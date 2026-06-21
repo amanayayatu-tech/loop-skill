@@ -67,11 +67,15 @@ contradictory:
 
 ## Codex macOS App Surface
 
-Default surface is `ui_manual`: the user creates/identifies threads, pastes
-prompts, fills thread identifiers, and sends `/goal` messages. Include tool/API
-instructions such as `send_message_to_thread`, `spawn_agent`, or
-`automation_update` only when the current environment exposes those tools or the
-user explicitly asks for tool-driven operation.
+Default surface is `codex_app_auto`: the user starts one Controller thread, and
+the Controller uses Codex macOS App thread/automation tools when exposed
+(`create_thread`, `send_message_to_thread`, `read_thread`, `automation_update`,
+or equivalent) to create Worker/Reviewer/State threads, send prompts and goals,
+read reports, and continue the loop.
+
+Use `ui_manual` only as a fallback when thread/automation tools are unavailable
+or the user explicitly asks for manual operation. In fallback mode, the user
+creates threads and transfers reports by hand.
 
 Treat `read_only` and `workspace_write` as sandbox expectations, not guaranteed
 runtime controls. Say "configure if available"; otherwise encode them as
@@ -133,8 +137,8 @@ for recurring, multi-worker, connector, or worktree-based loops.
 
 ### User-Facing Dispatch
 
-`怎么发` must be understandable by a non-technical Codex App user. Before the
-steps, include `先理解这些名字` with short Chinese explanations:
+`怎么发` / `怎么启动` must be understandable by a non-technical Codex App user.
+Before the steps, include `先理解这些名字` with short Chinese explanations:
 
 - `控制线程`: the chat that decides who does what and checks reports.
 - `实现线程`: the chat that writes or changes files.
@@ -143,11 +147,20 @@ steps, include `先理解这些名字` with short Chinese explanations:
 - `First Goal`: the first task message to send.
 - `线程标识`: the thread title, URL, or stable name the user can copy.
 
-Then write `照着做` as numbered UI actions. Use Chinese verbs such as
-`新建一个聊天`, `粘贴这一块`, `把标题复制到占位符`, `等待它回报`. Do not rely on
-unexplained English labels like Controller, Worker, Reviewer, State-Writer,
-thread identifier, or dispatch. Technical labels may appear once in parentheses
-after the Chinese name.
+Then write:
+
+- `默认自动模式`: the user creates only one Controller chat and pastes
+  `Controller Prompt`; the Controller creates/renames/sends/reads other threads
+  with Codex App tools and keeps looping until a stop condition.
+- `你只需要介入`: list human gates such as real subscription/payment/community
+  config, deploy/merge approval, missing connector, hard blocker, or real-user
+  evidence.
+- `手动降级模式`: include manual thread creation and copy/paste steps only if
+  Codex thread/automation tools are unavailable.
+
+Use Chinese verbs such as `新建一个控制聊天`, `粘贴这一块`, `让控制线程自动创建`,
+`等待它要求你确认`. Do not make manual message routing the main path. Technical
+labels may appear once in parentheses after the Chinese name.
 
 ### Full Mode
 

@@ -227,12 +227,12 @@ def load_payload(args: argparse.Namespace) -> dict[str, Any]:
         if value:
             data[key] = value
 
-    data.setdefault("surface", "ui_manual")
-    data.setdefault("automation", "manual first round; optional heartbeat max 6 wakeups")
-    data.setdefault("cadence", "manual first round; configure Codex Automation cadence only after the first manual pass works")
+    data.setdefault("surface", "codex_app_auto")
+    data.setdefault("automation", "Controller uses Codex App thread tools automatically; optional heartbeat after the first tool-driven round")
+    data.setdefault("cadence", "tool-driven first round; configure Codex Automation only after addressing, worktree isolation, report schema, and stop rules work")
     data.setdefault("discovery", "CI failures, open issues, recent commits, failing tests, and user triage notes")
     data.setdefault("triage_output", ".codex-loop/TRIAGE.md")
-    data.setdefault("connectors", "none declared; use filesystem and Codex UI only unless connectors are exposed")
+    data.setdefault("connectors", "Codex App thread tools; use project connectors only when exposed")
     data.setdefault("worktree_policy", "one Codex thread/worktree per writing Worker; Controller stays read-only; never share one write checkout across parallel Workers")
     data.setdefault("review", "review required before PASS if any code/config/PR diff exists")
     return data
@@ -319,9 +319,9 @@ def render(data: dict[str, Any], mode: str) -> str:
     objective = data.get("objective", "PLACEHOLDER")
     repo = data.get("repo", "PLACEHOLDER")
     branch = data.get("branch", "PLACEHOLDER")
-    surface = data.get("surface", "ui_manual")
-    automation = data.get("automation", "manual first round; optional heartbeat max 6 wakeups")
-    cadence = data.get("cadence", "manual first round; configure cadence later")
+    surface = data.get("surface", "codex_app_auto")
+    automation = data.get("automation", "Controller uses Codex App thread tools automatically; optional heartbeat after first proof")
+    cadence = data.get("cadence", "tool-driven first round; configure cadence later")
     discovery = data.get("discovery", "CI failures, open issues, recent commits, failing tests, and user triage notes")
     triage_output = data.get("triage_output", ".codex-loop/TRIAGE.md")
     connectors = data.get("connectors", "none declared; use filesystem and Codex UI only unless connectors are exposed")
@@ -417,6 +417,14 @@ Repo/root: {repo}
 Branch: {branch}
 Prompt Injection Boundary: {PROMPT_INJECTION_BOUNDARY}
 
+Tool-Driven Operation:
+- Default mode is automatic inside Codex macOS App.
+- Use create_thread or equivalent to create Worker, Reviewer, and State-Writer threads.
+- Use send_message_to_thread or equivalent to send each prompt and the First Goal.
+- Use read_thread or equivalent to read reports.
+- Use automation_update or equivalent only after one successful tool-driven round.
+- If thread/automation tools are not available, output MANUAL_FALLBACK_REQUIRED and use the manual fallback instructions.
+
 Runtime Mapping:
 - Dispatch surface: {surface}
 - Worktree policy: {worktree_policy}
@@ -446,7 +454,7 @@ Automation: {automation}
 Automation Template:
 - Project/root: {repo}
 - Cadence: {cadence}
-- Run target: Controller discovery/triage only; do not write code from automation.
+- Run target: Controller orchestration and discovery/triage only; do not write code from automation.
 - No-op rule: if no actionable finding exists, record NOOP in {triage_output} or state and archive/stop if the app supports it.
 - Triage write rule: if {triage_output} is file-backed, Controller sends a serialized write request to {state_writer_role}; otherwise use the app Triage inbox or manual note.
 - Wake limit: 6 unless human approves more.
@@ -515,7 +523,7 @@ On Hard Blocker: output HARD_BLOCK report, do not proceed.
 Max Retries: 3
 ```
 
-## 怎么发
+## 怎么启动
 ### 先理解这些名字
 - 控制线程（Controller）：只负责分配任务、看回报、决定下一步，不写代码。
 - 实现线程（Worker）：真正去改文件、跑测试的聊天。
@@ -524,20 +532,28 @@ Max Retries: 3
 - First Goal：第一条要发出去的任务消息。
 - 线程标识：这个聊天的标题、URL，或你给它起的稳定名字。
 
-### 照着做
-1. 在 Codex App 左侧新建一个聊天，命名为“控制线程”，把上面的 `Controller Prompt` 粘贴进去。
-2. 再新建每个“实现线程”。需要写代码的实现线程要用独立 worktree；把对应的 `Worker Prompt` 粘贴进去。
-3. 新建一个“审查线程”，把 reviewer 的 `Worker Prompt` 粘贴进去。它只检查，不改文件。
-4. 新建一个“状态线程”，把 `{state_writer_role}` 的 `Worker Prompt` 粘贴进去。它只写 `{state}`。
-5. 把这些聊天的标题或 URL 复制下来，替换所有 `<THREAD_IDENTIFIER_...>` 占位符。
-6. 先确认连接器/插件是否可用：`{connectors}`。缺失就手动收集证据，并标记 `MISSING_CONNECTOR`。
-7. 只把 `First Goal` 发给指定的第一个实现线程：`{first_worker}` / `{first_worker_id}`。
-8. 等实现线程回报。不要把同一个任务同时发给所有线程。
-9. 如果回报里有 `state_change_request`，控制线程先判断是否批准；批准后只发给状态线程。
-10. 状态线程写完 `{state}` 后，控制线程再对照实现线程回报、状态线程回报和 `{state}`。
-11. 只要有代码、配置、CI、部署或 PR 改动，就必须发给审查线程审查；审查没过不能说 PASS。
-12. 只有手动跑通一轮后，才考虑配置 Codex Automation。
-13. 看到 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR` 或 `HARD_BLOCK` 就停止，不要继续自动化。
+### 默认自动模式
+1. 你只需要新建一个聊天，命名为“控制线程”，把 `Controller Prompt` 粘贴进去。
+2. 控制线程会自己创建或继续这些线程：实现线程、审查线程、状态线程。
+3. 控制线程会自己把对应的 `Worker Prompt` 发给各线程。
+4. 控制线程会自己把 `First Goal` 发给第一个目标线程：`{first_worker}`。
+5. 控制线程会自己读取实现线程回报，批准或拒绝 `state_change_request`，再发给状态线程。
+6. 如果出现代码、配置、CI、部署或 PR 改动，控制线程会自己把报告发给审查线程。
+7. 审查没过时，控制线程会继续发修复任务；达到最多 3 次修复后停止。
+8. 控制线程最多自动醒来 6 次；超过后停止并要求你决定是否继续。
+
+### 你只需要介入
+- 需要真实订阅、支付、社群、密钥、外部服务配置时。
+- 需要批准 PR merge、deploy、release、真实外部写入时。
+- 出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR`、`HARD_BLOCK` 时。
+- 需要真人测试证据或你要承认 waiver 时。
+
+### 手动降级模式
+只有当当前 Codex App 没有线程工具或自动化工具时才使用：
+1. 你手动新建实现线程、审查线程、状态线程。
+2. 你手动把各自的 `Worker Prompt` 粘贴进去。
+3. 你手动把实现线程回报复制回控制线程。
+4. 即使手动降级，也必须保留审查门、状态单写者和停止条件。
 {full_note}
 """
 
@@ -558,7 +574,7 @@ def main() -> int:
     parser.add_argument("--evidence")
     parser.add_argument("--claim")
     parser.add_argument("--state")
-    parser.add_argument("--surface", default="ui_manual")
+    parser.add_argument("--surface", default="codex_app_auto")
     parser.add_argument("--automation")
     parser.add_argument("--cadence")
     parser.add_argument("--discovery", help="Discovery sources for automation/triage")

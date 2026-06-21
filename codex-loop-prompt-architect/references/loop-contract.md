@@ -173,7 +173,9 @@ Triage may create goals, but each goal must still pass L2-L12 before dispatch.
 
 Map the generated loop onto the actual Codex macOS App surface:
 
-- `surface`: `ui_manual`, tool-driven thread operation, automation, or subagent.
+- `surface`: default `codex_app_auto` when Codex App exposes thread tools
+  (`create_thread`, `send_message_to_thread`, `read_thread`,
+  `automation_update`, or equivalents). Use `ui_manual` only as fallback.
 - `connectors`: available MCP/connectors/plugins and their allowed actions.
 - `connector_fallback`: if a connector is missing, output `MISSING_CONNECTOR`,
   collect manual evidence, or stop. Never invent connector data.
@@ -184,9 +186,10 @@ Map the generated loop onto the actual Codex macOS App surface:
   durable state write permission.
 - `state_writer`: State-Writer is serial, not part of parallel execution fanout.
 
-When the environment lacks explicit worktree controls, encode isolation as a
-behavioral instruction and require the user to confirm the thread/worktree
-mapping before automation.
+When thread tools are available, Controller creates or continues Worker,
+Reviewer, and State-Writer threads directly and stores their identifiers in
+durable state. When the environment lacks thread/worktree controls, encode
+isolation as a behavioral instruction and use the manual fallback.
 
 ## Goal Template
 
@@ -253,27 +256,39 @@ First include a beginner-facing glossary titled `先理解这些名字`:
 - `First Goal`: the first task message to send.
 - `线程标识`: the thread title, URL, or stable name the user can copy.
 
-Then include numbered UI actions titled `照着做`:
+Then include `默认自动模式`:
 
-1. In Codex App, create or choose the control chat. Paste only
+1. In Codex App, the user creates or chooses one control chat and pastes only
    `Controller Prompt` there.
-2. Create one chat for each implementation Worker. If the Worker writes files,
-   configure a separate worktree when Codex offers it.
-3. Create one review chat when Review Gate is required. Paste only the reviewer
-   prompt there.
-4. Create one state chat when durable state is file-backed. Paste only the
-   State-Writer prompt there.
-5. Rename each chat with a simple stable title, or copy its URL.
-6. Replace every thread placeholder with that title or URL.
-7. Send `First Goal` to the named implementation/triage chat, not to every chat.
-8. Wait for the Worker report.
-9. If the Worker asks for state update, send only the approved state update to
-   the state chat.
-10. Send the diff/report to the review chat before claiming PASS.
-11. Stop on `AWAITING_HUMAN_APPROVAL`, `MISSING_CONNECTOR`, `HARD_BLOCK`, or
-    missing real evidence.
-12. Enable automation only after one manual round proves the thread titles,
-    worktree isolation, connector access, triage output, and report schema.
+2. Controller uses thread tools to create or continue Worker, Reviewer, and
+   State-Writer threads.
+3. Controller sends each generated prompt to its target thread.
+4. Controller sends `First Goal` to the first target Worker.
+5. Controller reads Worker reports with thread tools.
+6. Controller serializes `state_change_request` and sends approved updates to
+   State-Writer.
+7. Controller sends diff/report evidence to Reviewer before `PASS`.
+8. Controller continues repair/review/state rounds until `PASS`,
+   `AWAITING_HUMAN_APPROVAL`, `MISSING_CONNECTOR`, `HARD_BLOCK`, retry limit, or
+   wake limit.
+9. Controller may configure automation/heartbeat only after the first successful
+   tool-driven round proves addressing, worktree isolation, report schema, and
+   stop conditions.
+
+Then include `你只需要介入`:
+
+- real subscription/payment/community provider values.
+- deploy, merge, release, external write, or public-claim approval.
+- missing connector/tool access.
+- hard blocker.
+- real-user evidence such as `DOD-10SEC`.
+
+Then include `手动降级模式` only as fallback:
+
+1. Use it only if thread tools or automation tools are unavailable.
+2. The user manually creates Worker, Reviewer, and State-Writer chats.
+3. The user pastes each prompt and copies reports back to the Controller.
+4. Manual fallback must preserve all stop rules and review gates.
 
 Use Chinese action words and avoid unexplained English labels. Technical labels
 may appear once in parentheses after the Chinese name.

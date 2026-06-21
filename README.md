@@ -182,7 +182,7 @@ Compact Mode 默认输出五块：
 2. `Controller Prompt`
 3. `Worker Prompt`
 4. `First Goal`
-5. `怎么发`
+5. `怎么启动` / `怎么发`
 
 如果任务是 recurring loop、多线程、需要 connector、需要 worktree 或可能进入自动化，Controller Prompt 还会包含：
 
@@ -204,24 +204,25 @@ Compact Mode 默认输出五块：
 
 ## 输出之后应该怎么用
 
-生成 prompt 后，不是整段都发给一个线程。要按输出里的 `SEND TO` 和 `怎么发` 分开发：
+默认是 Codex macOS App 自动模式：你只需要启动一个控制线程。
 
-1. 在 Codex App 创建或找到 Controller thread。
-2. 创建或找到每个 Worker thread。
-3. 如果有写代码 Worker，尽量给每个 writing Worker 配独立 Codex thread/worktree。
-4. 把 `Controller Prompt` 只发给 Controller thread。
-5. 把每个 `Worker Prompt` 只发给对应 Worker thread。
-6. 把所有 `<THREAD_IDENTIFIER_...>` 替换成真实 thread ID、URL 或稳定标题。
-7. 把 `First Goal` 发给指定 Worker thread。
-8. 等 Worker 输出结构化 report。
-9. Controller 审查 Worker 的 `state_change_request`。
-10. Controller 一次只批准一个 state update。
-11. 把批准后的 state update 发给 `state-writer`。
-12. `state-writer` 串行更新 durable state。
-13. Controller 对齐 Worker report、State-Writer result 和 durable state。
-14. 如果有 code/config/CI/deploy/PR diff，必须跑独立 Review/Audit。
-15. 如果出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR` 或 `HARD_BLOCK`，停止，不要继续自动化。
-16. 只有手动第一轮验证了 thread addressing、worktree isolation、connector access、triage output 和 report schema 后，才配置 Codex Automation。
+1. 在 Codex App 创建一个新聊天，命名为“控制线程”。
+2. 把生成结果里的 `Controller Prompt` 粘贴进去。
+3. 控制线程会使用 Codex App 的线程工具自动创建或继续实现线程、审查线程、状态线程。
+4. 控制线程会自动把对应的 `Worker Prompt` 和 `First Goal` 发给目标线程。
+5. 控制线程会自动读取 Worker 回报，批准或拒绝 `state_change_request`。
+6. 控制线程会把批准后的状态更新发给 `state-writer`。
+7. 如果有 code/config/CI/deploy/PR diff，控制线程会把报告发给审查线程。
+8. 审查不过时，控制线程会继续发修复任务；达到 retry/wakeup 上限后停止。
+
+你只需要在这些情况介入：
+
+- 需要真实订阅链接、支付链接、社群链接或密钥。
+- 需要批准 PR merge、deploy、release 或真实外部写入。
+- 出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR` 或 `HARD_BLOCK`。
+- 需要真人可用性测试证据，或你决定接受 waiver。
+
+只有当前 Codex App 没有暴露线程工具或自动化工具时，才使用手动降级模式：你手动创建实现线程、审查线程、状态线程，粘贴对应 prompt，并把回报复制回控制线程。手动降级也必须保留审查门、状态单写者和停止条件。
 
 ## 安全模型
 
