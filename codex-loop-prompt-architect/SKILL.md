@@ -114,6 +114,9 @@ inside the Controller prompt:
   before output.
 - **Time Estimate**: min/typical/max wall-clock estimate for the runnable loop,
   with exclusions for user approval wait time and external-service wait time.
+- **Transient Runtime Retry Policy**: a bounded retry ladder for expected
+  network/registry/download/native-binary dependency failures before declaring
+  a validation block.
 - **Automation Template**: cadence, project/root, run target, no-op/archive rule,
   wake limit, and manual-first proof requirement.
 - **Discovery/Triage Template**: sources, triage output, fields, selection rule,
@@ -189,7 +192,7 @@ Use this shape:
 预计会停下等你的阶段：
 1. 阶段：...
    为什么会停：...
-   触发状态：AWAITING_HUMAN_APPROVAL | PASS_WITH_WAIVER | NEEDS_REPAIR | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | HARD_BLOCK | MISSING_CONNECTOR | OBSERVABILITY_GAP
+   触发状态：AWAITING_HUMAN_APPROVAL | PASS_WITH_WAIVER | NEEDS_REPAIR | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | HARD_BLOCK | MISSING_CONNECTOR | OBSERVABILITY_GAP
    你会被问什么：...
 ```
 
@@ -211,9 +214,11 @@ Common forecast categories:
   native binaries, browser dependencies, corrupted/partial package stores, lockfile
   creation, or platform-specific packages. Web loops should explicitly mention
   common blockers such as Next.js/SWC, Playwright, Sharp, canvas, Electron, and
-  large native packages. Use `RUNTIME_DEPENDENCY_BLOCKED` or
-  `VALIDATION_BLOCKED`; do not upgrade static source completion to PASS when
-  install/lint/typecheck/build/browser smoke did not run.
+  large native packages. Use `RUNTIME_DEPENDENCY_RETRYING` while the retry ladder
+  is still active; use `RUNTIME_DEPENDENCY_BLOCKED` or `VALIDATION_BLOCKED` only
+  after the retry ladder is exhausted or the failure is non-transient. Do not
+  upgrade static source completion to PASS when install/lint/typecheck/build/
+  browser smoke did not run.
 - Connector/runtime gaps: optional GitHub/browser/cloud connectors, dev server,
   package install, worktree handoff, or Codex Automation setup.
 - Observability repair: state/event/report audit trail falls behind thread
@@ -250,6 +255,56 @@ Prefer ranges over false precision. If confidence is low, say so and explain
 which unknowns widen the range. For small one-file tasks, minutes are acceptable;
 for full app builds, use hours; for long-running monitors or formal validation,
 separate active implementation time from elapsed monitoring time.
+
+### Transient Runtime Retry Policy
+
+For expected transient failures in dependency download, package registry access,
+native binary download, browser dependency setup, package-manager store access,
+lockfile generation, or resumable large downloads, generated Controller/Worker
+prompts must include a bounded retry ladder before stopping for the user.
+
+Default retry budget:
+
+- `min_runtime_dependency_retry_attempts_before_user_escalation`: at least 10 for
+  transient download, registry, package install, native binary, or browser
+  dependency failures.
+- This retry budget is separate from the normal `max_repair_attempts` for code
+  defects. Do not spend the 3 repair attempts on simple network/registry
+  volatility.
+- Record every attempt in `LOOP_EVENTS.jsonl` with attempt number, command,
+  timeout, registry/source used, result, and next action.
+
+Retry ladder requirements:
+
+1. Retry the exact failing command with a longer timeout and captured logs.
+2. Use package-manager retry/fetch options when available, for example increased
+   fetch timeout, reduced network concurrency, retry count, or offline-prefer
+   after a successful fetch.
+3. Resume, segment, or prefetch where possible, for example package-manager
+   fetch/store warming, lockfile-respecting install, resumable download, or
+   supported segmented/chunked downloader options.
+4. Retry with a clean project-scoped partial state only when safe: remove or
+   repair partial `node_modules`, project-local package store, temp downloads,
+   or lockfiles inside the allowed workspace only. Do not delete global caches or
+   unrelated files without human approval.
+5. Try an alternate public registry/source when appropriate and safe, then
+   restore or record the chosen source. Do not introduce private credentials or
+   paid services without approval.
+6. For browser/native dependencies, try the package's supported install or
+   download-host mechanism before declaring blocked.
+7. After each failed attempt, classify whether the next step is same-command
+   retry, resumed fetch, alternate registry/source, scoped cleanup, or hard
+   block.
+8. Only after the retry budget is exhausted, or if the error is clearly
+   non-transient such as missing credentials, unsupported platform, corrupt
+   package metadata, permission denial, or forbidden write scope, output
+   `RUNTIME_DEPENDENCY_BLOCKED` or `VALIDATION_BLOCKED`.
+
+The Controller should send an automatic retry goal to the implementation Worker
+for these transient failures instead of immediately asking the user. The user is
+only required when retry budget is exhausted, a non-transient condition is
+evident, or the next remedy would require secrets, paid services, global system
+changes, or writes outside allowed scope.
 
 ### User-Facing Dispatch
 
@@ -375,6 +430,10 @@ prompt and risk profile.
 - Fanout: max 2 parallel Workers and 3 new goals per Controller round unless
   approved.
 - Retry: max 3 repair attempts per goal.
+- Runtime dependency retry: for transient download/registry/native-binary/browser
+  dependency/package-install failures, use at least 10 runtime retry attempts
+  before asking the user, with exact commands/evidence logged. This is separate
+  from code repair attempts.
 - Automation: manual first round before automation; max 6 wakeups unless
   specified; no-op runs archive/stop after recording status.
 - Project binding: for project/repo work, start inside a Codex Project/Workspace
@@ -394,8 +453,11 @@ prompt and risk profile.
   connector is unavailable, output `MISSING_CONNECTOR` instead of inventing data.
 - Validation blocking: if dependency install, native binary download, package
   manager cache, browser dependency setup, lint/typecheck/build/test, or browser
-  smoke cannot run, report `VALIDATION_BLOCKED` or
-  `RUNTIME_DEPENDENCY_BLOCKED` with exact commands and evidence. Static code
+  smoke cannot run, first classify whether the failure is transient. For
+  transient download/registry/native-binary/package-store issues, output
+  `RUNTIME_DEPENDENCY_RETRYING` and apply the retry ladder before stopping. Only
+  after retry exhaustion or non-transient evidence, report `VALIDATION_BLOCKED`
+  or `RUNTIME_DEPENDENCY_BLOCKED` with exact commands and evidence. Static code
   review may be `REVIEW_PASS_WITH_BLOCKED_VALIDATION`, but Controller must not
   mark overall PASS until the validation chain runs or a human explicitly accepts
   a waiver.

@@ -25,5 +25,6 @@
   "triage_output": ".codex-loop/TRIAGE.md",
   "connectors": "GitHub connector if exposed; otherwise paste CI URLs and log excerpts manually",
   "worktree_policy": "one isolated Codex worktree per writing Worker; triage and reviewer stay read-only",
+  "runtime_retry_attempts": "10",
   "review": "review required before PASS if any code/config/PR diff exists"
 }

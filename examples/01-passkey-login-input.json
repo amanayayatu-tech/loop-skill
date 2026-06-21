@@ -25,5 +25,6 @@
   "triage_output": ".codex-loop/TRIAGE.md",
   "connectors": "GitHub connector if exposed; otherwise manual PR links and local git diff",
   "worktree_policy": "one Codex worktree per writing Worker; Controller remains read-only",
+  "runtime_retry_attempts": "10",
   "review": "review required before PASS if any code/config/PR diff exists"
 }
