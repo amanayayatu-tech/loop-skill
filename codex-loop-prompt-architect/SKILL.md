@@ -123,12 +123,31 @@ Output only:
 2. `Controller Prompt`: paste-ready, labeled `SEND TO: Controller thread`.
 3. `Worker Prompt`: one paste-ready block per role.
 4. `First Goal`: first atomic `/goal`.
-5. `怎么发`: exact send order, destination thread, expected report, stop rule.
+5. `怎么发`: plain-Chinese send order, destination thread, expected report,
+   stop rule, and beginner-friendly role explanation.
 
 Compact output must still include durable state, review gate, human gate, and
 stop rules when the task produces diffs or has high-risk signals. Controller
 Prompt must also include Automation, Discovery/Triage, and Runtime Mapping blocks
 for recurring, multi-worker, connector, or worktree-based loops.
+
+### User-Facing Dispatch
+
+`怎么发` must be understandable by a non-technical Codex App user. Before the
+steps, include `先理解这些名字` with short Chinese explanations:
+
+- `控制线程`: the chat that decides who does what and checks reports.
+- `实现线程`: the chat that writes or changes files.
+- `审查线程`: the chat that only reviews the diff and evidence.
+- `状态线程`: the chat that only records loop progress/state.
+- `First Goal`: the first task message to send.
+- `线程标识`: the thread title, URL, or stable name the user can copy.
+
+Then write `照着做` as numbered UI actions. Use Chinese verbs such as
+`新建一个聊天`, `粘贴这一块`, `把标题复制到占位符`, `等待它回报`. Do not rely on
+unexplained English labels like Controller, Worker, Reviewer, State-Writer,
+thread identifier, or dispatch. Technical labels may appear once in parentheses
+after the Chinese name.
 
 ### Full Mode
 

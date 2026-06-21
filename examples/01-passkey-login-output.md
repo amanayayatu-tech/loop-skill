@@ -338,16 +338,25 @@ Max Retries: 3
 ```
 
 ## 怎么发
-1. Create or identify the Controller thread and paste `Controller Prompt`.
-2. Create or identify each Worker thread and paste the matching `Worker Prompt`.
-3. Configure one separate Codex thread/worktree per writing Worker. Keep Controller read-only.
-4. Replace every `<THREAD_IDENTIFIER_...>` with the real thread ID, URL, or stable title.
-5. Confirm connector availability: `GitHub connector if exposed; otherwise manual PR links and local git diff`. If missing, collect evidence manually and mark MISSING_CONNECTOR.
-6. Send `First Goal` to the target Worker thread.
-7. Wait for the Worker structured report.
-8. Controller reviews each `state_change_request`; send at most one approved state update at a time to `state-writer`.
-9. `state-writer` updates `.codex-loop/LOOP_STATE.md` serially and reports the state write result.
-10. Controller reconciles Worker report, State-Writer result, and `.codex-loop/LOOP_STATE.md`.
-11. If there is any code/config/PR diff, run independent Review/Audit before PASS.
-12. Configure Codex Automation only after one manual round proves addressing, worktree isolation, connector access, triage output, and report schema.
-13. Stop on `AWAITING_HUMAN_APPROVAL`, `MISSING_CONNECTOR`, or `HARD_BLOCK`; do not continue automation.
+### 先理解这些名字
+- 控制线程（Controller）：只负责分配任务、看回报、决定下一步，不写代码。
+- 实现线程（Worker）：真正去改文件、跑测试的聊天。
+- 审查线程（Reviewer）：只检查改动和证据，不改文件。
+- 状态线程（State-Writer）：只记录进度到 `.codex-loop/LOOP_STATE.md`，不改业务代码。
+- First Goal：第一条要发出去的任务消息。
+- 线程标识：这个聊天的标题、URL，或你给它起的稳定名字。
+
+### 照着做
+1. 在 Codex App 左侧新建一个聊天，命名为“控制线程”，把上面的 `Controller Prompt` 粘贴进去。
+2. 再新建每个“实现线程”。需要写代码的实现线程要用独立 worktree；把对应的 `Worker Prompt` 粘贴进去。
+3. 新建一个“审查线程”，把 reviewer 的 `Worker Prompt` 粘贴进去。它只检查，不改文件。
+4. 新建一个“状态线程”，把 `state-writer` 的 `Worker Prompt` 粘贴进去。它只写 `.codex-loop/LOOP_STATE.md`。
+5. 把这些聊天的标题或 URL 复制下来，替换所有 `<THREAD_IDENTIFIER_...>` 占位符。
+6. 先确认连接器/插件是否可用：`GitHub connector if exposed; otherwise manual PR links and local git diff`。缺失就手动收集证据，并标记 `MISSING_CONNECTOR`。
+7. 只把 `First Goal` 发给指定的第一个实现线程：`implementation` / `<THREAD_IDENTIFIER_FOR_IMPLEMENTATION>`。
+8. 等实现线程回报。不要把同一个任务同时发给所有线程。
+9. 如果回报里有 `state_change_request`，控制线程先判断是否批准；批准后只发给状态线程。
+10. 状态线程写完 `.codex-loop/LOOP_STATE.md` 后，控制线程再对照实现线程回报、状态线程回报和 `.codex-loop/LOOP_STATE.md`。
+11. 只要有代码、配置、CI、部署或 PR 改动，就必须发给审查线程审查；审查没过不能说 PASS。
+12. 只有手动跑通一轮后，才考虑配置 Codex Automation。
+13. 看到 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR` 或 `HARD_BLOCK` 就停止，不要继续自动化。

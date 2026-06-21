@@ -244,25 +244,39 @@ Max Retries: {{N}}
 
 The usage section must include:
 
-1. Create/identify Controller thread.
-2. Create/identify Worker threads.
-3. Create/identify State-Writer thread when durable state is a writable file.
-4. Create/identify Reviewer/Judge thread when Review Gate is required.
-5. Map writing Workers to separate Codex worktrees/threads.
-6. Confirm connector availability or choose the manual fallback.
-7. Paste Controller Prompt into Controller only.
-8. Paste each Worker Prompt into its matching Worker only.
-9. Fill every thread identifier placeholder with an ID, URL, or stable title.
-10. Send first `/goal` to the target Worker thread.
-11. Read Worker structured report.
-12. Serialize and approve `state_change_request`; State-Writer applies one
-    approved state update at a time.
-13. Reconcile Worker report, State-Writer result, and durable state.
-14. Run Review/Audit if a diff or PR exists.
-15. Decide pass, repair goal, next phase, human approval wait, missing connector,
-    or hard stop.
-16. Configure automation only after a manual first round proves addressing,
+First include a beginner-facing glossary titled `先理解这些名字`:
+
+- `控制线程`: the chat that decides who does what and checks reports.
+- `实现线程`: the chat that writes or changes files.
+- `审查线程`: the chat that only reviews the diff and evidence.
+- `状态线程`: the chat that only records loop progress/state.
+- `First Goal`: the first task message to send.
+- `线程标识`: the thread title, URL, or stable name the user can copy.
+
+Then include numbered UI actions titled `照着做`:
+
+1. In Codex App, create or choose the control chat. Paste only
+   `Controller Prompt` there.
+2. Create one chat for each implementation Worker. If the Worker writes files,
+   configure a separate worktree when Codex offers it.
+3. Create one review chat when Review Gate is required. Paste only the reviewer
+   prompt there.
+4. Create one state chat when durable state is file-backed. Paste only the
+   State-Writer prompt there.
+5. Rename each chat with a simple stable title, or copy its URL.
+6. Replace every thread placeholder with that title or URL.
+7. Send `First Goal` to the named implementation/triage chat, not to every chat.
+8. Wait for the Worker report.
+9. If the Worker asks for state update, send only the approved state update to
+   the state chat.
+10. Send the diff/report to the review chat before claiming PASS.
+11. Stop on `AWAITING_HUMAN_APPROVAL`, `MISSING_CONNECTOR`, `HARD_BLOCK`, or
+    missing real evidence.
+12. Enable automation only after one manual round proves the thread titles,
     worktree isolation, connector access, triage output, and report schema.
+
+Use Chinese action words and avoid unexplained English labels. Technical labels
+may appear once in parentheses after the Chinese name.
 
 ## Flow Map
 
