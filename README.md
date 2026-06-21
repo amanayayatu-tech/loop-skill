@@ -128,6 +128,13 @@ Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的
 
 如果用户坚持要草稿，skill 会标记为 `NON_DISPATCHABLE_DRAFT`，不会把它说成 ready-to-send。
 
+正式输出 loop 之后，skill 还会给两类预期：
+
+- `运行中卡点预估`：只预测 loop 已经可以启动以后，仍然可能因为审批、真实外部服务、人工验收、审查修复、connector/runtime 或审计日志断档而停下的阶段。它不会把 repo/root/PRD/工作区缺失这类启动前问题包装成运行中风险。
+- `预计耗时`：给出 min / typical / max 的本地 Codex loop wall-clock 估算，并明确不计入等待用户提供 API key、批准 deploy/merge、真人验收、离线业务判断或 registry/network 恢复的时间。
+
+对 Web/Node/前端项目，`运行中卡点预估` 会默认提醒首轮依赖安装和本地验证环境风险，例如 Next.js/SWC、Playwright、Sharp、canvas、Electron、native binary、大包下载、`pnpm`/`npm` store 或 lockfile 问题。遇到这类情况时，loop 应该输出 `RUNTIME_DEPENDENCY_BLOCKED` 或 `VALIDATION_BLOCKED`，不能把“源码已生成/静态审查通过”说成完整 PASS。
+
 ## Full Mode 用法
 
 高风险任务、多 Worker、自动化、PR 合并、发布、auth/billing/security/secrets、生产数据、公开声明、科学/产品结论等任务，建议使用 Full Mode：
@@ -169,6 +176,11 @@ python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
   --claim "candidate implementation only" \
   --state ".codex-loop/LOOP_STATE.md" \
   --source-artifacts "docs/auth-spec.md and attached screenshots" \
+  --runtime-readiness "READY_BUT_LIKELY_REVIEW_REPAIRS" \
+  --time-min "45-90 分钟" \
+  --time-typical "2-4 小时" \
+  --time-max "4-8 小时" \
+  --time-factors "auth edge cases,browser/passkey support,native dependency install,test fixture setup,Reviewer repair rounds" \
   --discovery "CI failures, auth issues, recent auth commits" \
   --triage-output ".codex-loop/TRIAGE.md" \
   --connectors "GitHub connector if exposed; otherwise manual PR links" \
@@ -187,17 +199,21 @@ python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
 
 ## 输出内容长什么样
 
-Compact Mode 默认输出五块：
+Compact Mode 默认输出七块：
 
-1. `关键风险`
-2. `Controller Prompt`
-3. `Worker Prompt`
-4. `First Goal`
-5. `怎么启动` / `怎么发`
+1. `运行中卡点预估`
+2. `预计耗时`
+3. `关键风险`
+4. `Controller Prompt`
+5. `Worker Prompt`
+6. `First Goal`
+7. `怎么启动` / `怎么发`
 
 如果任务是 recurring loop、多线程、需要 connector、需要 worktree 或可能进入自动化，Controller Prompt 还会包含：
 
 - `Runtime Mapping`
+- `Runtime Blocker Forecast`
+- `Time Estimate`
 - `Automation Template`
 - `Discovery/Triage`
 - durable state schema
@@ -227,7 +243,7 @@ Compact Mode 默认输出五块：
 ### 2. 再启动控制线程
 
 1. 在这个项目/工作区下面新建聊天，命名为“控制线程”。
-2. 默认把生成结果完整粘贴进去，从 `关键风险` 到 `怎么启动`。不要只粘贴短的 `Controller Prompt` 代码块，除非它已经内嵌了 Worker Prompt 和 First Goal。
+2. 默认把生成结果完整粘贴进去，从 `运行中卡点预估` 到 `怎么启动`。不要只粘贴短的 `Controller Prompt` 代码块，除非它已经内嵌了 Worker Prompt 和 First Goal。
 3. 控制线程会先调用 `list_projects` 或等价工具，找到当前工作区的 `projectId`。
 4. 控制线程创建实现/审查/状态线程时，必须使用 `create_thread` 的 project target，例如 `target.type="project"` + 同一个 `projectId`。这样新线程会出现在同一个左侧项目工作区下面。
 5. 如果控制线程无法找到项目，它应该输出 `MISSING_PROJECT_WORKSPACE` 并停止。不要让它创建 projectless 普通对话线程。
