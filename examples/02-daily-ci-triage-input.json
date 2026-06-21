@@ -1,0 +1,21 @@
+{
+  "objective": "Run a daily CI failure triage loop and dispatch one scoped repair goal when evidence is concrete",
+  "repo": "/workspace/product-app",
+  "branch": "main",
+  "workers": "triage:read-only discover and classify CI failures;implementation:repair one selected low-risk failure inside approved scope",
+  "permissions": "triage:read_only;implementation:workspace_write",
+  "allowed": "src/**,tests/**,package.json,package-lock.json",
+  "forbidden": "secrets,production deploy,database migrations,billing,auth policy changes,release tags,PR merge",
+  "validation": "npm test;npm run lint;npm run typecheck",
+  "evidence": "local checks plus CI log excerpts",
+  "claim": "triage and candidate repair only; not merge-ready until independent review and CI confirmation",
+  "state": ".codex-loop/LOOP_STATE.md",
+  "surface": "ui_manual first, then Codex Automation after one proven manual round",
+  "automation": "manual first round; then daily Codex Automation may run Controller discovery/triage only",
+  "cadence": "daily at 09:00 local time on weekdays after manual proof",
+  "discovery": "GitHub Actions failures, open PR checks, recent commits, failing local tests, user triage notes",
+  "triage_output": ".codex-loop/TRIAGE.md",
+  "connectors": "GitHub connector if exposed; otherwise paste CI URLs and log excerpts manually",
+  "worktree_policy": "one isolated Codex worktree per writing Worker; triage and reviewer stay read-only",
+  "review": "review required before PASS if any code/config/PR diff exists"
+}

@@ -1,0 +1,21 @@
+{
+  "objective": "Implement passkey-first login with email fallback",
+  "repo": "/workspace/myapp",
+  "branch": "feature/passkey-login",
+  "workers": "implementation:write auth UI, server handlers, and auth tests",
+  "permissions": "implementation:workspace_write",
+  "allowed": "src/auth/**,tests/auth/**",
+  "forbidden": "billing,database migrations,secrets,CI deploy config,production deploy",
+  "validation": "npm test -- auth;npm run lint;npm run typecheck",
+  "evidence": "local checks",
+  "claim": "candidate implementation only; not production-ready until human review and deploy approval",
+  "state": ".codex-loop/LOOP_STATE.md",
+  "surface": "ui_manual",
+  "automation": "manual first round only; automation disabled until one successful implementation and review cycle",
+  "cadence": "manual only",
+  "discovery": "auth issues, failing auth tests, recent auth commits",
+  "triage_output": ".codex-loop/TRIAGE.md",
+  "connectors": "GitHub connector if exposed; otherwise manual PR links and local git diff",
+  "worktree_policy": "one Codex worktree per writing Worker; Controller remains read-only",
+  "review": "review required before PASS if any code/config/PR diff exists"
+}
