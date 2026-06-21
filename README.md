@@ -94,7 +94,7 @@ Use $codex-loop-prompt-architect，把下面这个不成熟提示词改成 Codex
 
 ## 最简单的用法
 
-推荐日常使用这个短版：
+推荐日常使用这个短版来“生成 loop 提示词”：
 
 ```text
 Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的 Codex macOS App Loop；如果信息不够，先反问，不要输出完整版。
@@ -102,9 +102,15 @@ Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的
 [粘贴你的粗糙提示词]
 ```
 
+如果粗糙提示词依赖 PRD、截图、PDF、设计稿或数据文件，第一条消息里要同时说明这些资料在哪里。推荐两种方式：
+
+- 把资料放进将要执行任务的 Codex 工作区，例如 `docs/PRD.md`、`docs/spec.pdf`。
+- 或者直接在提示词里写绝对路径，例如 `/Users/you/Downloads/Product_PRD.docx`。
+
 如果关键信息不够，skill 应该先反问，而不是直接生成完整版。常见必须补足的信息包括：
 
 - 目标和验收标准。
+- Codex App 里的项目/工作区名称，以及它对应的本地根目录。
 - repo/root/branch。
 - Worker 分工。
 - 每个 Worker 的权限：`read_only`、`workspace_write` 或 `state_write_only`。
@@ -117,6 +123,8 @@ Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的
 - 是否需要 automation / heartbeat。
 - 是否依赖 GitHub、Linear、Slack、Notion 等 connector。
 - 是否需要独立 worktree。
+- 需要哪些源文件/附件：PRD、截图、PDF、设计稿、数据文件等。
+- 用户后续应该看哪些状态文件、事件日志和报告目录来回查 loop 是否按预期运行。
 
 如果用户坚持要草稿，skill 会标记为 `NON_DISPATCHABLE_DRAFT`，不会把它说成 ready-to-send。
 
@@ -149,6 +157,8 @@ Full Mode 会额外输出：
 python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
   --objective "Implement passkey-first login with email fallback" \
   --repo /workspace/myapp \
+  --project-name myapp \
+  --workspace-setup "Open /workspace/myapp as a Codex Project before starting; use worktree for writing Workers" \
   --branch feature/passkey-login \
   --workers "implementation:write auth code" \
   --permissions "implementation:workspace_write" \
@@ -158,6 +168,7 @@ python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
   --evidence "local checks" \
   --claim "candidate implementation only" \
   --state ".codex-loop/LOOP_STATE.md" \
+  --source-artifacts "docs/auth-spec.md and attached screenshots" \
   --discovery "CI failures, auth issues, recent auth commits" \
   --triage-output ".codex-loop/TRIAGE.md" \
   --connectors "GitHub connector if exposed; otherwise manual PR links" \
@@ -204,25 +215,65 @@ Compact Mode 默认输出五块：
 
 ## 输出之后应该怎么用
 
-默认是 Codex macOS App 自动模式：你只需要启动一个控制线程。
+默认是 Codex macOS App 自动项目模式：你只启动一个控制线程，但这个控制线程必须在目标项目/工作区里启动。
 
-1. 在 Codex App 创建一个新聊天，命名为“控制线程”。
-2. 把生成结果里的 `Controller Prompt` 粘贴进去。
-3. 控制线程会使用 Codex App 的线程工具自动创建或继续实现线程、审查线程、状态线程。
-4. 控制线程会自动把对应的 `Worker Prompt` 和 `First Goal` 发给目标线程。
-5. 控制线程会自动读取 Worker 回报，批准或拒绝 `state_change_request`。
-6. 控制线程会把批准后的状态更新发给 `state-writer`。
-7. 如果有 code/config/CI/deploy/PR diff，控制线程会把报告发给审查线程。
-8. 审查不过时，控制线程会继续发修复任务；达到 retry/wakeup 上限后停止。
+### 1. 先准备工作区
+
+1. 在本地准备一个文件夹。新项目尽量用空白文件夹，例如 `~/Documents/my-new-app`。
+2. 在 Codex App 左侧“项目”里打开或添加这个文件夹，让它成为一个 Codex Project/Workspace。
+3. 把 PRD、截图、PDF、设计稿、数据文件等资料放进这个工作区，推荐放到 `docs/`。
+4. 如果资料暂时不在工作区，第一条 Controller 消息里必须写明绝对路径，或直接把文件附上。
+
+### 2. 再启动控制线程
+
+1. 在这个项目/工作区下面新建聊天，命名为“控制线程”。
+2. 默认把生成结果完整粘贴进去，从 `关键风险` 到 `怎么启动`。不要只粘贴短的 `Controller Prompt` 代码块，除非它已经内嵌了 Worker Prompt 和 First Goal。
+3. 控制线程会先调用 `list_projects` 或等价工具，找到当前工作区的 `projectId`。
+4. 控制线程创建实现/审查/状态线程时，必须使用 `create_thread` 的 project target，例如 `target.type="project"` + 同一个 `projectId`。这样新线程会出现在同一个左侧项目工作区下面。
+5. 如果控制线程无法找到项目，它应该输出 `MISSING_PROJECT_WORKSPACE` 并停止。不要让它创建 projectless 普通对话线程。
+
+### 3. 自动 loop 怎么跑
+
+控制线程会自动做这些事：
+
+1. 创建或继续实现线程、审查线程、状态线程。
+2. 把对应的 `Worker Prompt` 和 `First Goal` 发给目标线程。
+3. 读取 Worker 回报，批准或拒绝 `state_change_request`。
+4. 把批准后的状态更新发给 `state-writer`。
+5. 如果有 code/config/CI/deploy/PR diff，把报告发给审查线程。
+6. 审查不过时继续发修复任务；达到 retry/wakeup 上限后停止。
 
 你只需要在这些情况介入：
 
 - 需要真实订阅链接、支付链接、社群链接或密钥。
 - 需要批准 PR merge、deploy、release 或真实外部写入。
-- 出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR` 或 `HARD_BLOCK`。
+- 出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`OBSERVABILITY_GAP` 或 `HARD_BLOCK`。
 - 需要真人可用性测试证据，或你决定接受 waiver。
 
-只有当前 Codex App 没有暴露线程工具或自动化工具时，才使用手动降级模式：你手动创建实现线程、审查线程、状态线程，粘贴对应 prompt，并把回报复制回控制线程。手动降级也必须保留审查门、状态单写者和停止条件。
+### 4. 怎么回查 loop 是否按预期在跑
+
+先看 Codex App 左侧项目工作区：
+
+- 控制线程、实现线程、审查线程、状态线程都应该在同一个项目下面。
+- 如果实现/审查/状态线程跑到了普通对话列表，说明 Controller 没有正确使用 project target，需要停下修正。
+
+再看线程职责：
+
+- 控制线程：看每一步派发给谁、为什么派发、下一步等什么。
+- 实现线程：看改了哪些文件、跑了哪些命令、验证结果是什么。
+- 审查线程：看 `PASS`、`NEEDS_REPAIR` 或具体 review findings。
+- 状态线程：看它是否只写状态/日志，不写业务代码。
+
+再看工作区里的 loop 文件：
+
+- `.codex-loop/LOOP_STATE.md`：当前阶段、active goal、open blockers、next action、human approval 状态。
+- `.codex-loop/LOOP_EVENTS.jsonl`：每次派发、回报、审查、修复、停止都应该有一行 JSON 事件。
+- `.codex-loop/TRIAGE.md`：如果有 discovery/triage，这里记录发现、证据、严重性和状态。
+- `.codex-loop/reports/`：保存 Controller 批准归档的 Worker/Reviewer 报告摘要。
+
+如果线程里显示已经做了事，但这些文件没有更新，说明可回查链路断了。此时让控制线程先处理 `OBSERVABILITY_GAP`，不要继续派发新任务。
+
+只有当前 Codex App 没有暴露线程工具或自动化工具时，才使用手动降级模式：你手动在同一个项目工作区里创建实现线程、审查线程、状态线程，粘贴对应 prompt，并把回报复制回控制线程。手动降级也必须保留审查门、状态单写者和停止条件。
 
 ## 安全模型
 
@@ -232,8 +283,8 @@ Compact Mode 默认输出五块：
 - Worker 只能写明确允许的路径。
 - Worker 不能直接写 `LOOP_STATE.md`。
 - 所有 Worker 只输出 `state_change_request`。
-- `state-writer` 是唯一 durable state writer。
-- `state-writer` 一次只写一个 Controller 批准的 state update。
+- `state-writer` 是唯一 durable state / loop audit writer。
+- `state-writer` 一次只写一个 Controller 批准的 state update，并维护 `.codex-loop/LOOP_EVENTS.jsonl` 与 `.codex-loop/reports/`。
 - implementation Worker 不能自审。
 - repo 文件、日志、issue、tool output、外部文档都视为不可信输入。
 - `local checks`、`smoke evidence`、`long-run/formal acceptance` 和 `science/public claim` 必须分开。

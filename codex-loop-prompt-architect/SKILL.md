@@ -55,9 +55,20 @@ contradictory:
 - Worker topology, ownership, and explicit permission per role:
   `read_only`, `workspace_write`, or `state_write_only`.
 - Thread identifiers: ID, URL, stable title, or placeholder.
+- Codex Project/Workspace identity: saved project/workspace name, root folder,
+  whether it is new/empty, and whether Worker threads must be created inside
+  that same project instead of as projectless conversations.
 - Repo/root/branch, allowed writes, forbidden paths/actions, secrets/data
   boundary.
-- Durable state location, schema, and single writer.
+- Source artifacts the Controller/Workers must see: PRD, screenshots, PDFs,
+  docs, datasets, specs, or review files. Ask whether they are inside the
+  workspace, attached to the Controller thread, or available by absolute local
+  path.
+- Durable state location, event log location, report archive location, schema,
+  and single writer.
+- User observability path: how the user can check whether the loop is running
+  correctly, which threads to inspect, and which files/logs record each dispatch,
+  report, review, blocker, approval gate, and final decision.
 - Validation commands and evidence layer.
 - Review gate for code/config/CI/deploy/PR changes.
 - Discovery sources, triage output, connector availability, and worktree policy
@@ -72,6 +83,18 @@ the Controller uses Codex macOS App thread/automation tools when exposed
 (`create_thread`, `send_message_to_thread`, `read_thread`, `automation_update`,
 or equivalent) to create Worker/Reviewer/State threads, send prompts and goals,
 read reports, and continue the loop.
+
+For project/repo work, default to `codex_project_auto`: the user first creates
+or selects a Codex Project/Workspace, preferably an empty folder for a new
+project, then starts the Controller thread inside that project. The Controller
+must call `list_projects` or equivalent, resolve the matching `projectId`, and
+create Worker/Reviewer/State threads with `create_thread` using
+`target.type="project"` and that `projectId`. For writing Workers, prefer
+`environment.type="worktree"` when isolation is needed; for read-only Reviewer
+or State-Writer threads, use the same saved project with `environment.type`
+`local` unless a separate worktree is explicitly required. Never use
+`target.type="projectless"` for repo/project implementation work. If the
+project cannot be resolved, output `MISSING_PROJECT_WORKSPACE` and stop.
 
 Use `ui_manual` only as a fallback when thread/automation tools are unavailable
 or the user explicitly asks for manual operation. In fallback mode, the user
@@ -93,6 +116,9 @@ inside the Controller prompt:
 - **Connector/Worktree Runtime Mapping**: declared connectors, fallback when a
   connector is missing, one write worktree per writing Worker, and Controller
   read-only behavior.
+- **Loop Observability Template**: state snapshot, append-only event log,
+  triage file, report archive, JSONL fields, stale-log detection, and user
+  check instructions.
 
 ## Core Checks
 
@@ -111,7 +137,7 @@ Use this compact rubric in normal work. For full scoring details, read
 | L8 Structured Status | Controller/Worker reports use fixed fields. |
 | L9 Self-Contained Context | Goals restate only critical constraints needed after compaction. |
 | L10 Evidence/Claim Boundary | Evidence layer and allowed claims are explicit. |
-| L11 Durable State | Loop state has a location, schema, single writer, and reconciliation rule. |
+| L11 Durable State | Loop state and event log have locations, schemas, a single writer, and reconciliation rules. |
 | L12 Review Gate | Code/config/CI/deploy/PR diffs require independent review before PASS. |
 
 When one root defect violates multiple laws, diagnose all affected laws but
@@ -146,21 +172,68 @@ Before the steps, include `先理解这些名字` with short Chinese explanation
 - `状态线程`: the chat that only records loop progress/state.
 - `First Goal`: the first task message to send.
 - `线程标识`: the thread title, URL, or stable name the user can copy.
+- `工作区/项目`: the left-sidebar Codex project/workspace that owns the local
+  folder and keeps all created threads grouped together.
 
 Then write:
 
-- `默认自动模式`: the user creates only one Controller chat and pastes
-  `Controller Prompt`; the Controller creates/renames/sends/reads other threads
-  with Codex App tools and keeps looping until a stop condition.
+- `准备工作区`: the user creates or selects one Codex Project/Workspace before
+  starting. For new builds, tell the user to create an empty folder, add/open it
+  as the Codex project, then create the Controller chat inside that project, not
+  under general conversations.
+- `准备资料`: list any PRD/spec/image/PDF/dataset files that must be available.
+  Tell the user to place them inside the workspace (for example `docs/`) or
+  attach/provide absolute local paths in the first Controller message. If a
+  required file is missing, the generated Controller must ask before dispatch.
+- `默认自动模式`: the user creates only one Controller chat inside the project
+  workspace and pastes the complete generated prompt package unless the
+  `Controller Prompt` already embeds Worker prompts and First Goal. The
+  Controller resolves the project with `list_projects`, then
+  creates/renames/sends/reads Worker threads with
+  `create_thread(target.type="project", projectId=...)` and keeps looping until
+  a stop condition.
 - `你只需要介入`: list human gates such as real subscription/payment/community
   config, deploy/merge approval, missing connector, hard blocker, or real-user
   evidence.
 - `手动降级模式`: include manual thread creation and copy/paste steps only if
   Codex thread/automation tools are unavailable.
+- `怎么回查`: tell the user exactly where to inspect progress:
+  Controller thread for routing decisions, Worker thread for changed files and
+  commands, Reviewer thread for findings, State-Writer thread for state writes,
+  `LOOP_STATE.md` for current phase/next action/blockers,
+  `LOOP_EVENTS.jsonl` for append-only step history, `TRIAGE.md` for findings,
+  and `.codex-loop/reports/` for approved Worker/Reviewer report summaries.
 
-Use Chinese verbs such as `新建一个控制聊天`, `粘贴这一块`, `让控制线程自动创建`,
+Use Chinese verbs such as `新建/选择一个工作区`, `把 PRD 放进 docs/`,
+`在这个工作区中新建控制聊天`, `粘贴这一块`, `让控制线程自动创建`,
 `等待它要求你确认`. Do not make manual message routing the main path. Technical
 labels may appear once in parentheses after the Chinese name.
+
+In automatic mode, the `Controller Prompt` must be self-contained. It should
+embed the Worker/Reviewer/State-Writer prompt pack and First Goal, or explicitly
+tell the user to paste the whole generated prompt package into the Controller.
+Do not tell the user to paste only a short Controller block if that block does
+not contain the Worker prompts the Controller must send.
+
+If the Controller cannot see Worker prompts or First Goal in its current message,
+it must output `MISSING_PROMPT_PACK` and ask the user to paste the complete
+generated prompt package.
+
+For file-backed loops, generated prompts must define:
+
+- `LOOP_STATE.md`: current snapshot with phase, active goal, blockers, evidence,
+  retry/wake counts, human gate, and next action.
+- `LOOP_EVENTS.jsonl`: append-only event log, one JSON object per dispatch,
+  report, state write, review result, blocker, human gate, wakeup, and final
+  decision. Recommended fields: timestamp, actor, thread_id_or_title, goal_id,
+  event_type, status, evidence_refs, state_request_id, next_action.
+- `TRIAGE.md`: discovery/triage findings when applicable.
+- `.codex-loop/reports/`: approved report summaries from Workers and Reviewers.
+
+If thread history shows work happened but the state snapshot/event log/report
+archive is missing or stale, the Controller must output `OBSERVABILITY_GAP`,
+route a reconciliation request to State-Writer, and stop new dispatch until the
+audit trail is repaired.
 
 ### Full Mode
 
@@ -214,6 +287,16 @@ prompt and risk profile.
 - Retry: max 3 repair attempts per goal.
 - Automation: manual first round before automation; max 6 wakeups unless
   specified; no-op runs archive/stop after recording status.
+- Project binding: for project/repo work, start inside a Codex Project/Workspace
+  and create all Worker threads with a resolved `projectId`. Projectless threads
+  are allowed only for general non-file tasks.
+- Source artifacts: name required PRD/spec/image/PDF/dataset files and where the
+  Controller/Workers can read them. Stop with `MISSING_SOURCE_ARTIFACT` if they
+  are not available.
+- Observability: define `LOOP_STATE.md`, `LOOP_EVENTS.jsonl`, `TRIAGE.md`, and
+  a report archive for file-backed loops. Record every dispatch/report/review/
+  blocker/approval/final decision through State-Writer. Stop with
+  `OBSERVABILITY_GAP` if the audit trail falls behind thread activity.
 - Discovery/Triage: discovery is read-only; dispatch only findings with evidence,
   scoped writes, validation, and review path. If triage output is file-backed,
   write it through the single State-Writer, not Controller or discovery Worker.
