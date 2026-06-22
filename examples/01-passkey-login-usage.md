@@ -69,8 +69,10 @@
 3. 把 PRD/spec/图片/PDF/数据放到工作区，推荐放 `docs/`；或确保控制线程能读取这些路径：docs/auth-spec.md and any attached login-flow screenshots。
 4. 在这个工作区中新建一个聊天，命名为“控制线程”。不要在普通对话区启动。
 5. 把生成的 Controller Pack `.md` 文件发给控制线程。
-6. 控制线程会自动创建或继续实现线程、审查线程、状态线程，并把 First Goal 发给 `implementation`。
-7. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
+6. 控制线程会先创建或继续实现线程、审查线程、状态线程，并让它们进入 idle 待命；不会让审查线程提前空审。
+7. 控制线程必须创建 heartbeat 自动唤醒，默认每 15 分钟检查并继续推进；如果没有 heartbeat，就不算完整自动 loop。
+8. heartbeat 建好后，控制线程才把 First Goal 发给 `implementation`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。
+9. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
 
 ## 怎么回查 loop
 
@@ -78,6 +80,7 @@
 - 实现线程：看它改了哪些文件、跑了哪些命令、验证结果是什么。
 - 审查线程：看 review findings、`PASS` 或 `NEEDS_REPAIR`。
 - 状态线程：确认它只写状态/日志，不改业务代码。
+- heartbeat 自动化：看 Codex Automation/heartbeat 卡片是否为 active、间隔是否正确、目标是否是控制线程。
 - `.codex-loop/LOOP_STATE.md`：当前进度快照；看现在在哪个阶段、卡点是什么、下一步做什么。
 - `.codex-loop/LOOP_EVENTS.jsonl`：逐步流水账；看每次派发、回报、重试、审查、停止的时间和结果。
 - `.codex-loop/TRIAGE.md`：问题清单；看发现了哪些问题、证据、严重性和处理状态。

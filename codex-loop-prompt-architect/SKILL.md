@@ -120,8 +120,13 @@ inside the Controller prompt:
 - **Transient Runtime Retry Policy**: a bounded retry ladder for expected
   network/registry/download/native-binary dependency failures before declaring
   a validation block.
-- **Automation Template**: cadence, project/root, run target, no-op/archive rule,
-  wake limit, and manual-first proof requirement.
+- **Thread Bootstrap and Input Gates**: child threads may be created early, but
+  bootstrap prompts must not trigger implementation, review, or state writes.
+  Workers execute only explicit `/goal`; Reviewers execute only explicit
+  `/review` with Worker artifacts; State-Writers execute only explicit
+  `/state_update` approved by Controller.
+- **Heartbeat Automation Template**: cadence, project/root, run target,
+  no-op/archive rule, wake limit, and startup heartbeat requirement.
 - **Discovery/Triage Template**: sources, triage output, fields, selection rule,
   and non-actionable/no-evidence behavior.
 - **Connector/Worktree Runtime Mapping**: declared connectors, fallback when a
@@ -327,6 +332,60 @@ only required when retry budget is exhausted, a non-transient condition is
 evident, or the next remedy would require secrets, paid services, global system
 changes, or writes outside allowed scope.
 
+### Thread Bootstrap and Input Gates
+
+Generated Controller Packs must separate thread creation from task execution.
+Creating a child thread and sending its role prompt is only bootstrap. It must
+not cause a Worker to implement, a Reviewer to review, or a State-Writer to
+write.
+
+Use this protocol:
+
+- Phase 0 bootstrap: Controller creates Worker/Reviewer/State-Writer threads
+  under the same Codex Project/Workspace and sends each role prompt as
+  `BOOTSTRAP_ONLY`.
+- Bootstrap responses:
+  - execution Worker: `READY_IDLE_AWAITING_GOAL`
+  - Reviewer/Judge: `REVIEW_IDLE_AWAITING_ARTIFACTS`
+  - State-Writer: `READY_IDLE_AWAITING_STATE_UPDATE`
+- Execution Workers act only on explicit `/goal` messages with goal id,
+  objective, scope, validation, and stop conditions.
+- Reviewers act only on explicit `/review` messages that include `goal_id`,
+  Worker report, `changed_files`, `validation_run`, `evidence_artifacts`, and
+  `diff_summary` or file refs. If artifacts are missing, output
+  `REVIEW_IDLE_AWAITING_ARTIFACTS`; do not return `REVIEW_BLOCKED`,
+  `REVIEW_NEEDS_REPAIR`, or `REVIEW_PASS` from bootstrap.
+- State-Writers act only on explicit `/state_update` messages from Controller
+  with `controller_approved=true` and one serialized state request. They must
+  not infer writes from Worker/Reviewer chat.
+- Controller must not count idle statuses as failures or blockers.
+
+This gate is mandatory. It prevents the Reviewer from reviewing before an
+implementation report exists and prevents State-Writer from writing from a role
+prompt alone.
+
+### Heartbeat Automation
+
+Automatic Codex macOS App loop mode requires a heartbeat from startup. A
+generated loop that relies only on one initial dispatch is not a complete
+automatic loop.
+
+Generated Controller Packs must require:
+
+- Create heartbeat during startup after project/pack validation and child-thread
+  bootstrap; do not wait for the user to remind the loop.
+- Use Codex `automation_update` or equivalent with `kind="heartbeat"`,
+  `destination="thread"`, target=current Controller thread, status `ACTIVE`,
+  and default interval 15 minutes unless the user specified another cadence.
+- The heartbeat prompt must include thread ids/titles, repo/root, state paths,
+  queue order, review dependency gate, state write gate, hard stop conditions,
+  max wakeups, and evidence boundary.
+- On each wake, the Controller reads Worker/Reviewer/State-Writer reports,
+  reconciles state, dispatches repair/review/state update/next goal only when
+  gates are satisfied, and stops on final completion or hard blockers.
+- If heartbeat tools are unavailable, output `HEARTBEAT_UNAVAILABLE` and do not
+  call the loop fully automatic. Provide manual wake instructions instead.
+
 ### Controller Pack Markdown Delivery
 
 The generated Markdown file must be self-contained for the Controller:
@@ -340,6 +399,9 @@ The generated Markdown file must be self-contained for the Controller:
 - For project/repo work, require the Controller to resolve the project with
   `list_projects` or equivalent and create child threads with
   `create_thread(target.type="project", projectId=...)`.
+- Require bootstrap-only role prompts, explicit `/goal`, `/review`, and
+  `/state_update` gates, and mandatory heartbeat creation before claiming
+  automatic loop operation.
 - If the pack is incomplete, require `MISSING_PROMPT_PACK` and ask the user to
   send the complete Markdown file.
 - If file creation is impossible in the current environment, output a
@@ -379,8 +441,9 @@ Then write:
   workspace and sends the generated Controller Pack `.md` file. The Controller
   resolves the project with `list_projects`, then
   creates/renames/sends/reads Worker threads with
-  `create_thread(target.type="project", projectId=...)` and keeps looping until
-  a stop condition.
+  `create_thread(target.type="project", projectId=...)`, bootstraps child
+  threads into idle states, creates heartbeat automation, and keeps looping
+  until a stop condition.
 - `你只需要介入`: list human gates such as real subscription/payment/community
   config, deploy/merge approval, missing connector, hard blocker, or real-user
   evidence.
@@ -390,6 +453,7 @@ Then write:
   artifact means:
   Controller thread for routing decisions, Worker thread for changed files and
   commands, Reviewer thread for findings, State-Writer thread for state writes,
+  the heartbeat/automation card for active status, interval, and target thread,
   `LOOP_STATE.md` for the current progress snapshot (phase, active goal,
   blockers, next action), `LOOP_EVENTS.jsonl` for the step-by-step audit trail
   (dispatch, report, retry, review, stop), `TRIAGE.md` for the issue queue
@@ -493,8 +557,13 @@ the raw prompt carries domain-specific risks the heuristic cannot infer.
   dependency/package-install failures, use at least 10 runtime retry attempts
   before asking the user, with exact commands/evidence logged. This is separate
   from code repair attempts.
-- Automation: manual first round before automation; max 6 wakeups unless
-  specified; no-op runs archive/stop after recording status.
+- Automation: heartbeat is required at startup for automatic loop mode; default
+  15 minute interval and max 6 wakeups unless specified. If unavailable, output
+  `HEARTBEAT_UNAVAILABLE` and use manual wake fallback. No-op runs archive/stop
+  after recording status.
+- Thread bootstrap: role prompts are `BOOTSTRAP_ONLY`. Workers wait for `/goal`,
+  Reviewers wait for `/review`, and State-Writers wait for `/state_update`.
+  Idle statuses are normal, not blockers.
 - Project binding: for project/repo work, start inside a Codex Project/Workspace
   and create all Worker threads with a resolved `projectId`. Projectless threads
   are allowed only for general non-file tasks.

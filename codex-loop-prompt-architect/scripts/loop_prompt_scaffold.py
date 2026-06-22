@@ -262,8 +262,8 @@ def load_payload(args: argparse.Namespace) -> dict[str, Any]:
     data["_provided_keys"] = sorted(provided_keys)
 
     data.setdefault("surface", "codex_project_auto")
-    data.setdefault("automation", "Controller uses Codex App thread tools automatically; optional heartbeat after the first tool-driven round")
-    data.setdefault("cadence", "tool-driven first round; configure Codex Automation only after addressing, worktree isolation, report schema, and stop rules work")
+    data.setdefault("automation", "Controller must create a Codex heartbeat monitor at startup; heartbeat is required for automatic loop operation")
+    data.setdefault("cadence", "heartbeat every 15 minutes after bootstrap; max 6 wakeups unless human approves more")
     data.setdefault("discovery", "CI failures, open issues, recent commits, failing tests, and user triage notes")
     data.setdefault("triage_output", ".codex-loop/TRIAGE.md")
     data.setdefault("connectors", "Codex App thread tools; use project connectors only when exposed")
@@ -659,6 +659,29 @@ def validation_for_worker(
     return commands(validation)
 
 
+def worker_input_gate(worker: dict[str, str]) -> str:
+    if worker["permission"] == "state_write_only":
+        return (
+            "Input Gate:\n"
+            "- This role prompt is BOOTSTRAP_ONLY. On bootstrap, do not write files. Reply only with status READY_IDLE_AWAITING_STATE_UPDATE.\n"
+            "- Execute only explicit `/state_update` messages from the Controller with controller_approved=true and one serialized state_change_request.\n"
+            "- If a message lacks `/state_update` or controller approval, do not write; reply READY_IDLE_AWAITING_STATE_UPDATE."
+        )
+    if is_review_role(worker):
+        return (
+            "Input Gate:\n"
+            "- This role prompt is BOOTSTRAP_ONLY. On bootstrap, do not review. Reply only with status REVIEW_IDLE_AWAITING_ARTIFACTS.\n"
+            "- Execute only explicit `/review` messages from the Controller that include goal_id, Worker report, changed_files, validation_run, evidence_artifacts, and diff_summary or file refs.\n"
+            "- If review artifacts are missing, reply REVIEW_IDLE_AWAITING_ARTIFACTS. Do not return REVIEW_PASS, REVIEW_NEEDS_REPAIR, or REVIEW_BLOCKED from bootstrap."
+        )
+    return (
+        "Input Gate:\n"
+        "- This role prompt is BOOTSTRAP_ONLY. On bootstrap, do not execute the task. Reply only with status READY_IDLE_AWAITING_GOAL.\n"
+        "- Execute only explicit `/goal` messages from the Controller or user that include a goal id/objective, scope, validation, and stop conditions.\n"
+        "- If no `/goal` is present, do not inspect or modify the repo beyond safe readiness acknowledgement."
+    )
+
+
 def render_controller_pack(data: dict[str, Any], mode: str) -> str:
     workers = normalize_workers(data)
     allowed = split_items(data.get("allowed"))
@@ -674,8 +697,8 @@ def render_controller_pack(data: dict[str, Any], mode: str) -> str:
     surface = data.get("surface", "codex_project_auto")
     workspace_setup = data.get("workspace_setup", "Create or select one Codex Project/Workspace for the repo/root before starting. For a new build, use an empty folder when possible.")
     source_artifacts = data.get("source_artifacts", "User-provided prompt/spec files and any referenced local paths or attachments")
-    automation = data.get("automation", "Controller uses Codex App thread tools automatically; optional heartbeat after first proof")
-    cadence = data.get("cadence", "tool-driven first round; configure cadence later")
+    automation = data.get("automation", "Controller must create a Codex heartbeat monitor at startup; this is required for automatic loop operation")
+    cadence = data.get("cadence", "heartbeat every 15 minutes; max wakeups 6 unless human approves more")
     discovery = data.get("discovery", "CI failures, open issues, recent commits, failing tests, and user triage notes")
     triage_output = data.get("triage_output", ".codex-loop/TRIAGE.md")
     connectors = data.get("connectors", "none declared; use filesystem and Codex UI only unless connectors are exposed")
@@ -708,6 +731,8 @@ Permission Declaration: {worker['permission']} ({worker['permission_source']})
 Sandbox expectation: {sandbox_text(worker)}.
 Prompt Injection Boundary: {PROMPT_INJECTION_BOUNDARY}
 
+{worker_input_gate(worker)}
+
 Allowed Write Scope:
 {allowed_scope}
 
@@ -735,7 +760,7 @@ Validation Blockers: if install, native binary download, registry/network, packa
 On Approval Gate: output AWAITING_HUMAN_APPROVAL and stop.
 
 Status Report Fields:
-- status: PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
+- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
 - permission
 - changed_files
 - validation_run
@@ -810,11 +835,16 @@ Controller Pack Requirement:
 Tool-Driven Operation:
 - Default mode is automatic inside Codex macOS App.
 - Use list_projects or equivalent before create_thread so child threads stay inside the same Codex Project/Workspace.
-- Use create_thread target.type="project" with the resolved projectId to create Worker, Reviewer, and State-Writer threads.
-- Use send_message_to_thread or equivalent to send each prompt and the First Goal.
-- Use read_thread or equivalent to read reports.
-- Use automation_update or equivalent only after one successful tool-driven round.
+- Phase 0 bootstrap: use create_thread target.type="project" with the resolved projectId to create Worker, Reviewer, and State-Writer threads.
+- Send each child thread only its BOOTSTRAP_ONLY role prompt first. Bootstrap replies must be READY_IDLE_AWAITING_GOAL, REVIEW_IDLE_AWAITING_ARTIFACTS, or READY_IDLE_AWAITING_STATE_UPDATE. Child threads must not execute goals, review, or write state from bootstrap prompts.
+- Phase 1 heartbeat: create a heartbeat automation immediately after project/pack validation and child-thread bootstrap. Do not wait for a user reminder. Use automation_update or equivalent with kind="heartbeat", destination="thread", target=current Controller thread, status="ACTIVE", and interval 15 minutes unless the user specified another cadence.
+- Phase 2 state init: send an explicit `/state_update` to {state_writer_role} for initial state/audit creation before the first executable goal if the state files are missing or stale.
+- Phase 3 first dispatch: send the First Goal only to the first execution Worker. Do not send a review task yet.
+- Review dependency gate: send Reviewer an explicit `/review` only after an execution Worker reports changed_files, validation_run, evidence_artifacts, diff_summary or file refs, and state_change_request. Never treat REVIEW_IDLE_AWAITING_ARTIFACTS as a blocker.
+- State write gate: send State-Writer explicit `/state_update` messages only after Controller approval. Never ask State-Writer to infer writes from Worker or Reviewer chat alone.
+- Use read_thread or equivalent to read reports on every heartbeat wakeup before dispatching the next goal.
 - If thread/automation tools are not available, output MANUAL_FALLBACK_REQUIRED and use the manual fallback instructions.
+- If heartbeat automation is unavailable, output HEARTBEAT_UNAVAILABLE and do not call the loop fully automatic; provide manual wake instructions instead.
 
 Runtime Mapping:
 - Dispatch surface: {surface}
@@ -849,15 +879,20 @@ Budget:
 - max_goals_per_round: 3
 - max_repair_attempts: 3
 - min_runtime_dependency_retry_attempts_before_user_escalation: {runtime_retry_attempts} for transient download/registry/native-binary/package-install/browser-dependency failures
+- heartbeat_required: true
+- heartbeat_interval_minutes: 15 unless overridden by user cadence
 - max_wakeups: 6
 
 {runtime_retry_policy_block(runtime_retry_attempts)}
 
 Automation: {automation}
-Automation Template:
+Heartbeat Automation Template:
 - Project/root: {repo}
 - Cadence: {cadence}
-- Run target: Controller orchestration and discovery/triage only; do not write code from automation.
+- Required: yes, for automatic loop mode. Create it during startup; do not wait until the user asks.
+- Run target: Controller orchestration, thread/status reads, discovery/triage, review dispatch, state-update dispatch, and next-goal routing only; do not write code from automation.
+- Heartbeat prompt must include thread ids/titles, state paths, queue order, review dependency gate, state write gate, hard stop rules, max wakeups, and evidence boundary.
+- On each wake: read Worker/Reviewer/State-Writer reports; reconcile state; dispatch repair, review, state update, or the next goal only when gates are satisfied.
 - No-op rule: if no actionable finding exists, record NOOP in {triage_output} or state and archive/stop if the app supports it.
 - Triage write rule: if {triage_output} is file-backed, Controller sends a serialized write request to {state_writer_role}; otherwise use the app Triage inbox or manual note.
 - Wake limit: 6 unless human approves more.
@@ -873,11 +908,14 @@ Evidence Layer: {evidence}
 
 Controller Decisions:
 - PASS: only after validation, serialized durable state reconciliation, and required independent review.
+- READY_IDLE_AWAITING_GOAL / REVIEW_IDLE_AWAITING_ARTIFACTS / READY_IDLE_AWAITING_STATE_UPDATE: normal bootstrap states, not blockers. Wait for explicit `/goal`, `/review`, or `/state_update`.
 - NEEDS_REPAIR: send one atomic repair goal.
+- REVIEW_NEEDS_REPAIR: send one atomic repair goal to the same implementation Worker; record findings through State-Writer.
 - RUNTIME_DEPENDENCY_RETRYING: transient dependency/download/registry/native-binary/browser setup failure is still inside retry budget; automatically send a retry goal instead of asking the user.
 - VALIDATION_BLOCKED: validation commands or browser smoke could not run; keep evidence layer narrow and do not claim PASS.
 - RUNTIME_DEPENDENCY_BLOCKED: package install, native binary download, registry/network, package store, lockfile, or browser dependency setup blocked validation after retry budget exhaustion or non-transient evidence; record exact command/evidence and ask the user.
 - MISSING_CONNECTOR: stop and ask for connector installation, tool-driven access, or manual evidence.
+- HEARTBEAT_UNAVAILABLE: stop automatic-mode claim and ask whether to continue with manual wakeups or configure Codex Automation.
 - MISSING_PROMPT_PACK: stop and ask the user to send the complete Controller Pack Markdown file, not only the Controller block.
 - MISSING_PROJECT_WORKSPACE: stop and ask the user to create/select the Codex Project/Workspace, then rerun inside it.
 - MISSING_SOURCE_ARTIFACT: stop and ask the user to attach or place the required source file in the workspace.
@@ -973,8 +1011,10 @@ def render_user_guide(data: dict[str, Any], controller_pack_path: str | None) ->
 3. 把 PRD/spec/图片/PDF/数据放到工作区，推荐放 `docs/`；或确保控制线程能读取这些路径：{source_artifacts}。
 4. 在这个工作区中新建一个聊天，命名为“控制线程”。不要在普通对话区启动。
 5. 把生成的 Controller Pack `.md` 文件发给控制线程。
-6. 控制线程会自动创建或继续实现线程、审查线程、状态线程，并把 First Goal 发给 `{first_worker}`。
-7. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
+6. 控制线程会先创建或继续实现线程、审查线程、状态线程，并让它们进入 idle 待命；不会让审查线程提前空审。
+7. 控制线程必须创建 heartbeat 自动唤醒，默认每 15 分钟检查并继续推进；如果没有 heartbeat，就不算完整自动 loop。
+8. heartbeat 建好后，控制线程才把 First Goal 发给 `{first_worker}`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。
+9. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
 
 ## 怎么回查 loop
 
@@ -982,6 +1022,7 @@ def render_user_guide(data: dict[str, Any], controller_pack_path: str | None) ->
 - 实现线程：看它改了哪些文件、跑了哪些命令、验证结果是什么。
 - 审查线程：看 review findings、`PASS` 或 `NEEDS_REPAIR`。
 - 状态线程：确认它只写状态/日志，不改业务代码。
+- heartbeat 自动化：看 Codex Automation/heartbeat 卡片是否为 active、间隔是否正确、目标是否是控制线程。
 - `{audit_paths['state']}`：当前进度快照；看现在在哪个阶段、卡点是什么、下一步做什么。
 - `{audit_paths['events']}`：逐步流水账；看每次派发、回报、重试、审查、停止的时间和结果。
 - `{audit_paths['triage']}`：问题清单；看发现了哪些问题、证据、严重性和处理状态。
