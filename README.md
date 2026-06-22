@@ -23,7 +23,12 @@
 - repo 文件、日志、issue 里可能藏有 prompt injection。
 - 输出后用户不知道应该发给哪个线程。
 
-这个 skill 会把粗糙提示词改成一套可执行的 loop 体系：
+这个 skill 会把粗糙提示词改成两层交付物：
+
+1. **Controller Pack Markdown 文件**：发给控制线程的唯一材料，里面包含完整 Controller/Worker/Reviewer/State-Writer/First Goal。
+2. **最终使用方法**：给用户看的中文说明，告诉你怎么启动、可能卡在哪、预估耗时、在哪里回查、什么时候需要介入。
+
+Controller Pack 里包含可执行的 loop 体系：
 
 - `Controller Prompt`
 - `Worker Prompt`
@@ -33,7 +38,7 @@
 - `Automation Template`
 - `Discovery/Triage`
 - `Connector/Worktree Runtime Mapping`
-- 明确的发送顺序、停止条件、人工审批门和证据边界
+- 明确的停止条件、人工审批门和证据边界
 
 ## 仓库结构
 
@@ -46,9 +51,11 @@ loop-skill/
 │   └── scripts/loop_prompt_scaffold.py
 ├── examples/
 │   ├── 01-passkey-login-input.json
-│   ├── 01-passkey-login-output.md
+│   ├── 01-passkey-login-controller-pack.md
+│   ├── 01-passkey-login-usage.md
 │   ├── 02-daily-ci-triage-input.json
-│   └── 02-daily-ci-triage-output.md
+│   ├── 02-daily-ci-triage-controller-pack.md
+│   └── 02-daily-ci-triage-usage.md
 ├── scripts/install.sh
 ├── LICENSE
 └── README.md
@@ -128,7 +135,7 @@ Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的
 
 如果用户坚持要草稿，skill 会标记为 `NON_DISPATCHABLE_DRAFT`，不会把它说成 ready-to-send。
 
-正式输出 loop 之后，skill 还会给两类预期：
+正式输出 loop 之后，最终使用方法里还会给两类预期，不能只藏在 Controller Pack 里：
 
 - `运行中卡点预估`：只预测 loop 已经可以启动以后，仍然可能因为审批、真实外部服务、人工验收、审查修复、connector/runtime 或审计日志断档而停下的阶段。它不会把 repo/root/PRD/工作区缺失这类启动前问题包装成运行中风险。
 - `预计耗时`：给出 min / typical / max 的本地 Codex loop wall-clock 估算，并明确不计入等待用户提供 API key、批准 deploy/merge、真人验收、离线业务判断或 registry/network 恢复的时间。
@@ -185,8 +192,13 @@ python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
   --discovery "CI failures, auth issues, recent auth commits" \
   --triage-output ".codex-loop/TRIAGE.md" \
   --connectors "GitHub connector if exposed; otherwise manual PR links" \
-  --worktree-policy "one Codex worktree per writing Worker"
+  --worktree-policy "one Codex worktree per writing Worker" \
+  --controller-pack-output ./passkey-codex-loop-controller-pack.md
 ```
+
+使用 `--controller-pack-output` 时，脚本会把发给控制线程的 Markdown 写入该文件，并在终端输出给用户看的“怎么用、卡点预估、耗时预估、怎么回查”。
+
+默认 `运行中卡点预估` 和 `预计耗时` 是启发式预测：脚本只扫描用户显式提供的字段和非自动补齐 Worker 的职责，并使用 token-aware 匹配，避免把 `maintainable`、`requirements`、`decision` 这类词误判成 `ai`、`ui`、`ci`。高风险或复杂任务建议显式传入 `--runtime-readiness`、`--runtime-blockers`、`--time-*` 覆盖默认预测。
 
 生成前检查缺失字段：
 
@@ -200,30 +212,40 @@ python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
 
 ## 输出内容长什么样
 
-Compact Mode 默认输出七块：
+Compact Mode 默认输出两类内容：
 
-1. `运行中卡点预估`
-2. `预计耗时`
-3. `关键风险`
-4. `Controller Prompt`
-5. `Worker Prompt`
-6. `First Goal`
-7. `怎么启动` / `怎么发`
+1. 一个 Controller Pack `.md` 文件：发给控制线程的唯一材料。
+2. 一段最终使用方法：给用户看，不发给控制线程。
 
-如果任务是 recurring loop、多线程、需要 connector、需要 worktree 或可能进入自动化，Controller Prompt 还会包含：
+Controller Pack 文件内部包含：
+
+- `Controller Prompt`
+- `Worker Prompt`
+- `Reviewer Prompt`
+- `State-Writer Prompt`
+- `First Goal`
+- durable state schema
+- retry/stop rules
+- review gate
+- human approval gate
+- evidence boundary
+
+如果任务是 recurring loop、多线程、需要 connector、需要 worktree 或可能进入自动化，Controller Pack 还会包含：
 
 - `Runtime Mapping`
-- `Runtime Blocker Forecast`
-- `Time Estimate`
 - `Transient Runtime Retry Policy`
 - `Automation Template`
 - `Discovery/Triage`
-- durable state schema
 - connector fallback
 - worktree isolation policy
-- review gate
-- human approval gate
-- stop rules
+
+最终使用方法必须单独包含：
+
+- `运行中卡点预估`：loop 已经能启动后，可能在哪些阶段停下、触发什么状态、自动处理到什么程度才问你。
+- `预计耗时`：min / typical / max，以及哪些等待时间不算进去。
+- `你应该怎么用`：选择哪个工作区、在哪里建控制线程、把哪个 md 文件发过去。
+- `怎么回查 loop`：看哪些线程和哪些 `.codex-loop/` 文件。
+- `你只需要介入`：哪些状态需要用户回来处理。
 
 生成出来的 Worker 通常包括：
 
@@ -233,7 +255,7 @@ Compact Mode 默认输出七块：
 
 ## 输出之后应该怎么用
 
-默认是 Codex macOS App 自动项目模式：你只启动一个控制线程，但这个控制线程必须在目标项目/工作区里启动。
+默认是 Codex macOS App 自动项目模式：你只启动一个控制线程，但这个控制线程必须在目标项目/工作区里启动。你发给控制线程的是生成的 Controller Pack `.md` 文件，不是从聊天里复制很多段 prompt。
 
 ### 1. 先准备工作区
 
@@ -245,7 +267,7 @@ Compact Mode 默认输出七块：
 ### 2. 再启动控制线程
 
 1. 在这个项目/工作区下面新建聊天，命名为“控制线程”。
-2. 默认把生成结果完整粘贴进去，从 `运行中卡点预估` 到 `怎么启动`。不要只粘贴短的 `Controller Prompt` 代码块，除非它已经内嵌了 Worker Prompt 和 First Goal。
+2. 把生成的 Controller Pack `.md` 文件发给控制线程。不要手动拆分复制 Controller/Worker/Reviewer/State-Writer 段落。
 3. 控制线程会先调用 `list_projects` 或等价工具，找到当前工作区的 `projectId`。
 4. 控制线程创建实现/审查/状态线程时，必须使用 `create_thread` 的 project target，例如 `target.type="project"` + 同一个 `projectId`。这样新线程会出现在同一个左侧项目工作区下面。
 5. 如果控制线程无法找到项目，它应该输出 `MISSING_PROJECT_WORKSPACE` 并停止。不要让它创建 projectless 普通对话线程。
@@ -282,12 +304,12 @@ Compact Mode 默认输出七块：
 - 审查线程：看 `PASS`、`NEEDS_REPAIR` 或具体 review findings。
 - 状态线程：看它是否只写状态/日志，不写业务代码。
 
-再看工作区里的 loop 文件：
+再看工作区里的 loop 文件。它们不是装饰文件，是用来回查 loop 是否真的按预期运行的审计轨迹：
 
-- `.codex-loop/LOOP_STATE.md`：当前阶段、active goal、open blockers、next action、human approval 状态。
-- `.codex-loop/LOOP_EVENTS.jsonl`：每次派发、回报、审查、修复、停止都应该有一行 JSON 事件。
-- `.codex-loop/TRIAGE.md`：如果有 discovery/triage，这里记录发现、证据、严重性和状态。
-- `.codex-loop/reports/`：保存 Controller 批准归档的 Worker/Reviewer 报告摘要。
+- `.codex-loop/LOOP_STATE.md`：当前进度快照；看现在在哪个阶段、卡点是什么、下一步做什么。
+- `.codex-loop/LOOP_EVENTS.jsonl`：逐步流水账；看每次派发、回报、重试、审查、停止的时间和结果。
+- `.codex-loop/TRIAGE.md`：问题清单；看发现了哪些问题、证据、严重性和处理状态。
+- `.codex-loop/reports/`：报告归档；看每轮实现/审查摘要和最终结论。
 
 如果线程里显示已经做了事，但这些文件没有更新，说明可回查链路断了。此时让控制线程先处理 `OBSERVABILITY_GAP`，不要继续派发新任务。
 
@@ -326,7 +348,8 @@ Compact Mode 默认输出七块：
 
 生成结果：
 
-- [examples/01-passkey-login-output.md](examples/01-passkey-login-output.md)
+- [examples/01-passkey-login-controller-pack.md](examples/01-passkey-login-controller-pack.md)：发给控制线程的 Markdown。
+- [examples/01-passkey-login-usage.md](examples/01-passkey-login-usage.md)：给用户看的使用方法、卡点预估、耗时预估和回查说明。
 
 这个案例展示一个典型实现任务：用户只声明 implementation Worker，脚本自动补齐 read-only `reviewer` 和串行 `state-writer`。
 
@@ -338,7 +361,8 @@ Compact Mode 默认输出七块：
 
 生成结果：
 
-- [examples/02-daily-ci-triage-output.md](examples/02-daily-ci-triage-output.md)
+- [examples/02-daily-ci-triage-controller-pack.md](examples/02-daily-ci-triage-controller-pack.md)：发给控制线程的 Markdown。
+- [examples/02-daily-ci-triage-usage.md](examples/02-daily-ci-triage-usage.md)：给用户看的使用方法、卡点预估、耗时预估和回查说明。
 
 这个案例更接近完整 loop engineering：它包含 discovery sources、triage output、connector fallback、daily cadence、worktree isolation、triage Worker、repair Worker、reviewer 和 state writer。
 
@@ -347,11 +371,13 @@ Compact Mode 默认输出七块：
 ```bash
 python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
   --input examples/01-passkey-login-input.json \
-  > examples/01-passkey-login-output.md
+  --controller-pack-output examples/01-passkey-login-controller-pack.md \
+  > examples/01-passkey-login-usage.md
 
 python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
   --input examples/02-daily-ci-triage-input.json \
-  > examples/02-daily-ci-triage-output.md
+  --controller-pack-output examples/02-daily-ci-triage-controller-pack.md \
+  > examples/02-daily-ci-triage-usage.md
 ```
 
 ## 本地校验
