@@ -114,7 +114,8 @@ readiness, deploy readiness, or release readiness.
 Use the strongest available surface:
 
 - Dedicated Codex code-review capability, if exposed.
-- Separate read-only Reviewer/Judge thread or task-scoped subagent.
+- Separate read-only Reviewer/Judge Codex App thread created through
+  `create_thread(target.type="project", projectId=...)` for automatic loop mode.
 - GitHub PR review/status/review-thread tools when a PR exists and tool-driven
   operation is requested.
 - Manual diff review instructions for UI manual mode.
@@ -176,6 +177,12 @@ Map the generated loop onto the actual Codex macOS App surface:
 - `surface`: default `codex_app_auto` when Codex App exposes thread tools
   (`create_thread`, `send_message_to_thread`, `read_thread`,
   `automation_update`, or equivalents). Use `ui_manual` only as fallback.
+- `thread_tool_boundary`: Worker/Reviewer/State-Writer identities must be real
+  Codex App threads. Do not substitute `multi_agent_v1.spawn_agent`,
+  `agent_type`, `fork_context`, generic sub-agents, or `agentId`-only routing
+  for automatic loop threads. If thread tools are unavailable, output
+  `THREAD_TOOLS_UNAVAILABLE`; manual fallback may be used only after that is
+  explicit.
 - `connectors`: available MCP/connectors/plugins and their allowed actions.
 - `connector_fallback`: if a connector is missing, output `MISSING_CONNECTOR`,
   collect manual evidence, or stop. Never invent connector data.
@@ -188,8 +195,9 @@ Map the generated loop onto the actual Codex macOS App surface:
 
 When thread tools are available, Controller creates or continues Worker,
 Reviewer, and State-Writer threads directly and stores their identifiers in
-durable state. When the environment lacks thread/worktree controls, encode
-isolation as a behavioral instruction and use the manual fallback.
+durable state. When the environment lacks thread/worktree controls, do not
+spawn sub-agents as a silent substitute; output `THREAD_TOOLS_UNAVAILABLE`, then
+encode isolation as a behavioral instruction only for explicit manual fallback.
 
 ## Goal Template
 

@@ -470,6 +470,17 @@ def cost_usage_policy_block(data: dict[str, Any], workers: list[dict[str, str]])
     )
 
 
+def thread_tool_boundary_block() -> str:
+    return (
+        "Thread Tool Boundary:\n"
+        "- Worker, Reviewer, and State-Writer roles must be real Codex App threads, not internal sub-agents.\n"
+        "- Required thread path for project/repo work: list_projects -> resolve projectId -> create_thread(target.type=\"project\", projectId=..., environment=...).\n"
+        "- Forbidden substitutions: multi_agent_v1.spawn_agent, generic sub-agent tools, agent_type, fork_context, internal \"智能体\", or any agentId-only delegation.\n"
+        "- If create_thread/list_projects/read_thread/send_message_to_thread are unavailable, output THREAD_TOOLS_UNAVAILABLE and stop automatic mode. Do not silently fall back to sub-agents.\n"
+        "- Manual fallback is allowed only after reporting MANUAL_FALLBACK_REQUIRED and telling the user to manually create real Codex App threads inside the same project/workspace."
+    )
+
+
 def cost_usage_user_block(data: dict[str, Any], workers: list[dict[str, str]]) -> str:
     if not (metered_runtime_requested(data, workers) or metered_runtime_policy_supplied(data, workers)):
         return ""
@@ -909,7 +920,7 @@ Validation Blockers: if install, native binary download, registry/network, packa
 On Approval Gate: output AWAITING_HUMAN_APPROVAL and stop. On missing paid/metered runtime budget: output BLOCKED_COST_CAP and stop before calling.
 
 Status Report Fields:
-- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
+- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | THREAD_TOOLS_UNAVAILABLE | MANUAL_FALLBACK_REQUIRED | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
 - permission
 - changed_files
 - validation_run
@@ -943,6 +954,7 @@ Worker prompts manually unless Codex thread tools are unavailable.
 ## 关键风险
 {diagnosis}
 - Review/Audit is mandatory before PASS if any code/config/PR diff exists.
+- Worker/Reviewer/State-Writer must be real Codex App threads; sub-agents are not a valid substitute.
 - Human approval is mandatory for deploy, PR merge, secrets/auth/billing/security, data deletion, or public claims beyond evidence.
 - Explicit cost/usage authorization is mandatory before any `codex exec`, real LLM/API call, provider/backend call, paid API, or model scoring smoke.
 - Durable state uses single-writer serial updates; Workers output state_change_request only.
@@ -967,6 +979,7 @@ Codex Project/Workspace Binding:
 - Before creating child threads, call list_projects or equivalent and resolve the projectId whose name/root matches this workspace.
 - Create every Worker/Reviewer/State-Writer thread with create_thread target.type="project" and the resolved projectId.
 - Do not create project/repo work as target.type="projectless".
+- Do not use sub-agent tools to create these roles. `multi_agent_v1.spawn_agent`, `agent_type`, `fork_context`, and "创建智能体" are not Codex App project threads.
 - For workspace_write Workers, use the environment required by the worktree policy. Use environment.type="local" for a single approved writer in the same project workspace; use environment.type="worktree" for isolated or parallel writing Workers.
 - For read_only Reviewer and state_write_only State-Writer, use the same projectId and environment.type="local" unless the user explicitly requests a separate worktree.
 - If no matching project is found, output MISSING_PROJECT_WORKSPACE and stop.
@@ -985,6 +998,7 @@ Controller Pack Requirement:
 Tool-Driven Operation:
 - Default mode is automatic inside Codex macOS App.
 - Use list_projects or equivalent before create_thread so child threads stay inside the same Codex Project/Workspace.
+{thread_tool_boundary_block()}
 - Lean thread topology: {thread_topology}
 - Default child threads at startup: create only the first active Worker needed for First Goal, one Reviewer, and one State-Writer. Do not create one Worker per phase, milestone, or future goal.
 - Optional Explorer or additional Workers are just-in-time: create them only after Controller has a concrete dispatchable goal, required connector/worktree is available, cost/approval gates are satisfied, and the goal cannot safely reuse an existing Worker.
@@ -999,7 +1013,8 @@ Tool-Driven Operation:
 - Review dependency gate: send Reviewer an explicit `/review` only after an execution Worker reports changed_files, validation_run, evidence_artifacts, diff_summary or file refs, and state_change_request. Never treat REVIEW_IDLE_AWAITING_ARTIFACTS as a blocker.
 - State write gate: send State-Writer explicit `/state_update` messages only after Controller approval. Never ask State-Writer to infer writes from Worker or Reviewer chat alone.
 - Use read_thread or equivalent to read reports on every heartbeat wakeup before dispatching the next goal.
-- If thread/automation tools are not available, output MANUAL_FALLBACK_REQUIRED and use the manual fallback instructions.
+- If thread tools are not available, output THREAD_TOOLS_UNAVAILABLE and stop automatic mode. Do not use sub-agents as a fallback.
+- If the user explicitly accepts manual operation after THREAD_TOOLS_UNAVAILABLE, output MANUAL_FALLBACK_REQUIRED and use the manual fallback instructions.
 - If heartbeat automation is unavailable, output HEARTBEAT_UNAVAILABLE and do not call the loop fully automatic; provide manual wake instructions instead.
 
 Runtime Mapping:
@@ -1009,6 +1024,7 @@ Runtime Mapping:
 - Max child threads: {max_child_threads} unless human approves more
 - Connectors: {connectors}
 - Connector rule: use only tools/connectors exposed in the current Codex macOS App environment. If a required connector is missing, output MISSING_CONNECTOR and fall back to manual evidence collection; do not invent connector data.
+- Thread tool rule: Codex App thread tools are required for automatic mode. Sub-agent tools are explicitly out of scope for this Controller Pack.
 
 {cost_usage_gate}
 
@@ -1079,6 +1095,8 @@ Controller Decisions:
 - BLOCKED_COST_CAP: a goal would require `codex exec`, real LLM/API, provider/backend, paid API, model scoring smoke, or another metered service, but cost/call/token caps or authorization are missing/unspecified. Do not dispatch that Worker.
 - BLOCKED_USAGE_METADATA: approved metered execution cannot expose or conservatively infer usage metadata needed to enforce the cap. Stop before expanding calls.
 - MISSING_CONNECTOR: stop and ask for connector installation, tool-driven access, or manual evidence.
+- THREAD_TOOLS_UNAVAILABLE: `create_thread` or required Codex App thread tools are not exposed. Stop automatic mode; do not use `multi_agent_v1.spawn_agent` or any sub-agent tool.
+- MANUAL_FALLBACK_REQUIRED: only after THREAD_TOOLS_UNAVAILABLE or explicit user request, ask the user to manually create real Codex App threads inside the same project/workspace.
 - HEARTBEAT_UNAVAILABLE: stop automatic-mode claim and ask whether to continue with manual wakeups or configure Codex Automation.
 - MISSING_PROMPT_PACK: stop and ask the user to send the complete Controller Pack Markdown file, not only the Controller block.
 - MISSING_PROJECT_WORKSPACE: stop and ask the user to create/select the Codex Project/Workspace, then rerun inside it.
@@ -1180,9 +1198,11 @@ def render_user_guide(data: dict[str, Any], controller_pack_path: str | None) ->
 4. 在这个工作区中新建一个聊天，命名为“控制线程”。不要在普通对话区启动。
 5. 把生成的 Controller Pack `.md` 文件发给控制线程。
 6. 控制线程默认只创建或继续当前需要的最少线程：一个当前 Worker、一个审查线程、一个状态线程；不会按 R/S/T/U/W 这种阶段提前创建一堆 Worker。
-7. 控制线程必须创建 heartbeat 自动唤醒，默认每 15 分钟检查并继续推进；如果没有 heartbeat，就不算完整自动 loop。
-8. heartbeat 建好后，控制线程才把 First Goal 发给 `{first_worker}`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。后续阶段优先复用同一个实现线程，只有明确需要独立 worktree/专业角色/并行时才新建线程。
-9. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
+7. 这些必须是 Codex App 项目线程：控制线程要用 `list_projects` 和 `create_thread(target.type="project", projectId=...)` 创建。`multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、"创建智能体" 都不算。
+8. 控制线程必须创建 heartbeat 自动唤醒，默认每 15 分钟检查并继续推进；如果没有 heartbeat，就不算完整自动 loop。
+9. heartbeat 建好后，控制线程才把 First Goal 发给 `{first_worker}`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。后续阶段优先复用同一个实现线程，只有明确需要独立 worktree/专业角色/并行时才新建线程。
+10. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
+11. 如果控制线程说创建了“智能体 / sub-agent / agentId”，说明它没有创建真正的 Codex App 线程，让它停下处理 `THREAD_TOOLS_UNAVAILABLE`，不要继续执行。
 
 ## 怎么回查 loop
 
@@ -1203,7 +1223,7 @@ def render_user_guide(data: dict[str, Any], controller_pack_path: str | None) ->
 - 需要真实订阅、支付、社群、密钥或外部服务配置时。
 - 需要真实 LLM/API、`codex exec`、模型评分 smoke 或其他付费/计量调用，但没有预算/调用/Token 上限时。
 - 需要批准 PR merge、deploy、release 或真实外部写入时。
-- 出现 `AWAITING_HUMAN_APPROVAL`、`BLOCKED_COST_CAP`、`BLOCKED_USAGE_METADATA`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`OBSERVABILITY_GAP`、`HARD_BLOCK` 时。
+- 出现 `AWAITING_HUMAN_APPROVAL`、`BLOCKED_COST_CAP`、`BLOCKED_USAGE_METADATA`、`THREAD_TOOLS_UNAVAILABLE`、`MANUAL_FALLBACK_REQUIRED`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`OBSERVABILITY_GAP`、`HARD_BLOCK` 时。
 - 需要真人测试证据，或你决定接受 waiver 时。
 
 ## 手动降级

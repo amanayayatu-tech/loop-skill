@@ -9,6 +9,7 @@ Worker prompts manually unless Codex thread tools are unavailable.
 ## 关键风险
 - none visible from structured input
 - Review/Audit is mandatory before PASS if any code/config/PR diff exists.
+- Worker/Reviewer/State-Writer must be real Codex App threads; sub-agents are not a valid substitute.
 - Human approval is mandatory for deploy, PR merge, secrets/auth/billing/security, data deletion, or public claims beyond evidence.
 - Explicit cost/usage authorization is mandatory before any `codex exec`, real LLM/API call, provider/backend call, paid API, or model scoring smoke.
 - Durable state uses single-writer serial updates; Workers output state_change_request only.
@@ -33,6 +34,7 @@ Codex Project/Workspace Binding:
 - Before creating child threads, call list_projects or equivalent and resolve the projectId whose name/root matches this workspace.
 - Create every Worker/Reviewer/State-Writer thread with create_thread target.type="project" and the resolved projectId.
 - Do not create project/repo work as target.type="projectless".
+- Do not use sub-agent tools to create these roles. `multi_agent_v1.spawn_agent`, `agent_type`, `fork_context`, and "创建智能体" are not Codex App project threads.
 - For workspace_write Workers, use the environment required by the worktree policy. Use environment.type="local" for a single approved writer in the same project workspace; use environment.type="worktree" for isolated or parallel writing Workers.
 - For read_only Reviewer and state_write_only State-Writer, use the same projectId and environment.type="local" unless the user explicitly requests a separate worktree.
 - If no matching project is found, output MISSING_PROJECT_WORKSPACE and stop.
@@ -51,6 +53,12 @@ Controller Pack Requirement:
 Tool-Driven Operation:
 - Default mode is automatic inside Codex macOS App.
 - Use list_projects or equivalent before create_thread so child threads stay inside the same Codex Project/Workspace.
+Thread Tool Boundary:
+- Worker, Reviewer, and State-Writer roles must be real Codex App threads, not internal sub-agents.
+- Required thread path for project/repo work: list_projects -> resolve projectId -> create_thread(target.type="project", projectId=..., environment=...).
+- Forbidden substitutions: multi_agent_v1.spawn_agent, generic sub-agent tools, agent_type, fork_context, internal "智能体", or any agentId-only delegation.
+- If create_thread/list_projects/read_thread/send_message_to_thread are unavailable, output THREAD_TOOLS_UNAVAILABLE and stop automatic mode. Do not silently fall back to sub-agents.
+- Manual fallback is allowed only after reporting MANUAL_FALLBACK_REQUIRED and telling the user to manually create real Codex App threads inside the same project/workspace.
 - Lean thread topology: lean just-in-time topology: create only the first active Worker plus Reviewer and State-Writer at startup; create Explorer or extra Workers only when a gated goal actually needs them
 - Default child threads at startup: create only the first active Worker needed for First Goal, one Reviewer, and one State-Writer. Do not create one Worker per phase, milestone, or future goal.
 - Optional Explorer or additional Workers are just-in-time: create them only after Controller has a concrete dispatchable goal, required connector/worktree is available, cost/approval gates are satisfied, and the goal cannot safely reuse an existing Worker.
@@ -65,7 +73,8 @@ Tool-Driven Operation:
 - Review dependency gate: send Reviewer an explicit `/review` only after an execution Worker reports changed_files, validation_run, evidence_artifacts, diff_summary or file refs, and state_change_request. Never treat REVIEW_IDLE_AWAITING_ARTIFACTS as a blocker.
 - State write gate: send State-Writer explicit `/state_update` messages only after Controller approval. Never ask State-Writer to infer writes from Worker or Reviewer chat alone.
 - Use read_thread or equivalent to read reports on every heartbeat wakeup before dispatching the next goal.
-- If thread/automation tools are not available, output MANUAL_FALLBACK_REQUIRED and use the manual fallback instructions.
+- If thread tools are not available, output THREAD_TOOLS_UNAVAILABLE and stop automatic mode. Do not use sub-agents as a fallback.
+- If the user explicitly accepts manual operation after THREAD_TOOLS_UNAVAILABLE, output MANUAL_FALLBACK_REQUIRED and use the manual fallback instructions.
 - If heartbeat automation is unavailable, output HEARTBEAT_UNAVAILABLE and do not call the loop fully automatic; provide manual wake instructions instead.
 
 Runtime Mapping:
@@ -75,6 +84,7 @@ Runtime Mapping:
 - Max child threads: 4 unless human approves more
 - Connectors: GitHub connector if exposed; otherwise paste CI URLs and log excerpts manually
 - Connector rule: use only tools/connectors exposed in the current Codex macOS App environment. If a required connector is missing, output MISSING_CONNECTOR and fall back to manual evidence collection; do not invent connector data.
+- Thread tool rule: Codex App thread tools are required for automatic mode. Sub-agent tools are explicitly out of scope for this Controller Pack.
 
 Cost/Usage Authorization Gate:
 - metered_runtime_requested_from_input: not declared
@@ -181,6 +191,8 @@ Controller Decisions:
 - BLOCKED_COST_CAP: a goal would require `codex exec`, real LLM/API, provider/backend, paid API, model scoring smoke, or another metered service, but cost/call/token caps or authorization are missing/unspecified. Do not dispatch that Worker.
 - BLOCKED_USAGE_METADATA: approved metered execution cannot expose or conservatively infer usage metadata needed to enforce the cap. Stop before expanding calls.
 - MISSING_CONNECTOR: stop and ask for connector installation, tool-driven access, or manual evidence.
+- THREAD_TOOLS_UNAVAILABLE: `create_thread` or required Codex App thread tools are not exposed. Stop automatic mode; do not use `multi_agent_v1.spawn_agent` or any sub-agent tool.
+- MANUAL_FALLBACK_REQUIRED: only after THREAD_TOOLS_UNAVAILABLE or explicit user request, ask the user to manually create real Codex App threads inside the same project/workspace.
 - HEARTBEAT_UNAVAILABLE: stop automatic-mode claim and ask whether to continue with manual wakeups or configure Codex Automation.
 - MISSING_PROMPT_PACK: stop and ask the user to send the complete Controller Pack Markdown file, not only the Controller block.
 - MISSING_PROJECT_WORKSPACE: stop and ask the user to create/select the Codex Project/Workspace, then rerun inside it.
@@ -265,7 +277,7 @@ Validation Blockers: if install, native binary download, registry/network, packa
 On Approval Gate: output AWAITING_HUMAN_APPROVAL and stop. On missing paid/metered runtime budget: output BLOCKED_COST_CAP and stop before calling.
 
 Status Report Fields:
-- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
+- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | THREAD_TOOLS_UNAVAILABLE | MANUAL_FALLBACK_REQUIRED | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
 - permission
 - changed_files
 - validation_run
@@ -353,7 +365,7 @@ Validation Blockers: if install, native binary download, registry/network, packa
 On Approval Gate: output AWAITING_HUMAN_APPROVAL and stop. On missing paid/metered runtime budget: output BLOCKED_COST_CAP and stop before calling.
 
 Status Report Fields:
-- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
+- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | THREAD_TOOLS_UNAVAILABLE | MANUAL_FALLBACK_REQUIRED | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
 - permission
 - changed_files
 - validation_run
@@ -438,7 +450,7 @@ Validation Blockers: if install, native binary download, registry/network, packa
 On Approval Gate: output AWAITING_HUMAN_APPROVAL and stop. On missing paid/metered runtime budget: output BLOCKED_COST_CAP and stop before calling.
 
 Status Report Fields:
-- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
+- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | THREAD_TOOLS_UNAVAILABLE | MANUAL_FALLBACK_REQUIRED | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
 - permission
 - changed_files
 - validation_run
@@ -528,7 +540,7 @@ Validation Blockers: if install, native binary download, registry/network, packa
 On Approval Gate: output AWAITING_HUMAN_APPROVAL and stop. On missing paid/metered runtime budget: output BLOCKED_COST_CAP and stop before calling.
 
 Status Report Fields:
-- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
+- status: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | READY_IDLE_AWAITING_STATE_UPDATE | PASS | PASS_WITH_WAIVER | NEEDS_REPAIR | REVIEW_PASS | REVIEW_NEEDS_REPAIR | REVIEW_BLOCKED | RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | THREAD_TOOLS_UNAVAILABLE | MANUAL_FALLBACK_REQUIRED | HARD_BLOCK | AWAITING_HUMAN_APPROVAL | MISSING_CONNECTOR
 - permission
 - changed_files
 - validation_run

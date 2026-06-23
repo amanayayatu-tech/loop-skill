@@ -134,6 +134,7 @@ Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的
 - 是否需要独立 worktree。
 - 是否会运行 `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke、付费 API 或其他按量计费服务；如果会，必须说明 `cost_cap_usd`、调用次数/Token 上限，或者明确“先占位/延后，停在 `BLOCKED_COST_CAP`”。
 - 是否真的需要多个 Worker 并行或多个阶段专用线程；默认应该只用当前 Worker + Reviewer + State-Writer。
+- 是否当前 Codex App 暴露了 `create_thread` / `read_thread` / `send_message_to_thread` / `automation_update` 等线程工具。没有线程工具时只能停在 `THREAD_TOOLS_UNAVAILABLE` 或进入手动降级，不能用内部 sub-agent 冒充线程。
 - 需要哪些源文件/附件：PRD、截图、PDF、设计稿、数据文件等。
 - 用户后续应该看哪些状态文件、事件日志和报告目录来回查 loop 是否按预期运行。
 
@@ -145,6 +146,7 @@ Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的
 - `预计耗时`：给出 min / typical / max 的本地 Codex loop wall-clock 估算，并明确不计入等待用户提供 API key、批准 deploy/merge、真人验收、离线业务判断或 registry/network 恢复的时间。
 - `成本/付费调用闸`：如果任务可能运行 `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke、付费 API 或 Token 计量调用，最终用法必须明确当前 `cost_cap_usd`、调用/Token 上限，或说明会在该阶段前停到 `BLOCKED_COST_CAP`。这类缺失不能让用户跑到后半程才意外发现。
 - `线程数量原则`：默认精简拓扑，不按阶段提前创建一堆 Worker。正常情况下只需要一个当前 Worker、一个 Reviewer、一个 State-Writer；Explorer 和额外 Worker 只有在目标已经可派发、需要独立 worktree/专业角色/并行时才按需创建。
+- `线程工具边界`：自动模式必须用 Codex App 的 `create_thread(target.type="project", projectId=...)` 创建真实项目线程。`multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、`agentId`、"创建智能体" 都不是 Codex App loop 线程。
 
 对 Web/Node/前端项目，`运行中卡点预估` 会默认提醒首轮依赖安装和本地验证环境风险，例如 Next.js/SWC、Playwright、Sharp、canvas、Electron、native binary、大包下载、`pnpm`/`npm` store 或 lockfile 问题。遇到这类情况时，loop 不应该立刻卡死等用户处理；应该先进入 `RUNTIME_DEPENDENCY_RETRYING`，自动执行至少 10 次有策略的重试，包括延长 timeout、断点/分段/预取、降低并发、换安全公开 registry/source、清理项目内部分安装残留等。只有重试耗尽或错误明显不是临时波动时，才输出 `RUNTIME_DEPENDENCY_BLOCKED` 或 `VALIDATION_BLOCKED`。无论哪种情况，都不能把“源码已生成/静态审查通过”说成完整 PASS。
 
@@ -289,7 +291,8 @@ Controller Pack 文件内部包含：
 2. 把生成的 Controller Pack `.md` 文件发给控制线程。不要手动拆分复制 Controller/Worker/Reviewer/State-Writer 段落。
 3. 控制线程会先调用 `list_projects` 或等价工具，找到当前工作区的 `projectId`。
 4. 控制线程创建实现/审查/状态线程时，必须使用 `create_thread` 的 project target，例如 `target.type="project"` + 同一个 `projectId`。这样新线程会出现在同一个左侧项目工作区下面。
-5. 如果控制线程无法找到项目，它应该输出 `MISSING_PROJECT_WORKSPACE` 并停止。不要让它创建 projectless 普通对话线程。
+5. 控制线程不能用内部 sub-agent 代替线程。只要看到 `multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、`agentId`、`Jason(worker)`、`创建智能体` 这类输出，就说明它没有创建真正的 Codex App 项目线程，应停在 `THREAD_TOOLS_UNAVAILABLE` 或手动降级。
+6. 如果控制线程无法找到项目，它应该输出 `MISSING_PROJECT_WORKSPACE` 并停止。不要让它创建 projectless 普通对话线程。
 
 ### 3. 自动 loop 怎么跑
 
@@ -310,6 +313,7 @@ Controller Pack 文件内部包含：
 - 需要批准 PR merge、deploy、release 或真实外部写入。
 - 出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`OBSERVABILITY_GAP` 或 `HARD_BLOCK`。
 - 出现 `BLOCKED_COST_CAP` 或 `BLOCKED_USAGE_METADATA`。这表示后续需要真实付费/计量调用，但预算、调用/Token 上限或用量元数据边界还不够明确。
+- 出现 `THREAD_TOOLS_UNAVAILABLE` 或 `MANUAL_FALLBACK_REQUIRED`。这表示当前环境没有可用的 Codex App 线程工具；不能用 sub-agent 顶替。
 - 需要真人可用性测试证据，或你决定接受 waiver。
 
 ### 4. 怎么回查 loop 是否按预期在跑
@@ -318,6 +322,7 @@ Controller Pack 文件内部包含：
 
 - 控制线程、实现线程、审查线程、状态线程都应该在同一个项目下面。
 - 如果实现/审查/状态线程跑到了普通对话列表，说明 Controller 没有正确使用 project target，需要停下修正。
+- 如果左侧没有出现真实线程，而日志里出现“创建智能体”、`agentId` 或 `Jason/Descartes/Galileo` 这类 sub-agent 名称，说明 loop 跑错运行层了。让控制线程停止，不要继续执行。
 
 再看线程职责：
 
@@ -350,6 +355,7 @@ Controller Pack 文件内部包含：
 - `state-writer` 一次只写一个 Controller 批准的 state update，并维护 `.codex-loop/LOOP_EVENTS.jsonl` 与 `.codex-loop/reports/`。
 - 线程初始化是 `BOOTSTRAP_ONLY`：Worker 等 `/goal`，Reviewer 等 `/review`，State-Writer 等 `/state_update`。idle 不是失败，也不是卡点。
 - 自动 loop 必须在启动时创建 heartbeat；如果 heartbeat 工具不可用，输出 `HEARTBEAT_UNAVAILABLE`，只能进入手动唤醒降级模式。
+- 自动 loop 必须使用 Codex App thread tools 创建真实线程；禁止用 `multi_agent_v1.spawn_agent`、`agent_type`、`fork_context` 或内部 sub-agent 替代。缺少线程工具时输出 `THREAD_TOOLS_UNAVAILABLE`。
 - 默认只创建当前 Worker、Reviewer、State-Writer；不要按阶段提前创建一堆 Worker。Explorer 和额外 Worker 只在有明确、可派发、已过 gate 的目标时按需创建。
 - implementation Worker 不能自审。
 - `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke、付费 API 或 Token 计量调用必须有明确成本/调用/Token 上限；否则停在 `BLOCKED_COST_CAP`，不能临时自行运行。
@@ -364,6 +370,7 @@ Controller Pack 文件内部包含：
 - 无限循环。
 - 并发写状态导致撕裂。
 - 执行者自审。
+- 把内部 sub-agent 误当成 Codex App 项目线程。
 - prompt injection。
 - connector 缺失时编造数据。
 

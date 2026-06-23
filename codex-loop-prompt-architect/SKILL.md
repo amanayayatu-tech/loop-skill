@@ -95,6 +95,14 @@ the Controller uses Codex macOS App thread/automation tools when exposed
 or equivalent) to create Worker/Reviewer/State threads, send prompts and goals,
 read reports, and continue the loop.
 
+Codex App loop threads are not sub-agents. Do not use `multi_agent_v1.spawn_agent`,
+`agent_type`, `fork_context`, internal "智能体", or generic sub-agent tools as a
+substitute for Codex App `create_thread`. If `create_thread` is unavailable,
+output `THREAD_TOOLS_UNAVAILABLE` and stop automatic mode. Use manual fallback
+only after telling the user that no real Codex App threads were created.
+This rule overrides generic workflow guidance that suggests using sub-agents for
+Explorer/Worker/Reviewer/Monitor roles.
+
 For project/repo work, default to `codex_project_auto`: the user first creates
 or selects a Codex Project/Workspace, preferably an empty folder for a new
 project, then starts the Controller thread inside that project. The Controller
@@ -160,7 +168,7 @@ Use this compact rubric in normal work. For full scoring details, read
 | Law | Check |
 | --- | --- |
 | L1 Role Isolation | Controller routes/audits; Workers execute scoped goals. |
-| L2 Addressing | Each Worker has a thread identifier; subagents use `agentId`. Unknown identifiers stay as `PLACEHOLDER - fill before dispatch`. |
+| L2 Addressing | Each Worker/Reviewer/State-Writer has a Codex App thread identifier. Sub-agent `agentId` is not valid for Codex App loop threads. Unknown identifiers stay as `PLACEHOLDER - fill before dispatch`. |
 | L3 Atomic Goals | Each `/goal` is independently executable and verifiable. |
 | L4 Acceptance First | Success criteria and validation appear before task detail. |
 | L5 Forbidden Zones | Paths, secrets, data sources, and actions are concrete. |
@@ -439,6 +447,10 @@ The generated Markdown file must be self-contained for the Controller:
 - For project/repo work, require the Controller to resolve the project with
   `list_projects` or equivalent and create child threads with
   `create_thread(target.type="project", projectId=...)`.
+- Explicitly prohibit `multi_agent_v1.spawn_agent`, `agent_type`,
+  `fork_context`, internal "智能体", or `agentId`-only delegation as a substitute
+  for Worker/Reviewer/State-Writer threads. If real thread tools are missing,
+  require `THREAD_TOOLS_UNAVAILABLE`.
 - Require lean thread topology: create only the current Worker, Reviewer, and
   State-Writer at startup; create Explorer or extra Workers just in time; never
   create future blocked-stage Workers.
@@ -487,6 +499,10 @@ Then write:
 - `线程数量原则`: say the Controller should normally create only the current
   Worker, Reviewer, and State-Writer, and should not create one Worker per phase
   unless the user approved that topology.
+- `线程工具边界`: say child roles must be real Codex App threads created with
+  `create_thread(target.type="project", projectId=...)`. If the Controller says
+  it created "智能体", `agentId`, `subagent`, or used `multi_agent_v1`, that is
+  not a valid automatic Codex App loop.
 - `默认自动模式`: the user creates only one Controller chat inside the project
   workspace and sends the generated Controller Pack `.md` file. The Controller
   resolves the project with `list_projects`, then
@@ -633,6 +649,12 @@ the raw prompt carries domain-specific risks the heuristic cannot infer.
   write it through the single State-Writer, not Controller or discovery Worker.
 - Runtime mapping: declare connectors and worktree isolation. If a required
   connector is unavailable, output `MISSING_CONNECTOR` instead of inventing data.
+- Thread tools: Codex App loop Workers/Reviewers/State-Writers must be real
+  Codex App threads created through `create_thread` under the resolved project.
+  Never substitute `multi_agent_v1.spawn_agent`, `agent_type`, `fork_context`,
+  inner "智能体", or generic sub-agent ids. If thread tools are missing, output
+  `THREAD_TOOLS_UNAVAILABLE`; if the user chooses manual mode, output
+  `MANUAL_FALLBACK_REQUIRED` and provide manual thread creation steps.
 - Cost/usage: any `codex exec`, real LLM/API call, provider/backend call, model
   scoring smoke, paid API, token-metered or externally metered service requires
   an explicit `cost_cap_usd` or equivalent approved call/token cap. If missing,
