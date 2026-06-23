@@ -74,10 +74,18 @@ contradictory:
   report, review, blocker, approval gate, and final decision.
 - Validation commands and evidence layer.
 - Review gate for code/config/CI/deploy/PR changes.
+- Cost/usage authorization for any paid or metered runtime: `codex exec`, real
+  LLM/API calls, provider/backend calls, model scoring smoke, paid APIs, token
+  usage, or external metered services. Ask for `cost_cap_usd`, call/token caps,
+  usage-metadata expectations, and whether missing caps should block the stage
+  as `BLOCKED_COST_CAP` or be treated as an explicit deferred/placeholder gate.
 - Discovery sources, triage output, connector availability, and worktree policy
   when the loop should run beyond a one-off manual task.
 - Automation policy: manual-only or heartbeat, retry limit, wake limit, hard
   stop triggers.
+- Thread topology policy: default to one current execution Worker, one Reviewer,
+  and one State-Writer. Ask before generating many phase-specific Workers,
+  persistent Explorers, or parallel Workers.
 
 ## Codex macOS App Surface
 
@@ -135,6 +143,14 @@ inside the Controller prompt:
 - **Loop Observability Template**: state snapshot, append-only event log,
   triage file, report archive, JSONL fields, stale-log detection, and user
   check instructions.
+- **Cost/Usage Authorization Gate**: explicit cap/policy before `codex exec`,
+  real LLM/API calls, provider/backend calls, model scoring smoke, paid APIs, or
+  other metered services. If unresolved, run only approved local/placeholder
+  stages and stop before the paid stage with `BLOCKED_COST_CAP`.
+- **Lean Thread Topology**: create child threads just in time. Do not create one
+  Worker per phase/milestone by default; reuse a sequential implementation
+  Worker unless an isolated worktree, specialization, or approved parallelism is
+  actually required.
 
 ## Core Checks
 
@@ -178,6 +194,9 @@ The final user-facing instructions must include:
 
 - `运行中卡点预估`: expected gates after startup, or `none`.
 - `预计耗时`: min/typical/max estimate and exclusions.
+- `成本/付费调用闸` when relevant: show whether `cost_cap_usd`, call cap, token
+  cap, or a deferred/placeholder policy exists. If missing, tell the user the
+  loop will stop at `BLOCKED_COST_CAP` before paid/metered execution.
 
 The Controller Pack Markdown file must include:
 
@@ -231,6 +250,10 @@ Common forecast categories:
 
 - External service approval: auth, billing, API keys, real AI calls, deploy,
   PR merge, user-visible communication, or production data writes.
+- Paid/metered execution: `codex exec`, real LLM/API calls, provider/backend
+  calls, model scoring smoke, token-metered usage, or paid APIs. Missing budget
+  or usage metadata must trigger `BLOCKED_COST_CAP` or
+  `BLOCKED_USAGE_METADATA`; do not create the future Worker or run the call.
 - Human evidence: real-user tests, visual approval, acceptance of waiver, or
   product/public/scientific claim approval.
 - Review repair: likely UX gaps, test failures, export artifacts, CI/build
@@ -339,11 +362,28 @@ Creating a child thread and sending its role prompt is only bootstrap. It must
 not cause a Worker to implement, a Reviewer to review, or a State-Writer to
 write.
 
+Generated Controller Packs must also keep a lean default topology:
+
+- Startup child threads are limited to the first active Worker needed for First
+  Goal, one independent Reviewer, and one State-Writer.
+- Do not create one Worker per phase such as `v3.8R`, `v3.8S`, `v3.8T`,
+  `v3.8U`, `v3.8W` by default. Sequential phases reuse the same implementation
+  Worker unless a separate worktree, incompatible context, or explicit
+  user-approved specialization is required.
+- Do not create Workers for blocked future stages. If a future stage needs cost
+  cap, connector approval, human approval, or source artifacts, record the gate
+  in state and stop before creating that Worker.
+- Explorer/read-only discovery threads are optional and just-in-time. Do not
+  create an Explorer if the Controller can do the required read-only routing or
+  no discovery goal is currently dispatchable.
+- Keep the default total child-thread budget at 4 or fewer unless the user
+  explicitly approves more.
+
 Use this protocol:
 
-- Phase 0 bootstrap: Controller creates Worker/Reviewer/State-Writer threads
-  under the same Codex Project/Workspace and sends each role prompt as
-  `BOOTSTRAP_ONLY`.
+- Phase 0 bootstrap: Controller creates only the minimal current
+  Worker/Reviewer/State-Writer threads under the same Codex Project/Workspace
+  and sends each role prompt as `BOOTSTRAP_ONLY`.
 - Bootstrap responses:
   - execution Worker: `READY_IDLE_AWAITING_GOAL`
   - Reviewer/Judge: `REVIEW_IDLE_AWAITING_ARTIFACTS`
@@ -399,6 +439,9 @@ The generated Markdown file must be self-contained for the Controller:
 - For project/repo work, require the Controller to resolve the project with
   `list_projects` or equivalent and create child threads with
   `create_thread(target.type="project", projectId=...)`.
+- Require lean thread topology: create only the current Worker, Reviewer, and
+  State-Writer at startup; create Explorer or extra Workers just in time; never
+  create future blocked-stage Workers.
 - Require bootstrap-only role prompts, explicit `/goal`, `/review`, and
   `/state_update` gates, and mandatory heartbeat creation before claiming
   automatic loop operation.
@@ -437,6 +480,13 @@ Then write:
   Tell the user to place them inside the workspace (for example `docs/`) or
   attach/provide absolute local paths in the first Controller message. If a
   required file is missing, the generated Controller must ask before dispatch.
+- `成本/付费调用闸`: if the loop may need `codex exec`, real LLM/API calls,
+  provider/backend calls, model scoring smoke, paid APIs, or token-metered
+  execution, state the current cap/policy. If no cap/policy exists, say the
+  Controller will stop with `BLOCKED_COST_CAP` before that stage.
+- `线程数量原则`: say the Controller should normally create only the current
+  Worker, Reviewer, and State-Writer, and should not create one Worker per phase
+  unless the user approved that topology.
 - `默认自动模式`: the user creates only one Controller chat inside the project
   workspace and sends the generated Controller Pack `.md` file. The Controller
   resolves the project with `list_projects`, then
@@ -445,8 +495,8 @@ Then write:
   threads into idle states, creates heartbeat automation, and keeps looping
   until a stop condition.
 - `你只需要介入`: list human gates such as real subscription/payment/community
-  config, deploy/merge approval, missing connector, hard blocker, or real-user
-  evidence.
+  config, cost cap for paid/metered calls, deploy/merge approval, missing
+  connector, hard blocker, or real-user evidence.
 - `手动降级模式`: include manual thread creation and copy/paste steps only if
   Codex thread/automation tools are unavailable.
 - `怎么回查`: tell the user exactly where to inspect progress and what each
@@ -552,6 +602,10 @@ the raw prompt carries domain-specific risks the heuristic cannot infer.
   output `state_change_request`; only the single State-Writer writes state.
 - Fanout: max 2 parallel Workers and 3 new goals per Controller round unless
   approved.
+- Thread topology: default to one current execution Worker, one Reviewer, and
+  one State-Writer. Extra Workers/Explorers are just-in-time and require a
+  dispatchable goal; do not pre-create phase-specific or blocked future-stage
+  Workers.
 - Retry: max 3 repair attempts per goal.
 - Runtime dependency retry: for transient download/registry/native-binary/browser
   dependency/package-install failures, use at least 10 runtime retry attempts
@@ -579,6 +633,12 @@ the raw prompt carries domain-specific risks the heuristic cannot infer.
   write it through the single State-Writer, not Controller or discovery Worker.
 - Runtime mapping: declare connectors and worktree isolation. If a required
   connector is unavailable, output `MISSING_CONNECTOR` instead of inventing data.
+- Cost/usage: any `codex exec`, real LLM/API call, provider/backend call, model
+  scoring smoke, paid API, token-metered or externally metered service requires
+  an explicit `cost_cap_usd` or equivalent approved call/token cap. If missing,
+  output `BLOCKED_COST_CAP` before creating the paid-stage Worker or running the
+  call. If usage cannot be measured or bounded, output
+  `BLOCKED_USAGE_METADATA`.
 - Validation blocking: if dependency install, native binary download, package
   manager cache, browser dependency setup, lint/typecheck/build/test, or browser
   smoke cannot run, first classify whether the failure is transient. For

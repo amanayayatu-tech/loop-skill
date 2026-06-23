@@ -51,6 +51,7 @@
 
 不计入：
 - 等你提供 API key / 凭证 / 订阅配置的时间
+- 等你提供 cost_cap_usd / 调用次数 / Token 上限或批准真实付费调用的时间
 - 等你批准 deploy / merge / 外部写入的时间
 - 等真人验收或离线业务判断的时间
 - 等 registry / 网络 / 原生包下载恢复的时间
@@ -62,6 +63,8 @@
 - test fixture setup
 - Reviewer repair rounds
 
+
+
 ## 你应该怎么用
 
 1. 在 Codex App 左侧选择或创建项目工作区：`myapp`。
@@ -69,9 +72,9 @@
 3. 把 PRD/spec/图片/PDF/数据放到工作区，推荐放 `docs/`；或确保控制线程能读取这些路径：docs/auth-spec.md and any attached login-flow screenshots。
 4. 在这个工作区中新建一个聊天，命名为“控制线程”。不要在普通对话区启动。
 5. 把生成的 Controller Pack `.md` 文件发给控制线程。
-6. 控制线程会先创建或继续实现线程、审查线程、状态线程，并让它们进入 idle 待命；不会让审查线程提前空审。
+6. 控制线程默认只创建或继续当前需要的最少线程：一个当前 Worker、一个审查线程、一个状态线程；不会按 R/S/T/U/W 这种阶段提前创建一堆 Worker。
 7. 控制线程必须创建 heartbeat 自动唤醒，默认每 15 分钟检查并继续推进；如果没有 heartbeat，就不算完整自动 loop。
-8. heartbeat 建好后，控制线程才把 First Goal 发给 `implementation`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。
+8. heartbeat 建好后，控制线程才把 First Goal 发给 `implementation`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。后续阶段优先复用同一个实现线程，只有明确需要独立 worktree/专业角色/并行时才新建线程。
 9. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
 
 ## 怎么回查 loop
@@ -91,8 +94,9 @@
 ## 你只需要介入
 
 - 需要真实订阅、支付、社群、密钥或外部服务配置时。
+- 需要真实 LLM/API、`codex exec`、模型评分 smoke 或其他付费/计量调用，但没有预算/调用/Token 上限时。
 - 需要批准 PR merge、deploy、release 或真实外部写入时。
-- 出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`OBSERVABILITY_GAP`、`HARD_BLOCK` 时。
+- 出现 `AWAITING_HUMAN_APPROVAL`、`BLOCKED_COST_CAP`、`BLOCKED_USAGE_METADATA`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`OBSERVABILITY_GAP`、`HARD_BLOCK` 时。
 - 需要真人测试证据，或你决定接受 waiver 时。
 
 ## 手动降级
