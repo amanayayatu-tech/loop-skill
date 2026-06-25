@@ -4,6 +4,8 @@
   "project_name": "myapp",
   "workspace_setup": "Open /workspace/myapp as a Codex Project before starting; use an isolated worktree for the implementation Worker if the app supports it",
   "branch": "feature/passkey-login",
+  "base_branch": "main",
+  "target_branch": "feature/passkey-login",
   "workers": "implementation:write auth UI, server handlers, and auth tests",
   "permissions": "implementation:workspace_write",
   "allowed": "src/auth/**,tests/auth/**",

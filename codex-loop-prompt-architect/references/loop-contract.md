@@ -60,7 +60,7 @@ distinct operational risks.
 | Law | Deduct when |
 | --- | --- |
 | L1 Role Isolation | Controller is allowed to implement, deploy, or mutate code/state directly. |
-| L2 Addressing | Worker target is ambiguous or uses an unfilled placeholder without a warning. |
+| L2 Addressing | Worker target is ambiguous, uses an unfilled placeholder without a warning, treats `agentId`/`pendingWorktreeId`/thread title/branch name as durable identity, or uses an unverified/missing worktree starting ref. |
 | L3 Atomic Goals | One goal combines unrelated implementation, testing, deploy, and review work. |
 | L4 Acceptance First | Success criteria or validation commands are absent or appear only after task text. |
 | L5 Forbidden Zones | Secrets, forbidden files, data sources, or dangerous actions are vague. |
@@ -187,6 +187,12 @@ Map the generated loop onto the actual Codex macOS App surface:
 - `connector_fallback`: if a connector is missing, output `MISSING_CONNECTOR`,
   collect manual evidence, or stop. Never invent connector data.
 - `worktree_policy`: one isolated Codex thread/worktree per writing Worker.
+- `worktree_identity_gate`: distinguish verified `existing_base_branch` from
+  `target_implementation_branch`; verify any starting ref before
+  `create_thread`; if the target branch is missing, start from the current
+  working tree or verified base branch and create/switch the target branch only
+  inside `/goal`; reconcile `pendingWorktreeId` to real `threadId` before
+  dispatching First Goal.
 - `controller_checkout`: Controller stays read-only and must not implement in a
   Worker checkout.
 - `parallelism`: no two writing Workers may share the same write checkout or

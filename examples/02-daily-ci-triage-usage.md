@@ -68,10 +68,12 @@
 5. 把生成的 Controller Pack `.md` 文件发给控制线程。
 6. 控制线程默认只创建或继续当前需要的最少线程：一个当前 Worker、一个审查线程、一个状态线程；不会按 R/S/T/U/W 这种阶段提前创建一堆 Worker。
 7. 这些必须是 Codex App 项目线程：控制线程要用 `list_projects` 和 `create_thread(target.type="project", projectId=...)` 创建。`multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、"创建智能体" 都不算。
-8. 控制线程必须创建 heartbeat 自动唤醒，默认每 15 分钟检查并继续推进；如果没有 heartbeat，就不算完整自动 loop。
-9. heartbeat 建好后，控制线程才把 First Goal 发给 `triage`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。后续阶段优先复用同一个实现线程，只有明确需要独立 worktree/专业角色/并行时才新建线程。
-10. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
-11. 如果控制线程说创建了“智能体 / sub-agent / agentId”，说明它没有创建真正的 Codex App 线程，让它停下处理 `THREAD_TOOLS_UNAVAILABLE`，不要继续执行。
+8. 目标实现分支不等于 worktree 启动分支。控制线程必须先验证 existing base branch 是否存在；目标分支不存在时，不能把它当作 `startingState.branchName`，应从当前工作树或已验证基线启动 Worker，再由 Worker 在 `/goal` 里创建/切换目标分支。
+9. 控制线程必须把真实 `threadId` 写进状态。线程标题只是显示名；如果 `create_thread` 只返回 `pendingWorktreeId`，控制线程要 broad list project threads，用 cwd/worktree、projectId、bootstrap prompt、`READY_IDLE_AWAITING_GOAL` 等证据找回真实 Worker，再重命名和登记。
+10. 控制线程必须创建 heartbeat 自动唤醒，默认每 15 分钟检查并继续推进；如果没有 heartbeat，就不算完整自动 loop。
+11. heartbeat 建好后，控制线程才把 First Goal 发给 `triage`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。后续阶段优先复用同一个实现线程，只有明确需要独立 worktree/专业角色/并行时才新建线程。
+12. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
+13. 如果控制线程说创建了“智能体 / sub-agent / agentId”，说明它没有创建真正的 Codex App 线程，让它停下处理 `THREAD_TOOLS_UNAVAILABLE`，不要继续执行。
 
 ## 怎么回查 loop
 

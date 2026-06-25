@@ -115,6 +115,34 @@ or State-Writer threads, use the same saved project with `environment.type`
 `target.type="projectless"` for repo/project implementation work. If the
 project cannot be resolved, output `MISSING_PROJECT_WORKSPACE` and stop.
 
+### Worktree And Thread Identity Gate
+
+For repo/project loop prompts, generated Controller Packs must distinguish:
+
+- `existing_base_branch`: a branch/ref verified to exist before `create_thread`.
+- `target_implementation_branch`: a branch the Worker may create or switch to
+  only after bootstrap and preflight.
+
+Never use a proposed target branch as `create_thread` worktree
+`startingState.branchName` unless the Controller first verifies the ref exists
+with `git show-ref --verify refs/heads/<branch>` or equivalent. If the target
+branch is missing, create the Worker from the current project working tree or a
+verified existing base branch, then instruct the Worker to create/switch to the
+target branch inside the first `/goal`.
+
+Generated packs must treat `threadId` as the only durable Worker identity.
+Thread titles are display labels, not identity. If `create_thread` returns
+`pendingWorktreeId` instead of `threadId`, the Controller must broadly list
+recent project threads and match candidates by project/root, cwd/worktree path,
+source_thread_id if available, bootstrap prompt text, and readiness response
+such as `READY_IDLE_AWAITING_GOAL`. When a matching Worker is found under an
+unexpected title, the Controller must rename it with `set_thread_title` if
+available, record its real `threadId`, and continue. Do not record repeated
+heartbeat `NOOP` only because a title-filtered query missed an existing Worker.
+If identity reconciliation fails, use `THREAD_IDENTITY_UNRESOLVED`; if worktree
+startup failed because the starting ref/cwd is invalid, use
+`WORKTREE_BOOTSTRAP_BLOCKED`.
+
 Use `ui_manual` only as a fallback when thread/automation tools are unavailable
 or the user explicitly asks for manual operation. In fallback mode, the user
 creates threads and transfers reports by hand.
@@ -168,7 +196,7 @@ Use this compact rubric in normal work. For full scoring details, read
 | Law | Check |
 | --- | --- |
 | L1 Role Isolation | Controller routes/audits; Workers execute scoped goals. |
-| L2 Addressing | Each Worker/Reviewer/State-Writer has a Codex App thread identifier. Sub-agent `agentId` is not valid for Codex App loop threads. Unknown identifiers stay as `PLACEHOLDER - fill before dispatch`. |
+| L2 Addressing | Each Worker/Reviewer/State-Writer has a durable Codex App `threadId`. Sub-agent `agentId`, `pendingWorktreeId`, thread title, or branch name alone is not valid addressing. Worktree starting refs must be verified before `create_thread`. Unknown identifiers stay as `PLACEHOLDER - fill before dispatch`. |
 | L3 Atomic Goals | Each `/goal` is independently executable and verifiable. |
 | L4 Acceptance First | Success criteria and validation appear before task detail. |
 | L5 Forbidden Zones | Paths, secrets, data sources, and actions are concrete. |
@@ -454,6 +482,10 @@ The generated Markdown file must be self-contained for the Controller:
 - Require lean thread topology: create only the current Worker, Reviewer, and
   State-Writer at startup; create Explorer or extra Workers just in time; never
   create future blocked-stage Workers.
+- Require the Worktree And Thread Identity Gate: verify any worktree starting
+  ref before `create_thread`, do not use a missing target branch as
+  `startingState.branchName`, reconcile `pendingWorktreeId` to real `threadId`,
+  and store thread ids rather than titles.
 - Require bootstrap-only role prompts, explicit `/goal`, `/review`, and
   `/state_update` gates, and mandatory heartbeat creation before claiming
   automatic loop operation.
@@ -503,6 +535,16 @@ Then write:
   `create_thread(target.type="project", projectId=...)`. If the Controller says
   it created "智能体", `agentId`, `subagent`, or used `multi_agent_v1`, that is
   not a valid automatic Codex App loop.
+- `worktree/分支启动边界`: say the target implementation branch is not
+  automatically a valid worktree starting branch. The Controller must verify an
+  existing base branch/ref before worktree creation, and if the target branch is
+  missing, start from the current working tree or verified base branch and let
+  the Worker create/switch the target branch inside `/goal`.
+- `线程身份边界`: say durable identity is the real `threadId`, not the title,
+  search keyword, branch name, or `pendingWorktreeId`. If a pending worktree
+  later creates a thread under an unexpected title, the Controller must
+  reconcile, rename, record the `threadId`, and continue instead of heartbeat
+  no-op.
 - `默认自动模式`: the user creates only one Controller chat inside the project
   workspace and sends the generated Controller Pack `.md` file. The Controller
   resolves the project with `list_projects`, then
@@ -655,6 +697,14 @@ the raw prompt carries domain-specific risks the heuristic cannot infer.
   inner "智能体", or generic sub-agent ids. If thread tools are missing, output
   `THREAD_TOOLS_UNAVAILABLE`; if the user chooses manual mode, output
   `MANUAL_FALLBACK_REQUIRED` and provide manual thread creation steps.
+- Worktree/thread identity: repo/project loop prompts must separate
+  `existing_base_branch` from `target_implementation_branch`. Verify a worktree
+  starting branch/ref before `create_thread`; if the target branch does not
+  exist, start from the current working tree or a verified base branch and let
+  Worker create/switch inside `/goal`. Treat `threadId` as durable identity;
+  reconcile `pendingWorktreeId` or unexpected thread titles by broad project
+  thread lookup before recording `NOOP`. Use `WORKTREE_BOOTSTRAP_BLOCKED` or
+  `THREAD_IDENTITY_UNRESOLVED` for real bootstrap failures.
 - Cost/usage: any `codex exec`, real LLM/API call, provider/backend call, model
   scoring smoke, paid API, token-metered or externally metered service requires
   an explicit `cost_cap_usd` or equivalent approved call/token cap. If missing,

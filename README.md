@@ -121,6 +121,7 @@ Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的
 - 目标和验收标准。
 - Codex App 里的项目/工作区名称，以及它对应的本地根目录。
 - repo/root/branch。
+- 如果要用独立 worktree：区分已存在且可验证的 base branch/ref，以及目标实现分支。目标实现分支不存在时，不能把它当成 worktree 启动分支。
 - Worker 分工。
 - 每个 Worker 的权限：`read_only`、`workspace_write` 或 `state_write_only`。
 - 允许写哪些路径。
@@ -147,6 +148,8 @@ Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的
 - `成本/付费调用闸`：如果任务可能运行 `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke、付费 API 或 Token 计量调用，最终用法必须明确当前 `cost_cap_usd`、调用/Token 上限，或说明会在该阶段前停到 `BLOCKED_COST_CAP`。这类缺失不能让用户跑到后半程才意外发现。
 - `线程数量原则`：默认精简拓扑，不按阶段提前创建一堆 Worker。正常情况下只需要一个当前 Worker、一个 Reviewer、一个 State-Writer；Explorer 和额外 Worker 只有在目标已经可派发、需要独立 worktree/专业角色/并行时才按需创建。
 - `线程工具边界`：自动模式必须用 Codex App 的 `create_thread(target.type="project", projectId=...)` 创建真实项目线程。`multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、`agentId`、"创建智能体" 都不是 Codex App loop 线程。
+- `worktree/分支启动边界`：目标实现分支不是默认可用的 worktree 起点。Controller 必须先验证 existing base branch/ref；目标分支不存在时，应从当前工作树或已验证基线启动 Worker，再让 Worker 在 `/goal` 里创建/切换目标分支。
+- `线程身份边界`：真实身份是 `threadId`，不是标题、搜索关键词、分支名或 `pendingWorktreeId`。如果 pending worktree 后来生成了标题不对的线程，Controller 必须通过 projectId、cwd/worktree、bootstrap prompt、`READY_IDLE_AWAITING_GOAL` 等证据找回真实 Worker，重命名并登记，不能一直 heartbeat no-op。
 
 对 Web/Node/前端项目，`运行中卡点预估` 会默认提醒首轮依赖安装和本地验证环境风险，例如 Next.js/SWC、Playwright、Sharp、canvas、Electron、native binary、大包下载、`pnpm`/`npm` store 或 lockfile 问题。遇到这类情况时，loop 不应该立刻卡死等用户处理；应该先进入 `RUNTIME_DEPENDENCY_RETRYING`，自动执行至少 10 次有策略的重试，包括延长 timeout、断点/分段/预取、降低并发、换安全公开 registry/source、清理项目内部分安装残留等。只有重试耗尽或错误明显不是临时波动时，才输出 `RUNTIME_DEPENDENCY_BLOCKED` 或 `VALIDATION_BLOCKED`。无论哪种情况，都不能把“源码已生成/静态审查通过”说成完整 PASS。
 
@@ -184,6 +187,8 @@ python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
   --project-name myapp \
   --workspace-setup "Open /workspace/myapp as a Codex Project before starting; use worktree for writing Workers" \
   --branch feature/passkey-login \
+  --base-branch main \
+  --target-branch feature/passkey-login \
   --workers "implementation:write auth code" \
   --permissions "implementation:workspace_write" \
   --allowed "src/auth/**,tests/auth/**" \
@@ -209,6 +214,8 @@ python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
 ```
 
 使用 `--controller-pack-output` 时，脚本会把发给控制线程的 Markdown 写入该文件，并在终端输出给用户看的“怎么用、卡点预估、耗时预估、怎么回查”。
+
+`--branch` 保留为兼容字段，默认会被当成目标实现分支。需要独立 worktree 时，建议显式提供 `--base-branch` 和 `--target-branch`：`--base-branch` 必须是本地已存在并可验证的 ref，`--target-branch` 可以是 Worker 在 `/goal` 中创建的新分支。不要把一个尚不存在的新分支直接当成 worktree starting branch。
 
 默认 `运行中卡点预估` 和 `预计耗时` 是启发式预测：脚本只扫描用户显式提供的字段和非自动补齐 Worker 的职责，并使用 token-aware 匹配，避免把 `maintainable`、`requirements`、`decision` 这类词误判成 `ai`、`ui`、`ci`。高风险或复杂任务建议显式传入 `--runtime-readiness`、`--runtime-blockers`、`--time-*` 覆盖默认预测。
 
@@ -292,7 +299,9 @@ Controller Pack 文件内部包含：
 3. 控制线程会先调用 `list_projects` 或等价工具，找到当前工作区的 `projectId`。
 4. 控制线程创建实现/审查/状态线程时，必须使用 `create_thread` 的 project target，例如 `target.type="project"` + 同一个 `projectId`。这样新线程会出现在同一个左侧项目工作区下面。
 5. 控制线程不能用内部 sub-agent 代替线程。只要看到 `multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、`agentId`、`Jason(worker)`、`创建智能体` 这类输出，就说明它没有创建真正的 Codex App 项目线程，应停在 `THREAD_TOOLS_UNAVAILABLE` 或手动降级。
-6. 如果控制线程无法找到项目，它应该输出 `MISSING_PROJECT_WORKSPACE` 并停止。不要让它创建 projectless 普通对话线程。
+6. 如果使用独立 worktree，控制线程必须先验证 starting branch/ref 存在。目标实现分支如果还不存在，不能直接作为 `startingState.branchName`；应从当前工作树或已验证 base branch 启动，再由 Worker 在 `/goal` 里创建/切换目标分支。
+7. 控制线程必须登记真实 `threadId`。`pendingWorktreeId` 只能临时记录，标题只能用于显示；如果线程标题不符合预期，要 broad list 项目线程按 cwd/worktree、projectId、bootstrap prompt、idle 状态找回并重命名。
+8. 如果控制线程无法找到项目，它应该输出 `MISSING_PROJECT_WORKSPACE` 并停止。不要让它创建 projectless 普通对话线程。
 
 ### 3. 自动 loop 怎么跑
 
@@ -311,7 +320,7 @@ Controller Pack 文件内部包含：
 
 - 需要真实订阅链接、支付链接、社群链接或密钥。
 - 需要批准 PR merge、deploy、release 或真实外部写入。
-- 出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`OBSERVABILITY_GAP` 或 `HARD_BLOCK`。
+- 出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`WORKTREE_BOOTSTRAP_BLOCKED`、`THREAD_IDENTITY_UNRESOLVED`、`OBSERVABILITY_GAP` 或 `HARD_BLOCK`。
 - 出现 `BLOCKED_COST_CAP` 或 `BLOCKED_USAGE_METADATA`。这表示后续需要真实付费/计量调用，但预算、调用/Token 上限或用量元数据边界还不够明确。
 - 出现 `THREAD_TOOLS_UNAVAILABLE` 或 `MANUAL_FALLBACK_REQUIRED`。这表示当前环境没有可用的 Codex App 线程工具；不能用 sub-agent 顶替。
 - 需要真人可用性测试证据，或你决定接受 waiver。
@@ -356,6 +365,8 @@ Controller Pack 文件内部包含：
 - 线程初始化是 `BOOTSTRAP_ONLY`：Worker 等 `/goal`，Reviewer 等 `/review`，State-Writer 等 `/state_update`。idle 不是失败，也不是卡点。
 - 自动 loop 必须在启动时创建 heartbeat；如果 heartbeat 工具不可用，输出 `HEARTBEAT_UNAVAILABLE`，只能进入手动唤醒降级模式。
 - 自动 loop 必须使用 Codex App thread tools 创建真实线程；禁止用 `multi_agent_v1.spawn_agent`、`agent_type`、`fork_context` 或内部 sub-agent 替代。缺少线程工具时输出 `THREAD_TOOLS_UNAVAILABLE`。
+- 自动 loop 创建 worktree 前必须验证 starting ref。`branch`/目标分支名不等于已存在 base branch；目标分支不存在时，Worker 从当前工作树或已验证基线启动，再在 `/goal` 内创建/切换。
+- 自动 loop 必须把真实 `threadId` 写入状态。不能只靠标题查询 Worker；`pendingWorktreeId` 必须 reconciliation 到真实线程，否则输出 `THREAD_IDENTITY_UNRESOLVED` 或 `WORKTREE_BOOTSTRAP_BLOCKED`，不能反复记录 no-op。
 - 默认只创建当前 Worker、Reviewer、State-Writer；不要按阶段提前创建一堆 Worker。Explorer 和额外 Worker 只在有明确、可派发、已过 gate 的目标时按需创建。
 - implementation Worker 不能自审。
 - `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke、付费 API 或 Token 计量调用必须有明确成本/调用/Token 上限；否则停在 `BLOCKED_COST_CAP`，不能临时自行运行。
