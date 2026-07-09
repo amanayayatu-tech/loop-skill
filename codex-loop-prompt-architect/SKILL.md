@@ -171,6 +171,21 @@ inside the Controller prompt:
   `/state_update` approved by Controller.
 - **Heartbeat Automation Template**: cadence, project/root, run target,
   no-op/archive rule, wake limit, and startup heartbeat requirement.
+- **Startup Transaction Gate**: startup is not complete until project binding,
+  real child `threadId` reconciliation, bootstrap idle states, ACTIVE heartbeat,
+  state init/reconciliation, and First Goal dispatch have either succeeded or a
+  real hard blocker is recorded.
+- **Deterministic Transition Table**: every observed status maps to exactly one
+  next action. `REVIEW_PASS -> state update -> next goal/final closeout`,
+  `READY_FOR_REVIEW -> /review`, `RUNTIME_DEPENDENCY_RETRYING -> retry goal`,
+  and `OBSERVABILITY_GAP -> state reconciliation` must be explicit. Do not
+  generate vague `Controller decide`, progress-only notify, or wait-for-user
+  steps when the next action is dispatchable.
+- **Phase Permission Overlay**: each phase/goal declares whether local commit,
+  staging, PR creation, push, deploy, source artifact promotion, and
+  `.codex-loop/` git hygiene are allowed. If a phase requires a commit hash or
+  source promotion while the Worker prompt forbids it, stop as
+  `PHASE_PERMISSION_CONFLICT` and ask/patch before dispatch.
 - **Discovery/Triage Template**: sources, triage output, fields, selection rule,
   and non-actionable/no-evidence behavior.
 - **Connector/Worktree Runtime Mapping**: declared connectors, fallback when a
@@ -487,8 +502,20 @@ The generated Markdown file must be self-contained for the Controller:
   `startingState.branchName`, reconcile `pendingWorktreeId` to real `threadId`,
   and store thread ids rather than titles.
 - Require bootstrap-only role prompts, explicit `/goal`, `/review`, and
-  `/state_update` gates, and mandatory heartbeat creation before claiming
-  automatic loop operation.
+  `/state_update` gates, mandatory heartbeat creation before claiming automatic
+  loop operation, and a deterministic transition table that both Controller and
+  heartbeat must follow.
+- Require startup to be treated as one transaction: the Controller must not stop
+  after creating child threads or after a stale `active` child-thread status if
+  First Goal is otherwise dispatchable. It must reconcile child reports, create
+  heartbeat, initialize state, and dispatch First Goal or record a real hard
+  blocker.
+- Require the heartbeat prompt to embed the same transition table as the
+  Controller prompt. If a dispatchable next action exists, heartbeat must
+  dispatch it instead of sending a progress-only `NOTIFY`.
+- Require phase permission overlay for commit/source/git hygiene. If the mission
+  requires commit anchors, PR packaging, or source artifact promotion, the pack
+  must explicitly allow that phase or ask clarification before output.
 - If the pack is incomplete, require `MISSING_PROMPT_PACK` and ask the user to
   send the complete Markdown file.
 - If file creation is impossible in the current environment, output a
@@ -550,8 +577,17 @@ Then write:
   resolves the project with `list_projects`, then
   creates/renames/sends/reads Worker threads with
   `create_thread(target.type="project", projectId=...)`, bootstraps child
-  threads into idle states, creates heartbeat automation, and keeps looping
-  until a stop condition.
+  threads into idle states, creates heartbeat automation, initializes/reconciles
+  state, dispatches First Goal, and keeps looping until a stop condition.
+- `正常自动推进信号`: tell the user that after `READY_FOR_REVIEW` or Worker
+  `PASS`, Controller should dispatch `/review`; after `REVIEW_PASS`, it should
+  record state and dispatch the next goal or final closeout; dependency
+  download failures should show `RUNTIME_DEPENDENCY_RETRYING` before user
+  escalation.
+- `异常断停信号`: tell the user that progress-only messages like "Controller
+  will decide", "waiting for user reminder", missing heartbeat, heartbeat no-op
+  while a next action is dispatchable, stale event logs, or cost-cap stops
+  despite an approved budget/policy indicate prompt/runtime drift.
 - `你只需要介入`: list human gates such as real subscription/payment/community
   config, cost cap for paid/metered calls, deploy/merge approval, missing
   connector, hard blocker, or real-user evidence.
@@ -631,6 +667,9 @@ python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold
   --evidence "local checks" \
   --claim "candidate implementation only" \
   --state ".codex-loop/LOOP_STATE.md" \
+  --commit-policy "local commits are forbidden unless a later commit-packaging goal explicitly allows them" \
+  --source-promotion-policy "copy external specs into docs/loop-sources/ when allowed before long multi-phase execution" \
+  --loop-state-git-policy "keep .codex-loop/ ignored and out of product commits unless explicitly versioned" \
   --discovery "CI failures, auth issues, recent auth commits" \
   --triage-output ".codex-loop/TRIAGE.md" \
   --connectors "GitHub connector if exposed; otherwise manual PR links" \
@@ -671,8 +710,25 @@ the raw prompt carries domain-specific risks the heuristic cannot infer.
   from code repair attempts.
 - Automation: heartbeat is required at startup for automatic loop mode; default
   15 minute interval and max 6 wakeups unless specified. If unavailable, output
-  `HEARTBEAT_UNAVAILABLE` and use manual wake fallback. No-op runs archive/stop
-  after recording status.
+  `HEARTBEAT_UNAVAILABLE` and use manual wake fallback. Heartbeat must follow
+  the deterministic transition table; it may emit NOOP only when no next action
+  is dispatchable. No-op runs archive/stop after recording status.
+- Startup transaction: automatic mode must not stop after child-thread creation
+  alone. It must resolve project, reconcile real `threadId`s, handle stale
+  active flags with bounded re-read/poll, verify child idle states, create
+  heartbeat, initialize/reconcile durable state, and dispatch First Goal or
+  record a real hard blocker.
+- Deterministic transitions: `READY_FOR_REVIEW` or Worker `PASS` with evidence
+  routes to Reviewer; `REVIEW_PASS` routes through State-Writer to the next
+  queued goal or final closeout; `REVIEW_NEEDS_REPAIR` routes to the same
+  Worker repair loop; transient runtime dependency failures route to retry
+  ladder until retry budget is exhausted. If Controller only notifies while a
+  next action exists, treat it as `NON_ACTIONABLE_NOTIFY_BLOCKED`.
+- Phase permissions: goals must state whether commit/stage/push/PR/deploy,
+  source-artifact promotion, and `.codex-loop/` gitignore hygiene are allowed.
+  Do not combine "commit hash required" with "Worker cannot commit"; stop as
+  `PHASE_PERMISSION_CONFLICT`. Keep `.codex-loop/` state/log/report files out
+  of product commits unless explicitly versioned.
 - Thread bootstrap: role prompts are `BOOTSTRAP_ONLY`. Workers wait for `/goal`,
   Reviewers wait for `/review`, and State-Writers wait for `/state_update`.
   Idle statuses are normal, not blockers.

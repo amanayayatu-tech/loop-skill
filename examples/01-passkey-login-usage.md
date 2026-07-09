@@ -80,6 +80,8 @@
 11. heartbeat 建好后，控制线程才把 First Goal 发给 `implementation`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。后续阶段优先复用同一个实现线程，只有明确需要独立 worktree/专业角色/并行时才新建线程。
 12. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
 13. 如果控制线程说创建了“智能体 / sub-agent / agentId”，说明它没有创建真正的 Codex App 线程，让它停下处理 `THREAD_TOOLS_UNAVAILABLE`，不要继续执行。
+14. 如果 Reviewer 已经 `REVIEW_PASS`，控制线程不应该只告诉你“等我决定下一步”。它必须记录状态并继续派发下一 Goal；否则让它按 `NON_ACTIONABLE_NOTIFY_BLOCKED` 处理。
+15. 如果任务要求 commit hash、PR、push、deploy、source 文件入库或 `.codex-loop/` gitignore 处理，控制线程必须先确认当前阶段允许这些动作；不允许时应停在 `PHASE_PERMISSION_CONFLICT`，不能一边禁止一边要求 Worker 完成。
 
 ## 怎么回查 loop
 
@@ -94,6 +96,18 @@
 - `.codex-loop/reports/`：报告归档；看每轮实现/审查摘要和最终结论。
 
 如果线程里显示已经做了事，但这些文件没有更新，让控制线程先处理 `OBSERVABILITY_GAP`，不要继续派发新任务。
+
+正常自动推进信号：
+- 启动后能看到 heartbeat 已 active，并且目标是控制线程。
+- Worker 报 `READY_FOR_REVIEW` 或 `PASS` 后，控制线程会发 `/review`，不会直接说完成。
+- Reviewer 报 `REVIEW_PASS` 后，控制线程会先让 State-Writer 记录，再继续下一 Goal 或最终 closeout。
+- 依赖下载/registry/native binary 失败时，先看到 `RUNTIME_DEPENDENCY_RETRYING` 和多次自动重试，而不是马上问你。
+
+异常断停信号：
+- Controller 输出“等我决定 / 后续我会继续 / 需要用户提醒”但没有派发下一条消息。
+- heartbeat 没创建、目标线程不是控制线程，或只 wake 不执行状态表里的下一动作。
+- 已经有 Worker/Reviewer 结论，但 `LOOP_EVENTS.jsonl` 没有对应事件。
+- 已经给了成本/Token/调用策略，却仍仅因为某个可选 cap 字段是 `UNSPECIFIED` 停在 `BLOCKED_COST_CAP`。
 
 ## 你只需要介入
 

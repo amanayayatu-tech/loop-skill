@@ -69,7 +69,7 @@ distinct operational risks.
 | L8 Structured Status | Reports are free-form only and lack machine-readable status fields. |
 | L9 Self-Contained Context | Goals depend on earlier context for critical constraints. |
 | L10 Evidence/Claim Boundary | Prompt permits claims beyond the named evidence layer. |
-| L11 Durable State | Multi-round/automated loop lacks state location, schema, writer, or reconciliation. |
+| L11 Durable State | Multi-round/automated loop lacks state location, schema, writer, reconciliation, startup transaction, or deterministic transition table shared by Controller and heartbeat. |
 | L12 Review Gate | Code/config/CI/deploy/PR diffs can be marked done without independent review. |
 
 ## Durable State Contract
@@ -134,20 +134,85 @@ implementation Worker self-certify PASS.
 Include an automation template for recurring or heartbeat loops:
 
 - `project/root`: repo or workspace.
-- `cadence`: schedule or manual-first placeholder.
+- `cadence`: heartbeat schedule for automatic mode, or explicit manual-fallback
+  wake instructions only when automation tools are unavailable.
 - `run target`: Controller discovery/triage only by default.
 - `environment`: local checkout or background worktree if available.
 - `no-op rule`: record `NOOP` in durable state or triage output, then archive or
   stop if the app supports it.
 - `wake_limit`: default 6 unless user approves more.
 - `retry_limit`: default 3 repair attempts per goal.
-- `manual_first`: do not enable automation until one manual round proves thread
-  addressing, worktree isolation, connector access, triage output, and report
-  schema.
+- `startup_transaction`: automatic mode must resolve project, reconcile child
+  `threadId`s, verify bootstrap idle states, create/verify ACTIVE heartbeat,
+  initialize/reconcile durable state, and dispatch First Goal or record a real
+  hard blocker before it can claim startup completed.
+- `deterministic_transition_table`: every status maps to the next action.
+  `READY_FOR_REVIEW -> /review`, `REVIEW_PASS -> state update -> next goal or
+  final closeout`, `REVIEW_NEEDS_REPAIR -> repair goal`, and
+  `RUNTIME_DEPENDENCY_RETRYING -> retry goal` must be explicit.
+- `manual_probe`: optional only when the user requests a cautious manual probe.
+  For Codex macOS App automatic loops, do not require the user to manually
+  remind the Controller after each status if thread/automation tools are
+  available.
 
 Automation must not directly merge, deploy, delete data, write production
 systems, or make public/scientific/product claims. It should surface findings to
-Controller or triage.
+Controller or triage. If a next action is dispatchable, heartbeat must perform
+that dispatch instead of emitting progress-only `NOTIFY`; otherwise classify the
+stall as `NON_ACTIONABLE_NOTIFY_BLOCKED`.
+
+## Startup And Transition Contract
+
+Automatic Controller Packs must treat bootstrap as a transaction:
+
+1. Read the complete Controller Pack.
+2. Resolve the Codex Project/Workspace and source artifacts.
+3. Create or continue only the current Worker, Reviewer, and State-Writer.
+4. Reconcile durable `threadId` values; `pendingWorktreeId`, title, branch name,
+   and `agentId` are not durable identities.
+5. Handle stale child-thread `active` flags with bounded re-read/poll before
+   declaring a busy wait.
+6. Create and verify an ACTIVE heartbeat targeting the Controller.
+7. Initialize/reconcile durable state through State-Writer.
+8. Dispatch First Goal, unless a real hard blocker exists.
+
+Generated loops must include a transition table with at least:
+
+- Worker `READY_FOR_REVIEW` or `PASS` with changed files/evidence routes to
+  State-Writer update and Reviewer `/review`.
+- Reviewer `REVIEW_PASS` or `REVIEW_PASS_WITH_LIMITATION` routes to
+  State-Writer update and the next queued goal, or final closeout if no queue
+  remains.
+- `REVIEW_PASS_WITH_BLOCKED_VALIDATION` routes to validation retry when the
+  runtime retry budget remains; otherwise it records limited evidence and stops
+  or requests a waiver.
+- `REVIEW_NEEDS_REPAIR` routes to the same implementation Worker repair loop
+  until `max_repair_attempts`.
+- Transient download/registry/native-binary/browser dependency failures route
+  to `RUNTIME_DEPENDENCY_RETRYING` until the runtime retry budget is exhausted.
+- `OBSERVABILITY_GAP` routes to State-Writer reconciliation before any new
+  dispatch.
+- `BLOCKED_COST_CAP` must be re-evaluated against the declared
+  cost/call/token cap or `metered_runtime_policy`; do not stop solely because
+  one optional cap field is unspecified when an approved policy exists.
+
+Vague transitions such as "Controller decide", "wait for user reminder", or
+progress-only status messages are not valid when the next action is known.
+
+## Phase Permission Contract
+
+Each phase/goal must declare whether the following side effects are allowed:
+
+- local commit or staging
+- PR creation, push, merge, release, or deploy
+- source artifact promotion/copying into the repo
+- `.codex-loop/` gitignore or exclusion hygiene
+
+If the mission requires a commit hash, PR packaging, or source promotion while
+the Worker prompt forbids it, the prompt is inconsistent. Stop with
+`PHASE_PERMISSION_CONFLICT` and ask/patch before dispatch. If `.codex-loop/`
+state files live inside the repo, they must be ignored or explicitly excluded
+from product commits unless the user intentionally wants to version them.
 
 ## Discovery/Triage Contract
 
@@ -272,12 +337,15 @@ First include a beginner-facing glossary titled `先理解这些名字`:
 
 Then include `默认自动模式`:
 
-1. In Codex App, the user creates or chooses one control chat and pastes only
-   `Controller Prompt` there.
+1. In Codex App, the user creates or chooses one control chat inside the target
+   project/workspace and sends the complete Controller Pack Markdown file
+   there.
 2. Controller uses thread tools to create or continue Worker, Reviewer, and
    State-Writer threads.
-3. Controller sends each generated prompt to its target thread.
-4. Controller sends `First Goal` to the first target Worker.
+3. Controller extracts each generated prompt from that same Markdown file and
+   sends it to its target thread.
+4. Controller creates/verifies heartbeat and durable state, then sends
+   `First Goal` to the first target Worker.
 5. Controller reads Worker reports with thread tools.
 6. Controller serializes `state_change_request` and sends approved updates to
    State-Writer.
@@ -285,9 +353,8 @@ Then include `默认自动模式`:
 8. Controller continues repair/review/state rounds until `PASS`,
    `AWAITING_HUMAN_APPROVAL`, `MISSING_CONNECTOR`, `HARD_BLOCK`, retry limit, or
    wake limit.
-9. Controller may configure automation/heartbeat only after the first successful
-   tool-driven round proves addressing, worktree isolation, report schema, and
-   stop conditions.
+9. Controller configures heartbeat during startup for automatic mode and uses
+   the deterministic transition table to continue without user reminders.
 
 Then include `你只需要介入`:
 
@@ -312,8 +379,12 @@ may appear once in parentheses after the Chinese name.
 ```text
 Controller (read-only behavior; configure sandbox if available)
   -> classify surface
-  -> Phase 0 Preflight + runtime mapping + durable state read
-  -> Discovery/Triage read-only pass
+  -> Phase 0 startup transaction: project binding + source artifacts + runtime mapping
+  -> create/continue current Worker, Reviewer, State-Writer
+  -> reconcile real threadId values
+  -> verify bootstrap idle states
+  -> create/verify ACTIVE heartbeat
+  -> initialize/reconcile durable state
   -> send atomic goal to Worker <thread identifier>
 Worker (workspace_write expectation, scoped root)
   -> execute
@@ -325,10 +396,12 @@ State-Writer (serial, state_write_only)
 Reviewer/Judge (read-only)
   -> inspect diff, validation, evidence, claim boundary, forbidden artifacts
 Controller
-  -> reconcile Worker report + State-Writer result with durable state
-  -> if code/config/PR diff: Review/Audit phase
-  -> PASS: next phase
-  -> FIX: repair goal, max N
+  -> apply deterministic transition table
+  -> READY_FOR_REVIEW/PASS with diff: State-Writer update + Review/Audit phase
+  -> REVIEW_PASS: State-Writer update + next queued goal or final closeout
+  -> REVIEW_NEEDS_REPAIR: repair goal to same Worker, max N
+  -> RUNTIME_DEPENDENCY_RETRYING: retry ladder until budget exhausted
+  -> OBSERVABILITY_GAP: State-Writer reconciliation before new dispatch
   -> MISSING_CONNECTOR: manual fallback or stop
   -> AWAITING_HUMAN_APPROVAL: stop until approved
   -> HARD_BLOCK: escalate to human

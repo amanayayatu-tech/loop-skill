@@ -38,6 +38,8 @@ Controller Pack 里包含可执行的 loop 体系：
 - 第一个原子 `/goal`
 - `Thread Bootstrap / Input Gates`
 - `Heartbeat Automation Template`
+- `Startup Transaction Gate`
+- `Deterministic Transition Table`
 - `Discovery/Triage`
 - `Connector/Worktree Runtime Mapping`
 - 明确的停止条件、人工审批门和证据边界
@@ -150,6 +152,9 @@ Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的
 - `线程工具边界`：自动模式必须用 Codex App 的 `create_thread(target.type="project", projectId=...)` 创建真实项目线程。`multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、`agentId`、"创建智能体" 都不是 Codex App loop 线程。
 - `worktree/分支启动边界`：目标实现分支不是默认可用的 worktree 起点。Controller 必须先验证 existing base branch/ref；目标分支不存在时，应从当前工作树或已验证基线启动 Worker，再让 Worker 在 `/goal` 里创建/切换目标分支。
 - `线程身份边界`：真实身份是 `threadId`，不是标题、搜索关键词、分支名或 `pendingWorktreeId`。如果 pending worktree 后来生成了标题不对的线程，Controller 必须通过 projectId、cwd/worktree、bootstrap prompt、`READY_IDLE_AWAITING_GOAL` 等证据找回真实 Worker，重命名并登记，不能一直 heartbeat no-op。
+- `启动事务边界`：自动模式不是“创建几个线程就算启动”。控制线程必须完成项目绑定、真实 `threadId` 登记、bootstrap idle、heartbeat active、状态初始化/同步、First Goal 派发，或者记录真实 hard blocker。
+- `确定性状态转移`：`READY_FOR_REVIEW` 必须进入 `/review`，`REVIEW_PASS` 必须进入 State-Writer 记录和下一 Goal/最终 closeout，临时下载失败必须先 `RUNTIME_DEPENDENCY_RETRYING`，可派发下一步时不能只说“稍后继续/等我决定”。
+- `阶段权限覆盖`：每个阶段必须声明是否允许 commit/stage/PR/push/deploy、source 文件入库、`.codex-loop/` gitignore 处理。不能一边要求 commit hash，一边禁止 Worker commit。
 
 对 Web/Node/前端项目，`运行中卡点预估` 会默认提醒首轮依赖安装和本地验证环境风险，例如 Next.js/SWC、Playwright、Sharp、canvas、Electron、native binary、大包下载、`pnpm`/`npm` store 或 lockfile 问题。遇到这类情况时，loop 不应该立刻卡死等用户处理；应该先进入 `RUNTIME_DEPENDENCY_RETRYING`，自动执行至少 10 次有策略的重试，包括延长 timeout、断点/分段/预取、降低并发、换安全公开 registry/source、清理项目内部分安装残留等。只有重试耗尽或错误明显不是临时波动时，才输出 `RUNTIME_DEPENDENCY_BLOCKED` 或 `VALIDATION_BLOCKED`。无论哪种情况，都不能把“源码已生成/静态审查通过”说成完整 PASS。
 
@@ -199,6 +204,9 @@ python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
   --state ".codex-loop/LOOP_STATE.md" \
   --source-artifacts "docs/auth-spec.md and attached screenshots" \
   --metered-runtime-policy "no real LLM/API/codex exec calls; keep AI/provider behavior placeholder unless user later supplies cost_cap_usd" \
+  --commit-policy "local commits are forbidden for implementation; commit packaging requires an explicit later goal" \
+  --source-promotion-policy "copy external specs into docs/loop-sources/ when allowed before long multi-phase execution" \
+  --loop-state-git-policy "keep .codex-loop/ ignored and out of product commits" \
   --max-child-threads 4 \
   --runtime-readiness "READY_BUT_LIKELY_REVIEW_REPAIRS" \
   --runtime-retry-attempts 10 \
@@ -310,11 +318,12 @@ Controller Pack 文件内部包含：
 1. 创建或继续实现线程、审查线程、状态线程。
 2. 先把各线程初始化到 idle：实现线程等待 `/goal`，审查线程等待 `/review`，状态线程等待 `/state_update`。初始化本身不能触发实现、审查或写状态。
 3. 立即创建 heartbeat 自动唤醒，默认每 15 分钟唤醒控制线程；没有 heartbeat 就不算完整自动 loop。
-4. 发送 `First Goal` 给第一个实现线程。
+4. 初始化或同步 `.codex-loop/` 状态文件；然后发送 `First Goal` 给第一个实现线程。
 5. 读取 Worker 回报，批准或拒绝 `state_change_request`。
 6. 把批准后的状态更新发给 `state-writer`。
 7. 只有拿到 Worker 报告、changed files、validation、evidence 和 diff summary 后，才给审查线程发送 `/review`。
-8. 审查不过时继续发修复任务；通过后由 heartbeat 推进下一个 goal；达到 retry/wakeup 上限后停止。
+8. 审查不过时继续发修复任务；通过后由 heartbeat 按确定性状态转移表推进下一个 goal；达到 retry/wakeup 上限后停止。
+9. 如果 `REVIEW_PASS` 后还有下一个 goal 可派发，控制线程必须继续派发，不能只向你报告“下一步由 Controller 决定”。
 
 你只需要在这些情况介入：
 
@@ -350,6 +359,21 @@ Controller Pack 文件内部包含：
 
 如果线程里显示已经做了事，但这些文件没有更新，说明可回查链路断了。此时让控制线程先处理 `OBSERVABILITY_GAP`，不要继续派发新任务。
 
+正常自动推进信号：
+
+- 启动后能看到 heartbeat 已 active，并且目标是控制线程。
+- Worker 报 `READY_FOR_REVIEW` 或 `PASS` 后，控制线程会发 `/review`，不会直接说完成。
+- Reviewer 报 `REVIEW_PASS` 后，控制线程会先让 State-Writer 记录，再继续下一 Goal 或最终 closeout。
+- 依赖下载、registry、native binary、浏览器依赖失败时，先看到 `RUNTIME_DEPENDENCY_RETRYING` 和多次自动重试，而不是马上问你。
+
+异常断停信号：
+
+- Controller 输出“等我决定 / 后续我会继续 / 需要用户提醒”但没有派发下一条消息。
+- heartbeat 没创建、目标线程不是控制线程，或只 wake 不执行状态表里的下一动作。
+- 已经有 Worker/Reviewer 结论，但 `LOOP_EVENTS.jsonl` 没有对应事件。
+- 已经给了成本/Token/调用策略，却仍仅因为某个可选 cap 字段是 `UNSPECIFIED` 停在 `BLOCKED_COST_CAP`。
+- 任务要求 commit hash、PR、push、source 文件入库或 `.codex-loop/` gitignore 处理，但 Worker prompt 又禁止这些动作。
+
 只有当前 Codex App 没有暴露线程工具或自动化工具时，才使用手动降级模式：你手动在同一个项目工作区里创建实现线程、审查线程、状态线程，粘贴对应 prompt，并把回报复制回控制线程。手动降级也必须保留审查门、状态单写者和停止条件。
 
 ## 安全模型
@@ -364,10 +388,13 @@ Controller Pack 文件内部包含：
 - `state-writer` 一次只写一个 Controller 批准的 state update，并维护 `.codex-loop/LOOP_EVENTS.jsonl` 与 `.codex-loop/reports/`。
 - 线程初始化是 `BOOTSTRAP_ONLY`：Worker 等 `/goal`，Reviewer 等 `/review`，State-Writer 等 `/state_update`。idle 不是失败，也不是卡点。
 - 自动 loop 必须在启动时创建 heartbeat；如果 heartbeat 工具不可用，输出 `HEARTBEAT_UNAVAILABLE`，只能进入手动唤醒降级模式。
+- 启动必须作为一个事务完成：项目绑定、线程身份登记、bootstrap idle、heartbeat active、状态初始化/同步、First Goal 派发，缺一项都不能声称自动 loop 已启动。
+- Controller 和 heartbeat 必须使用同一张确定性状态转移表。`REVIEW_PASS` 后必须状态记录并进入下一 Goal/最终 closeout；可派发下一步时禁止 progress-only notify。
 - 自动 loop 必须使用 Codex App thread tools 创建真实线程；禁止用 `multi_agent_v1.spawn_agent`、`agent_type`、`fork_context` 或内部 sub-agent 替代。缺少线程工具时输出 `THREAD_TOOLS_UNAVAILABLE`。
 - 自动 loop 创建 worktree 前必须验证 starting ref。`branch`/目标分支名不等于已存在 base branch；目标分支不存在时，Worker 从当前工作树或已验证基线启动，再在 `/goal` 内创建/切换。
 - 自动 loop 必须把真实 `threadId` 写入状态。不能只靠标题查询 Worker；`pendingWorktreeId` 必须 reconciliation 到真实线程，否则输出 `THREAD_IDENTITY_UNRESOLVED` 或 `WORKTREE_BOOTSTRAP_BLOCKED`，不能反复记录 no-op。
 - 默认只创建当前 Worker、Reviewer、State-Writer；不要按阶段提前创建一堆 Worker。Explorer 和额外 Worker 只在有明确、可派发、已过 gate 的目标时按需创建。
+- commit、PR、push、deploy、source promotion、`.codex-loop/` gitignore 都是阶段权限，不是 Worker 可以临时自行决定的动作。要求 commit hash 时必须显式允许本地 commit，否则停在 `PHASE_PERMISSION_CONFLICT`。
 - implementation Worker 不能自审。
 - `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke、付费 API 或 Token 计量调用必须有明确成本/调用/Token 上限；否则停在 `BLOCKED_COST_CAP`，不能临时自行运行。
 - 临时下载/registry/native binary/package store/browser dependency 问题先自动执行至少 10 次 runtime retry ladder，再考虑让用户介入。
