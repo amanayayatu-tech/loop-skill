@@ -1,58 +1,84 @@
 # Codex Loop Prompt Architect
 
-`codex-loop-prompt-architect` 是一个只面向 Codex macOS App 的 skill，用来把不成熟、上下文不完整、容易失控的提示词，改造成可以投递到 Controller / Worker / Reviewer / State-Writer 多线程体系里的 Codex Loop 提示词。
+`codex-loop-prompt-architect` 是一个只面向 Codex macOS App 的 skill。它把
+不成熟、信息不完整或容易断停的需求，转换成一个可直接发送给控制线程的
+Controller Pack Markdown 文件，并另外告诉用户怎么启动、怎么回查、可能卡
+在哪里、预计需要多久。
 
-它不是“替你写代码”的 skill，而是“替你设计 loop prompt 系统”的 skill。
+它负责设计 loop，不负责直接实现 PRD 或修改目标项目。
 
 ## 它解决什么问题
 
-普通提示词通常只有一句目标，例如：
+普通提示词通常只有一个大目标：
 
 ```text
-帮我修一下登录流程，顺便跑测试，没问题就继续推进。
-帮我把这个 PRD 完整的做出来，并且可运行。
+把这个 PRD 完整做出来，自动测试，没问题就继续。
 ```
 
-这种提示词在 Codex 多线程或自动化场景里很容易出问题：
+直接把这种提示词交给多线程 Codex，常见结果是：
 
-- Controller 和 Worker 角色混在一起。
-- Worker 可能越权改文件。
-- 没有明确 stop rule，容易无界循环。
-- 模型可能把 smoke test 说成正式通过。
-- 实现者可能自审。
-- 多个 Worker 可能同时写 `LOOP_STATE.md`，导致状态撕裂。
-- repo 文件、日志、issue 里可能藏有 prompt injection。
-- 输出后用户不知道应该发给哪个线程。
+- 控制线程自己改代码。
+- 创建内部 sub-agent，而不是真实 Codex App 项目线程。
+- 子线程跑到普通对话区，没有归入目标工作区。
+- Reviewer 在实现完成前先审查，或者根本看不到 Worker worktree。
+- `REVIEW_PASS` 后只报告状态，没有派发下一步。
+- heartbeat 在 Worker 仍然运行时把 NOOP 当成终点。
+- State-Writer 尚未写完状态，Controller 已经派发下一 Goal。
+- 同一份 Worker 报告被 heartbeat 重复读取，造成重复 review 或重复任务。
+- 依赖下载短暂波动后立刻停下来找用户。
+- 真实模型调用没有预算，跑到后半程才停在成本闸。
+- 用户不知道该看哪个线程、哪个状态文件或哪一条事件。
 
-这个 skill 会把粗糙提示词改成两层交付物：
+这个 skill 生成的 loop 通过以下机制处理这些问题：
 
-1. **Controller Pack Markdown 文件**：发给控制线程的唯一材料，里面包含完整 Controller/Worker/Reviewer/State-Writer/First Goal。
-2. **最终使用方法**：给用户看的中文说明，告诉你怎么启动、可能卡在哪、预估耗时、在哪里回查、什么时候需要介入。
+- 真实 Codex App 项目线程和稳定 `threadId`。
+- dependency-ordered Goal Queue。
+- 每次派发都有 `goal_id` 和唯一 `dispatch_id`。
+- transactional dispatch outbox 防止发送成功但状态未落盘后重复派发。
+- State-Writer compare-and-swap 状态版本与事件幂等。
+- State-Writer ACK 后才能 review、repair 或进入下一 Goal。
+- Worker active 时使用 `WAITING_ACTIVE`，heartbeat 不会关闭或重复派发。
+- worktree Worker 使用同目录 Reviewer，或提供可验证的绝对 worktree 路径。
+- 每个 Goal 独立声明 commit、PR、push、merge、deploy 和外部写入权限。
+- 有超时、无进展 watchdog、退避和总耗时上限的下载重试梯队。
+- 每个 Goal 审查，加一次最终完整 diff 审查。
+- `.codex-loop/` 状态、事件、分诊和报告审计面。
 
-Controller Pack 里包含可执行的 loop 体系：
+## 输出什么
 
-- `Controller Prompt`
-- `Worker Prompt`
-- 自动补齐的 `Reviewer/Judge Prompt`
-- 自动补齐的 `State-Writer Prompt`
-- 第一个原子 `/goal`
-- `Thread Bootstrap / Input Gates`
-- `Heartbeat Automation Template`
-- `Startup Transaction Gate`
-- `Deterministic Transition Table`
-- `Discovery/Triage`
-- `Connector/Worktree Runtime Mapping`
-- 明确的停止条件、人工审批门和证据边界
+日常 Compact Mode 输出两份内容：
+
+1. `<project>-codex-loop-controller-pack.md`
+   - 发给控制线程的唯一材料。
+   - 包含 Controller、Worker、Reviewer、State-Writer、Goal Queue、First
+     Goal、heartbeat、状态协议、审查门和停止条件。
+2. 最终使用方法
+   - 留给用户阅读，不发给控制线程。
+   - 包含运行卡点、时间预估、工作区准备、启动步骤、回查方法和人工介入状态。
+
+Full Mode 还会实际生成：
+
+- L1-L12 诊断表。
+- Loop Integrity Score。
+- changelog。
+- flow map。
+- 正常、阻塞、幂等、active heartbeat 和压缩上下文测试目标。
+- 最终下一步。
+
+`--mode full` 不再只输出“请补充 Full Mode”的提示文字。
 
 ## 仓库结构
 
 ```text
 loop-skill/
+├── .github/workflows/test.yml
 ├── codex-loop-prompt-architect/
 │   ├── SKILL.md
 │   ├── agents/openai.yaml
 │   ├── references/loop-contract.md
-│   └── scripts/loop_prompt_scaffold.py
+│   └── scripts/
+│       ├── loop_prompt_scaffold.py
+│       └── validate_skill.py
 ├── examples/
 │   ├── 01-passkey-login-input.json
 │   ├── 01-passkey-login-controller-pack.md
@@ -60,16 +86,18 @@ loop-skill/
 │   ├── 02-daily-ci-triage-input.json
 │   ├── 02-daily-ci-triage-controller-pack.md
 │   └── 02-daily-ci-triage-usage.md
+├── tests/test_loop_prompt_scaffold.py
 ├── scripts/install.sh
 ├── LICENSE
 └── README.md
 ```
 
-只有 `codex-loop-prompt-architect/` 是真正要安装到 Codex App 的 skill 目录。顶层 README、examples 和 install script 是发行说明，不需要放进 Codex skill 运行目录。
+只有 `codex-loop-prompt-architect/` 会安装到 Codex skills 目录。README、
+examples、tests 和发行安装脚本保留在仓库中。
 
 ## 安装到 Codex macOS App
 
-### 方法一：使用安装脚本
+推荐使用安装脚本：
 
 ```bash
 git clone https://github.com/amanayayatu-tech/loop-skill.git
@@ -77,368 +105,556 @@ cd loop-skill
 ./scripts/install.sh
 ```
 
-安装目标位置：
+默认安装位置：
 
-```bash
+```text
 ${CODEX_HOME:-$HOME/.codex}/skills/codex-loop-prompt-architect
 ```
 
-如果本机已经有旧版本，安装脚本会先把旧版本移动到带时间戳的 backup 目录，再复制新版本。
+安装脚本会先执行：
 
-安装后，打开一个新的 Codex App 线程。如果 skill 没有出现，重启 Codex App，让它重新加载本地 skills。
+- 无缓存 Python 语法检查。
+- 最小语义校验与 Full Mode 生成 smoke。
+- Codex `quick_validate.py`，如果本机提供。
+- staging copy。
+- staging 中的 `__pycache__`/`.pyc` 清理。
+- 原子替换和失败回滚。
 
-### 方法二：手动安装
+旧版本备份放在：
+
+```text
+${CODEX_HOME:-$HOME/.codex}/skill-backups/codex-loop-prompt-architect/
+```
+
+旧安装器遗留在 `skills/codex-loop-prompt-architect.backup.*` 的目录会自动
+迁移到上述备份位置，避免 Codex 把每个 backup 都扫描成一个同名 skill。
+
+安装后新建一个 Codex App 聊天。skill 未出现时重启 Codex App，使其重新
+扫描本地 skills。
+
+手动安装只建议用于排障：
 
 ```bash
-git clone https://github.com/amanayayatu-tech/loop-skill.git
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
-cp -R loop-skill/codex-loop-prompt-architect "${CODEX_HOME:-$HOME/.codex}/skills/"
+cp -R codex-loop-prompt-architect \
+  "${CODEX_HOME:-$HOME/.codex}/skills/codex-loop-prompt-architect"
 ```
 
-然后在新的 Codex App 线程里使用：
+手动复制前应自行备份并清理旧目录，避免残留文件混入新版本。
+
+## 最简单的调用方法
+
+日常只需要这样说：
 
 ```text
-Use $codex-loop-prompt-architect，把下面这个不成熟提示词改成 Codex Loop 提示词体系：
+Use $codex-loop-prompt-architect：loop 化下面这个需求；信息不足先问我，不要直接输出完整版。
 
-[粘贴你的粗糙提示词]
+[你的需求]
 ```
 
-## 最简单的用法
-
-推荐日常使用这个短版来“生成 loop 提示词”：
+带 PRD 时：
 
 ```text
-Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的 Codex macOS App Loop；如果信息不够，先反问，不要输出完整版。
+Use $codex-loop-prompt-architect：loop 化这个 PRD；信息不足先问。
 
-[粘贴你的粗糙提示词]
+目标工作区：/Users/you/Documents/my-project
+PRD 路径：/Users/you/Documents/my-project/docs/PRD.md
+需求：完整实现 P0 + P1，并完成本地验证和浏览器 smoke。
 ```
 
-如果粗糙提示词依赖 PRD、截图、PDF、设计稿或数据文件，第一条消息里要同时说明这些资料在哪里。推荐两种方式：
+不要只把 PRD 附在当前聊天里然后假设子线程能看到。`create_thread` 和
+`send_message_to_thread` 不会自动继承 Controller-only 附件。最稳妥的方式
+是把资料放到目标工作区的 `docs/`，或者提供子线程可读的绝对路径。
+结构化输入中的 repo 必须是绝对路径；canonical state/triage 必须位于该 repo
+的 `.codex-loop/` 下，写入 scope 不能含 `..` 或指向 repo 外。源资料写成明确
+绝对/工作区相对路径、`http(s)` URL，或自包含任务专用的 `SELF_CONTAINED`。
+复杂 glob 的上下级关系采用保守校验：`src/**` 可容纳更窄路径；无法证明包含关系
+的两个不同 wildcard scope 会被拒绝，避免 `*` 跨目录放宽权限。
+`.codex-loop/**` 是 State-Writer 专用 control-plane scope，不能放进产品
+Worker 或 Goal 的写入范围。
+纯 read-only/no-diff loop 可以把 `allowed` 写成空数组；只要存在
+`workspace_write` Worker，global `allowed` 就必须是非空且可验证的 repo 内路径。
 
-- 把资料放进将要执行任务的 Codex 工作区，例如 `docs/PRD.md`、`docs/spec.pdf`。
-- 或者直接在提示词里写绝对路径，例如 `/Users/you/Downloads/Product_PRD.docx`。
+## 生成前会确认什么
 
-如果关键信息不够，skill 应该先反问，而不是直接生成完整版。常见必须补足的信息包括：
+信息不足时，skill 必须先反问一到三个最关键问题。以下信息在生成
+ready-to-send loop 前必须明确：
 
-- 目标和验收标准。
-- Codex App 里的项目/工作区名称，以及它对应的本地根目录。
-- repo/root/branch。
-- 如果要用独立 worktree：区分已存在且可验证的 base branch/ref，以及目标实现分支。目标实现分支不存在时，不能把它当成 worktree 启动分支。
-- Worker 分工。
-- 每个 Worker 的权限：`read_only`、`workspace_write` 或 `state_write_only`。
-- 允许写哪些路径。
-- 禁止碰哪些文件、数据源、动作或 secrets。
-- durable state 写在哪里。
+- 目标和可验证的验收标准。
+- Codex Project 名称和本地根目录。
+- `repo_mode`。
+- 现有 Git 项目的 base/target branch。
+- PRD、截图、PDF、数据集等源文件路径。
+- Worker 分工、权限和路径所有权。
+- 禁止路径、secrets、数据和副作用。
+- 多 Worker/多阶段任务的 Goal Queue。
 - validation commands。
-- evidence layer。
-- review gate。
-- 是否需要 automation / heartbeat。
-- 是否依赖 GitHub、Linear、Slack、Notion 等 connector。
-- 是否需要独立 worktree。
-- 是否会运行 `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke、付费 API 或其他按量计费服务；如果会，必须说明 `cost_cap_usd`、调用次数/Token 上限，或者明确“先占位/延后，停在 `BLOCKED_COST_CAP`”。
-- 是否真的需要多个 Worker 并行或多个阶段专用线程；默认应该只用当前 Worker + Reviewer + State-Writer。
-- 是否当前 Codex App 暴露了 `create_thread` / `read_thread` / `send_message_to_thread` / `automation_update` 等线程工具。没有线程工具时只能停在 `THREAD_TOOLS_UNAVAILABLE` 或进入手动降级，不能用内部 sub-agent 冒充线程。
-- 需要哪些源文件/附件：PRD、截图、PDF、设计稿、数据文件等。
-- 用户后续应该看哪些状态文件、事件日志和报告目录来回查 loop 是否按预期运行。
+- evidence layer 和 claim boundary。
+- durable state 位置。
+- review policy。
+- heartbeat、wake、idle、每 Goal 修复轮数、retry 和 hard-stop 上限。
+- connector 和 worktree 策略。
+- 真实 LLM/API/`codex exec` 的预算或 deferred policy。
+- deploy、merge、迁移、生产写入等动作是否预授权。
 
-如果用户坚持要草稿，skill 会标记为 `NON_DISPATCHABLE_DRAFT`，不会把它说成 ready-to-send。
+`TBD`、`TODO`、`unknown`、`待定`、`稍后补充`、`?` 等占位值不算
+已补齐信息；objective、claim、branch、approval、validation、acceptance、
+source path 或 Goal 里仍有这些值时，脚本拒绝生成可投递 pack。
 
-正式输出 loop 之后，最终使用方法里还会给两类预期，不能只藏在 Controller Pack 里：
+skill 不应该要求普通用户判断当前 Codex App 是否暴露
+`create_thread/read_thread/automation_update`。这是 Controller 启动时应当
+自行探测的运行条件。
 
-- `运行中卡点预估`：只预测 loop 已经可以启动以后，仍然可能因为审批、真实外部服务、人工验收、审查修复、connector/runtime 或审计日志断档而停下的阶段。它不会把 repo/root/PRD/工作区缺失这类启动前问题包装成运行中风险。
-- `预计耗时`：给出 min / typical / max 的本地 Codex loop wall-clock 估算，并明确不计入等待用户提供 API key、批准 deploy/merge、真人验收、离线业务判断或 registry/network 恢复的时间。
-- `成本/付费调用闸`：如果任务可能运行 `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke、付费 API 或 Token 计量调用，最终用法必须明确当前 `cost_cap_usd`、调用/Token 上限，或说明会在该阶段前停到 `BLOCKED_COST_CAP`。这类缺失不能让用户跑到后半程才意外发现。
-- `线程数量原则`：默认精简拓扑，不按阶段提前创建一堆 Worker。正常情况下只需要一个当前 Worker、一个 Reviewer、一个 State-Writer；Explorer 和额外 Worker 只有在目标已经可派发、需要独立 worktree/专业角色/并行时才按需创建。
-- `线程工具边界`：自动模式必须用 Codex App 的 `create_thread(target.type="project", projectId=...)` 创建真实项目线程。`multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、`agentId`、"创建智能体" 都不是 Codex App loop 线程。
-- `worktree/分支启动边界`：目标实现分支不是默认可用的 worktree 起点。Controller 必须先验证 existing base branch/ref；目标分支不存在时，应从当前工作树或已验证基线启动 Worker，再让 Worker 在 `/goal` 里创建/切换目标分支。
-- `线程身份边界`：真实身份是 `threadId`，不是标题、搜索关键词、分支名或 `pendingWorktreeId`。如果 pending worktree 后来生成了标题不对的线程，Controller 必须通过 projectId、cwd/worktree、bootstrap prompt、`READY_IDLE_AWAITING_GOAL` 等证据找回真实 Worker，重命名并登记，不能一直 heartbeat no-op。
-- `启动事务边界`：自动模式不是“创建几个线程就算启动”。控制线程必须完成项目绑定、真实 `threadId` 登记、bootstrap idle、heartbeat active、状态初始化/同步、First Goal 派发，或者记录真实 hard blocker。
-- `确定性状态转移`：`READY_FOR_REVIEW` 必须进入 `/review`，`REVIEW_PASS` 必须进入 State-Writer 记录和下一 Goal/最终 closeout，临时下载失败必须先 `RUNTIME_DEPENDENCY_RETRYING`，可派发下一步时不能只说“稍后继续/等我决定”。
-- `阶段权限覆盖`：每个阶段必须声明是否允许 commit/stage/PR/push/deploy、source 文件入库、`.codex-loop/` gitignore 处理。不能一边要求 commit hash，一边禁止 Worker commit。
+## 三种 repo_mode
 
-对 Web/Node/前端项目，`运行中卡点预估` 会默认提醒首轮依赖安装和本地验证环境风险，例如 Next.js/SWC、Playwright、Sharp、canvas、Electron、native binary、大包下载、`pnpm`/`npm` store 或 lockfile 问题。遇到这类情况时，loop 不应该立刻卡死等用户处理；应该先进入 `RUNTIME_DEPENDENCY_RETRYING`，自动执行至少 10 次有策略的重试，包括延长 timeout、断点/分段/预取、降低并发、换安全公开 registry/source、清理项目内部分安装残留等。只有重试耗尽或错误明显不是临时波动时，才输出 `RUNTIME_DEPENDENCY_BLOCKED` 或 `VALIDATION_BLOCKED`。无论哪种情况，都不能把“源码已生成/静态审查通过”说成完整 PASS。
+### `existing_git`
 
-对需要真实 LLM/API、`codex exec` 或模型评分 smoke 的 loop，缺少预算上限不是普通运行中卡点，而是前置成本闸。生成前应该先问；如果用户明确选择延后或占位，Controller 可以继续跑本地-only 阶段，但必须在付费/计量阶段前停在 `BLOCKED_COST_CAP`，并且不能提前创建那个未来阶段的 Worker。
+用于已经是 Git 仓库的项目。Controller 在创建 worktree 前必须记录：
 
-## Full Mode 用法
+- git root。
+- `git status --short`。
+- 当前 branch 和 HEAD/base SHA。
+- remotes。
+- `git worktree list`。
+- 用户原有的 dirty/untracked 文件。
 
-高风险任务、多 Worker、自动化、PR 合并、发布、auth/billing/security/secrets、生产数据、公开声明、科学/产品结论等任务，建议使用 Full Mode：
+目标实现分支不等于已存在的 worktree starting branch。只有验证存在的
+base ref 才能用于 `startingState.type="branch"`。
+目标分支与 base 不同时，第一个写入 Goal 必须授权 `branch_create=true`；这是
+允许在需要时创建，不是要求已存在分支再创建一次。
+只提供一个 `branch` 且不提供 `base_branch/target_branch` 时，脚本把它视为
+已经存在并要继续使用的分支，不会误要求创建权限。
+
+### `new_git`
+
+用于空白目录或尚未初始化 Git 的新项目。第一阶段应创建 local Worker，
+不能先运行 `git show-ref`，也不能直接从不存在的 branch 创建 worktree。
+只有 Goal 明确允许时，Worker 才初始化 Git 或创建第一条分支。
+这两个动作分别由阶段权限 `git_init` 和 `branch_create` 控制，不能从
+`commit=true` 或目标 branch 名称中推断。
+`new_git` 的第一个写入 Goal 缺少任一权限时，脚本拒绝生成可投递 pack；若任务
+永远不需要 Git，应选择 `non_git`。
+
+### `non_git`
+
+用于不需要 Git 的本地任务。branch/ref/worktree 字段是
+`NOT_APPLICABLE`，线程使用 local 环境。审查身份改用 before/after 文件 manifest、
+内容 SHA-256 和 `diff_sha256`，不能伪造 Git SHA。
+
+## 自动 loop 如何启动
+
+用户只创建一个控制聊天：
+
+把 Controller Pack 发给控制线程，就表示已明确授权它在 pack 的线程数量上限内
+创建、恢复、发消息和归档所声明的子线程，并创建/更新/暂停唯一 heartbeat；不必
+再次询问。这不授权 deploy、merge、push、密钥、生产写入或 Controller 改代码。
+
+1. 在 Codex App 左侧选择目标项目工作区。
+2. 在这个项目下面新建“控制线程”。
+3. 把生成的 Controller Pack `.md` 文件发给它。
+4. Controller 调用 `list_projects` 得到 `projectId`，并计算 pack/loop/bootstrap 标记。
+   若当前控制任务 ID 不可读，LOOP_ID 使用
+   `SHA-256(projectId + canonical repo + PACK_SHA256)` 的确定性 fallback，不能
+   随机生成。
+5. Controller 运行 repo-mode-specific preflight。
+6. Controller 先用 `list_threads` 恢复或创建唯一 State-Writer，初始化状态并等 ACK；
+   再通过 `THREAD_CREATE_PREPARED` 恢复或创建当前 Worker。
+7. 不预创建 Reviewer。Worker 报告已持久化且存在可审 artifact 后，再按需创建
+   同 checkout Reviewer；worktree Reviewer 优先使用同目录线程。
+8. 每个后续 `create_thread/fork_thread` 都先登记 role、environment、bootstrap
+   marker 和 prompt digest；成功后写 `THREAD_REGISTERED`，不能按标题猜 threadId。
+9. Controller 先写 `AUTOMATION_CREATE_PREPARED`；按“项目名 + loop_id”、目标线程、
+   rrule 和 prompt digest 检查已有 automation。只有没有精确匹配时才创建，再把
+   `AUTOMATION_REGISTERED`/id 写入状态并等待 ACK。
+10. Controller 替换所有 `MATERIALIZE_*` 运行时 token，先把
+    `DISPATCH_PREPARED` 和 payload digest 写入 outbox 并等待 ACK。
+11. Controller 发送 First Goal；确认目标线程已收到后写入
+    `DISPATCH_SENT` 并等待 ACK。
+12. 后续按 Worker -> state ACK -> Reviewer -> state ACK -> 下一 Goal 循环。
+13. Goal Queue 结束后运行 FINAL_AUDIT，最终状态 ACK 后暂停 heartbeat。
+
+`FINAL_REVIEW_PASS` 到达 `LOOP_COMPLETE`；只有限制项明确、受证据边界约束且
+没有未解决 required fix 时，`FINAL_REVIEW_PASS_WITH_LIMITATION` 才能到达
+`LOOP_COMPLETE_WITH_LIMITATION`。有限通过不能被静默升级为完整通过。
+
+自动模式必须使用真实项目线程：
 
 ```text
-Use $codex-loop-prompt-architect，Full Mode：
-请把下面任务改成 Codex macOS App loop prompt，并输出 L1-L12 诊断、Controller/Worker/Goal、Automation、Discovery/Triage、Runtime Mapping、怎么发。
-
-[粘贴你的粗糙提示词]
+create_thread(
+  prompt=BOOTSTRAP_PROMPT,
+  target={type:"project", projectId:PROJECT_ID, environment:{type:"local"}}
+)
 ```
 
-Full Mode 会额外输出：
+worktree 环境则把 `target.environment` 设为
+`{type:"worktree", startingState:{type:"branch", branchName:VERIFIED_BASE_BRANCH}}`。
 
-- L1-L12 loop diagnosis。
-- Loop Integrity Score。
-- hard risks。
-- changelog。
-- flow map。
-- test goals。
-- final next step。
+以下都不是有效的 Codex App Loop Worker：
 
-## 脚本化生成 scaffold
+- `multi_agent_v1.spawn_agent`
+- `agent_type`
+- `fork_context`
+- `agentId`
+- “创建智能体”
 
-如果你已经知道结构化字段，可以直接调用脚本生成 scaffold：
+缺少真实线程工具时，Controller 输出 `THREAD_TOOLS_UNAVAILABLE`，然后由
+用户决定是否进入手动降级。
+
+任务完成后的收纳使用
+`set_thread_archived(threadId=..., archived=true)`；归档不是删除，必须晚于报告和
+状态 ACK。
+
+## heartbeat 的准确行为
+
+heartbeat 只负责让当前一次 loop 自推进，不等于永久 daily/weekly cron。用户若
+还要长期 recurring automation，skill 必须另外确认 schedule、workspace、独立
+self-contained prompt、local/worktree 环境、启停条件和预算，再输出单独 cron
+模板；不能把一句“每天跑”静默塞进 heartbeat。
+
+默认创建参数：
+
+```text
+automation_update(
+  mode="create",
+  kind="heartbeat",
+  destination="thread",
+  status="ACTIVE",
+  rrule="FREQ=MINUTELY;INTERVAL=15",
+  name=HEARTBEAT_AUTOMATION_NAME,
+  prompt=HEARTBEAT_PROMPT
+)
+```
+
+生成的 Controller Pack 会内嵌完整 `HEARTBEAT_PROMPT_BEGIN/END` 文本，Controller
+必须原样作为 `prompt` 参数，不再临场概括。`HEARTBEAT_AUTOMATION_NAME` 是
+“项目名 + loop_id”的确定性名称。
+
+默认预算：
+
+- 每 15 分钟一次。
+- 最多 192 次，总计约 48 小时。
+- 没有 inflight/queue 时，连续 8 次 idle 才允许暂停。
+- Worker 连续 60 分钟无进展才进入 stale 检查。
+
+Worker 正在运行且仍有进展时：
+
+- 记录 `WAITING_ACTIVE`。
+- 保持 heartbeat ACTIVE。
+- 不增加 idle 计数。
+- 不重复派发 Goal。
+- 不把 NOOP 当终点。
+
+每次 heartbeat 唤醒先处理遗留状态请求，再用
+`automation_id + next wake_count` 生成稳定 wake event，经 State-Writer CAS
+写入一次 `HEARTBEAT_WAKE` 并等待 ACK。重复唤醒不能把同一次 wake 计数两遍。
+
+同一时间最多一个写入型 execution Worker。State-Writer 可串行写状态；Reviewer
+只在有可审 artifact 时短期并存，不预创建未来阶段线程。
+`max_child_threads` 是整个 loop 生命周期总上限：不含 Controller，但已归档任务
+仍计数；达到上限时复用现有任务或停止 `THREAD_BUDGET_EXHAUSTED`，不能继续堆线程。
+
+默认所有顺序写入 Goal 共享一条 integration worktree。角色不变时复用同一
+Worker；确实需要更换写入角色时，只能在前一 Writer idle 且报告/状态 ACK 后，
+按需调用 `fork_thread(threadId=PRIOR_WRITER_THREAD_ID,
+environment={type:"same-directory"})`，再发送新角色的完整 bootstrap prompt。
+只有 Goal Queue 明确给出 promotion/merge 计划和权限时，才允许分叉写入 worktree，
+否则停止 `WORKTREE_INTEGRATION_PLAN_MISSING`。
+
+已完成且不会复用的 Worker/Reviewer 在报告和状态 ACK 后通过
+`set_thread_archived(..., archived=true)` 归档；不能归档 active、未 ACK 或仍需
+修复的任务，State-Writer 必须保留到最终状态 ACK。
+
+heartbeat 只有在以下情况暂停：
+
+- `LOOP_COMPLETE` 等终态已经写入并 ACK。
+- 没有 inflight/queue，且 idle 预算耗尽。
+- 总 wake 预算耗尽并已记录 `HEARTBEAT_BUDGET_EXHAUSTED`。
+
+如果 `automation_update` 不可用，自动模式在 First Goal 前停止
+`AUTOMATION_TOOLS_UNAVAILABLE`，不能在没有 heartbeat 的情况下假装自动 loop。
+若创建后落盘前中断，Controller 从 `$CODEX_HOME/automations/*/automation.toml`
+按确定性名称和 prompt digest 认领已有 heartbeat，而不是再创建一个。
+
+## Goal Queue 和幂等状态
+
+每个 Goal 必须有：
+
+- `goal_id`。
+- 每次尝试唯一的 `dispatch_id`。
+- 真实目标 `threadId`。
+- objective、acceptance、validation、scope。
+- dependencies 和 `dispatch_when`。
+- side-effect permission matrix。
+- evidence、claim 和 stop conditions。
+
+多角色任务必须提供 Goal Queue。例如 CI 分诊：
+
+```text
+CI-T1: triage -> TRIAGE_ACTIONABLE 或 TRIAGE_NO_ACTION
+CI-R1: implementation -> 仅在 CI-T1 为 TRIAGE_ACTIONABLE 时解锁
+FINAL_AUDIT: 队列结束后的完整审查
+```
+
+State-Writer 使用：
+
+- `state_version`。
+- `state_request_id`。
+- `event_id`。
+- `expected_state_version`。
+- `dispatch_outbox`，包含 payload digest、目标 threadId 和发送阶段。
+
+返回值：
+
+- `STATE_WRITE_APPLIED`：成功写入并增加版本。
+- `STATE_WRITE_ALREADY_APPLIED`：重复事件，幂等跳过。
+- `STATE_VERSION_CONFLICT`：版本冲突，没有写入。
+
+Controller 未拿到 ACK 前，不能同时发送 review、repair 或下一 Goal。
+
+首次启动时，不存在的 canonical state 视为 version 0；只有
+`LOOP_INITIALIZED + expected_state_version=0` 可以创建 version 1。已有状态必须
+恢复，不能覆盖。运行期 request/event/dispatch id 只允许字母数字、点、下划线和
+连字符，禁止把路径或报告文本拼进 transaction/report 文件名。
+
+`LOOP_STATE.md` 的 canonical 部分是
+`STATE_JSON_BEGIN/STATE_JSON_END` 之间唯一的严格 JSON object；所有 schema key
+必须存在，顶层未知 key 拒绝。`LOOP_EVENTS.jsonl` 每行只能有一个完整 JSON
+object，不能写 Markdown fence 或多行记录。这样 heartbeat 和 State-Writer
+恢复时不依赖自由格式文本猜状态。
+
+non-git 或未提交 new_git 的产品 before/after digest 只覆盖获批产品 scope；
+`.codex-loop`、声明过的原有无关文件和 cache 从产品 digest 排除，但必须输出
+exclusion manifest 供 FINAL_AUDIT 单独检查，避免状态写入制造假产品 diff。
+
+Goal 派发采用 transactional outbox：
+
+1. 生成唯一 `dispatch_id` 和稳定 payload digest。
+2. 写入 `DISPATCH_PREPARED`，等待 State-Writer ACK。
+3. 向真实目标 threadId 发送一次。
+4. 写入 `DISPATCH_SENT`，等待 State-Writer ACK。
+5. heartbeat 恢复到 PREPARED 状态时，先按 `dispatch_id` 查询目标线程；只有
+   确认未送达才重发。Worker 收到重复 `dispatch_id` 时返回既有报告，不能重做。
+
+每个 Goal 还必须物化一份有界 canonical state 快照，至少包含 state version、
+repo/worktree、依赖、审批/预算切片、重试计数、原有脏文件和 claim/evidence 边界。
+只给 worktree Worker 一个 `.codex-loop/LOOP_STATE.md` 路径不算自包含。
+
+## worktree 审查
+
+Reviewer 必须看到 Worker 的真实代码，而不是只看文字摘要。
+任何 `workspace_write` Goal 都不能把 review 关闭；脚本会拒绝
+`review not required`。只有纯只读、无 diff 的 loop 可以省略代码审查。
+
+local Worker：
+
+- Reviewer 可在相同项目 checkout 中读取代码。
+- Git 工作的 `/review` 带 base/head SHA、完整 patch 和 `diff_sha256`。
+- `non_git` 或尚未提交的 `new_git` 使用 before/after manifest 与 snapshot
+  SHA-256；不可用 Git SHA 写 `NOT_APPLICABLE`。
+
+worktree Worker：
+
+- 优先使用真实 Codex App
+  `fork_thread(threadId=WORKER_THREAD_ID, environment={type:"same-directory"})`。
+- 如果同目录 fork 不可用，Reviewer 必须能读取绝对 worktree 路径，并拿到
+  base SHA、head SHA、changed files、`diff_sha256` 和完整 patch/diff。
+- 任何一项无法证明时输出 `REVIEW_ARTIFACT_UNAVAILABLE`，不能只根据 Worker
+  摘要给 `REVIEW_PASS`。
+
+每个 Goal 的 diff 需要审查。所有 Goal 完成后，还要对完整 Git base-to-head 或
+`non_git` before-to-after snapshot diff 运行一次 FINAL_AUDIT。
+
+## 下载和依赖重试
+
+默认瞬时依赖重试包含四种预算：
+
+- 首次失败后最多 10 次重试，总计最多 11 次尝试。
+- 180 分钟总耗时，足以容纳初始尝试和 10 次有界重试。
+- 每次尝试 12 分钟硬超时。
+- 每次 6 分钟无进展 watchdog。
+- 每次退避最多 5 分钟，且必须受剩余总预算约束。
+
+策略顺序：
+
+1. 原命令、明确 timeout、完整日志。
+2. 遵守 `Retry-After`，否则指数退避加 jitter。
+3. package-manager retry/fetch 参数和降低并发。
+4. 工具原生支持的断点续传、range/chunked 下载、预取或 package store warming。
+5. allowlist 内的公开备用源，并记录完整性证据。
+6. 只清理项目内、由本轮产生的部分残留。
+7. browser/native package 官方支持的下载 host。
+
+不能因为重试而删除已有 tracked lockfile。只有本轮产生的 untracked partial
+lockfile 且 Goal 明确拥有它时才允许删除。禁止清理全局 cache、永久修改全局
+registry、引入私有凭证或未经批准的付费镜像。
+
+## 成本和审批
+
+以下执行需要明确预算或 policy：
+
+- `codex exec`。
+- 真实 LLM/API/provider 调用。
+- 模型评分 smoke。
+- Token、调用次数或美元计量服务。
+
+可用边界：
+
+- 正数 `cost_cap_usd`。
+- 正数 `call_cap`。
+- 正数 `token_cap`。
+- 明确且有边界的 `metered_runtime_policy`，例如 deferred/local-only，或写出
+  最大调用/请求次数、token 或美元。
+
+`unlimited`、`尽量跑完`、`自行控制成本` 等无上限表达不是有效 policy。
+只限制“运行几小时/几天”也不能约束花费，因此不能单独作为付费调用授权。
+
+目标里出现 `fake`、`mock`、`placeholder` 不等于成本授权或 deferred policy。
+中文“真实大模型调用、付费模型评分、计量调用”等同样会触发成本闸。
+
+审批写进 `approval_ledger`。已经明确预授权的本地代码和测试不应反复询问；
+生产 deploy、merge、secrets、用户数据删除、迁移、真实外部写入和超证据声明
+仍需对应范围的授权。
+
+## 怎么回查 loop
+
+### 看线程
+
+- 控制线程：Goal Queue、真实 threadId、dispatch_id、状态 ACK、下一动作。
+- 实现线程：worktree、base/head SHA、changed files、diff summary、验证 exit code。
+- 审查线程：按严重度排序的 file/line findings、reviewed SHA、test gaps。
+- 状态线程：event/request id、state version、transaction journal 和写入结果。
+
+### 看文件
+
+- `.codex-loop/LOOP_STATE.md`
+  - 当前状态版本、Goal Queue、thread-creation/automation/dispatch outbox、
+    inflight dispatch、线程登记、预算和审批 ledger。
+- `.codex-loop/LOOP_EVENTS.jsonl`
+  - 每次派发、ACK、重试、审查和停止的 append-only 流水。
+- `.codex-loop/TRIAGE.md`
+  - 分诊发现、证据、`TRIAGE_ACTIONABLE/TRIAGE_NO_ACTION` 和后续 Goal。
+- `.codex-loop/reports/`
+  - Worker、Reviewer 和 FINAL_AUDIT 报告。
+- `.codex-loop/transactions/`
+  - State-Writer 按 `state_request_id` 保存的 `PREPARED/APPLIED` 恢复日志，
+    用于补齐中断事务，不是第二份状态源。
+- `.codex-loop/sources/CONTROLLER_PACK.md`
+  - 初始化时归档的精确 pack 快照和对应 `PACK_SHA256`；heartbeat 优先读它，
+    避免长对话压缩后依赖不完整聊天摘要。
+- Codex Automation 卡片
+  - automation id、ACTIVE/PAUSED、rrule、目标线程和运行次数。
+
+### 正常推进信号
+
+- Worker active 时 heartbeat 记录 `WAITING_ACTIVE`，仍保持 ACTIVE。
+- Worker 报告后先出现 `STATE_WRITE_APPLIED`，然后才 `/review`。
+- Reviewer 通过后先写状态 ACK，再派发恰好一个新 Goal。
+- 新 Goal 依次出现 `DISPATCH_PREPARED`、消息送达、`DISPATCH_SENT`；恢复时不会
+  生成第二个 dispatch。
+- 依赖波动时先出现带 attempt/timeout/backoff 的
+  `RUNTIME_DEPENDENCY_RETRYING`。
+- 队列结束后出现 FINAL_AUDIT，再出现 `LOOP_COMPLETE`。
+
+### 异常信号
+
+- `MATERIALIZE_*` 运行时 token 未替换就发给 Worker。
+- 相同 `dispatch_id` 被执行两次。
+- State-Writer 尚未 ACK，Controller 已派发下一任务。
+- Reviewer 只看 Worker 摘要，不知道 worktree/base/head SHA。
+- Worker active 时 heartbeat 被暂停或创建重复 Worker。
+- event log 缺失、版本倒退或 event id 重复。
+- 用户已经给了有效预算，却因为另一个可选 cap 是 UNSPECIFIED 而停下。
+
+## 需要用户介入的状态
+
+- 工作区/资料/线程工具：`MISSING_PROJECT_WORKSPACE`、
+  `MISSING_SOURCE_ARTIFACT`、`THREAD_TOOLS_UNAVAILABLE`、
+  `THREAD_BUDGET_EXHAUSTED`、`AUTOMATION_TOOLS_UNAVAILABLE`、
+  `AUTOMATION_IDENTITY_UNRESOLVED`、`MISSING_CONNECTOR`。
+- Git/worktree/review：`DIRTY_WORKTREE_CONFLICT`、
+  `WORKTREE_BOOTSTRAP_BLOCKED`、`THREAD_IDENTITY_UNRESOLVED`、
+  `REVIEW_ARTIFACT_UNAVAILABLE`、`WORKTREE_INTEGRATION_PLAN_MISSING`、
+  `PATH_SCOPE_ESCAPE`。
+- 成本/审批：`BLOCKED_COST_CAP`、`BLOCKED_USAGE_METADATA`、
+  `AWAITING_HUMAN_APPROVAL`、`PHASE_PERMISSION_CONFLICT`。
+- 验证/状态/自动化：`RUNTIME_DEPENDENCY_BLOCKED`、`VALIDATION_BLOCKED`、
+  `REPAIR_BUDGET_EXHAUSTED`、无法自动调和的 `STATE_VERSION_CONFLICT`、
+  `HEARTBEAT_BUDGET_EXHAUSTED`、`HEARTBEAT_IDLE_BUDGET_EXHAUSTED`、
+  `HARD_BLOCK`。
+
+表中的 `STOP` 不是“报一句话后放着不管”：Controller 必须先把精确 blocker 写入
+状态并等 ACK，再暂停已有 heartbeat。你补充了正好解决该 blocker 的证据或批准后，
+Controller 更新 ledger、清除该 blocker，并重新激活同一个 automation id；不能
+新建第二个 heartbeat，也不能把一次批准扩大到其他阶段。
+
+`OBSERVABILITY_GAP` 默认由 Controller 和 State-Writer自动调和，不应直接变成
+人工审批；只有状态冲突无法根据 thread/report/event 证据解决时才询问用户。
+
+## 脚本化生成
+
+推荐先准备 JSON 输入。可以查看 schema：
 
 ```bash
 python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
-  --objective "Implement passkey-first login with email fallback" \
-  --repo /workspace/myapp \
-  --project-name myapp \
-  --workspace-setup "Open /workspace/myapp as a Codex Project before starting; use worktree for writing Workers" \
-  --branch feature/passkey-login \
-  --base-branch main \
-  --target-branch feature/passkey-login \
-  --workers "implementation:write auth code" \
-  --permissions "implementation:workspace_write" \
-  --allowed "src/auth/**,tests/auth/**" \
-  --forbidden "billing,database migrations,secrets,CI deploy config" \
-  --validation "npm test -- auth;npm run lint;npm run typecheck" \
-  --evidence "local checks" \
-  --claim "candidate implementation only" \
-  --state ".codex-loop/LOOP_STATE.md" \
-  --source-artifacts "docs/auth-spec.md and attached screenshots" \
-  --metered-runtime-policy "no real LLM/API/codex exec calls; keep AI/provider behavior placeholder unless user later supplies cost_cap_usd" \
-  --commit-policy "local commits are forbidden for implementation; commit packaging requires an explicit later goal" \
-  --source-promotion-policy "copy external specs into docs/loop-sources/ when allowed before long multi-phase execution" \
-  --loop-state-git-policy "keep .codex-loop/ ignored and out of product commits" \
-  --max-child-threads 4 \
-  --runtime-readiness "READY_BUT_LIKELY_REVIEW_REPAIRS" \
-  --runtime-retry-attempts 10 \
-  --time-min "45-90 分钟" \
-  --time-typical "2-4 小时" \
-  --time-max "4-8 小时" \
-  --time-factors "auth edge cases,browser/passkey support,native dependency install,test fixture setup,Reviewer repair rounds" \
-  --discovery "CI failures, auth issues, recent auth commits" \
-  --triage-output ".codex-loop/TRIAGE.md" \
-  --connectors "GitHub connector if exposed; otherwise manual PR links" \
-  --worktree-policy "one Codex worktree per writing Worker" \
+  --print-schema
+```
+
+检查输入：
+
+```bash
+python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
+  --input examples/01-passkey-login-input.json \
+  --check-only
+```
+
+生成文件：
+
+```bash
+python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
+  --input examples/01-passkey-login-input.json \
   --controller-pack-output ./passkey-codex-loop-controller-pack.md
 ```
 
-使用 `--controller-pack-output` 时，脚本会把发给控制线程的 Markdown 写入该文件，并在终端输出给用户看的“怎么用、卡点预估、耗时预估、怎么回查”。
-
-`--branch` 保留为兼容字段，默认会被当成目标实现分支。需要独立 worktree 时，建议显式提供 `--base-branch` 和 `--target-branch`：`--base-branch` 必须是本地已存在并可验证的 ref，`--target-branch` 可以是 Worker 在 `/goal` 中创建的新分支。不要把一个尚不存在的新分支直接当成 worktree starting branch。
-
-默认 `运行中卡点预估` 和 `预计耗时` 是启发式预测：脚本只扫描用户显式提供的字段和非自动补齐 Worker 的职责，并使用 token-aware 匹配，避免把 `maintainable`、`requirements`、`decision` 这类词误判成 `ai`、`ui`、`ci`。高风险或复杂任务建议显式传入 `--runtime-readiness`、`--runtime-blockers`、`--time-*` 覆盖默认预测。
-
-如果结构化输入里出现 `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke 或其他计量执行信号，但没有提供 `--cost-cap-usd` / `--call-cap` / `--token-cap` / `--metered-runtime-policy`，`--check-only` 应该提示缺少 `cost_cap_usd_or_metered_runtime_policy`。如果只是想先占位，显式传入类似：
-
-```bash
---metered-runtime-policy "deferred: run local-only stages, then stop with BLOCKED_COST_CAP before any codex exec or real LLM/API call"
-```
-
-默认线程拓扑是 lean / just-in-time：启动时只创建当前 Worker、Reviewer、State-Writer。不要为 R/S/T/U/W 这类顺序阶段提前创建多个 Worker；后续阶段优先复用同一个实现线程，只有明确需要独立 worktree、专业角色或并行时才新建。
-
-生成前检查缺失字段：
+Full Mode：
 
 ```bash
 python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
-  --check-only \
-  --objective "Fix README typo"
+  --input examples/01-passkey-login-input.json \
+  --mode full \
+  --controller-pack-output ./passkey-codex-loop-controller-pack-full.md
 ```
 
-如果缺少必需字段，脚本会以非零状态退出，并列出缺少的字段。
+输入不完整时脚本默认拒绝生成。只有明确需要不可投递草稿时才使用：
 
-## 输出内容长什么样
+```bash
+--allow-draft
+```
 
-Compact Mode 默认输出两类内容：
+草稿文件以 `NON_DISPATCHABLE_DRAFT` 开头，最终使用方法也会明确写“不要发送”。
+JSON 顶层或嵌套对象出现重复 key 时会直接作为 input error 拒绝，避免后一个值
+静默覆盖权限、review 或预算配置。
 
-1. 一个 Controller Pack `.md` 文件：发给控制线程的唯一材料。
-2. 一段最终使用方法：给用户看，不发给控制线程。
+## 两个案例
 
-Controller Pack 文件内部包含：
+### Passkey 登录
 
-- `Controller Prompt`
-- `Worker Prompt`
-- `Reviewer Prompt`
-- `State-Writer Prompt`
-- `First Goal`
-- durable state schema
-- retry/stop rules
-- review gate
-- human approval gate
-- evidence boundary
-- thread bootstrap/input gates：Worker 只响应 `/goal`，Reviewer 只响应 `/review`，State-Writer 只响应 `/state_update`
+- 输入：[examples/01-passkey-login-input.json](examples/01-passkey-login-input.json)
+- Controller Pack：[examples/01-passkey-login-controller-pack.md](examples/01-passkey-login-controller-pack.md)
+- 使用方法：[examples/01-passkey-login-usage.md](examples/01-passkey-login-usage.md)
 
-如果任务是 recurring loop、多线程、需要 connector、需要 worktree 或可能进入自动化，Controller Pack 还会包含：
+展示单实现 Worker、自动 Reviewer/State-Writer、auth 本地代码预授权、worktree
+同目录审查和最终完整审查。
 
-- `Runtime Mapping`
-- `Transient Runtime Retry Policy`
-- `Heartbeat Automation Template`
-- `Discovery/Triage`
-- connector fallback
-- worktree isolation policy
+### Daily CI Triage
 
-最终使用方法必须单独包含：
+- 输入：[examples/02-daily-ci-triage-input.json](examples/02-daily-ci-triage-input.json)
+- Controller Pack：[examples/02-daily-ci-triage-controller-pack.md](examples/02-daily-ci-triage-controller-pack.md)
+- 使用方法：[examples/02-daily-ci-triage-usage.md](examples/02-daily-ci-triage-usage.md)
 
-- `运行中卡点预估`：loop 已经能启动后，可能在哪些阶段停下、触发什么状态、自动处理到什么程度才问你。
-- `预计耗时`：min / typical / max，以及哪些等待时间不算进去。
-- `你应该怎么用`：选择哪个工作区、在哪里建控制线程、把哪个 md 文件发过去。
-- `怎么回查 loop`：看哪些线程和哪些 `.codex-loop/` 文件。
-- `你只需要介入`：哪些状态需要用户回来处理。
+展示 `CI-T1` read-only triage、`TRIAGE_ACTIONABLE/TRIAGE_NO_ACTION`、条件解锁
+`CI-R1`、一个实现 worktree 和最终审查。
 
-生成出来的 Worker 通常包括：
-
-- `implementation`：只允许在 scoped write set 内写代码。
-- `reviewer`：当 review required 时自动补齐，且是 read-only。
-- `state-writer`：自动补齐，唯一负责串行写 durable state。
-
-## 输出之后应该怎么用
-
-默认是 Codex macOS App 自动项目模式：你只启动一个控制线程，但这个控制线程必须在目标项目/工作区里启动。你发给控制线程的是生成的 Controller Pack `.md` 文件，不是从聊天里复制很多段 prompt。
-
-### 1. 先准备工作区
-
-1. 在本地准备一个文件夹。新项目尽量用空白文件夹，例如 `~/Documents/my-new-app`。
-2. 在 Codex App 左侧“项目”里打开或添加这个文件夹，让它成为一个 Codex Project/Workspace。
-3. 把 PRD、截图、PDF、设计稿、数据文件等资料放进这个工作区，推荐放到 `docs/`。
-4. 如果资料暂时不在工作区，第一条 Controller 消息里必须写明绝对路径，或直接把文件附上。
-
-### 2. 再启动控制线程
-
-1. 在这个项目/工作区下面新建聊天，命名为“控制线程”。
-2. 把生成的 Controller Pack `.md` 文件发给控制线程。不要手动拆分复制 Controller/Worker/Reviewer/State-Writer 段落。
-3. 控制线程会先调用 `list_projects` 或等价工具，找到当前工作区的 `projectId`。
-4. 控制线程创建实现/审查/状态线程时，必须使用 `create_thread` 的 project target，例如 `target.type="project"` + 同一个 `projectId`。这样新线程会出现在同一个左侧项目工作区下面。
-5. 控制线程不能用内部 sub-agent 代替线程。只要看到 `multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、`agentId`、`Jason(worker)`、`创建智能体` 这类输出，就说明它没有创建真正的 Codex App 项目线程，应停在 `THREAD_TOOLS_UNAVAILABLE` 或手动降级。
-6. 如果使用独立 worktree，控制线程必须先验证 starting branch/ref 存在。目标实现分支如果还不存在，不能直接作为 `startingState.branchName`；应从当前工作树或已验证 base branch 启动，再由 Worker 在 `/goal` 里创建/切换目标分支。
-7. 控制线程必须登记真实 `threadId`。`pendingWorktreeId` 只能临时记录，标题只能用于显示；如果线程标题不符合预期，要 broad list 项目线程按 cwd/worktree、projectId、bootstrap prompt、idle 状态找回并重命名。
-8. 如果控制线程无法找到项目，它应该输出 `MISSING_PROJECT_WORKSPACE` 并停止。不要让它创建 projectless 普通对话线程。
-
-### 3. 自动 loop 怎么跑
-
-控制线程会自动做这些事：
-
-1. 创建或继续实现线程、审查线程、状态线程。
-2. 先把各线程初始化到 idle：实现线程等待 `/goal`，审查线程等待 `/review`，状态线程等待 `/state_update`。初始化本身不能触发实现、审查或写状态。
-3. 立即创建 heartbeat 自动唤醒，默认每 15 分钟唤醒控制线程；没有 heartbeat 就不算完整自动 loop。
-4. 初始化或同步 `.codex-loop/` 状态文件；然后发送 `First Goal` 给第一个实现线程。
-5. 读取 Worker 回报，批准或拒绝 `state_change_request`。
-6. 把批准后的状态更新发给 `state-writer`。
-7. 只有拿到 Worker 报告、changed files、validation、evidence 和 diff summary 后，才给审查线程发送 `/review`。
-8. 审查不过时继续发修复任务；通过后由 heartbeat 按确定性状态转移表推进下一个 goal；达到 retry/wakeup 上限后停止。
-9. 如果 `REVIEW_PASS` 后还有下一个 goal 可派发，控制线程必须继续派发，不能只向你报告“下一步由 Controller 决定”。
-
-你只需要在这些情况介入：
-
-- 需要真实订阅链接、支付链接、社群链接或密钥。
-- 需要批准 PR merge、deploy、release 或真实外部写入。
-- 出现 `AWAITING_HUMAN_APPROVAL`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`WORKTREE_BOOTSTRAP_BLOCKED`、`THREAD_IDENTITY_UNRESOLVED`、`OBSERVABILITY_GAP` 或 `HARD_BLOCK`。
-- 出现 `BLOCKED_COST_CAP` 或 `BLOCKED_USAGE_METADATA`。这表示后续需要真实付费/计量调用，但预算、调用/Token 上限或用量元数据边界还不够明确。
-- 出现 `THREAD_TOOLS_UNAVAILABLE` 或 `MANUAL_FALLBACK_REQUIRED`。这表示当前环境没有可用的 Codex App 线程工具；不能用 sub-agent 顶替。
-- 需要真人可用性测试证据，或你决定接受 waiver。
-
-### 4. 怎么回查 loop 是否按预期在跑
-
-先看 Codex App 左侧项目工作区：
-
-- 控制线程、实现线程、审查线程、状态线程都应该在同一个项目下面。
-- 如果实现/审查/状态线程跑到了普通对话列表，说明 Controller 没有正确使用 project target，需要停下修正。
-- 如果左侧没有出现真实线程，而日志里出现“创建智能体”、`agentId` 或 `Jason/Descartes/Galileo` 这类 sub-agent 名称，说明 loop 跑错运行层了。让控制线程停止，不要继续执行。
-
-再看线程职责：
-
-- 控制线程：看每一步派发给谁、为什么派发、下一步等什么。
-- 实现线程：看改了哪些文件、跑了哪些命令、验证结果是什么。
-- 审查线程：先应是 idle，收到 `/review` 后才看 `PASS`、`NEEDS_REPAIR` 或具体 review findings。
-- 状态线程：看它是否只写状态/日志，不写业务代码。
-- heartbeat 自动化：看 Codex Automation/heartbeat 卡片是否 active、间隔是否正确、目标是否是控制线程。
-
-再看工作区里的 loop 文件。它们不是装饰文件，是用来回查 loop 是否真的按预期运行的审计轨迹：
-
-- `.codex-loop/LOOP_STATE.md`：当前进度快照；看现在在哪个阶段、卡点是什么、下一步做什么。
-- `.codex-loop/LOOP_EVENTS.jsonl`：逐步流水账；看每次派发、回报、重试、审查、停止的时间和结果。
-- `.codex-loop/TRIAGE.md`：问题清单；看发现了哪些问题、证据、严重性和处理状态。
-- `.codex-loop/reports/`：报告归档；看每轮实现/审查摘要和最终结论。
-
-如果线程里显示已经做了事，但这些文件没有更新，说明可回查链路断了。此时让控制线程先处理 `OBSERVABILITY_GAP`，不要继续派发新任务。
-
-正常自动推进信号：
-
-- 启动后能看到 heartbeat 已 active，并且目标是控制线程。
-- Worker 报 `READY_FOR_REVIEW` 或 `PASS` 后，控制线程会发 `/review`，不会直接说完成。
-- Reviewer 报 `REVIEW_PASS` 后，控制线程会先让 State-Writer 记录，再继续下一 Goal 或最终 closeout。
-- 依赖下载、registry、native binary、浏览器依赖失败时，先看到 `RUNTIME_DEPENDENCY_RETRYING` 和多次自动重试，而不是马上问你。
-
-异常断停信号：
-
-- Controller 输出“等我决定 / 后续我会继续 / 需要用户提醒”但没有派发下一条消息。
-- heartbeat 没创建、目标线程不是控制线程，或只 wake 不执行状态表里的下一动作。
-- 已经有 Worker/Reviewer 结论，但 `LOOP_EVENTS.jsonl` 没有对应事件。
-- 已经给了成本/Token/调用策略，却仍仅因为某个可选 cap 字段是 `UNSPECIFIED` 停在 `BLOCKED_COST_CAP`。
-- 任务要求 commit hash、PR、push、source 文件入库或 `.codex-loop/` gitignore 处理，但 Worker prompt 又禁止这些动作。
-
-只有当前 Codex App 没有暴露线程工具或自动化工具时，才使用手动降级模式：你手动在同一个项目工作区里创建实现线程、审查线程、状态线程，粘贴对应 prompt，并把回报复制回控制线程。手动降级也必须保留审查门、状态单写者和停止条件。
-
-## 安全模型
-
-这套 skill 默认保守：
-
-- Controller 只读，不写代码、不 deploy、不 push、不 merge。
-- Worker 只能写明确允许的路径。
-- Worker 不能直接写 `LOOP_STATE.md`。
-- 所有 Worker 只输出 `state_change_request`。
-- `state-writer` 是唯一 durable state / loop audit writer。
-- `state-writer` 一次只写一个 Controller 批准的 state update，并维护 `.codex-loop/LOOP_EVENTS.jsonl` 与 `.codex-loop/reports/`。
-- 线程初始化是 `BOOTSTRAP_ONLY`：Worker 等 `/goal`，Reviewer 等 `/review`，State-Writer 等 `/state_update`。idle 不是失败，也不是卡点。
-- 自动 loop 必须在启动时创建 heartbeat；如果 heartbeat 工具不可用，输出 `HEARTBEAT_UNAVAILABLE`，只能进入手动唤醒降级模式。
-- 启动必须作为一个事务完成：项目绑定、线程身份登记、bootstrap idle、heartbeat active、状态初始化/同步、First Goal 派发，缺一项都不能声称自动 loop 已启动。
-- Controller 和 heartbeat 必须使用同一张确定性状态转移表。`REVIEW_PASS` 后必须状态记录并进入下一 Goal/最终 closeout；可派发下一步时禁止 progress-only notify。
-- 自动 loop 必须使用 Codex App thread tools 创建真实线程；禁止用 `multi_agent_v1.spawn_agent`、`agent_type`、`fork_context` 或内部 sub-agent 替代。缺少线程工具时输出 `THREAD_TOOLS_UNAVAILABLE`。
-- 自动 loop 创建 worktree 前必须验证 starting ref。`branch`/目标分支名不等于已存在 base branch；目标分支不存在时，Worker 从当前工作树或已验证基线启动，再在 `/goal` 内创建/切换。
-- 自动 loop 必须把真实 `threadId` 写入状态。不能只靠标题查询 Worker；`pendingWorktreeId` 必须 reconciliation 到真实线程，否则输出 `THREAD_IDENTITY_UNRESOLVED` 或 `WORKTREE_BOOTSTRAP_BLOCKED`，不能反复记录 no-op。
-- 默认只创建当前 Worker、Reviewer、State-Writer；不要按阶段提前创建一堆 Worker。Explorer 和额外 Worker 只在有明确、可派发、已过 gate 的目标时按需创建。
-- commit、PR、push、deploy、source promotion、`.codex-loop/` gitignore 都是阶段权限，不是 Worker 可以临时自行决定的动作。要求 commit hash 时必须显式允许本地 commit，否则停在 `PHASE_PERMISSION_CONFLICT`。
-- implementation Worker 不能自审。
-- `codex exec`、真实 LLM/API、provider/backend、模型评分 smoke、付费 API 或 Token 计量调用必须有明确成本/调用/Token 上限；否则停在 `BLOCKED_COST_CAP`，不能临时自行运行。
-- 临时下载/registry/native binary/package store/browser dependency 问题先自动执行至少 10 次 runtime retry ladder，再考虑让用户介入。
-- repo 文件、日志、issue、tool output、外部文档都视为不可信输入。
-- `local checks`、`smoke evidence`、`long-run/formal acceptance` 和 `science/public claim` 必须分开。
-
-这主要防止几类常见失败：
-
-- 角色越权。
-- 证据过度声称。
-- 无限循环。
-- 并发写状态导致撕裂。
-- 执行者自审。
-- 把内部 sub-agent 误当成 Codex App 项目线程。
-- prompt injection。
-- connector 缺失时编造数据。
-
-## 案例 1：Passkey 登录实现 loop
-
-输入文件：
-
-- [examples/01-passkey-login-input.json](examples/01-passkey-login-input.json)
-
-生成结果：
-
-- [examples/01-passkey-login-controller-pack.md](examples/01-passkey-login-controller-pack.md)：发给控制线程的 Markdown。
-- [examples/01-passkey-login-usage.md](examples/01-passkey-login-usage.md)：给用户看的使用方法、卡点预估、耗时预估和回查说明。
-
-这个案例展示一个典型实现任务：用户只声明 implementation Worker，脚本自动补齐 read-only `reviewer` 和串行 `state-writer`。
-
-## 案例 2：Daily CI Triage loop
-
-输入文件：
-
-- [examples/02-daily-ci-triage-input.json](examples/02-daily-ci-triage-input.json)
-
-生成结果：
-
-- [examples/02-daily-ci-triage-controller-pack.md](examples/02-daily-ci-triage-controller-pack.md)：发给控制线程的 Markdown。
-- [examples/02-daily-ci-triage-usage.md](examples/02-daily-ci-triage-usage.md)：给用户看的使用方法、卡点预估、耗时预估和回查说明。
-
-这个案例更接近完整 loop engineering：它包含 discovery sources、triage output、connector fallback、daily cadence、worktree isolation、triage Worker、repair Worker、reviewer 和 state writer。
-
-重新生成两个案例：
+重新生成：
 
 ```bash
 python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
@@ -454,19 +670,39 @@ python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
 
 ## 本地校验
 
-如果本机有 Codex 的 `skill-creator` system skill：
+运行全部语义回归：
 
 ```bash
-python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  ./codex-loop-prompt-architect
+python3 -m unittest discover -s tests -v
 ```
 
-Python 脚本语法检查：
+运行 skill 与脚本校验：
 
 ```bash
 python3 -m py_compile \
-  ./codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py
+  codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py
+
+python3 codex-loop-prompt-architect/scripts/validate_skill.py
+
+bash -n scripts/install.sh
 ```
+
+如果当前 Codex 安装还提供 system `quick_validate.py`，安装脚本会额外运行；
+它不存在时不会阻止安装，因为仓库自带 validator 已覆盖 frontmatter、目录、
+metadata、脚本编译和 schema 输出检查。
+
+当前回归套件共 110 项，覆盖中文/英文成本检测、否定语义、provider 文档误报、
+`fake/mock` 成本绕过、无限/零/模糊预算、schema 类型与重复 key、placeholder、
+glob/path/control-plane scope、repo mode、分支创建权限、重复角色、多
+State-Writer/Reviewer、Goal/Dispatch ID、Goal Queue、triage、thread/automation/
+dispatch outbox、严格 JSON/JSONL 状态、heartbeat wake CAS、STOP/恢复、limited
+完成、repair/runtime retry、同目录 worktree Review、Full Mode、原子文件输出和
+不可投递草稿。它还会逐字节核对两个示例 fixture，并在隔离 `CODEX_HOME` 中验证
+安装、旧备份迁移、缓存排除和安装失败回滚。GitHub Actions 会在 push/PR 自动运行
+同一套检查。
+
+这些是 local checks。示例生成通过并不等于每个 Codex App 版本的真实线程
+loop 已完成端到端运行；发布前仍应在当前 App 版本做一个受控 smoke。
 
 ## 许可证
 

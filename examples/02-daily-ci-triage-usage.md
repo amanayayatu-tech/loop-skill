@@ -1,55 +1,38 @@
 ## 生成文件
 
 已生成 Controller Pack：`examples/02-daily-ci-triage-controller-pack.md`。
-这个 Markdown 文件是发给控制线程的唯一材料；不要再手动拆分复制 Controller/Worker/Reviewer/State-Writer 段落。
+这个 Markdown 文件是发给控制线程的唯一材料，不需要拆分复制内部段落。
 
 ## 运行中卡点预估
 
-前提：以下预估只针对已经通过 Clarification Gate、可以正式启动的 loop；不包含工作区、repo/root、PRD、权限边界等启动前必须补齐的问题。
+前提：工作区、repo_mode、源文件、验收、权限、Goal Queue、验证和审查门已经齐全。
 
 运行准备度：READY_WITH_EXPECTED_GATES
 
-预计会停下等你的阶段：
-1. 阶段：真实外部能力或高风险操作
-   为什么会停：真实 API、密钥、Billing、Deploy、Merge、生产写入或用户可见发布不能由 loop 擅自启用
-   触发状态：AWAITING_HUMAN_APPROVAL
-   你会被问什么：是否提供凭证、批准真实调用/部署/合并，或继续保持占位/waiver
+可能显著延长、自动重试或最终需要你介入的阶段：
+1. 阶段：依赖安装 / 本地验证环境
+为什么会停：registry、native binary、浏览器依赖或 package store 可能波动
+触发状态：RUNTIME_DEPENDENCY_RETRYING；预算耗尽后 RUNTIME_DEPENDENCY_BLOCKED
+自动处理：按超时、无进展 watchdog、退避、续传、预取、安全备用源和项目内清理的梯队重试
+你会被问什么：只有重试预算耗尽或下一步需要凭证/全局改动时才会询问
 
-2. 阶段：依赖安装 / 本地验证环境
-   为什么会停：首次 install 可能下载 native binary 或大依赖，受 registry、网络、package store、lockfile、平台包影响；Next/SWC、Playwright、Sharp、canvas、Electron 尤其常见
-   触发状态：RUNTIME_DEPENDENCY_RETRYING；重试预算耗尽后才升级为 RUNTIME_DEPENDENCY_BLOCKED | VALIDATION_BLOCKED
-   自动处理：控制线程应下发至少 10 次重试梯队，包括延长 timeout、断点/分段/预取、降低并发、换公开 registry/source、清理项目内部分残留
-   你会被问什么：只有重试耗尽、错误明显非临时、或下一步需要凭证/付费/系统级改动/越界写入时，才会问你
-
-3. 阶段：验证与独立审查修复
-   为什么会停：lint/test/build/CI/export 或 Reviewer 可能发现缺口，需要 1-3 轮修复
-   触发状态：NEEDS_REPAIR，超过修复上限后 HARD_BLOCK
-   你会被问什么：是否继续增加修复轮数、放宽范围，或把部分 P1/P2 延后
-
-4. 阶段：可选 connector / runtime 能力
-   为什么会停：GitHub、浏览器、Automation、worktree 或云端能力可能未暴露给当前 Codex App 线程
-   触发状态：MISSING_CONNECTOR
-   你会被问什么：是否安装/授权 connector，或改用本地/手动证据
-
-5. 阶段：loop 审计轨迹同步
-   为什么会停：线程已经推进但 LOOP_STATE.md、LOOP_EVENTS.jsonl 或 reports 归档未同步时，必须先修复可回查链路
-   触发状态：OBSERVABILITY_GAP
-   你会被问什么：是否允许 State-Writer 根据最新线程报告补写状态/事件/报告摘要
+2. 阶段：验证与独立审查修复
+为什么会停：测试或 Reviewer 可能发现真实缺口
+触发状态：NEEDS_REPAIR | REVIEW_NEEDS_REPAIR
+自动处理：在修复预算内自动回派同一 Worker，状态写入确认后再复审
+你会被问什么：只有修复预算耗尽或范围需要扩大时才会询问
 
 ## 预计耗时
 
-前提：工作区、源文件、权限边界、验证命令和审查门已经齐全。这是本地 Codex loop wall-clock 估算，不是 SLA。
+前提：启动前校验已经通过。这是 wall-clock 规划估算，不是 SLA。
 
 最短时间 min：30-60 分钟主动设置
-典型时间：1-2 小时完成首轮验证，之后每次 wakeup 约 10-30 分钟
+典型时间：1-2 小时完成首轮，之后每次 wakeup 约 10-30 分钟
 最大时间 max：半天，若 CI/connector 不稳定会更长
 
-不计入：
-- 等你提供 API key / 凭证 / 订阅配置的时间
-- 等你提供 cost_cap_usd / 调用次数 / Token 上限或批准真实付费调用的时间
-- 等你批准 deploy / merge / 外部写入的时间
-- 等真人验收或离线业务判断的时间
-- 等 registry / 网络 / 原生包下载恢复的时间
+当前 heartbeat 总预算覆盖约 12 小时（15 分钟 x 48 次）；预计任务超过该范围时必须在启动前提高 max_wakeups。
+
+不计入：等待凭证、deploy/merge 批准、真人验收和外部服务恢复的时间。
 
 可能拉长时间的因素：
 - GitHub connector availability
@@ -61,56 +44,43 @@
 
 ## 你应该怎么用
 
-1. 在 Codex App 左侧选择或创建项目工作区：`product-app`。
-2. 确认该工作区根目录是：`/workspace/product-app`。
-3. 把 PRD/spec/图片/PDF/数据放到工作区，推荐放 `docs/`；或确保控制线程能读取这些路径：GitHub Actions URLs or pasted CI log excerpts when the GitHub connector is unavailable。
-4. 在这个工作区中新建一个聊天，命名为“控制线程”。不要在普通对话区启动。
-5. 把生成的 Controller Pack `.md` 文件发给控制线程。
-6. 控制线程默认只创建或继续当前需要的最少线程：一个当前 Worker、一个审查线程、一个状态线程；不会按 R/S/T/U/W 这种阶段提前创建一堆 Worker。
-7. 这些必须是 Codex App 项目线程：控制线程要用 `list_projects` 和 `create_thread(target.type="project", projectId=...)` 创建。`multi_agent_v1.spawn_agent`、`agent_type`、`fork_context`、"创建智能体" 都不算。
-8. 目标实现分支不等于 worktree 启动分支。控制线程必须先验证 existing base branch 是否存在；目标分支不存在时，不能把它当作 `startingState.branchName`，应从当前工作树或已验证基线启动 Worker，再由 Worker 在 `/goal` 里创建/切换目标分支。
-9. 控制线程必须把真实 `threadId` 写进状态。线程标题只是显示名；如果 `create_thread` 只返回 `pendingWorktreeId`，控制线程要 broad list project threads，用 cwd/worktree、projectId、bootstrap prompt、`READY_IDLE_AWAITING_GOAL` 等证据找回真实 Worker，再重命名和登记。
-10. 控制线程必须创建 heartbeat 自动唤醒，默认每 15 分钟检查并继续推进；如果没有 heartbeat，就不算完整自动 loop。
-11. heartbeat 建好后，控制线程才把 First Goal 发给 `triage`，之后按 Worker 报告 -> Reviewer 审查 -> State-Writer 记录 -> 下一 Goal 的顺序循环。后续阶段优先复用同一个实现线程，只有明确需要独立 worktree/专业角色/并行时才新建线程。
-12. 如果子线程跑到普通对话列表，说明项目绑定失败，让控制线程停下处理 `MISSING_PROJECT_WORKSPACE`。
-13. 如果控制线程说创建了“智能体 / sub-agent / agentId”，说明它没有创建真正的 Codex App 线程，让它停下处理 `THREAD_TOOLS_UNAVAILABLE`，不要继续执行。
-14. 如果 Reviewer 已经 `REVIEW_PASS`，控制线程不应该只告诉你“等我决定下一步”。它必须记录状态并继续派发下一 Goal；否则让它按 `NON_ACTIONABLE_NOTIFY_BLOCKED` 处理。
-15. 如果任务要求 commit hash、PR、push、deploy、source 文件入库或 `.codex-loop/` gitignore 处理，控制线程必须先确认当前阶段允许这些动作；不允许时应停在 `PHASE_PERMISSION_CONFLICT`，不能一边禁止一边要求 Worker 完成。
+1. 在 Codex App 左侧选择或创建项目工作区：`product-app`，根目录必须是 `/workspace/product-app`。
+2. 当前 repo_mode 是 `existing_git`：`existing_git` 先检查现有 git/worktree/脏文件；`new_git` 第一阶段先用 local Worker，且只有 Goal 的 `git_init/branch_create` 为 true 才初始化；`non_git` 不执行分支/worktree 检查。
+3. 把资料放进工作区或提供子线程可读的绝对路径：/workspace/product-app/docs/ci-evidence/。只附在控制聊天里的文件不会自动传给新线程。
+4. 在这个工作区中新建一个“控制线程”，发送生成的 Controller Pack `.md` 文件。
+5. 控制线程使用 `list_projects`、`list_threads`、`create_thread`、`read_thread`、`send_message_to_thread` 创建和恢复真实项目线程，禁止用 sub-agent 冒充；先看到 `THREAD_REGISTERED` 才能派发。
+6. 控制线程先初始化版本化状态，收到 State-Writer ACK，再写 `AUTOMATION_CREATE_PREPARED`；核对本机已有 automation 后，仅在没有精确匹配时用准确的 `automation_update(mode="create", kind="heartbeat", destination="thread", rrule=...)` 创建一次，并写 `AUTOMATION_REGISTERED`。
+7. 所有 `MATERIALIZE_*` 运行时 token 必须替换为真实 `threadId`、`dispatch_id` 和 state snapshot；先写 `DISPATCH_PREPARED` 并等 ACK，发送一次，再写 `DISPATCH_SENT`。
+8. Reviewer 不在启动时预创建；Worker 报告已写入且存在可审 diff 后再即时创建。worktree Reviewer 优先用 `fork_thread(... same-directory)`，否则传递可验证的绝对 worktree 路径和完整 diff。
+9. 每次 Worker/Reviewer 回报先写状态并等待 `STATE_WRITE_APPLIED`，再进入 review、repair 或下一 Goal。
+10. heartbeat 每 15 分钟唤醒，最多 48 次；Worker 正在运行时记录 `WAITING_ACTIVE`，不能 NOOP 关闭。只有终态或无 inflight/queue 且连续 8 次 idle 才允许暂停。
+11. Goal Queue 全部通过后还要做一次完整 Git base-to-head 或 non_git before-to-after snapshot FINAL_AUDIT，最终状态写入成功后才是 `LOOP_COMPLETE`。
 
 ## 怎么回查 loop
 
-- 控制线程：看它把任务派给谁、为什么派发、下一步等什么。
-- 实现线程：看它改了哪些文件、跑了哪些命令、验证结果是什么。
-- 审查线程：看 review findings、`PASS` 或 `NEEDS_REPAIR`。
-- 状态线程：确认它只写状态/日志，不改业务代码。
-- heartbeat 自动化：看 Codex Automation/heartbeat 卡片是否为 active、间隔是否正确、目标是否是控制线程。
-- `.codex-loop/LOOP_STATE.md`：当前进度快照；看现在在哪个阶段、卡点是什么、下一步做什么。
-- `.codex-loop/LOOP_EVENTS.jsonl`：逐步流水账；看每次派发、回报、重试、审查、停止的时间和结果。
-- `.codex-loop/TRIAGE.md`：问题清单；看发现了哪些问题、证据、严重性和处理状态。
-- `.codex-loop/reports/`：报告归档；看每轮实现/审查摘要和最终结论。
+- 控制线程：看 PACK_SHA256/LOOP_ID、`THREAD_REGISTERED`、真实 threadId、dispatch_id、Goal Queue、状态 ACK 和下一动作。
+- 实现线程：看 worktree_path、Git 或 snapshot identity、changed_files、diff_summary、diff_sha256 和带 exit_code 的验证结果。
+- 审查线程：看 severity-first 的 file/line findings、reviewed artifact identity 和 test gaps。
+- 状态线程：看 state_request_id、event_id、state_version_before/after、transaction journal，确认没有重复事件或半事务。
+- heartbeat 卡片：看 automation id、ACTIVE/PAUSED、rrule、目标控制线程和 wake 计数。
+- `/workspace/product-app/.codex-loop/LOOP_STATE.md`：版本化当前快照、Goal Queue、thread-creation/automation/dispatch outbox、inflight dispatch、线程登记、预算和审批 ledger。
+- `/workspace/product-app/.codex-loop/LOOP_EVENTS.jsonl`：按 event_id 记录的派发、ACK、重试、审查、停止流水。
+- `/workspace/product-app/.codex-loop/TRIAGE.md`：TRIAGE_ACTIONABLE/TRIAGE_NO_ACTION 发现及其证据和后续 Goal。
+- `/workspace/product-app/.codex-loop/reports/`：Worker、Reviewer 和 FINAL_AUDIT 报告归档。
+- `/workspace/product-app/.codex-loop/transactions/`：State-Writer 的 PREPARED/APPLIED 恢复日志；用于判断中断后缺哪一步，不能当作第二份 canonical state。
+- `/workspace/product-app/.codex-loop/sources/CONTROLLER_PACK.md`：初始化时归档的精确 Controller Pack；heartbeat 校验 PACK_SHA256 后用它抵抗长对话压缩。
 
-如果线程里显示已经做了事，但这些文件没有更新，让控制线程先处理 `OBSERVABILITY_GAP`，不要继续派发新任务。
+正常信号：State-Writer 后出现恰好一个当前 Worker 的 `THREAD_REGISTERED`，再出现唯一的 `AUTOMATION_REGISTERED`；`WAITING_ACTIVE` 不会关闭 heartbeat；新任务依次出现 `DISPATCH_PREPARED` 和 `DISPATCH_SENT`；`STATE_WRITE_APPLIED` 后才继续；`REVIEW_PASS` 后准确派发一个已解锁 Goal；队列结束后出现 FINAL_AUDIT。
 
-正常自动推进信号：
-- 启动后能看到 heartbeat 已 active，并且目标是控制线程。
-- Worker 报 `READY_FOR_REVIEW` 或 `PASS` 后，控制线程会发 `/review`，不会直接说完成。
-- Reviewer 报 `REVIEW_PASS` 后，控制线程会先让 State-Writer 记录，再继续下一 Goal 或最终 closeout。
-- 依赖下载/registry/native binary 失败时，先看到 `RUNTIME_DEPENDENCY_RETRYING` 和多次自动重试，而不是马上问你。
-
-异常断停信号：
-- Controller 输出“等我决定 / 后续我会继续 / 需要用户提醒”但没有派发下一条消息。
-- heartbeat 没创建、目标线程不是控制线程，或只 wake 不执行状态表里的下一动作。
-- 已经有 Worker/Reviewer 结论，但 `LOOP_EVENTS.jsonl` 没有对应事件。
-- 已经给了成本/Token/调用策略，却仍仅因为某个可选 cap 字段是 `UNSPECIFIED` 停在 `BLOCKED_COST_CAP`。
+异常信号：同一 BOOTSTRAP_MARKER 出现多个未归档任务、重复 heartbeat、未替换的 `MATERIALIZE_*` 运行时 token、重复 dispatch_id、状态版本倒退、Reviewer 看不到 worktree、Worker active 时 heartbeat 被暂停、state update 与下一 Goal 同时发送。
 
 ## 你只需要介入
 
-- 需要真实订阅、支付、社群、密钥或外部服务配置时。
-- 需要真实 LLM/API、`codex exec`、模型评分 smoke 或其他付费/计量调用，但没有预算/调用/Token 上限时。
-- 需要批准 PR merge、deploy、release 或真实外部写入时。
-- 出现 `AWAITING_HUMAN_APPROVAL`、`BLOCKED_COST_CAP`、`BLOCKED_USAGE_METADATA`、`THREAD_TOOLS_UNAVAILABLE`、`MANUAL_FALLBACK_REQUIRED`、`MISSING_CONNECTOR`、`MISSING_PROMPT_PACK`、`MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`OBSERVABILITY_GAP`、`HARD_BLOCK` 时。
-- 需要真人测试证据，或你决定接受 waiver 时。
+- `MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`THREAD_TOOLS_UNAVAILABLE`、`THREAD_BUDGET_EXHAUSTED`、`AUTOMATION_TOOLS_UNAVAILABLE`、`AUTOMATION_IDENTITY_UNRESOLVED`、`MISSING_CONNECTOR`。
+- `DIRTY_WORKTREE_CONFLICT`、`WORKTREE_BOOTSTRAP_BLOCKED`、`WORKTREE_INTEGRATION_PLAN_MISSING`、`PATH_SCOPE_ESCAPE`、`THREAD_IDENTITY_UNRESOLVED`、`REVIEW_ARTIFACT_UNAVAILABLE`。
+- `BLOCKED_COST_CAP`、`BLOCKED_USAGE_METADATA`、`AWAITING_HUMAN_APPROVAL`、`PHASE_PERMISSION_CONFLICT`。
+- `RUNTIME_DEPENDENCY_BLOCKED`、`VALIDATION_BLOCKED`、`REPAIR_BUDGET_EXHAUSTED`、`STATE_VERSION_CONFLICT` 无法自动调和、`HEARTBEAT_BUDGET_EXHAUSTED`、`HEARTBEAT_IDLE_BUDGET_EXHAUSTED`、`HARD_BLOCK`。
 
 ## 手动降级
 
-只有当 Codex App 没有线程工具或自动化工具时才手动降级：你手动在同一个项目工作区里创建实现线程、审查线程、状态线程，把 Controller Pack 里的对应 prompt 发过去，并把回报交回控制线程。手动降级也必须保留审查门、状态单写者和停止条件。
+只有真实 Codex App 线程或 heartbeat 工具不可用时才使用。手动模式仍需真实项目线程、版本化单写者状态、精确 worktree 审查和相同停止条件。

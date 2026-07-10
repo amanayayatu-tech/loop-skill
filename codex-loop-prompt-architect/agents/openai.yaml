@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Loop Prompt Architect"
-  short_description: "把粗糙提示词脚本化生成完整 Codex Loop，含自动化、分诊、审阅和状态单写者"
-  default_prompt: "Use $codex-loop-prompt-architect，短版：把下面提示词变成可投递的 Codex macOS App Loop；必要时补全 Automation、Discovery/Triage、Connector/Worktree runtime mapping。"
+  short_description: "把粗糙需求生成可验证、自推进、可回查的 Codex App Loop"
+  default_prompt: "Use $codex-loop-prompt-architect：把下面需求生成一个可投递的 Codex App Controller Pack；信息不足先反问。"

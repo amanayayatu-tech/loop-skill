@@ -1,32 +1,101 @@
 {
   "objective": "Run a daily CI failure triage loop and dispatch one scoped repair goal when evidence is concrete",
   "repo": "/workspace/product-app",
+  "repo_mode": "existing_git",
   "project_name": "product-app",
-  "workspace_setup": "Open /workspace/product-app as a Codex Project before starting; writing Workers should use isolated worktrees",
+  "workspace_setup": "Open /workspace/product-app as a Codex Project before starting; writing Workers use isolated worktrees",
   "branch": "codex/daily-ci-triage-repair",
   "base_branch": "main",
   "target_branch": "codex/daily-ci-triage-repair",
-  "workers": "triage:read-only discover and classify CI failures;implementation:repair one selected low-risk failure inside approved scope",
-  "permissions": "triage:read_only;implementation:workspace_write",
-  "allowed": "src/**,tests/**,package.json,package-lock.json",
-  "forbidden": "secrets,production deploy,database migrations,billing,auth policy changes,release tags,PR merge",
-  "validation": "npm test;npm run lint;npm run typecheck",
-  "evidence": "local checks plus CI log excerpts",
+  "workers": [
+    {
+      "role": "triage",
+      "scope": "read-only discovery and classification of CI failures",
+      "permission": "read_only",
+      "validation": ["inspect supplied CI logs and local git evidence read-only"]
+    },
+    {
+      "role": "implementation",
+      "scope": "repair one selected low-risk failure inside approved scope",
+      "permission": "workspace_write",
+      "allowed": ["src/**", "tests/**", "package.json", "package-lock.json"]
+    }
+  ],
+  "permissions": {
+    "triage": "read_only",
+    "implementation": "workspace_write"
+  },
+  "allowed": ["src/**", "tests/**", "package.json", "package-lock.json"],
+  "forbidden": ["secrets", "production deploy", "database migrations", "billing", "auth policy changes", "release tags", "PR merge"],
+  "validation": ["npm test", "npm run lint", "npm run typecheck"],
+  "acceptance_criteria": [
+    "Triage returns evidence-backed TRIAGE_ACTIONABLE or TRIAGE_NO_ACTION",
+    "At most one selected low-risk repair is dispatched",
+    "Any repair passes local validation and independent exact-artifact review"
+  ],
+  "goals": [
+    {
+      "goal_id": "CI-T1",
+      "phase": "Read-only CI triage",
+      "worker_role": "triage",
+      "objective": "Inspect the declared CI evidence and select at most one concrete low-risk failure",
+      "success_criteria": [
+        "Return TRIAGE_ACTIONABLE with one finding and evidence, or TRIAGE_NO_ACTION with evidence",
+        "Do not modify files or dispatch implementation directly"
+      ],
+      "validation": ["inspect supplied CI logs and local git evidence read-only"],
+      "dispatch_when": "startup transaction is complete"
+    },
+    {
+      "goal_id": "CI-R1",
+      "phase": "Scoped CI repair",
+      "worker_role": "implementation",
+      "objective": "Repair the single finding selected by CI-T1 without expanding scope",
+      "depends_on": ["CI-T1"],
+      "dispatch_when": "CI-T1 status is TRIAGE_ACTIONABLE and the finding has concrete evidence, allowed scope, and validation",
+      "success_criteria": [
+        "The selected failure is repaired inside approved files",
+        "npm test, lint, and typecheck pass",
+        "Independent Reviewer approves the exact Worker worktree diff"
+      ],
+      "validation": ["npm test", "npm run lint", "npm run typecheck"],
+      "allowed_write_scope": ["src/**", "tests/**", "package.json", "package-lock.json"],
+      "phase_permissions": {
+        "local_commit": false,
+        "stage": false,
+        "pr_create": false,
+        "push": false,
+        "merge": false,
+        "deploy": false,
+        "source_promotion": false,
+        "git_init": false,
+        "branch_create": true,
+        "gitignore_hygiene": false,
+        "external_write": false
+      }
+    }
+  ],
+  "evidence": "local checks",
   "claim": "triage and candidate repair only; not merge-ready until independent review and CI confirmation",
   "state": ".codex-loop/LOOP_STATE.md",
-  "surface": "codex_project_auto with startup heartbeat automation",
+  "surface": "codex_project_auto",
   "runtime_readiness": "READY_WITH_EXPECTED_GATES",
   "time_min": "30-60 分钟主动设置",
-  "time_typical": "1-2 小时完成首轮验证，之后每次 wakeup 约 10-30 分钟",
+  "time_typical": "1-2 小时完成首轮，之后每次 wakeup 约 10-30 分钟",
   "time_max": "半天，若 CI/connector 不稳定会更长",
-  "time_factors": "GitHub connector availability, CI log quality, local test runtime, repair round count",
-  "automation": "Controller must create a startup heartbeat for the active repair loop; after the loop completes, a separate daily triage automation may be configured only if still needed",
-  "cadence": "heartbeat every 15 minutes during the active loop; optional daily triage only after completion",
-  "source_artifacts": "GitHub Actions URLs or pasted CI log excerpts when the GitHub connector is unavailable",
+  "time_factors": ["GitHub connector availability", "CI log quality", "local test runtime", "repair round count"],
+  "automation": "Create one startup heartbeat for this bounded triage/repair queue and pause it after terminal closeout",
+  "heartbeat_interval_minutes": 15,
+  "max_wakeups": 48,
+  "max_idle_wakeups": 8,
+  "active_stale_after_minutes": 60,
+  "source_artifacts": ["/workspace/product-app/docs/ci-evidence/"],
   "discovery": "GitHub Actions failures, open PR checks, recent commits, failing local tests, user triage notes",
   "triage_output": ".codex-loop/TRIAGE.md",
-  "connectors": "GitHub connector if exposed; otherwise paste CI URLs and log excerpts manually",
-  "worktree_policy": "one isolated Codex worktree per writing Worker; triage and reviewer stay read-only",
-  "runtime_retry_attempts": "10",
+  "connectors": "GitHub connector if exposed; otherwise workspace CI log files and manually supplied URLs",
+  "worktree_policy": "one isolated worktree for implementation; triage is read-only; Reviewer uses same-directory fork; State-Writer remains in control-plane checkout",
+  "runtime_retry_attempts": 10,
+  "runtime_retry_total_minutes": 180,
+  "runtime_retry_no_progress_minutes": 6,
   "review": "review required before PASS if any code/config/PR diff exists"
 }
