@@ -1,0 +1,254 @@
+{
+  "objective": "Build and validate a passkey sign-in flow while allowing exact browser evidence to revise later milestones",
+  "repo": "/workspace/adaptive-passkey-app",
+  "repo_mode": "existing_git",
+  "branch": "main",
+  "base_branch": "main",
+  "target_branch": "codex/adaptive-passkey",
+  "coordination_mode": "adaptive",
+  "adaptive_reason": "The final UX and session behavior may need to change after authenticated browser verification",
+  "workers": [
+    {
+      "role": "implementation",
+      "role_kind": "implementation",
+      "scope": "implement passkey UI, handlers, session behavior, tests, and evidence-safe fixes",
+      "permission": "workspace_write",
+      "allowed": [
+        "app/**",
+        "tests/**",
+        "docs/**"
+      ],
+      "validation": [
+        "pnpm lint",
+        "pnpm typecheck",
+        "pnpm test",
+        "pnpm build"
+      ]
+    }
+  ],
+  "permissions": {
+    "implementation": "workspace_write"
+  },
+  "allowed": [
+    "app/**",
+    "tests/**",
+    "docs/**"
+  ],
+  "forbidden": [
+    "production deploy",
+    "merge to main",
+    "real user credential capture",
+    "secrets or session cookie disclosure",
+    "payment or billing changes"
+  ],
+  "validation": [
+    "pnpm lint",
+    "pnpm typecheck",
+    "pnpm test",
+    "pnpm build"
+  ],
+  "acceptance_criteria": [
+    "Passkey registration and sign-in behavior is covered by deterministic tests",
+    "The exact integrated artifact passes lint, typecheck, tests, and build",
+    "Authenticated browser behavior is verified without exposing credentials",
+    "Every milestone receives code review and Roadmap Audit before the next milestone",
+    "Final integrated review contains no unresolved required fix"
+  ],
+  "milestones": [
+    {
+      "milestone_id": "M1-CONTRACT",
+      "outcome": "Establish the passkey and session contract with deterministic tests",
+      "scope": [
+        "app/**",
+        "tests/**"
+      ],
+      "decisions": [
+        "Keep production credentials and deployment out of scope"
+      ],
+      "blockers": [],
+      "required_evidence": [
+        "focused unit tests",
+        "exact diff code review"
+      ],
+      "status": "ACTIVE",
+      "depends_on": [],
+      "references": [
+        "PASSKEY-G1"
+      ]
+    },
+    {
+      "milestone_id": "M2-IMPLEMENT",
+      "outcome": "Implement the passkey UI, handlers, and session persistence",
+      "scope": [
+        "app/**",
+        "tests/**"
+      ],
+      "decisions": [],
+      "blockers": [],
+      "required_evidence": [
+        "lint, typecheck, tests, and build",
+        "exact integrated diff review"
+      ],
+      "status": "PLANNED",
+      "depends_on": [
+        "M1-CONTRACT"
+      ],
+      "references": [
+        "PASSKEY-G2"
+      ]
+    },
+    {
+      "milestone_id": "M3-LOCAL-VERIFY",
+      "outcome": "Prove registration, sign-in, callback, and session behavior in an authenticated local browser",
+      "scope": [
+        "app/**",
+        "tests/**"
+      ],
+      "decisions": [],
+      "blockers": [
+        "A local authenticated browser profile must be available when verification begins"
+      ],
+      "required_evidence": [
+        "sanitized screenshots",
+        "browser console and network evidence",
+        "stable local verification id"
+      ],
+      "status": "PLANNED",
+      "depends_on": [
+        "M2-IMPLEMENT"
+      ],
+      "references": [
+        "PASSKEY-G3"
+      ]
+    },
+    {
+      "milestone_id": "M4-INTEGRATE",
+      "outcome": "Close browser-discovered gaps and produce a bounded final readiness package",
+      "scope": [
+        "app/**",
+        "tests/**",
+        "docs/**"
+      ],
+      "decisions": [],
+      "blockers": [],
+      "required_evidence": [
+        "retest of every failed local verification id",
+        "final integrated review",
+        "explicit remaining limitations"
+      ],
+      "status": "PLANNED",
+      "depends_on": [
+        "M3-LOCAL-VERIFY"
+      ],
+      "references": [
+        "PASSKEY-G4"
+      ]
+    }
+  ],
+  "goals": [
+    {
+      "goal_id": "PASSKEY-G1",
+      "milestone_id": "M1-CONTRACT",
+      "phase": "Contract and tests",
+      "worker_role": "implementation",
+      "objective": "Define the passkey/session contract and add deterministic failing-then-passing tests",
+      "success_criteria": [
+        "Contract tests cover registration, sign-in, callback, and session persistence"
+      ],
+      "depends_on": [],
+      "dispatch_when": "startup transaction, native or emulated Controller Goal, and controller lease are acknowledged",
+      "phase_permissions": {
+        "branch_create": true
+      }
+    },
+    {
+      "goal_id": "PASSKEY-G2",
+      "milestone_id": "M2-IMPLEMENT",
+      "phase": "Implementation",
+      "worker_role": "implementation",
+      "objective": "Implement the passkey UI, handlers, and session behavior against the audited contract",
+      "success_criteria": [
+        "Lint, typecheck, tests, and build pass on the exact artifact"
+      ],
+      "depends_on": [
+        "PASSKEY-G1"
+      ],
+      "dispatch_when": "M1 code review and Roadmap Audit are acknowledged and M2 is the sole Active milestone"
+    },
+    {
+      "goal_id": "PASSKEY-G3",
+      "milestone_id": "M3-LOCAL-VERIFY",
+      "phase": "Local verification preparation and repair",
+      "worker_role": "implementation",
+      "objective": "Prepare the exact artifact for authenticated local verification and repair only evidence-backed failures",
+      "success_criteria": [
+        "Every Local Verifier failure is repaired and retested with the same verification id"
+      ],
+      "depends_on": [
+        "PASSKEY-G2"
+      ],
+      "dispatch_when": "M2 Roadmap Audit activates M3 and the local verification prerequisites are available"
+    },
+    {
+      "goal_id": "PASSKEY-G4",
+      "milestone_id": "M4-INTEGRATE",
+      "phase": "Integration closeout",
+      "worker_role": "implementation",
+      "objective": "Integrate approved fixes, rerun the full validation ladder, and prepare bounded readiness documentation",
+      "success_criteria": [
+        "Full validation and final integrated review pass with explicit limitations"
+      ],
+      "depends_on": [
+        "PASSKEY-G3"
+      ],
+      "dispatch_when": "M3 local verification and Roadmap Audit are acknowledged and M4 is Active"
+    }
+  ],
+  "evidence": "smoke evidence",
+  "claim": "local passkey implementation and authenticated-browser smoke only; not production security readiness",
+  "state": ".codex-loop/LOOP_STATE.md",
+  "source_artifacts": [
+    "SELF_CONTAINED"
+  ],
+  "delegation_policy": "auto_read_only",
+  "max_read_only_subagents": 2,
+  "max_read_only_subagent_runs": 4,
+  "subagent_retry_limit": 1,
+  "subagent_input_policy": "Only workspace source paths and redacted local validation logs; never secrets, cookies, credentials, private browser data, or external uploads",
+  "subagent_max_depth": 1,
+  "local_verification_policy": "required",
+  "dashboard_policy": "auto",
+  "dashboard_threshold_hours": 12,
+  "metered_runtime_policy": "Real paid LLM/provider calls are deferred; local deterministic implementation and browser verification only",
+  "human_approval_policy": "Local scoped implementation, validation, read-only browser inspection, and bounded read-only subagents are pre-authorized. Production credentials, deploy, merge, external writes, and claim expansion remain human gates.",
+  "commit_policy": "No commit, push, PR, merge, or deploy in this example",
+  "source_promotion_policy": "No source promotion",
+  "loop_state_git_policy": "Keep .codex-loop and local browser evidence out of product commits",
+  "thread_topology": "one reusable implementation task, one serial State-Writer, one just-in-time Reviewer reused for code and roadmap audit, and one just-in-time Local Verifier",
+  "max_child_threads": 4,
+  "max_repair_attempts_per_goal": 3,
+  "runtime_blockers": [
+    "First dependency install may require bounded registry retries",
+    "Authenticated browser state may be unavailable",
+    "Browser evidence may require another implementation/retest cycle"
+  ],
+  "time_min": "6 hours",
+  "time_typical": "14 hours",
+  "time_max": "2 days",
+  "time_factors": [
+    "Dependency cache availability",
+    "Number of browser-discovered repair rounds",
+    "Availability of an authenticated local browser profile"
+  ],
+  "heartbeat_interval_minutes": 15,
+  "max_wakeups": 192,
+  "max_idle_wakeups": 8,
+  "active_stale_after_minutes": 60,
+  "runtime_retry_attempts": 10,
+  "runtime_retry_total_minutes": 180,
+  "runtime_retry_attempt_timeout_minutes": 12,
+  "runtime_retry_no_progress_minutes": 6,
+  "connectors": "Codex App project task and automation tools; local browser/computer-use tools only when exposed",
+  "worktree_policy": "one shared integration worktree for sequential implementation goals; Reviewer and Local Verifier use same-directory access when exact worktree evidence is required",
+  "review": "code review and Roadmap Audit required before every milestone transition; final integrated review required"
+}

@@ -1,0 +1,962 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openai.local/codex-loop/adaptive-mutation.schema.json",
+  "title": "Deterministic Adaptive State Mutation Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "controller_approved",
+    "state_request_id",
+    "event_id",
+    "expected_state_version",
+    "actor",
+    "thread_id",
+    "occurred_at",
+    "evidence_paths",
+    "mutation"
+  ],
+  "properties": {
+    "controller_approved": {"const": true},
+    "state_request_id": {"$ref": "#/$defs/safeId"},
+    "event_id": {"$ref": "#/$defs/safeId"},
+    "expected_state_version": {"type": "integer", "minimum": 0},
+    "actor": {"$ref": "#/$defs/safeId"},
+    "thread_id": {"$ref": "#/$defs/safeId"},
+    "occurred_at": {"$ref": "#/$defs/timestamp"},
+    "evidence_paths": {"$ref": "#/$defs/stringArray"},
+    "artifacts": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "mutation": {
+      "oneOf": [
+        {"$ref": "#/$defs/initialize"},
+        {"$ref": "#/$defs/acquireLease"},
+        {"$ref": "#/$defs/releaseLease"},
+        {"$ref": "#/$defs/renewLease"},
+        {"$ref": "#/$defs/takeoverLease"},
+        {"$ref": "#/$defs/prepareOutbox"},
+        {"$ref": "#/$defs/cancelOutbox"},
+        {"$ref": "#/$defs/markOutboxSent"},
+        {"$ref": "#/$defs/ackOutbox"},
+        {"$ref": "#/$defs/recordReview"},
+        {"$ref": "#/$defs/roadmapRevision"},
+        {"$ref": "#/$defs/finalizeLoop"},
+        {"$ref": "#/$defs/stopLoop"},
+        {"$ref": "#/$defs/ackFinalization"}
+      ]
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "boundedText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "timestamp": {"type": "string", "format": "date-time"},
+    "stringArray": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "safeIdArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/safeId"}
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "content", "digest", "media_type"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/CONTROLLER_PACK\\.md)$"
+        },
+        "content": {"type": "string", "maxLength": 4000000},
+        "digest": {"$ref": "#/$defs/digest"},
+        "media_type": {"enum": ["text/markdown", "application/json", "text/plain"]}
+      }
+    },
+    "booleanMap": {
+      "type": "object",
+      "required": [
+        "git_init",
+        "branch_create",
+        "local_commit",
+        "stage",
+        "pr_create",
+        "push",
+        "merge",
+        "deploy",
+        "source_promotion",
+        "gitignore_hygiene",
+        "external_write"
+      ],
+      "properties": {
+        "git_init": {"type": "boolean"},
+        "branch_create": {"type": "boolean"},
+        "local_commit": {"type": "boolean"},
+        "stage": {"type": "boolean"},
+        "pr_create": {"type": "boolean"},
+        "push": {"type": "boolean"},
+        "merge": {"type": "boolean"},
+        "deploy": {"type": "boolean"},
+        "source_promotion": {"type": "boolean"},
+        "gitignore_hygiene": {"type": "boolean"},
+        "external_write": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "leaseClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease_epoch", "lease_id", "routing_turn_id", "owner_kind", "owner_identity", "intended_transition"],
+      "properties": {
+        "lease_epoch": {"type": "integer", "minimum": 1},
+        "lease_id": {"$ref": "#/$defs/safeId"},
+        "routing_turn_id": {"$ref": "#/$defs/safeId"},
+        "owner_kind": {"enum": ["GOAL_TURN", "HEARTBEAT"]},
+        "owner_identity": {"$ref": "#/$defs/safeId"},
+        "intended_transition": {"const": "ROUTE_ONE_TRANSITION"}
+      }
+    },
+    "milestone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "milestone_id",
+        "outcome",
+        "scope",
+        "decisions",
+        "blockers",
+        "required_evidence",
+        "status",
+        "depends_on",
+        "references"
+      ],
+      "properties": {
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "outcome": {"type": "string", "minLength": 1},
+        "scope": {"$ref": "#/$defs/stringArray"},
+        "decisions": {"$ref": "#/$defs/stringArray"},
+        "blockers": {"$ref": "#/$defs/stringArray"},
+        "required_evidence": {"$ref": "#/$defs/stringArray"},
+        "status": {
+          "enum": ["PLANNED", "ACTIVE", "BLOCKED", "COMPLETE", "SUPERSEDED"]
+        },
+        "depends_on": {"$ref": "#/$defs/safeIdArray"},
+        "references": {"$ref": "#/$defs/stringArray"},
+        "last_change_reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "goalDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goal_id",
+        "milestone_id",
+        "worker_role",
+        "worker_role_kind",
+        "objective",
+        "success_criteria",
+        "validation",
+        "allowed_write_scope",
+        "phase_permissions",
+        "depends_on",
+        "dispatch_when",
+        "payload_template_digest"
+      ],
+      "properties": {
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "worker_role": {"type": "string", "minLength": 1},
+        "worker_role_kind": {"enum": ["implementation", "triage", "explorer"]},
+        "objective": {"type": "string", "minLength": 1},
+        "success_criteria": {"$ref": "#/$defs/stringArray"},
+        "validation": {"$ref": "#/$defs/stringArray"},
+        "allowed_write_scope": {"$ref": "#/$defs/stringArray"},
+        "phase_permissions": {"$ref": "#/$defs/booleanMap"},
+        "depends_on": {"$ref": "#/$defs/safeIdArray"},
+        "dispatch_when": {"type": "string", "minLength": 1},
+        "payload_template_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "goalDefinitionMap": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/goalDefinition"}
+      },
+      "additionalProperties": false
+    },
+    "goalQueueEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goal_id", "milestone_id", "roadmap_version", "status", "depends_on"],
+      "properties": {
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_version": {"type": "integer", "minimum": 1},
+        "status": {"enum": ["READY", "PLANNED"]},
+        "depends_on": {"$ref": "#/$defs/safeIdArray"}
+      }
+    },
+    "authorizationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objective_id",
+        "allowed_write_scope",
+        "phase_permissions",
+        "phase_permission_caps",
+        "control_plane_caps",
+        "control_plane_limits",
+        "delegation_policy",
+        "repair_policy",
+        "budget_caps",
+        "connectors",
+        "side_effects",
+        "evidence_policy",
+        "claim_boundary",
+        "production_access",
+        "secrets_access"
+      ],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/digest"},
+        "allowed_write_scope": {"$ref": "#/$defs/stringArray"},
+        "phase_permissions": {"$ref": "#/$defs/booleanMap"},
+        "phase_permission_caps": {"$ref": "#/$defs/phasePermissionCaps"},
+        "control_plane_caps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"],
+          "properties": {
+            "thread_create": {"type": "boolean"},
+            "automation_manage": {"type": "boolean"},
+            "goal_manage": {"type": "boolean"},
+            "message_send": {"type": "boolean"},
+            "local_verifier": {"type": "boolean"}
+          }
+        },
+        "control_plane_limits": {"$ref": "#/$defs/controlPlaneLimits"},
+        "delegation_policy": {"$ref": "#/$defs/delegationPolicy"},
+        "repair_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_repair_attempts_per_goal"],
+          "properties": {
+            "max_repair_attempts_per_goal": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          }
+        },
+        "budget_caps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cost_usd", "calls", "tokens"],
+          "properties": {
+            "cost_usd": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0}]},
+            "calls": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]},
+            "tokens": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]}
+          }
+        },
+        "connectors": {"$ref": "#/$defs/stringArray"},
+        "side_effects": {"$ref": "#/$defs/booleanMap"},
+        "evidence_policy": {"type": "string", "minLength": 1},
+        "claim_boundary": {"type": "string", "minLength": 1},
+        "production_access": {"type": "boolean"},
+        "secrets_access": {"type": "boolean"}
+      }
+    },
+    "controlPlaneLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_child_threads",
+        "max_business_heartbeats",
+        "allowed_external_worktree_roots"
+      ],
+      "properties": {
+        "max_child_threads": {"type": "integer", "minimum": 1, "maximum": 32},
+        "max_business_heartbeats": {"const": 1},
+        "allowed_external_worktree_roots": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "pattern": "^/"}
+        }
+      }
+    },
+    "delegationPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "max_concurrent",
+        "max_lifetime_runs",
+        "retry_limit_per_exploration",
+        "max_depth"
+      ],
+      "properties": {
+        "mode": {"enum": ["disabled", "explicit_read_only", "auto_read_only"]},
+        "max_concurrent": {"type": "integer", "minimum": 0, "maximum": 2},
+        "max_lifetime_runs": {"type": "integer", "minimum": 0, "maximum": 16},
+        "retry_limit_per_exploration": {"type": "integer", "minimum": 0, "maximum": 2},
+        "max_depth": {"const": 1}
+      }
+    },
+    "goalPermissionCap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["milestone_id", "phase_permissions"],
+      "properties": {
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "phase_permissions": {"$ref": "#/$defs/booleanMap"}
+      }
+    },
+    "phasePermissionCaps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by_milestone", "by_goal"],
+      "properties": {
+        "by_milestone": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/booleanMap"}
+          },
+          "additionalProperties": false
+        },
+        "by_goal": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/goalPermissionCap"}
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "jsonValue": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "boolean"},
+        {"type": "number"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/jsonValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/jsonValue"}}
+      ]
+    },
+    "jsonObject": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/jsonValue"}
+    },
+    "formalAckResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "report_digest", "artifact_digest"],
+      "properties": {
+        "status": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "BLOCKED",
+            "REVIEW_PASS",
+            "REVIEW_PASS_WITH_LIMITATION",
+            "REVIEW_NEEDS_REPAIR",
+            "REVIEW_ARTIFACT_UNAVAILABLE",
+            "ROADMAP_AUDIT_PASS",
+            "ROADMAP_CHANGE_PROPOSED",
+            "ROADMAP_AUDIT_PASS_FINAL_CANDIDATE",
+            "ROADMAP_AUDIT_NEEDS_REPAIR",
+            "FINAL_REVIEW_PASS",
+            "FINAL_REVIEW_PASS_WITH_LIMITATION",
+            "FINAL_REVIEW_NEEDS_REPAIR"
+          ]
+        },
+        "report_digest": {"$ref": "#/$defs/digest"},
+        "artifact_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "initialize": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "loop_id",
+        "project_id",
+        "controller_pack_digest",
+        "controller_thread_id",
+        "controller_bootstrap_prompt_digest",
+        "state_writer_thread_id",
+        "state_writer_bootstrap_prompt_digest",
+        "dashboard_required",
+        "milestones",
+        "goal_definition_registry",
+        "goal_queue",
+        "authorization_envelope",
+        "local_verification_required_goal_ids"
+      ],
+      "properties": {
+        "type": {"const": "INITIALIZE"},
+        "loop_id": {"$ref": "#/$defs/safeId"},
+        "project_id": {"$ref": "#/$defs/boundedText"},
+        "controller_pack_digest": {"$ref": "#/$defs/digest"},
+        "controller_thread_id": {"$ref": "#/$defs/safeId"},
+        "controller_bootstrap_prompt_digest": {"$ref": "#/$defs/digest"},
+        "state_writer_thread_id": {"$ref": "#/$defs/safeId"},
+        "state_writer_bootstrap_prompt_digest": {"$ref": "#/$defs/digest"},
+        "dashboard_required": {"type": "boolean"},
+        "milestones": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/milestone"}
+        },
+        "goal_definition_registry": {"$ref": "#/$defs/goalDefinitionMap"},
+        "goal_queue": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/goalQueueEntry"}
+        },
+        "authorization_envelope": {"$ref": "#/$defs/authorizationEnvelope"},
+        "local_verification_required_goal_ids": {"$ref": "#/$defs/safeIdArray"},
+        "max_routing_turns": {"type": "integer", "minimum": 1},
+        "projection_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "acquireLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "routing_turn_id",
+        "lease_id",
+        "owner_kind",
+        "owner_identity",
+        "observed_at",
+        "expires_at"
+      ],
+      "properties": {
+        "type": {"const": "ACQUIRE_LEASE"},
+        "routing_turn_id": {"$ref": "#/$defs/safeId"},
+        "lease_id": {"$ref": "#/$defs/safeId"},
+        "owner_kind": {"enum": ["GOAL_TURN", "HEARTBEAT"]},
+        "owner_identity": {"$ref": "#/$defs/safeId"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "expires_at": {"$ref": "#/$defs/timestamp"},
+        "intended_transition": {"const": "ROUTE_ONE_TRANSITION"}
+      }
+    },
+    "releaseLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "lease_claim", "observed_at", "reason_code"],
+      "properties": {
+        "type": {"const": "RELEASE_LEASE"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "reason_code": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "ownerEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "thread_id", "routing_turn_id", "last_activity_at", "read_digest", "read_evidence_path"],
+      "properties": {
+        "status": {"const": "ACTIVE_SAME_OWNER"},
+        "thread_id": {"$ref": "#/$defs/safeId"},
+        "routing_turn_id": {"$ref": "#/$defs/safeId"},
+        "last_activity_at": {"$ref": "#/$defs/timestamp"},
+        "read_digest": {"$ref": "#/$defs/digest"},
+        "read_evidence_path": {"type": "string", "minLength": 1}
+      }
+    },
+    "renewLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "lease_claim", "new_lease_id", "observed_at", "expires_at", "owner_evidence"],
+      "properties": {
+        "type": {"const": "RENEW_LEASE"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "new_lease_id": {"$ref": "#/$defs/safeId"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "expires_at": {"$ref": "#/$defs/timestamp"},
+        "owner_evidence": {"$ref": "#/$defs/ownerEvidence"}
+      }
+    },
+    "takeoverEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "thread_id", "last_activity_at", "read_digest", "read_evidence_path"],
+      "properties": {
+        "status": {"const": "STALE"},
+        "thread_id": {"$ref": "#/$defs/safeId"},
+        "last_activity_at": {"$ref": "#/$defs/timestamp"},
+        "read_digest": {"$ref": "#/$defs/digest"},
+        "read_evidence_path": {"type": "string", "minLength": 1}
+      }
+    },
+    "takeoverLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "lease_claim",
+        "routing_turn_id",
+        "new_lease_id",
+        "new_owner_kind",
+        "new_owner_identity",
+        "observed_at",
+        "expires_at",
+        "takeover_evidence"
+      ],
+      "properties": {
+        "type": {"const": "TAKEOVER_LEASE"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "routing_turn_id": {"$ref": "#/$defs/safeId"},
+        "new_lease_id": {"$ref": "#/$defs/safeId"},
+        "new_owner_kind": {"enum": ["GOAL_TURN", "HEARTBEAT"]},
+        "new_owner_identity": {"$ref": "#/$defs/safeId"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "expires_at": {"$ref": "#/$defs/timestamp"},
+        "takeover_evidence": {"$ref": "#/$defs/takeoverEvidence"}
+      }
+    },
+    "prepareOutbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "lease_claim",
+        "observed_at",
+        "outbox_kind",
+        "outbox_id",
+        "payload_digest",
+        "target_id",
+        "identity"
+      ],
+      "properties": {
+        "type": {"const": "PREPARE_OUTBOX"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "outbox_kind": {
+          "enum": ["DISPATCH", "AUTOMATION", "GOAL", "THREAD", "ASSURANCE", "LOCAL", "DELEGATION"]
+        },
+        "outbox_id": {"$ref": "#/$defs/safeId"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "target_id": {"$ref": "#/$defs/safeId"},
+        "identity": {"$ref": "#/$defs/jsonObject"}
+      }
+    },
+    "cancelOutbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "lease_claim",
+        "observed_at",
+        "outbox_kind",
+        "outbox_id",
+        "payload_digest",
+        "target_id",
+        "cancel_reason_code",
+        "recovery_evidence_paths"
+      ],
+      "properties": {
+        "type": {"const": "CANCEL_OUTBOX"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "outbox_kind": {"enum": ["DISPATCH", "AUTOMATION", "GOAL", "THREAD", "ASSURANCE", "LOCAL", "DELEGATION"]},
+        "outbox_id": {"$ref": "#/$defs/safeId"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "target_id": {"$ref": "#/$defs/safeId"},
+        "cancel_reason_code": {"$ref": "#/$defs/safeId"},
+        "recovery_evidence_paths": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "markOutboxSent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "lease_claim",
+        "observed_at",
+        "outbox_kind",
+        "outbox_id",
+        "payload_digest",
+        "target_id",
+        "send_evidence_paths"
+      ],
+      "properties": {
+        "type": {"const": "MARK_OUTBOX_SENT"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "outbox_kind": {
+          "enum": ["DISPATCH", "AUTOMATION", "GOAL", "THREAD", "ASSURANCE", "LOCAL", "DELEGATION"]
+        },
+        "outbox_id": {"$ref": "#/$defs/safeId"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "target_id": {"$ref": "#/$defs/safeId"},
+        "send_evidence_paths": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "ackOutbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "lease_claim",
+        "observed_at",
+        "outbox_kind",
+        "outbox_id",
+        "payload_digest",
+        "target_id",
+        "ack_evidence_paths"
+      ],
+      "properties": {
+        "type": {"const": "ACK_OUTBOX"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "outbox_kind": {
+          "enum": ["DISPATCH", "AUTOMATION", "GOAL", "THREAD", "ASSURANCE", "LOCAL", "DELEGATION"]
+        },
+        "outbox_id": {"$ref": "#/$defs/safeId"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "target_id": {"$ref": "#/$defs/safeId"},
+        "ack_evidence_paths": {"$ref": "#/$defs/stringArray"},
+        "result": {"$ref": "#/$defs/jsonObject"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outbox_kind": {"enum": ["DISPATCH", "ASSURANCE", "LOCAL"]}
+            },
+            "required": ["outbox_kind"]
+          },
+          "then": {
+            "required": ["result"],
+            "properties": {
+              "result": {"$ref": "#/$defs/formalAckResult"}
+            }
+          }
+        }
+      ]
+    },
+    "recordReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "lease_claim",
+        "observed_at",
+        "review_id",
+        "review_kind",
+        "review_dispatch_id",
+        "goal_id",
+        "worker_dispatch_id",
+        "worker_report_digest",
+        "reviewer_thread_id",
+        "roadmap_version",
+        "artifact_digest",
+        "report_digest",
+        "decision",
+        "review_evidence_paths"
+      ],
+      "properties": {
+        "type": {"const": "RECORD_REVIEW"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "review_id": {"$ref": "#/$defs/safeId"},
+        "review_kind": {"enum": ["CODE_REVIEW", "ROADMAP_AUDIT", "FINAL_AUDIT"]},
+        "review_dispatch_id": {"$ref": "#/$defs/safeId"},
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "worker_dispatch_id": {"$ref": "#/$defs/safeId"},
+        "worker_report_digest": {"$ref": "#/$defs/digest"},
+        "reviewer_thread_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_version": {"type": "integer", "minimum": 1},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "report_digest": {"$ref": "#/$defs/digest"},
+        "decision": {
+          "enum": [
+            "REVIEW_PASS",
+            "REVIEW_PASS_WITH_LIMITATION",
+            "REVIEW_NEEDS_REPAIR",
+            "REVIEW_ARTIFACT_UNAVAILABLE",
+            "ROADMAP_AUDIT_PASS",
+            "ROADMAP_CHANGE_PROPOSED",
+            "ROADMAP_AUDIT_PASS_FINAL_CANDIDATE",
+            "ROADMAP_AUDIT_NEEDS_REPAIR",
+            "FINAL_REVIEW_PASS",
+            "FINAL_REVIEW_PASS_WITH_LIMITATION",
+            "FINAL_REVIEW_NEEDS_REPAIR"
+          ]
+        },
+        "review_evidence_paths": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "roadmapOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "milestone_id", "reason"],
+          "properties": {
+            "operation": {
+              "enum": ["ADD_MILESTONE", "UPDATE_MILESTONE", "SUPERSEDE_MILESTONE"]
+            },
+            "milestone_id": {"$ref": "#/$defs/safeId"},
+            "reason": {"$ref": "#/$defs/boundedText"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "ordered_milestone_ids", "reason"],
+          "properties": {
+            "operation": {"const": "REORDER_FUTURE_MILESTONES"},
+            "ordered_milestone_ids": {"$ref": "#/$defs/safeIdArray"},
+            "reason": {"$ref": "#/$defs/boundedText"}
+          }
+        }
+      ]
+    },
+    "roadmapProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_id",
+        "roadmap_audit_dispatch_id",
+        "base_roadmap_version",
+        "operations",
+        "milestones_digest",
+        "goal_queue_digest",
+        "goal_definition_registry_digest",
+        "authorization_envelope_digest",
+        "estimate_digest",
+        "next_goal_id",
+        "reason_code",
+        "within_authorized_envelope"
+      ],
+      "properties": {
+        "proposal_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_audit_dispatch_id": {"$ref": "#/$defs/safeId"},
+        "base_roadmap_version": {"type": "integer", "minimum": 1},
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/roadmapOperation"}
+        },
+        "milestones_digest": {"$ref": "#/$defs/digest"},
+        "goal_queue_digest": {"$ref": "#/$defs/digest"},
+        "goal_definition_registry_digest": {"$ref": "#/$defs/digest"},
+        "authorization_envelope_digest": {"$ref": "#/$defs/digest"},
+        "estimate_digest": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "next_goal_id": {"$ref": "#/$defs/safeId"},
+        "reason_code": {"$ref": "#/$defs/safeId"},
+        "within_authorized_envelope": {"const": true}
+      }
+    },
+    "roadmapRevision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "lease_claim",
+        "observed_at",
+        "base_roadmap_version",
+        "source_goal_id",
+        "worker_dispatch_id",
+        "artifact_digest",
+        "code_review_id",
+        "roadmap_audit_id",
+        "roadmap_audit_report_digest",
+        "roadmap_proposal",
+        "roadmap_proposal_digest",
+        "milestones",
+        "goal_definition_registry",
+        "goal_queue",
+        "authorization_envelope",
+        "next_goal_id",
+        "projection_digest",
+        "reason_code"
+      ],
+      "properties": {
+        "type": {"const": "ROADMAP_REVISION"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "base_roadmap_version": {"type": "integer", "minimum": 1},
+        "source_goal_id": {"$ref": "#/$defs/safeId"},
+        "worker_dispatch_id": {"$ref": "#/$defs/safeId"},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "code_review_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_audit_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_audit_report_digest": {"$ref": "#/$defs/digest"},
+        "roadmap_proposal": {"$ref": "#/$defs/roadmapProposal"},
+        "roadmap_proposal_digest": {"$ref": "#/$defs/digest"},
+        "milestones": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/milestone"}
+        },
+        "goal_definition_registry": {"$ref": "#/$defs/goalDefinitionMap"},
+        "goal_queue": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/goalQueueEntry"}
+        },
+        "authorization_envelope": {"$ref": "#/$defs/authorizationEnvelope"},
+        "next_goal_id": {"$ref": "#/$defs/safeId"},
+        "projection_digest": {"$ref": "#/$defs/digest"},
+        "reason_code": {"$ref": "#/$defs/safeId"},
+        "estimate": {"$ref": "#/$defs/jsonObject"}
+      }
+    },
+    "finalizeLoop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "lease_claim",
+        "observed_at",
+        "base_roadmap_version",
+        "final_goal_id",
+        "worker_dispatch_id",
+        "artifact_digest",
+        "code_review_id",
+        "roadmap_audit_id",
+        "final_audit_id",
+        "terminal_status",
+        "projection_digest",
+        "finalization_id",
+        "controller_goal_id",
+        "automation_id"
+      ],
+      "properties": {
+        "type": {"const": "FINALIZE_LOOP"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "base_roadmap_version": {"type": "integer", "minimum": 1},
+        "final_goal_id": {"$ref": "#/$defs/safeId"},
+        "worker_dispatch_id": {"$ref": "#/$defs/safeId"},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "code_review_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_audit_id": {"$ref": "#/$defs/safeId"},
+        "final_audit_id": {"$ref": "#/$defs/safeId"},
+        "terminal_status": {"enum": ["LOOP_COMPLETE", "LOOP_COMPLETE_WITH_LIMITATION"]},
+        "projection_digest": {"$ref": "#/$defs/digest"},
+        "finalization_id": {"$ref": "#/$defs/safeId"},
+        "controller_goal_id": {"$ref": "#/$defs/safeId"},
+        "automation_id": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "blockerObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goal_turn_id",
+        "observed_at",
+        "blocker_code",
+        "blocker_fingerprint",
+        "controller_goal_id",
+        "report_path",
+        "report_digest"
+      ],
+      "properties": {
+        "goal_turn_id": {"$ref": "#/$defs/safeId"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "blocker_code": {"$ref": "#/$defs/safeId"},
+        "blocker_fingerprint": {"$ref": "#/$defs/digest"},
+        "controller_goal_id": {"$ref": "#/$defs/safeId"},
+        "report_path": {
+          "type": "string",
+          "pattern": "^\\.codex-loop/reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.json$"
+        },
+        "report_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "stopLoop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "lease_claim",
+        "observed_at",
+        "terminal_status",
+        "blocker_code",
+        "blocker_fingerprint",
+        "blocker_observations",
+        "blocker_report_path",
+        "blocker_report_digest",
+        "finalization_id",
+        "controller_goal_id",
+        "automation_id"
+      ],
+      "properties": {
+        "type": {"const": "STOP_LOOP"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "terminal_status": {"const": "LOOP_BLOCKED"},
+        "blocker_code": {"$ref": "#/$defs/safeId"},
+        "blocker_fingerprint": {"$ref": "#/$defs/digest"},
+        "blocker_observations": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {"$ref": "#/$defs/blockerObservation"}
+        },
+        "blocker_report_path": {
+          "type": "string",
+          "pattern": "^\\.codex-loop/reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.json$"
+        },
+        "blocker_report_digest": {"$ref": "#/$defs/digest"},
+        "finalization_id": {"$ref": "#/$defs/safeId"},
+        "controller_goal_id": {"$ref": "#/$defs/safeId"},
+        "automation_id": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "ackFinalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "observed_at",
+        "finalization_id",
+        "finalized_state_version",
+        "controller_goal_id",
+        "controller_goal_status",
+        "controller_goal_observation_path",
+        "controller_goal_observation_digest",
+        "automation_id",
+        "automation_status",
+        "automation_observation_path",
+        "automation_observation_digest"
+      ],
+      "properties": {
+        "type": {"const": "ACK_FINALIZATION"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "finalization_id": {"$ref": "#/$defs/safeId"},
+        "finalized_state_version": {"type": "integer", "minimum": 1},
+        "controller_goal_id": {"$ref": "#/$defs/safeId"},
+        "controller_goal_status": {"enum": ["COMPLETE", "BLOCKED"]},
+        "controller_goal_observation_path": {"type": "string", "minLength": 1},
+        "controller_goal_observation_digest": {"$ref": "#/$defs/digest"},
+        "automation_id": {"$ref": "#/$defs/safeId"},
+        "automation_status": {"const": "PAUSED"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -216,8 +218,8 @@ class ScaffoldValidationTests(unittest.TestCase):
         payload["max_child_threads"] = "0"
         errors = scaffold.validation_errors(payload)
         self.assertIn("cost_cap_usd:must_be_positive", errors)
-        self.assertIn("runtime_retry_attempts:must_be_between_10_and_100", errors)
-        self.assertIn("max_child_threads:must_be_between_2_and_32", errors)
+        self.assertIn("runtime_retry_attempts:must_be_integer", errors)
+        self.assertIn("max_child_threads:must_be_integer", errors)
 
     def test_numeric_limit_strings_follow_the_public_schema(self) -> None:
         payload = base_payload()
@@ -226,6 +228,29 @@ class ScaffoldValidationTests(unittest.TestCase):
         errors = scaffold.validation_errors(payload)
         self.assertIn("max_wakeups:must_be_integer", errors)
         self.assertIn("max_idle_wakeups:must_be_integer", errors)
+
+    def test_standard_positive_numeric_limit_strings_remain_compatible(self) -> None:
+        fields = (
+            "runtime_retry_attempts",
+            "runtime_retry_total_minutes",
+            "runtime_retry_attempt_timeout_minutes",
+            "runtime_retry_no_progress_minutes",
+            "heartbeat_interval_minutes",
+            "max_wakeups",
+            "max_idle_wakeups",
+            "active_stale_after_minutes",
+            "max_child_threads",
+            "max_repair_attempts_per_goal",
+        )
+        for field in fields:
+            with self.subTest(field=field):
+                payload = base_payload()
+                payload[field] = str(payload[field])
+                errors = scaffold.validation_errors(payload)
+                self.assertFalse(
+                    any(error.startswith(f"{field}:") for error in errors),
+                    errors,
+                )
 
     def test_duplicate_roles_are_rejected(self) -> None:
         payload = base_payload()
@@ -1116,6 +1141,13 @@ class GeneratedPackTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def test_legacy_workers_flag_remains_supported(self) -> None:
+        args = scaffold.build_parser().parse_args(
+            ["--workers", "implementation:scoped feature"]
+        )
+        payload = scaffold.load_payload(args)
+        self.assertEqual(payload["workers"], "implementation:scoped feature")
+
     def test_skill_validator_passes(self) -> None:
         result = subprocess.run(
             [sys.executable, str(VALIDATOR)],
@@ -1288,19 +1320,86 @@ class CliTests(unittest.TestCase):
 
 
 class ExampleFixtureTests(unittest.TestCase):
-    def test_committed_examples_match_current_generator(self) -> None:
+    def test_standard_fixture_hashes_are_stable(self) -> None:
+        expected = {
+            "01-passkey-login-controller-pack.md": "ade35bce4bd26f30d4dbf2c02e724fdb8556b7534f107271aa0208b595755590",
+            "01-passkey-login-usage.md": "d8e38f4680a47aed114adf3ddfa20ba9534be7dbfc03fd6a770b345b118f81e4",
+            "02-daily-ci-triage-controller-pack.md": "3eeca66128bc02c6a24761526097bbb04d20fa6dd1a848598195e8d959598072",
+            "02-daily-ci-triage-usage.md": "cea1c0a82898712685aac818ef3862fe0cbda444967a7e0313592b77ac2eb73a",
+        }
+        for name, expected_digest in expected.items():
+            actual = hashlib.sha256((ROOT / "examples" / name).read_bytes()).hexdigest()
+            self.assertEqual(actual, expected_digest, name)
+
+    def test_standard_fixtures_match_generator_byte_for_byte(self) -> None:
         for prefix in ("01-passkey-login", "02-daily-ci-triage"):
             input_path = ROOT / "examples" / f"{prefix}-input.json"
             args = scaffold.build_parser().parse_args(["--input", str(input_path)])
             payload = scaffold.load_payload(args)
-            expected_pack = scaffold.render_controller_pack(payload, "compact").rstrip() + "\n"
+            expected_pack = (
+                scaffold.render_controller_pack(payload, "compact").rstrip() + "\n"
+            ).encode("utf-8")
             pack_path = ROOT / "examples" / f"{prefix}-controller-pack.md"
-            self.assertEqual(pack_path.read_text(encoding="utf-8"), expected_pack)
-            expected_usage = scaffold.render_user_guide(
-                payload, f"examples/{prefix}-controller-pack.md"
-            ).rstrip() + "\n"
+            self.assertEqual(pack_path.read_bytes(), expected_pack)
+            expected_usage = (
+                scaffold.render_user_guide(
+                    payload, f"examples/{prefix}-controller-pack.md"
+                ).rstrip()
+                + "\n"
+            ).encode("utf-8")
             usage_path = ROOT / "examples" / f"{prefix}-usage.md"
-            self.assertEqual(usage_path.read_text(encoding="utf-8"), expected_usage)
+            self.assertEqual(usage_path.read_bytes(), expected_usage)
+
+    @mock.patch.dict(os.environ, {"CODEX_HOME": "/workspace/.codex"})
+    def test_adaptive_fixture_cli_outputs_match_renderer_bytes(self) -> None:
+        input_path = ROOT / "examples" / "03-adaptive-passkey-input.json"
+        args = scaffold.build_parser().parse_args(["--input", str(input_path)])
+        payload = scaffold.load_payload(args)
+        with tempfile.TemporaryDirectory() as directory:
+            pack_path = Path(directory) / "adaptive-pack.md"
+            usage_path = Path(directory) / "adaptive-usage.md"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--input",
+                    str(input_path),
+                    "--mode",
+                    "full",
+                    "--controller-pack-output",
+                    str(pack_path),
+                    "--user-guide-output",
+                    str(usage_path),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected_pack = (
+                scaffold.render_controller_pack(payload, "full").rstrip() + "\n"
+            ).encode("utf-8")
+            expected_usage = (
+                scaffold.render_user_guide(payload, str(pack_path)).rstrip() + "\n"
+            ).encode("utf-8")
+            self.assertEqual(pack_path.read_bytes(), expected_pack)
+            self.assertEqual(usage_path.read_bytes(), expected_usage)
+            self.assertEqual(
+                (ROOT / "examples" / "03-adaptive-passkey-controller-pack.md").read_bytes(),
+                expected_pack,
+            )
+            committed_usage = (
+                scaffold.render_user_guide(
+                    payload,
+                    "examples/03-adaptive-passkey-controller-pack.md",
+                ).rstrip()
+                + "\n"
+            ).encode("utf-8")
+            self.assertEqual(
+                (ROOT / "examples" / "03-adaptive-passkey-usage.md").read_bytes(),
+                committed_usage,
+            )
 
 
 if __name__ == "__main__":

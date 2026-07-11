@@ -7,11 +7,15 @@ PYTHON_BIN="${PYTHON:-python3}"
 SKILLS_DIR="$CODEX_HOME_DIR/skills"
 SOURCE_DIR="$ROOT_DIR/codex-loop-prompt-architect"
 TARGET_DIR="$SKILLS_DIR/codex-loop-prompt-architect"
+STATE_RUNTIME="$SOURCE_DIR/scripts/adaptive_state_runtime.py"
+STATE_SCHEMA="$SOURCE_DIR/references/adaptive-state.schema.json"
+MUTATION_SCHEMA="$SOURCE_DIR/references/adaptive-mutation.schema.json"
 BACKUP_ROOT="$CODEX_HOME_DIR/skill-backups/codex-loop-prompt-architect"
 STAGING_ROOT="$CODEX_HOME_DIR/install-staging"
 STAMP="$(date +%Y%m%d%H%M%S)-$$"
 STAGING_DIR="$STAGING_ROOT/codex-loop-prompt-architect-$STAMP"
 BACKUP_DIR="$BACKUP_ROOT/$STAMP"
+RUNTIME_SMOKE_ROOT="$STAGING_ROOT/runtime-smoke-$STAMP"
 backup_created=""
 install_complete=0
 
@@ -21,11 +25,24 @@ cleanup() {
     echo "Installation interrupted; restored previous skill from $backup_created" >&2
   fi
   rm -rf "$STAGING_DIR"
+  rm -rf "$RUNTIME_SMOKE_ROOT"
 }
 trap cleanup EXIT
 
 if [[ ! -f "$SOURCE_DIR/SKILL.md" ]]; then
   echo "Missing skill source: $SOURCE_DIR/SKILL.md" >&2
+  exit 1
+fi
+
+for required_file in "$STATE_RUNTIME" "$STATE_SCHEMA" "$MUTATION_SCHEMA"; do
+  if [[ ! -f "$required_file" ]]; then
+    echo "Missing Adaptive state runtime artifact: $required_file" >&2
+    exit 1
+  fi
+done
+
+if ! "$PYTHON_BIN" -c "import jsonschema" >/dev/null 2>&1; then
+  echo "Missing Python dependency: jsonschema. Install requirements-test.txt before installing this skill." >&2
   exit 1
 fi
 
@@ -52,11 +69,16 @@ for legacy_backup in "$SKILLS_DIR"/codex-loop-prompt-architect.backup.*; do
 done
 
 cp -R "$SOURCE_DIR" "$STAGING_DIR"
+chmod +x "$STAGING_DIR/scripts/loop_prompt_scaffold.py"
+chmod +x "$STAGING_DIR/scripts/validate_skill.py"
+chmod +x "$STAGING_DIR/scripts/adaptive_state_runtime.py"
+mkdir -p "$RUNTIME_SMOKE_ROOT"
+"$PYTHON_BIN" "$STAGING_DIR/scripts/adaptive_state_runtime.py" \
+  --root "$RUNTIME_SMOKE_ROOT" --recover >/dev/null
+rm -rf "$RUNTIME_SMOKE_ROOT"
 find "$STAGING_DIR" -name ".DS_Store" -delete
 find "$STAGING_DIR" -type d -name "__pycache__" -prune -exec rm -rf {} +
 find "$STAGING_DIR" -type f -name "*.pyc" -delete
-chmod +x "$STAGING_DIR/scripts/loop_prompt_scaffold.py"
-chmod +x "$STAGING_DIR/scripts/validate_skill.py"
 
 if [[ -e "$TARGET_DIR" ]]; then
   mv "$TARGET_DIR" "$BACKUP_DIR"

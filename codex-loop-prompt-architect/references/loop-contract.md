@@ -4,6 +4,11 @@ Read this reference for Full Mode, automated/multi-round loops, worktree-based
 review, paid runtime, or formal scoring. The scaffold script implements these
 contracts and its test suite guards the critical invariants.
 
+This file is the Standard execution-control contract. When
+`coordination_mode=adaptive`, also read
+[adaptive-loop-contract.md](adaptive-loop-contract.md). Adaptive extends this
+contract; it never weakens identity, state, review, budget, or permission gates.
+
 ## Table Of Contents
 
 - Full Output Contract
@@ -83,6 +88,11 @@ Ready-to-send output requires these facts:
 - explicit Goal Queue for more than one dispatch Worker
 - review policy
 - heartbeat, per-goal repair, and runtime retry limits
+
+Adaptive input additionally requires an explicit reason, structured
+`role_kind`, milestones with exactly one Active item, Goal-to-milestone mapping,
+and Local Verifier/subagent/dashboard policies. Output detail mode remains
+independent from coordination mode.
 - cost/call/token policy when metered runtime is requested
 
 Reject, rather than silently normalize:
