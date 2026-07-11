@@ -1,6 +1,6 @@
 ---
 name: codex-loop-prompt-architect
-description: Turn rough prompts into validated Codex macOS App Controller Pack Markdown files with real project threads, dependency-ordered Goal Queues, versioned durable state, heartbeat automation, exact-worktree review, bounded retries, evidence gates, and separate Chinese usage instructions. Use for loop化, Codex Loop prompt design, Controller/Worker/Reviewer/State-Writer orchestration, cross-thread automation, or diagnosis/repair of a loop that stalls, duplicates work, creates sub-agents, or loses state.
+description: Turn rough prompts into validated Standard or Adaptive Codex macOS App Controller Pack Markdown files with real project tasks, durable state, heartbeat automation, exact-worktree review, bounded retries, evidence gates, and separate Chinese usage instructions. Use for loop化, long-running/adaptive project loops, Controller/Worker/Reviewer/State-Writer orchestration, or diagnosis of a loop that stalls, duplicates work, loses state, or follows an obsolete plan.
 ---
 
 # Codex Loop Prompt Architect
@@ -12,7 +12,6 @@ Generate prompts; do not execute the engineering mission or operate its threads
 unless the user separately asks for live execution.
 
 Default deliverables:
-
 1. one self-contained `<project>-codex-loop-controller-pack.md` file for the
    Controller thread
 2. separate Simplified Chinese usage instructions for the user
@@ -33,17 +32,22 @@ Accept concise requests such as:
 loop化这个提示词：...
 用 $codex-loop-prompt-architect，短版：...
 把这个 PRD 做成 Codex App 自动 loop；信息不够先问。
+把这个长期项目做成 Adaptive loop，允许新证据调整后续里程碑。
 修复这个已有 Controller Pack 的断停问题。
 ```
 
-## Mode Order
+## Two Independent Mode Axes
 
-1. Clarification first.
-2. Risk overrides brevity.
-3. Default to Compact Mode for ordinary low-risk conversion.
-4. Use Full Mode for high-risk, automated, multi-role, formal diagnosis, or
-   explicit Full Mode requests.
-5. Use Minimal Patch Mode only for a requested patch to an existing pack.
+Output mode controls detail: `compact` by default, `full` for high-risk or
+formal diagnosis, and `minimal_patch` only for an existing-pack repair.
+Coordination mode controls runtime: `standard` preserves the fixed validated
+Goal Queue; `adaptive` is a beta/experimental strategy that adds a mutable
+milestone roadmap and project-judgment audit. Keep the axes separate.
+
+Use Adaptive when explicitly requested, when there are more than three
+milestones, when acceptance/scope may change with evidence, when machine-local
+verification is required, or when work is expected to exceed half a day.
+Existing inputs default to Standard. Clarification and risk override brevity.
 
 If required facts remain missing and the user insists on a draft, label it
 `NON_DISPATCHABLE_DRAFT`. Do not describe it as ready to send.
@@ -59,6 +63,8 @@ fact is missing or contradictory:
 - current/base/target branches when `existing_git`
 - source PRD/spec/image/PDF/dataset paths visible to child threads
 - Worker roles, ownership, explicit permission, allowed and forbidden paths
+- coordination mode; Adaptive reason, explicit input `role_kind`, initial milestones,
+  exactly one Active milestone, and collision-free post-injection role/task ids
 - dependency-ordered goals when more than one dispatch Worker or phase exists
 - validation commands, evidence layer, and claim boundary
 - canonical state path and review policy
@@ -67,6 +73,8 @@ fact is missing or contradictory:
 - for a separate long-lived cron: exact schedule, workspace, self-contained
   prompt, local/worktree environment, activation/stop policy, and budget
 - connector/worktree requirements
+- Local Verifier policy; explicit subagent concurrency/lifetime/retry/input
+  limits when delegation is enabled; and dashboard policy in Adaptive Mode
 - cost/call/token cap or explicit deferred/forbidden policy for metered runtime
 - production/external side effects and which are pre-authorized
 
@@ -90,16 +98,19 @@ For automated, multi-round, worktree, paid-runtime, or high-risk loops, read
 [references/loop-contract.md](references/loop-contract.md) before producing the
 pack. That reference is authoritative for Goal Queue, state schemas,
 idempotency, worktree review, heartbeat lifecycle, and Full Mode.
+For Adaptive Mode, also read
+[references/adaptive-loop-contract.md](references/adaptive-loop-contract.md).
 
 Keep these invariants in every ready pack:
 
-- real Codex App project threads, never internal sub-agents
+- Controller, Worker, Reviewer, State-Writer, and Local Verifier are real Codex
+  App project tasks, never internal subagents
 - Controller read-only behavior
 - one serial State-Writer for canonical audit files
 - stable `goal_id`, runtime `dispatch_id`, and real `threadId`
 - dependency-ordered Goal Queue
 - versioned state and idempotent state/event writes
-- transactional dispatch outbox with stable payload digests
+- transactional dispatch outbox with runtime-materialized and runtime-verified payload digests
 - State-Writer acknowledgement before review or next-goal dispatch
 - active Worker heartbeat states that never terminate as NOOP
 - exact Worker checkout/diff visibility for Reviewer
@@ -107,6 +118,31 @@ Keep these invariants in every ready pack:
 - explicit phase side-effect permissions
 - bounded repair, runtime retry, wake, idle, and active-stale policies
 - evidence and claim boundaries
+
+Adaptive Mode additionally requires exactly one Active milestone, canonical
+roadmap data in `LOOP_STATE.md`, derived `.codex-loop/GOALS.md`, separate
+CODE_REVIEW, ROADMAP_AUDIT, and final FINAL_AUDIT dispatches to one reusable
+Reviewer task, completed-Worker-bound CODE_REVIEW, immutable executable Goal
+definitions, an Active-milestone-derived First Goal, concrete fenced authorization/Goal JSON, explicit review/local
+outboxes, canonical payload digests, latest-Worker binding, full-claim one-route lease arbitration, loop/pack-scoped
+native Goal create/update outbox recovery with an emulated fallback, linked artifact/version-
+bound review ACKs, runtime-enforced Active-milestone Goal switching, typed audited roadmap proposals plus separate PREPARED cancellation and revision CAS,
+JSON-Schema-backed deterministic state runtime, immutable Pack/task/tool-result identity,
+runtime-derived dashboard, FINALIZE_LOOP/STOP_LOOP plus evidence-bound ACK_FINALIZATION,
+and an authorization envelope for every roadmap mutation. Initialize all
+Adaptive state before acquiring a lease; each Goal turn or heartbeat wake uses
+one ACQUIRE_LEASE request that both counts the routing turn and returns its
+one-route claim. All task, automation, Goal, review, and dispatch outboxes use
+that claim; roadmap/final CAS checks Worker, review, and local outboxes together.
+Initial queues cover every routable Goal definition; scopes reject traversal;
+routing events are immutable/idempotent; same-owner renewal may rebind the one exact active
+route without resending it; control-plane caps and external-worktree roots are runtime enforced.
+
+Subagents default to disabled. Only the Controller under explicitly bounded Adaptive input may allow
+an authorization ceiling of two depth-one read-only sidecars; the deterministic router serializes one active delegation per lease, and no task delegates further.
+Lifetime runs, retries, and input exposure are capped; they never replace formal
+tasks, write, approve, dispatch, or change state; tool names/fields are discovered
+from the current App schema rather than hardcoded.
 
 State that sending the pack is explicit authorization for declared, bounded
 control-plane task creation/recovery/messaging/archival and the single heartbeat.
@@ -128,7 +164,7 @@ read_thread(threadId=...)
 send_message_to_thread(threadId=..., prompt=...)
 set_thread_archived(threadId=..., archived=true)
 ```
-
+Adaptive `BOOTSTRAP_MARKER` is exactly `LOOP_ID|ROLE_KIND|PACK_SHA256`; take `ROLE_KIND` literally from the generated role Prompt and never convert its separators.
 For a worktree, use
 `target.environment={type:"worktree", startingState:{type:"branch", branchName:VERIFIED_BASE_BRANCH}}`.
 
@@ -146,9 +182,9 @@ It is not a sub-agent or `fork_context`.
 
 Compute a stable pack digest and loop id before child creation. Bootstrap only
 State-Writer first, initialize canonical state, then use a thread-creation
-outbox for Worker/Reviewer. `BOOTSTRAP_PROMPT` is the exact role prompt plus a
-loop/role/pack marker and `BOOTSTRAP_ONLY`; it never contains First Goal.
-Recover with `list_threads`/`read_thread` before any duplicate create/fork.
+outbox for Worker/Reviewer. `BOOTSTRAP_PROMPT` is the byte-exact full role prompt plus a
+loop/role/pack marker and `BOOTSTRAP_ONLY`, never a path/line summary; its digest is full lowercase SHA-256 and it never contains First Goal.
+Recover with `list_threads`/`read_thread` before any duplicate create/fork; Adaptive mode retries the same returned thread id across a bounded post-create visibility window, keeps a readable active/pending bootstrap nonterminal through quota recovery, never replaces it on a transient response, and binds lease owner identity only to the real current Controller thread id, never a delegation source/parent id.
 If Controller thread id is unavailable, derive LOOP_ID deterministically from
 project id, canonical repo, and pack digest; never use a random fallback.
 
@@ -182,9 +218,10 @@ Default heartbeat policy:
 - pause only after terminal completion or exhausted idle budget with no inflight
   or queued work
 
-At each wake, resolve prior pending state first, then write one idempotent
-`HEARTBEAT_WAKE` CAS event derived from automation id and next canonical
-`wake_count`. Wait for ACK before routing. A replay cannot increment twice.
+In Standard Mode, each wake writes one idempotent `HEARTBEAT_WAKE` CAS event
+derived from automation id and next `wake_count`. In Adaptive Mode,
+`ACQUIRE_LEASE` is itself the counted wake; no separate wake-start mutation
+exists. Both modes resolve pending state first and reject duplicate routing.
 
 Custom values must replace every generated occurrence. A Worker that is active
 with recent progress becomes `WAITING_ACTIVE`; heartbeat stays active and sends
@@ -203,8 +240,8 @@ no duplicate goal.
 
 For existing git worktrees, verify the base ref before using
 `startingState.type="branch"`. Otherwise use an approved working-tree start.
-Reconcile `pendingWorktreeId` to real `threadId` and `worktree_path` before
-dispatch.
+Reconcile `pendingWorktreeId` or `clientThreadId` to real `threadId` and
+`worktree_path` before dispatch.
 Resolve real paths before writing; a symlink or target outside approved repo
 scope stops `PATH_SCOPE_ESCAPE`.
 `.codex-loop/**` is reserved for State-Writer and cannot appear in a product
@@ -262,8 +299,9 @@ Only concrete tokens use angle brackets; generic documentation never does.
 Workers reject unresolved runtime tokens.
 
 Each extracted child prompt is self-contained. Executable Workers receive the
-full bounded retry ladder; Reviewer receives exact-artifact rules; State-Writer
-receives state/event schemas, CAS, idempotency, and crash-recovery protocol.
+full retry ladder; Reviewer receives exact-artifact rules. Standard State-Writer
+receives CAS/idempotency protocol. Adaptive State-Writer accepts only
+`STATE_MUTATION`, invokes the installed deterministic runtime, and never hand-writes canonical state/events/journals.
 
 Minimum state includes:
 
@@ -305,9 +343,11 @@ If a PREPARED heartbeat create cannot be reconciled because the local automation
 registry is inaccessible or ambiguous, stop `AUTOMATION_IDENTITY_UNRESOLVED`;
 never speculate with a second create.
 
-Dispatch uses a transactional outbox: persist `DISPATCH_PREPARED` and wait for
-ACK, send exactly once, then persist `DISPATCH_SENT` and wait for ACK. Recovery
-checks the target thread for the same `dispatch_id` before any resend. A Worker
+Adaptive formal dispatch uses the generic outbox: PREPARE, materialize the exact
+runtime transport, send once, then `MARK_OUTBOX_SENT`. DISPATCH, ASSURANCE, and
+LOCAL `ACK_OUTBOX` bind a canonical strict JSON report and the exact three-field
+status/report/artifact result; runtime rejects missing top-level source identity
+without changing state. Recovery checks the target thread before resend. A Worker
 returns its existing report for a duplicate dispatch instead of re-executing.
 Recovery pages `read_thread` with cursors back to the registered bootstrap
 boundary; a latest-turn-only search is not proof of absence.
@@ -326,9 +366,10 @@ Required canonical audit files:
   state request id; never a second canonical state
 - `.codex-loop/sources/CONTROLLER_PACK.md`: exact trusted pack snapshot whose
   SHA-256 is stored in state; heartbeat uses it after context compaction
+- in Adaptive Mode, `.codex-loop/GOALS.md` and optional dashboard are projections
+  of canonical roadmap/Goal-definition/execution state, never a second source
 
 ## Review And Completion
-
 Worker reports include goal/dispatch/thread/worktree identity, base/head SHA,
 before/after snapshot identity, changed files, diff summary and `diff_sha256`,
 command/cwd/timestamps/exit codes/log refs, evidence, state request, blockers,
@@ -341,16 +382,19 @@ Codex code-review capability when exposed, plus exact-artifact Reviewer.
 After all goals pass, run one `FINAL_AUDIT` over the complete Git base-to-head or
 non-git before-to-after snapshot diff, validation evidence, forbidden artifacts,
 unresolved comments, audit trail, budget/approval ledgers, evidence layer, and
-claim boundary. Full final pass plus final state ACK sets `LOOP_COMPLETE`.
-A final pass with limitation may set `LOOP_COMPLETE_WITH_LIMITATION` only when
-limitations are explicit/evidence-bounded and no required fix remains. Then
-pause heartbeat.
+claim boundary. In Adaptive Mode this is a tagged third dispatch to the same
+Reviewer after final Roadmap Audit. FINALIZE_LOOP prepares the receipt; Controller
+completes the Goal, pauses heartbeat, and sends evidence-bound ACK_FINALIZATION.
+Only FINALIZATION_ACKED closes the loop. Formal review ACK/ledger decision and digests must match exactly. Adaptive THREAD identity maps explicit
+bootstrap to formal roles without title inference. STOP_LOOP requires three
+prior consecutive observation-only turn artifacts; none can be backfilled. The next dedicated
+turn blocks Goal and pauses heartbeat. A bounded final limitation may set
+`LOOP_COMPLETE_WITH_LIMITATION` only when no required fix remains.
 
 Reject any configuration that disables review while a `workspace_write` Worker
 exists. Review may be omitted only for a fully read-only, no-diff loop.
 
 ## Runtime Retry
-
 Default transient dependency limits:
 
 - 10 retries after the initial attempt, 11 attempts total
@@ -373,7 +417,6 @@ bound spend. `unlimited` and other unbounded language are invalid
 authorization.
 
 ## Scripted Scaffold
-
 Prefer the deterministic script after clarification facts are known:
 
 ```bash
@@ -387,6 +430,8 @@ python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold
 ```
 
 Use JSON arrays for workers, goals, validation, acceptance, and source paths.
+Adaptive also requires `milestones` and bootstrap `role_kind`; runtime supplies
+the deterministic formal role.
 Print the supported schema with:
 
 ```bash
@@ -406,7 +451,6 @@ After scaffold generation, adapt domain-specific goal decomposition and runtime
 forecasts. Do not weaken validated invariants.
 
 ## Output Contract
-
 ### Controller Pack File
 
 Start with `# Codex Loop Controller Pack` and include:
@@ -414,11 +458,14 @@ Start with `# Codex Loop Controller Pack` and include:
 - at most three key risks
 - Controller Prompt
 - Worker/Reviewer/State-Writer prompts
+- Adaptive Local Verifier prompt when machine-local verification may be needed
 - Goal Queue
 - First Goal and remaining goal templates
 - canonical state/event schemas and ACK protocol
 - exact heartbeat call and deterministic transition table
 - runtime retry, worktree review, cost, approval, evidence, and stop rules
+- in Adaptive Mode: milestone roadmap, Controller Goal/lease, Roadmap Audit,
+  authorization-envelope, optional subagent, GOALS/dashboard contracts
 
 ### Final User Instructions
 
@@ -435,6 +482,8 @@ Keep these outside the Controller Pack and explain them in Chinese:
 - abnormal stall/duplicate/identity signals
 - what each Controller/Worker/Reviewer/State thread shows
 - what `LOOP_STATE.md`, `LOOP_EVENTS.jsonl`, `TRIAGE.md`, and reports contain
+- in Adaptive Mode, what `GOALS.md`, the optional dashboard, native/emulated
+  Goal state, and Roadmap Audit statuses mean
 - every status that requires user intervention
 - manual fallback only when real thread/automation tools are unavailable
 
@@ -448,5 +497,4 @@ diagnosis and generated contract, not a note telling another model to add it.
 
 ## Minimal Patch Mode
 
-Return violated laws, exact replacement snippets, insertion locations, changed
-state transitions, and updated user dispatch instructions.
+Return violated laws, exact replacement snippets, insertion locations, changed state transitions, and updated user dispatch instructions.

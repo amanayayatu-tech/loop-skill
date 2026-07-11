@@ -11,20 +11,20 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
+      ADAPTIVE_FUZZ_CASES: "5000"
+      ADAPTIVE_STATE_FUZZ_CASES: "5000"
       PYTHONDONTWRITEBYTECODE: "1"
-      PYTHONWARNINGS: error
     steps:
       - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: python3 -m pip install --disable-pip-version-check -r requirements-test.txt
       - name: Check patch whitespace
         run: git show --check --format= HEAD
       - name: Compile Python
-        run: >-
-          python3 -m py_compile
-          codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py
-          codex-loop-prompt-architect/scripts/validate_skill.py
+        run: python3 -W error -m compileall -q codex-loop-prompt-architect/scripts tests
       - name: Validate skill package
         run: python3 codex-loop-prompt-architect/scripts/validate_skill.py
       - name: Check installer syntax
         run: bash -n scripts/install.sh
       - name: Run semantic regression suite
-        run: python3 -m unittest discover -s tests -v
+        run: python3 -W error -m unittest discover -s tests -v

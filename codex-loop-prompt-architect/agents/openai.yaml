@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Loop Prompt Architect"
-  short_description: "把粗糙需求生成可验证、自推进、可回查的 Codex App Loop"
-  default_prompt: "Use $codex-loop-prompt-architect：把下面需求生成一个可投递的 Codex App Controller Pack；信息不足先反问。"
+  short_description: "生成标准或 beta 自适应、可验证、可回查的 Codex App Loop"
+  default_prompt: "Use $codex-loop-prompt-architect：把下面需求生成可投递的 Standard 或 Adaptive Controller Pack；信息不足先反问。"

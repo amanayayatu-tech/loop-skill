@@ -1,0 +1,1151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openai.local/codex-loop/adaptive-state.schema.json",
+  "title": "Deterministic Adaptive Loop Canonical State",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "loop_id",
+    "root",
+    "controller_pack_identity",
+    "dashboard_required",
+    "state_version",
+    "roadmap_version",
+    "terminal_status",
+    "logical_time",
+    "active_milestone_id",
+    "milestones",
+    "goal_queue",
+    "goal_definition_registry",
+    "goal_execution_ledger",
+    "local_verification_required_goal_ids",
+    "authorization_envelope",
+    "thread_registry",
+    "controller_goal",
+    "controller_lease",
+    "lease_epoch_counter",
+    "consumed_controller_lease_ids",
+    "routing_turn_count",
+    "max_routing_turns",
+    "routing_turn_ledger",
+    "routing_action_ledger",
+    "dispatch_outbox",
+    "automation_outbox",
+    "controller_goal_outbox",
+    "thread_creation_outbox",
+    "assurance_dispatch_outbox",
+    "local_verification_outbox",
+    "roadmap_change_outbox",
+    "assurance_ledger",
+    "local_verification_queue",
+    "local_verification_ledger",
+    "goal_queue_history",
+    "roadmap_projection",
+    "estimate_history",
+    "delegation_ledger",
+    "subagent_attempt_ledger",
+    "artifact_ledger",
+    "finalization_outbox",
+    "finalization_receipt",
+    "request_ledger",
+    "event_ledger",
+    "last_state_request_id",
+    "last_event_id",
+    "last_transaction_id",
+    "external_action_count"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "loop_id": {"$ref": "#/$defs/safeId"},
+    "root": {"type": "string", "minLength": 1},
+    "controller_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
+    "dashboard_required": {"type": "boolean"},
+    "state_version": {"type": "integer", "minimum": 1},
+    "roadmap_version": {"type": "integer", "minimum": 1},
+    "terminal_status": {
+      "oneOf": [
+        {"type": "null"},
+        {"enum": ["LOOP_COMPLETE", "LOOP_COMPLETE_WITH_LIMITATION", "LOOP_BLOCKED"]}
+      ]
+    },
+    "logical_time": {"$ref": "#/$defs/timestamp"},
+    "active_milestone_id": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+    },
+    "milestones": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/milestone"}
+    },
+    "goal_queue": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/goalQueueEntry"}
+    },
+    "goal_definition_registry": {"$ref": "#/$defs/goalDefinitionMap"},
+    "goal_execution_ledger": {"$ref": "#/$defs/goalExecutionMap"},
+    "local_verification_required_goal_ids": {"$ref": "#/$defs/safeIdArray"},
+    "authorization_envelope": {"$ref": "#/$defs/authorizationEnvelope"},
+    "thread_registry": {"$ref": "#/$defs/threadRegistry"},
+    "controller_goal": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/controllerGoal"}]
+    },
+    "controller_lease": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/leaseState"}]
+    },
+    "lease_epoch_counter": {"type": "integer", "minimum": 0},
+    "consumed_controller_lease_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/safeId"}
+    },
+    "routing_turn_count": {"type": "integer", "minimum": 0},
+    "max_routing_turns": {"type": "integer", "minimum": 1},
+    "routing_turn_ledger": {"$ref": "#/$defs/routingTurnMap"},
+    "routing_action_ledger": {"$ref": "#/$defs/routingActionMap"},
+    "dispatch_outbox": {"$ref": "#/$defs/outboxMap"},
+    "automation_outbox": {"$ref": "#/$defs/outboxMap"},
+    "controller_goal_outbox": {"$ref": "#/$defs/outboxMap"},
+    "thread_creation_outbox": {"$ref": "#/$defs/outboxMap"},
+    "assurance_dispatch_outbox": {"$ref": "#/$defs/outboxMap"},
+    "local_verification_outbox": {"$ref": "#/$defs/outboxMap"},
+    "roadmap_change_outbox": {"$ref": "#/$defs/roadmapChangeMap"},
+    "assurance_ledger": {"$ref": "#/$defs/reviewMap"},
+    "local_verification_queue": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "local_verification_ledger": {"$ref": "#/$defs/jsonObjectMap"},
+    "goal_queue_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["roadmap_version", "goal_queue"],
+        "properties": {
+          "roadmap_version": {"type": "integer", "minimum": 1},
+          "goal_queue": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/goalQueueEntry"}
+          }
+        }
+      }
+    },
+    "roadmap_projection": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["roadmap_version", "projection_digest"],
+          "properties": {
+            "roadmap_version": {"type": "integer", "minimum": 1},
+            "projection_digest": {"$ref": "#/$defs/digest"}
+          }
+        }
+      ]
+    },
+    "estimate_history": {"type": "array", "items": {"type": "object"}},
+    "delegation_ledger": {"$ref": "#/$defs/outboxMap"},
+    "subagent_attempt_ledger": {"$ref": "#/$defs/subagentAttemptMap"},
+    "artifact_ledger": {"$ref": "#/$defs/artifactRecordMap"},
+    "finalization_outbox": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/finalizationOutbox"}]
+    },
+    "finalization_receipt": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/finalizationReceipt"}]
+    },
+    "request_ledger": {"$ref": "#/$defs/requestLedger"},
+    "event_ledger": {"$ref": "#/$defs/eventLedger"},
+    "last_state_request_id": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+    },
+    "last_event_id": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+    },
+    "last_transaction_id": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+    },
+    "external_action_count": {"const": 0}
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "stringArray": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "safeIdArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/safeId"}
+    },
+    "booleanMap": {
+      "type": "object",
+      "required": [
+        "git_init",
+        "branch_create",
+        "local_commit",
+        "stage",
+        "pr_create",
+        "push",
+        "merge",
+        "deploy",
+        "source_promotion",
+        "gitignore_hygiene",
+        "external_write"
+      ],
+      "properties": {
+        "git_init": {"type": "boolean"},
+        "branch_create": {"type": "boolean"},
+        "local_commit": {"type": "boolean"},
+        "stage": {"type": "boolean"},
+        "pr_create": {"type": "boolean"},
+        "push": {"type": "boolean"},
+        "merge": {"type": "boolean"},
+        "deploy": {"type": "boolean"},
+        "source_promotion": {"type": "boolean"},
+        "gitignore_hygiene": {"type": "boolean"},
+        "external_write": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "milestone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "milestone_id",
+        "outcome",
+        "scope",
+        "decisions",
+        "blockers",
+        "required_evidence",
+        "status",
+        "depends_on",
+        "references"
+      ],
+      "properties": {
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "outcome": {"type": "string", "minLength": 1},
+        "scope": {"$ref": "#/$defs/stringArray"},
+        "decisions": {"$ref": "#/$defs/stringArray"},
+        "blockers": {"$ref": "#/$defs/stringArray"},
+        "required_evidence": {"$ref": "#/$defs/stringArray"},
+        "status": {
+          "enum": ["PLANNED", "ACTIVE", "BLOCKED", "COMPLETE", "SUPERSEDED"]
+        },
+        "depends_on": {"$ref": "#/$defs/safeIdArray"},
+        "references": {"$ref": "#/$defs/stringArray"},
+        "last_change_reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "goalDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goal_id",
+        "milestone_id",
+        "worker_role",
+        "worker_role_kind",
+        "objective",
+        "success_criteria",
+        "validation",
+        "allowed_write_scope",
+        "phase_permissions",
+        "depends_on",
+        "dispatch_when",
+        "payload_template_digest"
+      ],
+      "properties": {
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "worker_role": {"type": "string", "minLength": 1},
+        "worker_role_kind": {"enum": ["implementation", "triage", "explorer"]},
+        "objective": {"type": "string", "minLength": 1},
+        "success_criteria": {"$ref": "#/$defs/stringArray"},
+        "validation": {"$ref": "#/$defs/stringArray"},
+        "allowed_write_scope": {"$ref": "#/$defs/stringArray"},
+        "phase_permissions": {"$ref": "#/$defs/booleanMap"},
+        "depends_on": {"$ref": "#/$defs/safeIdArray"},
+        "dispatch_when": {"type": "string", "minLength": 1},
+        "payload_template_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "goalDefinitionMap": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/goalDefinition"}
+      },
+      "additionalProperties": false
+    },
+    "goalQueueEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goal_id", "milestone_id", "roadmap_version", "status", "depends_on"],
+      "properties": {
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_version": {"type": "integer", "minimum": 1},
+        "status": {"enum": ["READY", "PLANNED"]},
+        "depends_on": {"$ref": "#/$defs/safeIdArray"}
+      }
+    },
+    "workerResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dispatch_id",
+        "status",
+        "report_digest",
+        "artifact_digest",
+        "roadmap_version",
+        "evidence_paths"
+      ],
+      "properties": {
+        "dispatch_id": {"$ref": "#/$defs/safeId"},
+        "status": {"enum": ["PASS", "FAIL", "BLOCKED"]},
+        "report_digest": {"$ref": "#/$defs/digest"},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "roadmap_version": {"type": "integer", "minimum": 1},
+        "evidence_paths": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "goalExecution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goal_id",
+        "milestone_id",
+        "definition_digest",
+        "status",
+        "attempts",
+        "latest_worker",
+        "completed_roadmap_version"
+      ],
+      "properties": {
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "definition_digest": {"$ref": "#/$defs/digest"},
+        "status": {
+          "enum": [
+            "READY",
+            "PLANNED",
+            "IN_PROGRESS",
+            "WORKER_PASS",
+            "REPAIR_REQUIRED",
+            "CODE_REVIEW_PASS",
+            "LOCAL_VERIFICATION_PASS",
+            "FINAL_CANDIDATE",
+            "FINAL_AUDIT_PASS",
+            "COMPLETE",
+            "RETIRED"
+          ]
+        },
+        "attempts": {"type": "array", "items": {"$ref": "#/$defs/workerResult"}},
+        "latest_worker": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/workerResult"}]
+        },
+        "completed_roadmap_version": {
+          "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]
+        }
+      }
+    },
+    "goalExecutionMap": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/goalExecution"}
+      },
+      "additionalProperties": false
+    },
+    "authorizationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objective_id",
+        "allowed_write_scope",
+        "phase_permissions",
+        "phase_permission_caps",
+        "control_plane_caps",
+        "control_plane_limits",
+        "delegation_policy",
+        "repair_policy",
+        "budget_caps",
+        "connectors",
+        "side_effects",
+        "evidence_policy",
+        "claim_boundary",
+        "production_access",
+        "secrets_access"
+      ],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/digest"},
+        "allowed_write_scope": {"$ref": "#/$defs/stringArray"},
+        "phase_permissions": {"$ref": "#/$defs/booleanMap"},
+        "phase_permission_caps": {"$ref": "#/$defs/phasePermissionCaps"},
+        "control_plane_caps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"],
+          "properties": {
+            "thread_create": {"type": "boolean"},
+            "automation_manage": {"type": "boolean"},
+            "goal_manage": {"type": "boolean"},
+            "message_send": {"type": "boolean"},
+            "local_verifier": {"type": "boolean"}
+          }
+        },
+        "control_plane_limits": {"$ref": "#/$defs/controlPlaneLimits"},
+        "delegation_policy": {"$ref": "#/$defs/delegationPolicy"},
+        "repair_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_repair_attempts_per_goal"],
+          "properties": {
+            "max_repair_attempts_per_goal": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          }
+        },
+        "budget_caps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cost_usd", "calls", "tokens"],
+          "properties": {
+            "cost_usd": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0}]},
+            "calls": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]},
+            "tokens": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]}
+          }
+        },
+        "connectors": {"$ref": "#/$defs/stringArray"},
+        "side_effects": {"$ref": "#/$defs/booleanMap"},
+        "evidence_policy": {"type": "string", "minLength": 1},
+        "claim_boundary": {"type": "string", "minLength": 1},
+        "production_access": {"type": "boolean"},
+        "secrets_access": {"type": "boolean"}
+      }
+    },
+    "controlPlaneLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_child_threads",
+        "max_business_heartbeats",
+        "allowed_external_worktree_roots"
+      ],
+      "properties": {
+        "max_child_threads": {"type": "integer", "minimum": 1, "maximum": 32},
+        "max_business_heartbeats": {"const": 1},
+        "allowed_external_worktree_roots": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "pattern": "^/"}
+        }
+      }
+    },
+    "delegationPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "max_concurrent",
+        "max_lifetime_runs",
+        "retry_limit_per_exploration",
+        "max_depth"
+      ],
+      "properties": {
+        "mode": {"enum": ["disabled", "explicit_read_only", "auto_read_only"]},
+        "max_concurrent": {"type": "integer", "minimum": 0, "maximum": 2},
+        "max_lifetime_runs": {"type": "integer", "minimum": 0, "maximum": 16},
+        "retry_limit_per_exploration": {"type": "integer", "minimum": 0, "maximum": 2},
+        "max_depth": {"const": 1}
+      }
+    },
+    "goalPermissionCap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["milestone_id", "phase_permissions"],
+      "properties": {
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "phase_permissions": {"$ref": "#/$defs/booleanMap"}
+      }
+    },
+    "phasePermissionCaps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by_milestone", "by_goal"],
+      "properties": {
+        "by_milestone": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/booleanMap"}
+          },
+          "additionalProperties": false
+        },
+        "by_goal": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/goalPermissionCap"}
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "controllerGoal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "loop_id",
+        "pack_digest",
+        "milestone_id",
+        "objective_digest",
+        "marker",
+        "goal_id",
+        "status"
+      ],
+      "properties": {
+        "action": {"enum": ["CREATE", "UPDATE"]},
+        "loop_id": {"$ref": "#/$defs/safeId"},
+        "pack_digest": {"$ref": "#/$defs/digest"},
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "objective_digest": {"$ref": "#/$defs/digest"},
+        "marker": {"type": "string", "minLength": 1},
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "target_status": {"enum": ["COMPLETE", "BLOCKED"]},
+        "status": {
+          "enum": ["ACTIVE", "EMULATED_SINGLE_ACTIVE_MILESTONE", "COMPLETE", "BLOCKED"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"action": {"const": "UPDATE"}}},
+          "then": {"required": ["target_status"]},
+          "else": {"not": {"required": ["target_status"]}}
+        }
+      ]
+    },
+    "threadRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "thread_id",
+        "project_id",
+        "task_kind",
+        "bootstrap_role_kind",
+        "role_kind",
+        "bootstrap_prompt_digest",
+        "status",
+        "worktree_path"
+      ],
+      "properties": {
+        "thread_id": {"$ref": "#/$defs/safeId"},
+        "project_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "task_kind": {"const": "PROJECT_TASK"},
+        "bootstrap_role_kind": {
+          "enum": ["controller", "state_writer", "implementation", "triage", "explorer", "code_reviewer", "local_verifier"]
+        },
+        "role_kind": {
+          "enum": ["CONTROLLER", "STATE_WRITER", "WORKER", "REVIEWER", "LOCAL_VERIFIER"]
+        },
+        "bootstrap_prompt_digest": {"$ref": "#/$defs/digest"},
+        "status": {"enum": ["REGISTERED", "ARCHIVED"]},
+        "worktree_path": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}
+      }
+    },
+    "threadRegistry": {
+      "type": "object",
+      "minProperties": 2,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/threadRecord"}
+      },
+      "additionalProperties": false
+    },
+    "controllerPackIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest", "media_type"],
+      "properties": {
+        "path": {"const": ".codex-loop/sources/CONTROLLER_PACK.md"},
+        "digest": {"$ref": "#/$defs/digest"},
+        "media_type": {"const": "text/markdown"}
+      }
+    },
+    "leaseClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease_epoch", "lease_id", "routing_turn_id", "owner_kind", "owner_identity", "intended_transition"],
+      "properties": {
+        "lease_epoch": {"type": "integer", "minimum": 1},
+        "lease_id": {"$ref": "#/$defs/safeId"},
+        "routing_turn_id": {"$ref": "#/$defs/safeId"},
+        "owner_kind": {"enum": ["GOAL_TURN", "HEARTBEAT"]},
+        "owner_identity": {"$ref": "#/$defs/safeId"},
+        "intended_transition": {"const": "ROUTE_ONE_TRANSITION"}
+      }
+    },
+    "routeAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_type", "action_id"],
+      "properties": {
+        "action_type": {"enum": ["OUTBOX", "ROADMAP_REVISION", "FINALIZE_LOOP", "STOP_LOOP"]},
+        "action_id": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "leaseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "routing_turn_id", "acquired_at", "expires_at", "route_action"],
+      "properties": {
+        "claim": {"$ref": "#/$defs/leaseClaim"},
+        "routing_turn_id": {"$ref": "#/$defs/safeId"},
+        "acquired_at": {"$ref": "#/$defs/timestamp"},
+        "expires_at": {"$ref": "#/$defs/timestamp"},
+        "route_action": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/routeAction"}]
+        }
+      }
+    },
+    "routingTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["routing_turn_id", "event_id", "owner_kind", "owner_identity", "lease_id", "status"],
+      "properties": {
+        "routing_turn_id": {"$ref": "#/$defs/safeId"},
+        "event_id": {"$ref": "#/$defs/safeId"},
+        "owner_kind": {"enum": ["GOAL_TURN", "HEARTBEAT"]},
+        "owner_identity": {"$ref": "#/$defs/safeId"},
+        "lease_id": {"$ref": "#/$defs/safeId"},
+        "status": {"enum": ["LEASE_ACQUIRED", "COMPLETED", "TAKEN_OVER"]}
+      }
+    },
+    "routingTurnMap": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/routingTurn"}
+      },
+      "additionalProperties": false
+    },
+    "routingActionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease_id", "routing_turn_id", "route_action", "completed_state_version"],
+      "properties": {
+        "lease_id": {"$ref": "#/$defs/safeId"},
+        "routing_turn_id": {"$ref": "#/$defs/safeId"},
+        "route_action": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/routeAction"}]
+        },
+        "completed_state_version": {"type": "integer", "minimum": 1},
+        "release_reason_code": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "routingActionMap": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/routingActionRecord"}
+      },
+      "additionalProperties": false
+    },
+    "artifactRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest", "media_type", "archived_state_version"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "digest": {"$ref": "#/$defs/digest"},
+        "media_type": {"enum": ["text/markdown", "application/json", "text/plain"]},
+        "archived_state_version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "artifactRecordMap": {
+      "type": "object",
+      "patternProperties": {
+        "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/CONTROLLER_PACK\\.md)$": {"$ref": "#/$defs/artifactRecord"}
+      },
+      "additionalProperties": false
+    },
+    "blockerObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goal_turn_id",
+        "observed_at",
+        "blocker_code",
+        "blocker_fingerprint",
+        "controller_goal_id",
+        "report_path",
+        "report_digest"
+      ],
+      "properties": {
+        "goal_turn_id": {"$ref": "#/$defs/safeId"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "blocker_code": {"$ref": "#/$defs/safeId"},
+        "blocker_fingerprint": {"$ref": "#/$defs/digest"},
+        "controller_goal_id": {"$ref": "#/$defs/safeId"},
+        "report_path": {"type": "string", "minLength": 1},
+        "report_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "finalizationOutbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finalization_id",
+        "status",
+        "finalized_state_version",
+        "controller_goal_id",
+        "automation_id",
+        "outcome_kind",
+        "controller_goal_target_status",
+        "automation_target_status",
+        "blocker_code",
+        "blocker_fingerprint",
+        "blocker_observations",
+        "blocker_report_path",
+        "blocker_report_digest"
+      ],
+      "properties": {
+        "finalization_id": {"$ref": "#/$defs/safeId"},
+        "status": {"enum": ["PREPARED", "ACKED"]},
+        "finalized_state_version": {"type": "integer", "minimum": 1},
+        "controller_goal_id": {"$ref": "#/$defs/safeId"},
+        "automation_id": {"$ref": "#/$defs/safeId"},
+        "outcome_kind": {"enum": ["SUCCESS", "BLOCKED"]},
+        "controller_goal_target_status": {"enum": ["COMPLETE", "BLOCKED"]},
+        "automation_target_status": {"const": "PAUSED"},
+        "blocker_code": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+        },
+        "blocker_fingerprint": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "blocker_observations": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {"$ref": "#/$defs/blockerObservation"}
+        },
+        "blocker_report_path": {
+          "oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]
+        },
+        "blocker_report_digest": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"outcome_kind": {"const": "SUCCESS"}}},
+          "then": {
+            "properties": {
+              "controller_goal_target_status": {"const": "COMPLETE"},
+              "blocker_code": {"type": "null"},
+              "blocker_fingerprint": {"type": "null"},
+              "blocker_observations": {"maxItems": 0},
+              "blocker_report_path": {"type": "null"},
+              "blocker_report_digest": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"outcome_kind": {"const": "BLOCKED"}}},
+          "then": {
+            "properties": {
+              "controller_goal_target_status": {"const": "BLOCKED"},
+              "blocker_code": {"$ref": "#/$defs/safeId"},
+              "blocker_fingerprint": {"$ref": "#/$defs/digest"},
+              "blocker_observations": {"minItems": 3, "maxItems": 3},
+              "blocker_report_path": {"type": "string", "minLength": 1},
+              "blocker_report_digest": {"$ref": "#/$defs/digest"}
+            }
+          }
+        }
+      ]
+    },
+    "finalizationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finalization_id",
+        "controller_goal_id",
+      "controller_goal_status",
+      "controller_goal_observation_path",
+      "controller_goal_observation_digest",
+      "automation_id",
+      "automation_status",
+      "automation_observation_path",
+      "automation_observation_digest",
+      "outcome_kind",
+      "blocker_code",
+      "blocker_fingerprint",
+      "blocker_observations",
+      "blocker_report_path",
+      "blocker_report_digest",
+      "ack_state_version",
+        "evidence_paths"
+      ],
+      "properties": {
+        "finalization_id": {"$ref": "#/$defs/safeId"},
+        "controller_goal_id": {"$ref": "#/$defs/safeId"},
+        "controller_goal_status": {"enum": ["COMPLETE", "BLOCKED"]},
+        "controller_goal_observation_path": {"type": "string", "minLength": 1},
+        "controller_goal_observation_digest": {"$ref": "#/$defs/digest"},
+        "automation_id": {"$ref": "#/$defs/safeId"},
+        "automation_status": {"const": "PAUSED"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"},
+        "outcome_kind": {"enum": ["SUCCESS", "BLOCKED"]},
+        "blocker_code": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+        },
+        "blocker_fingerprint": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "blocker_observations": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {"$ref": "#/$defs/blockerObservation"}
+        },
+        "blocker_report_path": {
+          "oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]
+        },
+        "blocker_report_digest": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "ack_state_version": {"type": "integer", "minimum": 1},
+        "evidence_paths": {"$ref": "#/$defs/stringArray"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"outcome_kind": {"const": "SUCCESS"}}},
+          "then": {
+            "properties": {
+              "controller_goal_status": {"const": "COMPLETE"},
+              "blocker_code": {"type": "null"},
+              "blocker_fingerprint": {"type": "null"},
+              "blocker_observations": {"maxItems": 0},
+              "blocker_report_path": {"type": "null"},
+              "blocker_report_digest": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"outcome_kind": {"const": "BLOCKED"}}},
+          "then": {
+            "properties": {
+              "controller_goal_status": {"const": "BLOCKED"},
+              "blocker_code": {"$ref": "#/$defs/safeId"},
+              "blocker_fingerprint": {"$ref": "#/$defs/digest"},
+              "blocker_observations": {"minItems": 3, "maxItems": 3},
+              "blocker_report_path": {"type": "string", "minLength": 1},
+              "blocker_report_digest": {"$ref": "#/$defs/digest"}
+            }
+          }
+        }
+      ]
+    },
+    "outboxRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outbox_id",
+        "outbox_kind",
+        "status",
+        "payload_digest",
+        "target_id",
+        "identity",
+        "lease_claim",
+        "roadmap_version",
+        "prepared_state_version",
+        "sent_evidence_paths",
+        "ack_evidence_paths",
+        "result"
+      ],
+      "properties": {
+        "outbox_id": {"$ref": "#/$defs/safeId"},
+        "outbox_kind": {
+          "enum": ["DISPATCH", "AUTOMATION", "GOAL", "THREAD", "ASSURANCE", "LOCAL", "DELEGATION"]
+        },
+        "status": {"enum": ["PREPARED", "SENT", "ACKED", "COMPLETED", "CANCELLED"]},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "target_id": {"$ref": "#/$defs/safeId"},
+        "identity": {"type": "object"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "roadmap_version": {"type": "integer", "minimum": 1},
+        "prepared_state_version": {"type": "integer", "minimum": 1},
+        "sent_evidence_paths": {"$ref": "#/$defs/stringArray"},
+        "ack_evidence_paths": {"$ref": "#/$defs/stringArray"},
+        "result": {
+          "oneOf": [{"type": "null"}, {"type": "object"}]
+        },
+        "cancel_reason_code": {"$ref": "#/$defs/safeId"},
+        "cancel_evidence_paths": {"$ref": "#/$defs/stringArray"},
+        "cancelled_state_version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "outboxMap": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/outboxRecord"}
+      },
+      "additionalProperties": false
+    },
+    "subagentAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "outbox_id",
+        "payload_digest",
+        "status",
+        "report_digest",
+        "agent_id"
+      ],
+      "properties": {
+        "attempt_id": {"$ref": "#/$defs/safeId"},
+        "outbox_id": {"$ref": "#/$defs/safeId"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "status": {"enum": ["PREPARED", "RUNNING", "COMPLETED", "INTERRUPTED", "DROPPED", "CANCELLED"]},
+        "report_digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "agent_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]}
+      }
+    },
+    "subagentAttemptMap": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/subagentAttempt"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "roadmapOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "milestone_id", "reason"],
+          "properties": {
+            "operation": {
+              "enum": ["ADD_MILESTONE", "UPDATE_MILESTONE", "SUPERSEDE_MILESTONE"]
+            },
+            "milestone_id": {"$ref": "#/$defs/safeId"},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 1024}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "ordered_milestone_ids", "reason"],
+          "properties": {
+            "operation": {"const": "REORDER_FUTURE_MILESTONES"},
+            "ordered_milestone_ids": {"$ref": "#/$defs/safeIdArray"},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 1024}
+          }
+        }
+      ]
+    },
+    "roadmapProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_id",
+        "roadmap_audit_dispatch_id",
+        "base_roadmap_version",
+        "operations",
+        "milestones_digest",
+        "goal_queue_digest",
+        "goal_definition_registry_digest",
+        "authorization_envelope_digest",
+        "estimate_digest",
+        "next_goal_id",
+        "reason_code",
+        "within_authorized_envelope"
+      ],
+      "properties": {
+        "proposal_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_audit_dispatch_id": {"$ref": "#/$defs/safeId"},
+        "base_roadmap_version": {"type": "integer", "minimum": 1},
+        "operations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/roadmapOperation"}},
+        "milestones_digest": {"$ref": "#/$defs/digest"},
+        "goal_queue_digest": {"$ref": "#/$defs/digest"},
+        "goal_definition_registry_digest": {"$ref": "#/$defs/digest"},
+        "authorization_envelope_digest": {"$ref": "#/$defs/digest"},
+        "estimate_digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "next_goal_id": {"$ref": "#/$defs/safeId"},
+        "reason_code": {"$ref": "#/$defs/safeId"},
+        "within_authorized_envelope": {"type": "boolean"}
+      }
+    },
+    "roadmapChangeRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_id",
+        "status",
+        "base_roadmap_version",
+        "new_roadmap_version",
+        "source_goal_id",
+        "next_goal_id",
+        "reason_code",
+        "roadmap_audit_id",
+        "roadmap_audit_report_digest",
+        "roadmap_proposal",
+        "roadmap_proposal_digest",
+        "lease_claim",
+        "evidence_paths"
+      ],
+      "properties": {
+        "proposal_id": {"$ref": "#/$defs/safeId"},
+        "status": {"const": "APPLIED"},
+        "base_roadmap_version": {"type": "integer", "minimum": 1},
+        "new_roadmap_version": {"type": "integer", "minimum": 2},
+        "source_goal_id": {"$ref": "#/$defs/safeId"},
+        "next_goal_id": {"$ref": "#/$defs/safeId"},
+        "reason_code": {"$ref": "#/$defs/safeId"},
+        "roadmap_audit_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_audit_report_digest": {"$ref": "#/$defs/digest"},
+        "roadmap_proposal": {"$ref": "#/$defs/roadmapProposal"},
+        "roadmap_proposal_digest": {"$ref": "#/$defs/digest"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "evidence_paths": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "roadmapChangeMap": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/roadmapChangeRecord"}
+      },
+      "additionalProperties": false
+    },
+    "reviewRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_id",
+        "review_kind",
+        "review_dispatch_id",
+        "goal_id",
+        "worker_dispatch_id",
+        "worker_report_digest",
+        "reviewer_thread_id",
+        "roadmap_version",
+        "artifact_digest",
+        "report_digest",
+        "decision",
+        "evidence_paths"
+      ],
+      "properties": {
+        "review_id": {"$ref": "#/$defs/safeId"},
+        "review_kind": {"enum": ["CODE_REVIEW", "ROADMAP_AUDIT", "FINAL_AUDIT"]},
+        "review_dispatch_id": {"$ref": "#/$defs/safeId"},
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "worker_dispatch_id": {"$ref": "#/$defs/safeId"},
+        "worker_report_digest": {"$ref": "#/$defs/digest"},
+        "reviewer_thread_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_version": {"type": "integer", "minimum": 1},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "report_digest": {"$ref": "#/$defs/digest"},
+        "decision": {
+          "enum": [
+            "REVIEW_PASS",
+            "REVIEW_PASS_WITH_LIMITATION",
+            "REVIEW_NEEDS_REPAIR",
+            "REVIEW_ARTIFACT_UNAVAILABLE",
+            "ROADMAP_AUDIT_PASS",
+            "ROADMAP_CHANGE_PROPOSED",
+            "ROADMAP_AUDIT_PASS_FINAL_CANDIDATE",
+            "ROADMAP_AUDIT_NEEDS_REPAIR",
+            "FINAL_REVIEW_PASS",
+            "FINAL_REVIEW_PASS_WITH_LIMITATION",
+            "FINAL_REVIEW_NEEDS_REPAIR"
+          ]
+        },
+        "roadmap_proposal_digest": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "roadmap_proposal": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/roadmapProposal"}]
+        },
+        "evidence_paths": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "reviewMap": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/reviewRecord"}
+      },
+      "additionalProperties": false
+    },
+    "requestLedgerRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_digest", "event_id", "mutation_type", "applied_state_version"],
+      "properties": {
+        "request_digest": {"$ref": "#/$defs/digest"},
+        "event_id": {"$ref": "#/$defs/safeId"},
+        "mutation_type": {"$ref": "#/$defs/safeId"},
+        "applied_state_version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "requestLedger": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/requestLedgerRecord"}
+      },
+      "additionalProperties": false
+    },
+    "eventLedgerRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state_request_id", "request_digest", "mutation_type", "applied_state_version"],
+      "properties": {
+        "state_request_id": {"$ref": "#/$defs/safeId"},
+        "request_digest": {"$ref": "#/$defs/digest"},
+        "mutation_type": {"$ref": "#/$defs/safeId"},
+        "applied_state_version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "eventLedger": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/eventLedgerRecord"}
+      },
+      "additionalProperties": false
+    },
+    "jsonValue": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "boolean"},
+        {"type": "number"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/jsonValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/jsonValue"}}
+      ]
+    },
+    "jsonObjectMap": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/jsonValue"}
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
