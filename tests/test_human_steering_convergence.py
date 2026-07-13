@@ -31,7 +31,7 @@ from loop_architect.state_runtime import (  # noqa: E402
     RuntimeRejection,
     STATUS_PROJECTION_STAGES,
 )
-from tests.test_adaptive_state_runtime import (  # noqa: E402
+from tests.state_runtime_support import (  # noqa: E402
     Harness,
     authorization_envelope,
     complete_validation_matrix,

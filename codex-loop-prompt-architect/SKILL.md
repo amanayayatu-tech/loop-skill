@@ -100,26 +100,26 @@ Keep these invariants in every ready pack:
 - bounded repair, runtime retry, wake, idle, and active-stale policies
 - evidence and claim boundaries
 
-Adaptive Mode additionally requires exactly one Active milestone, canonical
-roadmap data in `LOOP_STATE.md`, derived `.codex-loop/GOALS.md`, separate
-CODE_REVIEW, ROADMAP_AUDIT, and final FINAL_AUDIT dispatches to one reusable
-Reviewer task, completed-Worker-bound CODE_REVIEW, immutable executable Goal
-definitions, an Active-milestone-derived First Goal, concrete fenced authorization/Goal JSON, explicit review/local
-outboxes, canonical payload digests, latest-Worker binding, full-claim one-route lease arbitration, loop/pack-scoped
-native Goal create/update outbox recovery with an emulated fallback, linked artifact/version-
-bound review ACKs, runtime-enforced Active-milestone Goal switching, typed audited roadmap proposals plus separate PREPARED cancellation and revision CAS,
-JSON-Schema-backed deterministic state runtime, immutable Pack/task/tool-result identity,
-runtime-derived dashboard, FINALIZE_LOOP/STOP_LOOP plus evidence-bound ACK_FINALIZATION,
-and an authorization envelope for every roadmap mutation. Initialize all
-Adaptive state before acquiring a lease; each Goal turn or heartbeat wake uses
-one ACQUIRE_LEASE request that both counts the routing turn and returns its
-one-route claim. All task, automation, Goal, review, and dispatch outboxes use
-that claim; roadmap/final CAS checks Worker, review, and local outboxes together.
-Adaptive generation rejects `max_wakeups` below the route floor for declared Goals, repairs, assurance, and finalization.
-Initial queues cover every routable Goal definition; scopes reject traversal;
-routing events are immutable/idempotent; same-owner renewal may rebind the one exact active
-route without resending it; control-plane caps and external-worktree roots are runtime enforced.
-Adaptive v2 stores Steering, Decision, failure, freshness, and validation facts in canonical state; `STATUS.md` and review guidance stay derived.
+Adaptive Mode adds these non-negotiable invariants:
+
+- exactly one Active milestone; roadmap data is canonical only in `LOOP_STATE.md`
+- immutable executable Goal definitions and a First Goal derived from that milestone
+- separate `CODE_REVIEW`, `ROADMAP_AUDIT`, and final `FINAL_AUDIT` dispatches
+- completed-Worker/latest-artifact binding for review and local-verification ACKs
+- explicit outboxes, canonical payload digests, and one-route lease arbitration
+- native Goal create/update outbox recovery with an emulated fallback
+- typed roadmap proposals, authorization envelopes, PREPARED cancellation, and CAS
+- deterministic schema-backed state changes and immutable Pack/task/tool identities
+- runtime-enforced Goal switching, scope/cap checks, and external-worktree roots
+- evidence-bound `FINALIZE_LOOP`/`STOP_LOOP` followed by `ACK_FINALIZATION`
+
+Initialize state before leasing. Each Goal turn or heartbeat wake uses one
+`ACQUIRE_LEASE`; every routed outbox uses its returned full claim. Generation
+rejects an insufficient route budget. Routing is immutable and idempotent;
+same-owner renewal may rebind one active route without resending it. Steering,
+Decision, failure, freshness, and validation facts stay canonical; `GOALS.md`,
+`STATUS.md`, dashboards, and review guidance stay derived. The Adaptive contract
+defines the exact fields, transition ordering, recovery rules, and STOP codes.
 
 Subagents default to disabled. Only the Controller under explicitly bounded Adaptive input may allow
 an authorization ceiling of two depth-one read-only sidecars; the deterministic router serializes one active delegation per lease, and no task delegates further.
@@ -163,11 +163,18 @@ Do not substitute:
 allowed for a real Reviewer thread that must inspect the same Worker worktree.
 It is not a sub-agent or `fork_context`.
 
-Compute a stable pack digest and loop id before child creation from a launcher PACK_IDENTITY_ATTESTATION that matches the exact local Pack path/bytes; never hash or decode delegation/XML/HTML/UI wrapper text. Bootstrap only
-State-Writer first, initialize canonical state, then use a thread-creation
-outbox for Worker/Reviewer. `BOOTSTRAP_PROMPT` is the byte-exact full role prompt plus a
-loop/role/pack marker and `BOOTSTRAP_ONLY`, never a path/line summary; its digest is full lowercase SHA-256 and it never contains First Goal.
-Recover with `list_threads`/`read_thread` before any duplicate create/fork; Adaptive mode retries the same returned thread id across a bounded post-create visibility window, keeps a readable active/pending bootstrap nonterminal through quota recovery, never replaces it on a transient response, and binds lease owner identity only to the real current Controller thread id, never a delegation source/parent id.
+Before child creation:
+
+- attest the exact local Pack path and bytes with `PACK_IDENTITY_ATTESTATION`
+- never hash or decode delegation, XML, HTML, or UI wrapper text
+- bootstrap only State-Writer, initialize state, then use creation outboxes
+- make `BOOTSTRAP_PROMPT` the byte-exact full role prompt plus marker and
+  `BOOTSTRAP_ONLY`; never include First Goal or substitute a path summary
+- recover with `list_threads`/`read_thread` before duplicate create or fork
+- retry the same returned task id through bounded post-create visibility lag;
+  transient/quota responses never authorize replacement
+- bind the lease owner only to the real current Controller task id
+
 If Controller thread id is unavailable, derive LOOP_ID deterministically from
 project id, canonical repo, and pack digest; never use a random fallback.
 
@@ -370,31 +377,33 @@ unresolved comments, audit trail, budget/approval ledgers, evidence layer, and
 claim boundary. In Adaptive Mode this is a tagged third dispatch to the same
 Reviewer after final Roadmap Audit. FINALIZE_LOOP prepares the receipt; Controller
 completes the Goal, pauses heartbeat, and sends evidence-bound ACK_FINALIZATION.
-`native_goal_policy` defaults to `required`: required uses native Goal; disabled/advisory use only `EMULATED_SINGLE_ACTIVE_MILESTONE` and never call the Goal tool. Only a matching one-use capability from `FINALIZE_LOOP_APPLIED`/`STOP_LOOP_APPLIED` authorizes `update_goal(complete|blocked)`; waits, timeouts, quota recovery, and Decisions never do. `CORE_FINALIZATION_ACKED`/`FINALIZATION_PENDING_EXTERNAL_SYNC` are evidence, not release success; only exact FINALIZATION_ACKED closes the loop. Formal review ACK/ledger decision and digests must match exactly. Adaptive THREAD identity maps explicit
-bootstrap to formal roles without title inference. STOP_LOOP requires three
-prior consecutive observation-only turn artifacts; none can be backfilled. The next dedicated
-turn blocks Goal and pauses heartbeat. A bounded final limitation may set
-`LOOP_COMPLETE_WITH_LIMITATION` only when no required fix remains. A PENDING Decision pauses heartbeat but never blocks Goal; task read/index/message timeouts on PREPARED/SENT routes are recoverable waits, not hard blockers. Before resuming/routing, `get_goal` must match canonical ACTIVE identity or stop as `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST` without replacement/emulation.
+Finalization rules are atomic:
+
+- `native_goal_policy` defaults to `required` and uses native Goal; disabled/advisory use only
+  `EMULATED_SINGLE_ACTIVE_MILESTONE` and never call Goal tools
+- only the matching one-use capability from `FINALIZE_LOOP_APPLIED` or
+  `STOP_LOOP_APPLIED` authorizes `update_goal(complete|blocked)`
+- only exact `FINALIZATION_ACKED` closes the loop; intermediate ACK/sync states do not
+- review ACK, ledger decision, identities, and digests must match exactly
+- formal roles come from explicit bootstrap identity, never title inference
+- `STOP_LOOP` requires three consecutive prior observation-only turn artifacts;
+  never backfill them; a later dedicated turn blocks Goal and pauses heartbeat
+- `LOOP_COMPLETE_WITH_LIMITATION` is valid only when no required fix remains
+- PENDING Decisions pause heartbeat but do not block Goal; route timeouts wait/recover
+- before routing, native Goal must match canonical ACTIVE identity or stop
+  `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST` without replacement or emulation
 
 Reject any configuration that disables review while a `workspace_write` Worker
 exists. Review may be omitted only for a fully read-only, no-diff loop.
 
 ## Runtime Retry
-Default transient dependency limits:
-
-- 10 retries after the initial attempt, 11 attempts total
-- 180 total minutes so the initial attempt plus ten retries can all fit
-- 12-minute hard timeout per attempt
-- 6-minute no-progress timeout per attempt
-- at most 5 minutes per backoff, always bounded by remaining total time
-
-Every attempt has a hard timeout and watchdog. Honor `Retry-After`; otherwise
-use exponential backoff with jitter. Then try supported fetch flags, reduced
-concurrency, resumable fetch/store warming, allowlisted public alternatives,
-project-scoped cleanup, and supported browser/native hosts.
+Use the exact retry ladder in `loop-contract.md`. Defaults are 10 retries after
+the initial attempt, 180 total minutes, 12 minutes per attempt, 6 minutes without
+progress, and 5 minutes maximum backoff. Each attempt has a hard timeout and
+watchdog; `Retry-After` is honored only inside the remaining budget.
 
 Preserve tracked lockfiles. Never delete global caches, persist global registry
-changes, introduce credentials, or use paid mirrors without approval.
+changes, add credentials, or use paid mirrors without approval.
 
 Metered runtime policy must either defer/forbid the call or state a measurable
 positive bound in calls/requests, tokens, or dollars. Duration alone does not
