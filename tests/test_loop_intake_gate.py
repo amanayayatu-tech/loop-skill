@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 
@@ -65,6 +68,20 @@ class IntakeGateContractTests(unittest.TestCase):
         self.assertIn("A non-ready result stops before\n  Pack generation", INTAKE)
         self.assertIn("without another confirmation round", INTAKE)
 
+    def test_explicit_generate_authorizes_only_the_pack_artifact(self) -> None:
+        normalized = " ".join(INTAKE.split())
+        self.assertIn(
+            "An explicit `generate` request authorizes only the required Controller Pack artifact in the current workspace or a user-approved output path.",
+            normalized,
+        )
+        self.assertIn(
+            "does not authorize product changes, other repo writes, external side effects, push, merge, or deploy",
+            normalized,
+        )
+        self.assertIn(
+            "current workspace or a user-approved output path", " ".join(SKILL.split())
+        )
+
     def test_intake_read_only_allows_only_disposable_check_input(self) -> None:
         self.assertIn(
             "Read-only means no product, repo, canonical control-plane, task, Goal, or",
@@ -116,6 +133,29 @@ class IntakeGateContractTests(unittest.TestCase):
         self.assertIn("G1-G9 are hard gates", INTAKE)
         self.assertIn("G10 is the route decision", INTAKE)
 
+    def test_route_contract_keeps_four_plus_stable_goals_standard(self) -> None:
+        route = INTAKE.split("### G10 Route Recommendation", 1)[1].split(
+            "## Overall Status", 1
+        )[0]
+        normalized = " ".join(route.split())
+        self.assertIn("stable, dependency-ordered, fixed Goal Queue", normalized)
+        self.assertIn("that count is not a hard cap", normalized)
+        self.assertIn(
+            "Four or more stable sequential Goals remain Standard", normalized
+        )
+        self.assertIn(
+            "Goal count alone must not force `ADAPTIVE_LOOP` or justify inventing milestones",
+            normalized,
+        )
+        for adaptive_trigger in (
+            "explicitly requested Adaptive coordination",
+            "mutable milestone roadmap",
+            "evidence-dependent replanning",
+            "browser/machine/device validation",
+            "dynamic multi-stage acceptance",
+        ):
+            self.assertIn(adaptive_trigger, normalized)
+
     def test_only_four_readiness_statuses_exist(self) -> None:
         statuses = (
             "READY_FOR_LOOP",
@@ -126,6 +166,10 @@ class IntakeGateContractTests(unittest.TestCase):
         overall = INTAKE.split("## Overall Status", 1)[1].split(
             "## Clarification Priority", 1
         )[0]
+        declared_statuses = set(
+            re.findall(r"^- `([A-Z_]+)`: ", overall, flags=re.MULTILINE)
+        )
+        self.assertEqual(declared_statuses, set(statuses))
         for status in statuses:
             self.assertIn(f"`{status}`", overall)
         self.assertIn("`READY_WITH_ASSUMPTIONS` does not exist", overall)
@@ -178,10 +222,11 @@ class IntakeGateContractTests(unittest.TestCase):
         ):
             self.assertIn(marker, INTAKE)
 
-    def test_seven_behavioral_scenarios_are_auditable(self) -> None:
+    def test_behavioral_scenarios_are_auditable(self) -> None:
         expected = {
             "S1 Ambiguous Idea": "NEEDS_CLARIFICATION",
             "S2 Complete Standard Requirement": "STANDARD_LOOP",
+            "S2A Four-Plus Stable Sequential Goals": "STANDARD_LOOP",
             "S3 Multi-Stage Adaptive Requirement": "ADAPTIVE_LOOP",
             "S4 Permission Conflict": "BLOCKED",
             "S5 Simple Direct Task": "DIRECT_TASK_RECOMMENDED",
@@ -194,6 +239,14 @@ class IntakeGateContractTests(unittest.TestCase):
         self.assertIn("produce no Pack and no fabricated complete\nJSON", INTAKE)
         self.assertIn("do not silently grant push, merge,\ndeploy", INTAKE)
         self.assertIn("generate no Pack, Controller, Worker, Reviewer, or heartbeat", INTAKE)
+        stable = INTAKE.split("### S2A Four-Plus Stable Sequential Goals", 1)[1].split(
+            "### S3", 1
+        )[0]
+        self.assertIn("must not force\nAdaptive", stable)
+        adaptive = INTAKE.split("### S3 Multi-Stage Adaptive Requirement", 1)[1].split(
+            "### S4", 1
+        )[0]
+        self.assertIn("mutable\nmilestone roadmap", adaptive)
 
     def test_repository_has_no_second_skill_or_intake_schema(self) -> None:
         self.assertFalse((ROOT / "loop-readiness-gate").exists())
@@ -213,6 +266,24 @@ class IntakeGateContractTests(unittest.TestCase):
         self.assertTrue((ROOT / "tests" / "test_loop_intake_gate.py").is_file())
         self.assertIn("references/loop-intake-gate.md", README)
         self.assertIn("test_loop_intake_gate.py", README)
+        self.assertIn(
+            "~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py",
+            README,
+        )
+        scripted_generation = README.split("## 脚本化生成", 1)[1].split(
+            "## 三个案例", 1
+        )[0]
+        self.assertNotIn(
+            "python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py",
+            scripted_generation,
+        )
+        self.assertEqual(
+            scripted_generation.count(
+                "python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/"
+                "loop_prompt_scaffold.py"
+            ),
+            4,
+        )
 
     def test_readme_documents_modes_statuses_and_context_handoff(self) -> None:
         self.assertIn("## 先质检，再 Loop 化", README)
@@ -256,25 +327,45 @@ class IntakeGateContractTests(unittest.TestCase):
 
 class GeneratorCompatibilityContractTests(unittest.TestCase):
     def run_check_only(self, relative_input: str) -> subprocess.CompletedProcess[str]:
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(SCAFFOLD),
-                "--input",
-                str(ROOT / relative_input),
-                "--check-only",
-            ],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(
-            "All required fields and semantic invariants are valid.", result.stdout
-        )
-        self.assertNotIn("# Codex Loop Controller Pack", result.stdout)
-        return result
+        source_input = ROOT / relative_input
+        with tempfile.TemporaryDirectory() as directory:
+            unrelated_cwd = Path(directory)
+            input_path = unrelated_cwd / source_input.name
+            shutil.copy2(source_input, input_path)
+            before_bytes = input_path.read_bytes()
+            before_manifest = {
+                path.relative_to(unrelated_cwd)
+                for path in unrelated_cwd.rglob("*")
+                if path.is_file()
+            }
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCAFFOLD),
+                    "--input",
+                    str(input_path),
+                    "--check-only",
+                ],
+                cwd=unrelated_cwd,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            after_manifest = {
+                path.relative_to(unrelated_cwd)
+                for path in unrelated_cwd.rglob("*")
+                if path.is_file()
+            }
+            self.assertEqual(input_path.read_bytes(), before_bytes)
+            self.assertEqual(after_manifest, before_manifest)
+            self.assertFalse(list(unrelated_cwd.glob("*.md")))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(
+                "All required fields and semantic invariants are valid.",
+                result.stdout,
+            )
+            self.assertNotIn("# Codex Loop Controller Pack", result.stdout)
+            return result
 
     def test_complete_standard_input_passes_existing_check_only(self) -> None:
         payload = json.loads(
@@ -286,6 +377,117 @@ class GeneratorCompatibilityContractTests(unittest.TestCase):
         self.assertGreaterEqual(len(payload["goals"]), 1)
         self.assertLessEqual(len(payload["goals"]), 3)
         self.run_check_only("examples/01-passkey-login-input.json")
+
+    def test_documented_installed_handoff_is_cwd_independent(self) -> None:
+        handoff = INTAKE.split("## Generator Handoff", 1)[1].split(
+            "## Behavioral Scenarios", 1
+        )[0]
+        documented_paths = re.findall(
+            r"python3\s+([^\s\\]+loop_prompt_scaffold\.py)", handoff
+        )
+        expected = (
+            "~/.codex/skills/codex-loop-prompt-architect/scripts/"
+            "loop_prompt_scaffold.py"
+        )
+        self.assertEqual(documented_paths, [expected, expected])
+        self.assertNotIn(
+            "python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py",
+            handoff,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            temp_root = Path(directory)
+            fake_home = temp_root / "home"
+            installed = (
+                fake_home / ".codex" / "skills" / "codex-loop-prompt-architect"
+            )
+            shutil.copytree(SKILL_DIR, installed)
+            unrelated_cwd = temp_root / "unrelated-target-project"
+            unrelated_cwd.mkdir()
+            script = Path(documented_paths[0].replace("~", str(fake_home), 1))
+
+            schema_result = subprocess.run(
+                [sys.executable, str(script), "--print-schema"],
+                cwd=unrelated_cwd,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                schema_result.returncode, 0, schema_result.stdout + schema_result.stderr
+            )
+            self.assertIn('"objective"', schema_result.stdout)
+
+            input_path = unrelated_cwd / "loop-input.json"
+            shutil.copy2(ROOT / "examples" / "01-passkey-login-input.json", input_path)
+            before_bytes = input_path.read_bytes()
+            before_manifest = {
+                path.relative_to(unrelated_cwd)
+                for path in unrelated_cwd.rglob("*")
+                if path.is_file()
+            }
+            check_result = subprocess.run(
+                [sys.executable, str(script), "--input", str(input_path), "--check-only"],
+                cwd=unrelated_cwd,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            after_manifest = {
+                path.relative_to(unrelated_cwd)
+                for path in unrelated_cwd.rglob("*")
+                if path.is_file()
+            }
+            self.assertEqual(input_path.read_bytes(), before_bytes)
+            self.assertEqual(after_manifest, before_manifest)
+            self.assertEqual(
+                check_result.returncode, 0, check_result.stdout + check_result.stderr
+            )
+            self.assertIn(
+                "All required fields and semantic invariants are valid.",
+                check_result.stdout,
+            )
+
+    def test_four_stable_goals_pass_existing_standard_scaffold(self) -> None:
+        payload = json.loads(
+            (ROOT / "examples" / "01-passkey-login-input.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        template = payload["goals"][0]
+        goals = []
+        for index in range(1, 5):
+            goal = deepcopy(template)
+            goal["goal_id"] = f"AUTH-G{index}"
+            goal["phase"] = f"Stable phase {index}"
+            goal["objective"] = f"Complete fixed authentication phase {index}"
+            if index == 1:
+                goal.pop("depends_on", None)
+                goal["dispatch_when"] = "startup transaction is complete"
+            else:
+                goal["depends_on"] = [f"AUTH-G{index - 1}"]
+                goal["dispatch_when"] = f"AUTH-G{index - 1} is complete"
+            goals.append(goal)
+        payload["goals"] = goals
+        self.assertNotEqual(payload.get("coordination_mode"), "adaptive")
+
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = Path(directory) / "four-stable-goals.json"
+            input_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(SCAFFOLD), "--input", str(input_path), "--check-only"],
+                cwd=Path(directory),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(
+                "All required fields and semantic invariants are valid.", result.stdout
+            )
 
     def test_complete_adaptive_input_preserves_required_fields(self) -> None:
         payload = json.loads(

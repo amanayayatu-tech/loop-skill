@@ -33,7 +33,11 @@ Choose exactly one mode from the user's current request.
   generation without another confirmation round.
 
 If wording conflicts, the narrower `intake-only` instruction wins for that
-turn. Mode selection never grants file writes or external side effects.
+turn. An explicit `generate` request authorizes only the required Controller
+Pack artifact in the current workspace or a user-approved output path. That
+narrow artifact write does not authorize product changes, other repo writes,
+external side effects, push, merge, or deploy. Mode selection alone grants
+nothing further.
 
 Read-only means no product, repo, canonical control-plane, task, Goal, or
 heartbeat mutation. Creating a disposable generator input in a temporary
@@ -154,12 +158,16 @@ Choose one:
 
 - `DIRECT_TASK`: a single-step, low-risk task with enough information and no
   durable multi-round coordination need.
-- `STANDARD_LOOP`: a stable dependency-ordered plan with one to three Goals.
-- `ADAPTIVE_LOOP`: more than three milestones, a plan expected to change with
-  evidence, browser/machine/device validation, multi-stage acceptance, or work
-  expected to exceed half a day.
+- `STANDARD_LOOP`: a stable, dependency-ordered, fixed Goal Queue. It typically
+  has one to three Goals, but that count is not a hard cap. Four or more stable
+  sequential Goals remain Standard when no Adaptive trigger applies.
+- `ADAPTIVE_LOOP`: explicitly requested Adaptive coordination, more than three
+  real milestones or a mutable milestone roadmap, evidence-dependent
+  replanning, browser/machine/device validation, dynamic multi-stage acceptance,
+  or work expected to exceed half a day.
 - `UNDETERMINED`: missing or conflicting facts prevent an honest route.
 
+Goal count alone must not force `ADAPTIVE_LOOP` or justify inventing milestones.
 This is a recommendation, not a schema bypass. Standard and Adaptive inputs
 still pass the deterministic scaffold checks.
 
@@ -256,17 +264,19 @@ Do not define or maintain a second YAML/JSON schema for intake. The scaffold is
 the only generator schema authority:
 
 ```bash
-python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py --print-schema
-python3 codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
+python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py --print-schema
+python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
   --input /tmp/approved-loop-input.json --check-only
 ```
 
 Build `LOOP_INPUT_JSON` from the schema returned in the current environment,
-not from memory. Use a temporary or user-approved input path. Preserve all
-confirmed details, including Adaptive `milestones`, explicit `role_kind`,
-Validation Matrix inputs, paths, permission booleans, evidence layer, and claim
-boundary. A successful `--check-only` result is required before calling the
-input generator-compatible.
+not from memory. Resolve the scaffold from the installed Skill as shown above;
+the command must work from any target-project cwd and must never require a
+checkout of the `loop-skill` source repo. Use a temporary or user-approved input
+path. Preserve all confirmed details, including Adaptive `milestones`, explicit
+`role_kind`, Validation Matrix inputs, paths, permission booleans, evidence
+layer, and claim boundary. A successful `--check-only` result is required before
+calling the input generator-compatible.
 
 In `generate` mode, only after that success may the scaffold emit Standard or
 Adaptive files. In `intake-only` mode, stop after the validated JSON and intake
@@ -288,17 +298,26 @@ JSON.
 
 ### S2 Complete Standard Requirement
 
-Input: a scoped code requirement with one to three stable Goals, real repo and
+Input: a scoped code requirement with a stable fixed Goal Queue, real repo and
 source paths, executable acceptance, explicit permissions, validation, budget,
 and evidence boundary.
 
 Expected: `READY_FOR_LOOP` + `STANDARD_LOOP`, one schema-derived
 `LOOP_INPUT_JSON`, and a successful real `--check-only` before any Pack.
 
+### S2A Four-Plus Stable Sequential Goals
+
+Input: a complete requirement with four or more dependency-ordered Goals, fixed
+scope and acceptance, and no mutable roadmap or evidence-dependent replanning.
+
+Expected: `READY_FOR_LOOP` + `STANDARD_LOOP`; Goal count alone must not force
+Adaptive or cause the Skill to invent milestones.
+
 ### S3 Multi-Stage Adaptive Requirement
 
-Input: more than three milestones or evidence-dependent replanning with
-machine/browser validation.
+Input: an explicit Adaptive request, more than three real milestones, a mutable
+milestone roadmap, or evidence-dependent replanning with machine/browser
+validation.
 
 Expected: `ADAPTIVE_LOOP`; preserve milestones, explicit `role_kind`, validation
 and permission boundaries in schema-derived input; do not flatten it into a
