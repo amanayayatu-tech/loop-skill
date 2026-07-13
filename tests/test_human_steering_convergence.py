@@ -420,7 +420,9 @@ class HumanControlHelperTests(unittest.TestCase):
     def test_skill_links_one_layer_v32_reference_and_stays_bounded(self) -> None:
         skill = (ROOT / "codex-loop-prompt-architect" / "SKILL.md").read_text()
         self.assertIn("references/human-steering-and-convergence.md", skill)
-        self.assertIn("Confirmed Facts / Inferred Intent", skill)
+        self.assertIn("references/loop-intake-gate.md", skill)
+        self.assertIn("READY_FOR_LOOP", skill)
+        self.assertNotIn("## Clarification Gate", skill)
         self.assertLessEqual(len(skill.splitlines()), 500)
 
     def test_adaptive_input_with_one_repair_keeps_fingerprint_compatibility(self) -> None:

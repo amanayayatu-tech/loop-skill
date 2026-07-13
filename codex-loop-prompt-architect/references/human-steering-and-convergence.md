@@ -14,11 +14,10 @@ parallel writers, deployment platform, or general cron system.
 
 ## Fuzzy Intake
 
-Before a dispatchable Pack, separate `Confirmed Facts`, `Inferred Intent`,
-`Unresolved Facts`, `Proposed Safe Defaults`, and `Blocking Questions`. Ask at
-most three questions. Never infer repo/path, source identity, permission,
-budget, acceptance, or external side effects. If the user insists without
-required facts, emit only `NON_DISPATCHABLE_DRAFT`.
+Pre-generation readiness and clarification are defined only by
+[loop-intake-gate.md](loop-intake-gate.md). This reference does not maintain a
+second intake rule set. The sections below govern Steering after an Adaptive
+loop exists; they cannot upgrade an intake status or bypass the Intake Gate.
 
 ## Minimal Steering
 
