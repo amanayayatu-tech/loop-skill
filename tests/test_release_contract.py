@@ -43,6 +43,8 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn('ADAPTIVE_STATE_FUZZ_CASES: "5000"', workflow)
         self.assertIn("github.event_name == 'pull_request'", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertIn("branches:\n      - main", workflow)
+        self.assertIn('tags:\n      - "v*"', workflow)
         self.assertIn("github.event.pull_request.head.ref || github.ref_name", workflow)
         self.assertIn("actions/checkout@v7", workflow)
         self.assertIn("actions/setup-python@v6", workflow)
