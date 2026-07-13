@@ -52,6 +52,16 @@ class AdaptiveProtocolCatalogTests(unittest.TestCase):
             accepted_mutation_types(),
             (
                 "INITIALIZE",
+                "MIGRATE_V1_TO_V2",
+                "RECORD_STEERING",
+                "RESOLVE_STEERING",
+                "SET_RUN_CONTROL",
+                "REGISTER_DECISION",
+                "RECORD_DECISION_RESPONSE",
+                "RECORD_FAILURE",
+                "RECORD_VALIDATION",
+                "RECORD_CONTEXT_FRESHNESS",
+                "RECORD_CONTROLLER_GOAL_RESUME",
                 "ACQUIRE_LEASE",
                 "RELEASE_LEASE",
                 "RENEW_LEASE",
@@ -126,6 +136,16 @@ class AdaptiveProtocolCatalogTests(unittest.TestCase):
         self.assertIn("STOP_LOOP_APPLIED", codes)
         self.assertIn("FINALIZATION_ACKED", codes)
         self.assertIn("IDEMPOTENT_REPLAY", codes)
+        self.assertTrue(
+            {
+                "STEERING_APPLIED",
+                "STEERING_DEFERRED",
+                "STEERING_CONFLICT",
+                "PAUSE_REQUESTED",
+                "PAUSED_AT_SAFE_POINT",
+                "RUNNING",
+            }.issubset(codes)
+        )
 
     def test_adaptive_example_contains_no_non_runtime_protocol_tokens(self) -> None:
         self.assertEqual(forbidden_rendered_tokens(self.pack), ())

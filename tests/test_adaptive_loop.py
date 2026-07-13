@@ -18,6 +18,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from loop_architect.forecast import dashboard_required, local_verifier_needed
+from loop_architect.validation import minimum_adaptive_routing_turns
 from loop_architect.state_runtime import (
     AdaptiveStateRuntime,
     materialize_dispatch_payload,
@@ -108,6 +109,24 @@ def adaptive_payload() -> dict:
 class AdaptiveValidationTests(unittest.TestCase):
     def test_valid_adaptive_payload(self) -> None:
         self.assertEqual(scaffold.validation_errors(adaptive_payload()), [])
+
+    def test_native_goal_policy_defaults_required_and_rejects_unknown(self) -> None:
+        payload = adaptive_payload()
+        payload.pop("native_goal_policy", None)
+        payload["_provided_keys"] = sorted(
+            key for key in payload if not key.startswith("_")
+        )
+        self.assertEqual(scaffold.validation_errors(payload), [])
+        normalized = dict(payload)
+        for key, value in scaffold.DEFAULTS.items():
+            normalized.setdefault(key, value)
+        self.assertEqual(normalized["native_goal_policy"], "required")
+
+        payload["native_goal_policy"] = "best_effort"
+        self.assertIn(
+            "native_goal_policy:unsupported",
+            scaffold.validation_errors(payload),
+        )
 
     def test_adaptive_requires_explicit_role_kind(self) -> None:
         payload = adaptive_payload()
@@ -342,6 +361,32 @@ class AdaptiveValidationTests(unittest.TestCase):
             "heartbeat:coverage_below_time_max",
             scaffold.validation_errors(payload),
         )
+
+    def test_adaptive_routing_budget_must_reach_terminal_with_declared_repairs(self) -> None:
+        payload = adaptive_payload()
+        payload["milestones"] = [payload["milestones"][0]]
+        payload["goals"] = [payload["goals"][0]]
+        payload["max_repair_attempts_per_goal"] = 2
+        payload["local_verification_policy"] = "not_required"
+        payload["max_wakeups"] = 12
+        self.assertEqual(minimum_adaptive_routing_turns(payload), 17)
+        self.assertIn(
+            "max_wakeups:below_adaptive_minimum_routing_turns:17",
+            scaffold.validation_errors(payload),
+        )
+        payload["max_wakeups"] = 17
+        self.assertNotIn(
+            "max_wakeups:below_adaptive_minimum_routing_turns:17",
+            scaffold.validation_errors(payload),
+        )
+
+    def test_required_local_verifier_is_included_in_routing_capacity(self) -> None:
+        payload = adaptive_payload()
+        payload["milestones"] = [payload["milestones"][0]]
+        payload["goals"] = [payload["goals"][0]]
+        payload["max_repair_attempts_per_goal"] = 1
+        payload["local_verification_policy"] = "required"
+        self.assertEqual(minimum_adaptive_routing_turns(payload), 16)
 
     def test_adaptive_integer_fields_reject_numeric_strings(self) -> None:
         payload = adaptive_payload()
@@ -628,7 +673,15 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
 
     def test_heartbeat_uses_controller_lease(self) -> None:
         heartbeat = self.pack.split("HEARTBEAT_PROMPT_BEGIN\n", 1)[1].split("HEARTBEAT_PROMPT_END", 1)[0]
-        self.assertIn("begin this wake with one ACQUIRE_LEASE mutation", heartbeat)
+        self.assertNotIn("begin this wake with one ACQUIRE_LEASE mutation", heartbeat)
+        steering_position = heartbeat.index(
+            "classify and durably ACK every new Steering item"
+        )
+        lease_position = heartbeat.index(
+            "only when exactly one legal external route is ready"
+        )
+        self.assertLess(steering_position, lease_position)
+        self.assertIn("not the first action of the wake", heartbeat)
         self.assertIn("WAITING_CONTROLLER_LEASE", heartbeat)
         self.assertIn("ROADMAP_AUDIT", heartbeat)
         self.assertIn("full lease_claim", heartbeat)
@@ -680,11 +733,11 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertTrue(formal_role_blocks)
         for block in formal_role_blocks:
             self.assertIn(
-                "This real project task must perform its assigned State-Writer, Worker, Reviewer, or Local Verifier work directly",
+                "Formal Role Delegation Boundary: perform this role directly",
                 block,
             )
             self.assertIn("Never call any subagent/collaboration spawn tool", block)
-            self.assertIn("Only the Controller may use", block)
+            self.assertIn("Only Controller may use", block)
 
     def test_pack_uses_fenced_lease_and_versioned_goal_queue(self) -> None:
         self.assertIn("monotonically increasing lease_epoch", self.pack)
@@ -719,9 +772,14 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             self.pack,
         )
         self.assertIn("changed_files are repo-relative POSIX paths", self.pack)
-        self.assertIn("report_digest set to the literal PENDING_CONTROLLER_ARCHIVE", self.pack)
-        self.assertIn("REPORT_ARTIFACT_UNBOUND", self.pack)
-        self.assertIn("archived `application/json` report artifact", self.pack)
+        self.assertIn(
+            "source_artifact_digest is exactly the literal sha256: prefix followed by after_snapshot_sha256",
+            self.pack,
+        )
+        self.assertNotIn("sha256:<after_snapshot_sha256>", self.pack)
+        self.assertIn("report_digest=PENDING_CONTROLLER_ARCHIVE", self.pack)
+        self.assertIn("Formal report artifacts are never inline", self.pack)
+        self.assertIn("bind status, report_digest, artifact_digest, and one JSON report", self.pack)
         self.assertIn("reusing only an epoch or lease id is invalid", self.pack)
         self.assertIn("dispatch_id + exact payload_digest + target_thread_id + immutable Goal definition digest", self.pack)
         self.assertIn(
@@ -736,14 +794,26 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertIn("fresh lease for every", self.pack)
         self.assertIn("complete Goal definition registry and execution ledger", self.pack)
         self.assertIn("safe in-repo scope with no `..` or `.codex-loop`", self.pack)
-        self.assertIn("Every returned Goal status, including complete", self.pack)
+        self.assertIn("before accepting any native status", self.pack)
         self.assertIn("COMPLETE_CURRENT_CONTROLLER_GOAL", self.pack)
         self.assertIn(
             "Controller Goal is missing, non-active, or bound to another milestone",
             self.pack,
         )
         self.assertIn(
-            "completed assurance outboxes and the assurance ledger are a one-to-one invariant",
+            "RECORD_REVIEW has zero artifacts and reuses only its canonical ACK report",
+            self.pack,
+        )
+        self.assertIn(
+            "zero-artifact RECORD_REVIEW from its ACK path",
+            self.pack,
+        )
+        self.assertIn(
+            "Payloads use context_state_digest freshness",
+            self.pack,
+        )
+        self.assertIn(
+            "Worker PASS ACK projects artifact_identity/evidence_refs to latest_worker.review_handoff",
             self.pack,
         )
 
@@ -761,7 +831,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             "Every routing turn starts with exactly one ACQUIRE_LEASE mutation",
             "Worker task creation uses one complete lease cycle",
             "Heartbeat creation uses a fresh complete lease cycle",
-            "Controller Goal creation uses another fresh complete lease cycle",
+            "Goal creation uses a fresh GOAL-outbox lease",
             "First Goal dispatch uses a fourth fresh complete lease cycle",
         )
         positions = [startup.index(marker) for marker in ordered]
@@ -918,11 +988,21 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             self.pack,
         )
         self.assertIn("Never mark the remaining queue complete in bulk", self.pack)
-        self.assertIn("latest durably COMPLETED/PASS dispatch", self.pack)
+        self.assertIn("latest durably COMPLETED/PASS Worker identity", self.pack)
         self.assertIn("assurance_dispatch_outbox PREPARED", self.pack)
         self.assertIn("Worker, assurance, or Local Verifier outbox", self.pack)
         self.assertIn("REVIEW_ARTIFACT_UNAVAILABLE closes the outbox as a non-PASS blocker", self.pack)
         self.assertIn("one bounded repair authorization ledger", self.pack)
+        self.assertIn(
+            "Every Worker PASS report includes one structured complete_diff_reference",
+            self.pack,
+        )
+        self.assertIn("MANIFEST_DELTA_V1", self.pack)
+        self.assertIn("latest_worker.review_handoff", self.pack)
+        self.assertIn(
+            "The review payload copies artifact_identity/evidence_refs exactly",
+            self.pack,
+        )
 
     def test_pack_handles_current_queued_task_identity_and_separate_goal_budget(self) -> None:
         self.assertIn("pendingWorktreeId or clientThreadId", self.pack)
@@ -948,6 +1028,22 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         )
         self.assertIn("PREPARE_OUTBOX(kind=GOAL, action=CREATE)", self.pack)
         self.assertIn("marker alone is untrusted", self.pack)
+
+    def test_pack_identity_attestation_precedes_every_child_creation(self) -> None:
+        self.assertIn("PACK_IDENTITY_ATTESTATION", self.pack)
+        self.assertIn("PACK_IDENTITY_ATTESTATION_REQUIRED", self.pack)
+        self.assertIn("CONTROLLER_PACK_TRANSPORT_IDENTITY_UNRESOLVED", self.pack)
+        self.assertIn(
+            "Never derive PACK_SHA256 from codex_delegation.input",
+            self.pack,
+        )
+        self.assertIn("zero child-task, Goal, heartbeat, or state side effects", self.pack)
+        self.assertIn("`source_path` set to the frozen root-confined local Pack file", self.pack)
+        self.assertIn("never transport the Pack as inline `content`, Base64", self.pack)
+
+        guide = scaffold.render_user_guide(self.payload, "/tmp/adaptive-pack.md")
+        self.assertIn("PACK_IDENTITY_ATTESTATION", guide)
+        self.assertIn("禁止 hash/decode `codex_delegation`", guide)
 
     def test_pack_has_tagged_review_union_and_one_operation_enum(self) -> None:
         reviewer = self.pack.split("### Worker Prompt - reviewer", 1)[1].split(
@@ -975,6 +1071,141 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertIn("Only on the next dedicated Goal turn may STOP_LOOP", self.pack)
         self.assertIn("Never manufacture wakeups or backfill an observation", self.pack)
         self.assertIn("never use ROADMAP_REVISION as a terminal shortcut", self.pack)
+
+    def test_pending_decision_pauses_heartbeat_without_blocking_native_goal(self) -> None:
+        self.assertIn(
+            "When REGISTER_DECISION returns WAIT_DECISION, pause the exact heartbeat",
+            self.pack,
+        )
+        self.assertIn(
+            "A pending human Decision is expected waiting, not a hard blocker",
+            self.pack,
+        )
+        self.assertIn(
+            "never call update_goal(status=blocked) unless STOP_LOOP_APPLIED",
+            self.pack,
+        )
+        self.assertIn(
+            "Resume the heartbeat only after a real matching DECISION_RESPONSE is durably applied",
+            self.pack,
+        )
+
+    def test_native_goal_loss_stops_before_route_or_finalization(self) -> None:
+        self.assertIn("NATIVE_CONTROLLER_GOAL_IDENTITY_LOST", self.pack)
+        self.assertIn(
+            "do not create, emulate, or recreate a Goal, and send nothing",
+            self.pack,
+        )
+        self.assertIn(
+            "Canonical native Goal is ACTIVE but `get_goal` returns `goal:null`",
+            self.pack,
+        )
+
+    def test_same_identity_blocked_goal_uses_evidence_bound_logical_resume(self) -> None:
+        self.assertIn("RECORD_CONTROLLER_GOAL_RESUME", self.pack)
+        self.assertIn("SAME_GOAL_RESUME", self.pack)
+        self.assertIn(
+            "receipt changes no Goal/outbox and never implies ACTIVE",
+            self.pack,
+        )
+        self.assertIn("immutable archived JSON send evidence", self.pack)
+
+    def test_transient_task_read_timeout_never_blocks_native_goal(self) -> None:
+        self.assertIn(
+            "A task read, indexing, message-send, or transport timeout while a PREPARED/SENT outbox",
+            self.pack,
+        )
+        self.assertIn(
+            "never a hard-block observation and never grounds for update_goal(status=blocked)",
+            self.pack,
+        )
+        self.assertIn(
+            "count timeout turns as hard-block observations, call `update_goal(status=blocked)`",
+            self.pack,
+        )
+
+    def test_native_goal_adapter_policy_and_closeout_capability_are_explicit(self) -> None:
+        self.assertIn("native_goal_policy: required", self.pack)
+        self.assertIn("Include native_goal_policy=required", self.pack)
+        self.assertIn(
+            "Only the one-use exact closeout capability returned by FINALIZE_LOOP_APPLIED",
+            self.pack,
+        )
+        self.assertIn(
+            "Only its returned one-use exact closeout capability may authorize `update_goal(status=\"blocked\")`",
+            self.pack,
+        )
+        self.assertIn("CORE_FINALIZATION_ACKED", self.pack)
+        self.assertIn("FINALIZATION_PENDING_EXTERNAL_SYNC", self.pack)
+        self.assertIn(
+            "Report completion only after exact FINALIZATION_ACKED",
+            self.pack,
+        )
+
+    def test_disabled_and_advisory_goal_policies_use_only_emulated_control_plane(self) -> None:
+        for policy in ("disabled", "advisory"):
+            payload = adaptive_payload()
+            payload["native_goal_policy"] = policy
+            pack = scaffold.render_controller_pack(payload, "compact")
+            self.assertIn(f"native_goal_policy: {policy}", pack)
+            self.assertIn(
+                f"With native_goal_policy={policy}",
+                pack,
+            )
+            self.assertIn(
+                "disabled/advisory direct-ACK the exact PREPARED GOAL outbox as EMULATED",
+                pack,
+            )
+
+    def test_formal_reports_use_runtime_managed_staging(self) -> None:
+        self.assertIn(
+            "adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage",
+            self.pack,
+        )
+        self.assertIn("FORMAL_REPORT_STAGED", self.pack)
+        self.assertIn(".codex-loop/report-staging/", self.pack)
+        self.assertIn(
+            "Before any final answer crosses App transport",
+            self.pack,
+        )
+        self.assertIn(
+            "Controller never reads, copies, parses, or transports REPORT bytes",
+            self.pack,
+        )
+        self.assertIn("Never accept a Controller-written staging file", self.pack)
+        self.assertIn("product/review artifacts: read-only", self.pack)
+        self.assertIn("RUNTIME-ONLY: installed --report-stage may write", self.pack)
+        self.assertIn("EXCLUDE all other control-plane paths", self.pack)
+        self.assertIn(
+            "terminal state allows only ACK_FINALIZATION, so do not prepare a GOAL UPDATE",
+            self.pack,
+        )
+
+    def test_payload_verify_retry_and_report_restage_never_reexecute(self) -> None:
+        self.assertIn("PAYLOAD_VERIFICATION_RETRY_REQUIRED", self.pack)
+        self.assertIn(
+            "same target/task/dispatch/payload identity",
+            self.pack,
+        )
+        self.assertIn("`execution_started=false`", self.pack)
+        self.assertIn(
+            "Product work completed but report staging/archive failed",
+            self.pack,
+        )
+        self.assertIn(
+            "re-execute product work or MARK_OUTBOX_SENT again",
+            self.pack,
+        )
+
+    def test_payload_verification_is_semantic_but_entity_strict(self) -> None:
+        self.assertIn(
+            "normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization",
+            self.pack,
+        )
+        self.assertIn(
+            "Entity substitution or any field/value change still fails",
+            self.pack,
+        )
 
     def test_goals_and_dashboard_are_state_writer_owned(self) -> None:
         self.assertIn("/tmp/example-repo/.codex-loop/GOALS.md", self.pack)

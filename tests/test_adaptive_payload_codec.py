@@ -52,7 +52,10 @@ class AdaptivePayloadCodecTests(unittest.TestCase):
                     "state_version": 41,
                 },
                 "code_review_id": None,
-                "decision_contract": {"allowed": ["REVIEW_PASS"]},
+                "decision_contract": {
+                    "allowed": ["REVIEW_PASS"],
+                    "transport_probe": "<tag>&中文 &lt;literal",
+                },
                 "dispatch_lease_claim": claim,
                 "dispatch_payload_digest": PAYLOAD_DIGEST_PLACEHOLDER,
                 "evidence_refs": [".codex-loop/reports/worker.json"],
@@ -74,8 +77,12 @@ class AdaptivePayloadCodecTests(unittest.TestCase):
         result = materialize_dispatch_payload(self.specification())
         self.assertEqual(result["status"], "PAYLOAD_MATERIALIZED")
         self.assertFalse(result["transport_text"].endswith("\n"))
+        self.assertNotIn("<", result["transport_text"])
+        self.assertNotIn(">", result["transport_text"])
+        self.assertNotIn("&", result["transport_text"])
         verified = verify_dispatch_payload(result["transport_text"])
         self.assertEqual(verified["status"], "PAYLOAD_BYTES_VERIFIED")
+        self.assertEqual(verified["verification_mode"], "STRICT_SEMANTIC_CANONICAL_V1")
         self.assertEqual(verified["payload_digest"], result["payload_digest"])
         self.assertEqual(
             verified["canonical_byte_count"], result["canonical_byte_count"]
@@ -95,13 +102,22 @@ class AdaptivePayloadCodecTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeRejection, "DISPATCH_PAYLOAD_DIGEST_MISMATCH"):
             verify_dispatch_payload(malformed)
 
-    def test_noncanonical_transport_and_duplicate_keys_are_rejected(self) -> None:
+    def test_limited_line_ending_normalization_and_duplicate_key_rejection(self) -> None:
         result = materialize_dispatch_payload(self.specification())
         transport = result["transport_text"]
-        with self.assertRaisesRegex(RuntimeRejection, "DISPATCH_PAYLOAD_NONCANONICAL"):
-            verify_dispatch_payload(transport + "\n")
-        with self.assertRaisesRegex(RuntimeRejection, "DISPATCH_PAYLOAD_NONCANONICAL"):
-            verify_dispatch_payload(transport.replace("\n", "\r\n", 1))
+        for variant in (
+            transport + "\n",
+            transport.replace("\n", "\r\n", 1),
+            transport.replace("\n", "\r\n", 1) + "\r\n",
+        ):
+            verified = verify_dispatch_payload(variant)
+            self.assertEqual(verified["payload_digest"], result["payload_digest"])
+            self.assertTrue(verified["transport_normalized"])
+        for malformed in (transport + "\n\n", transport.replace("\n", "\r", 1)):
+            with self.assertRaisesRegex(
+                RuntimeRejection, "DISPATCH_PAYLOAD_NONCANONICAL"
+            ):
+                verify_dispatch_payload(malformed)
         duplicate = (
             'REVIEW_DISPATCH\n{"dispatch_payload_digest":"sha256:'
             + "0" * 64
@@ -111,6 +127,36 @@ class AdaptivePayloadCodecTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeRejection, "DISPATCH_PAYLOAD_JSON_INVALID"):
             verify_dispatch_payload(duplicate)
+
+    def test_transport_safe_escapes_preserve_semantics_and_entities_do_not(self) -> None:
+        result = materialize_dispatch_payload(self.specification())
+        transport = result["transport_text"]
+        self.assertIn("\\u003ctag\\u003e\\u0026", transport)
+        self.assertIn("\\u4e2d\\u6587", transport)
+        self.assertIn("\\u0026lt;literal", transport)
+        self.assertEqual(
+            verify_dispatch_payload(transport)["payload_digest"],
+            result["payload_digest"],
+        )
+
+        envelope, payload_text = transport.split("\n", 1)
+        payload = json.loads(payload_text)
+        legacy_literal = envelope + "\n" + json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self.assertEqual(
+            verify_dispatch_payload(legacy_literal)["payload_digest"],
+            result["payload_digest"],
+        )
+
+        entity_changed = transport.replace("\\u003c", "&lt;", 1)
+        with self.assertRaisesRegex(
+            RuntimeRejection, "DISPATCH_PAYLOAD_DIGEST_MISMATCH"
+        ):
+            verify_dispatch_payload(entity_changed)
 
     def test_materializer_requires_exact_placeholder_and_closed_input(self) -> None:
         wrong = self.specification()

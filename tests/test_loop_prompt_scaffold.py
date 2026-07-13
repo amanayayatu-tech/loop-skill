@@ -1322,9 +1322,9 @@ class CliTests(unittest.TestCase):
 class ExampleFixtureTests(unittest.TestCase):
     def test_standard_fixture_hashes_are_stable(self) -> None:
         expected = {
-            "01-passkey-login-controller-pack.md": "ade35bce4bd26f30d4dbf2c02e724fdb8556b7534f107271aa0208b595755590",
+            "01-passkey-login-controller-pack.md": "b8ea8ed56d6fef4689e83fb5fd7ab8dfb033ad881910b48b000372e2e3b6da5e",
             "01-passkey-login-usage.md": "d8e38f4680a47aed114adf3ddfa20ba9534be7dbfc03fd6a770b345b118f81e4",
-            "02-daily-ci-triage-controller-pack.md": "3eeca66128bc02c6a24761526097bbb04d20fa6dd1a848598195e8d959598072",
+            "02-daily-ci-triage-controller-pack.md": "42e264a0ef54812c73935d0d9c039a12805e7168365748f24474b10cf263445e",
             "02-daily-ci-triage-usage.md": "cea1c0a82898712685aac818ef3862fe0cbda444967a7e0313592b77ac2eb73a",
         }
         for name, expected_digest in expected.items():

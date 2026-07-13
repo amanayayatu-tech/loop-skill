@@ -16,16 +16,38 @@ import importlib
 import json
 import os
 import re
+import stat
 import threading
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Mapping
+
+from .human_control import (
+    VALIDATION_DIMENSIONS,
+    canonical_digest,
+    classify_failure_progress,
+    render_decision_card,
+    validate_review_surface,
+)
+
+DEFAULT_HUMAN_CONTROL_POLICY = {
+    "human_steering_enabled": True,
+    "status_projection_enabled": True,
+    "decision_cards_enabled": True,
+    "failure_fingerprint_enabled": True,
+    "context_freshness_required": True,
+    "review_evidence_policy": "deterministic_first",
+}
+
+CURRENT_STATUS_RENDER_CONTRACT = "status-v2"
+LEGACY_STATUS_RENDER_CONTRACT = "status-v1"
 
 
 STATE_BEGIN = "STATE_JSON_BEGIN"
 STATE_END = "STATE_JSON_END"
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 DIGEST_RE = re.compile(r"sha256:[a-f0-9]{64}\Z")
+SHA256_HEX_RE = re.compile(r"[a-f0-9]{64}\Z")
 INTENDED_TRANSITION = "ROUTE_ONE_TRANSITION"
 PAYLOAD_DIGEST_FIELD = "dispatch_payload_digest"
 PAYLOAD_DIGEST_PLACEHOLDER = "PAYLOAD_DIGEST_PLACEHOLDER"
@@ -69,6 +91,9 @@ DISPATCH_PAYLOAD_KEYS = {
         "target_branch",
         "target_thread_id",
         "validation_commands",
+        "validation_matrix",
+        "review_surface",
+        "context_freshness_snapshot",
         "worker_permission",
         "worker_role",
         "worker_role_kind",
@@ -128,6 +153,26 @@ PHASE_PERMISSION_FIELDS = (
     "gitignore_hygiene",
     "external_write",
 )
+MAX_ARTIFACT_CONTENT_SIZE = 4_000_000
+
+V2_ONLY_MUTATIONS = {
+    "RECORD_STEERING",
+    "RESOLVE_STEERING",
+    "SET_RUN_CONTROL",
+    "REGISTER_DECISION",
+    "RECORD_DECISION_RESPONSE",
+    "RECORD_FAILURE",
+    "RECORD_VALIDATION",
+    "RECORD_CONTEXT_FRESHNESS",
+    "RECORD_CONTROLLER_GOAL_RESUME",
+}
+
+PAUSE_BLOCKED_ROUTING_MUTATIONS = {
+    "ACQUIRE_LEASE",
+    "PREPARE_OUTBOX",
+    "ROADMAP_REVISION",
+    "FINALIZE_LOOP",
+}
 
 BOOTSTRAP_ROLE_TO_FORMAL_ROLE = {
     "implementation": "WORKER",
@@ -169,6 +214,14 @@ REVIEW_DECISIONS = {
 CODE_REVIEW_PASS = {"REVIEW_PASS", "REVIEW_PASS_WITH_LIMITATION"}
 ROADMAP_REVISION_PASS = {"ROADMAP_AUDIT_PASS"}
 FINAL_PASS = {"FINAL_REVIEW_PASS", "FINAL_REVIEW_PASS_WITH_LIMITATION"}
+DECISION_EFFECT_CAPABILITY = {
+    "CREATE_DRAFT_PR": "pr_create",
+    "WAIT": "none",
+    "RETURN_FOR_REPAIR": "none",
+    "CONTINUE": "none",
+    "APPLY_ROADMAP_REVISION": "none",
+    "REVIEW_SURFACE_ACCEPTED": "none",
+}
 ROADMAP_OPERATION_TYPES = {
     "ADD_MILESTONE",
     "UPDATE_MILESTONE",
@@ -214,7 +267,15 @@ ARTIFACT_STAGES = (
     "ARTIFACT_REPLACED",
     "ARTIFACT_DIR_FSYNCED",
 )
-CRASH_STAGES = PERSISTENT_STAGES + ARTIFACT_STAGES
+STATUS_PROJECTION_STAGES = (
+    "STATUS_JOURNAL_TEMP_FSYNCED",
+    "STATUS_JOURNAL_REPLACED",
+    "STATUS_JOURNAL_DIR_FSYNCED",
+    "STATUS_TEMP_FSYNCED",
+    "STATUS_REPLACED",
+    "STATUS_DIR_FSYNCED",
+)
+CRASH_STAGES = PERSISTENT_STAGES + ARTIFACT_STAGES + STATUS_PROJECTION_STAGES
 
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
 _PROCESS_LOCKS_GUARD = threading.Lock()
@@ -263,6 +324,35 @@ def _digest(value: Any) -> str:
 
 def _bytes_digest(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _closeout_capability(
+    *,
+    loop_id: str,
+    controller_pack_digest: str,
+    finalization_id: str,
+    finalized_state_version: int,
+    controller_goal_id: str,
+    controller_goal_target_status: str,
+    automation_id: str,
+    native_goal_policy: str,
+) -> str:
+    """Derive the exact capability authorizing the terminal adapter actions."""
+
+    return _digest(
+        {
+            "capability_kind": "FINALIZATION_CLOSEOUT_V1",
+            "loop_id": loop_id,
+            "controller_pack_digest": controller_pack_digest,
+            "finalization_id": finalization_id,
+            "finalized_state_version": finalized_state_version,
+            "controller_goal_id": controller_goal_id,
+            "controller_goal_target_status": controller_goal_target_status,
+            "automation_id": automation_id,
+            "automation_target_status": "PAUSED",
+            "native_goal_policy": native_goal_policy,
+        }
+    )
 
 
 def _goal_definition_digest(definition: Mapping[str, Any]) -> str:
@@ -348,6 +438,33 @@ def _dispatch_payload_text(envelope_type: str, payload: Mapping[str, Any]) -> st
     return f"{envelope_type}\n{body}"
 
 
+def _dispatch_transport_text(envelope_type: str, payload: Mapping[str, Any]) -> str:
+    """Render an App-transport-safe JSON envelope without changing semantics."""
+
+    if envelope_type not in DISPATCH_ENVELOPE_TYPES:
+        raise RuntimeRejection(
+            "DISPATCH_ENVELOPE_TYPE_INVALID",
+            "/envelope_type",
+            {"allowed": list(DISPATCH_ENVELOPE_TYPES)},
+        )
+    try:
+        body = json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeRejection(
+            "DISPATCH_PAYLOAD_JSON_INVALID",
+            "/payload",
+            {"error_type": type(exc).__name__},
+        ) from exc
+    body = body.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    return f"{envelope_type}\n{body}"
+
+
 def _dispatch_payload_rejection(code: str, field: str, details: Any = None) -> None:
     raise RuntimeRejection(code, f"/payload/{field}", details)
 
@@ -382,12 +499,18 @@ def _validate_dispatch_payload_shape(envelope_type: str, payload: Mapping[str, A
             "/envelope_type",
             {"allowed": list(DISPATCH_ENVELOPE_TYPES)},
         )
-    if set(payload) != required:
+    compatibility_optional = (
+        {"validation_matrix", "review_surface", "context_freshness_snapshot"}
+        if envelope_type == "WORKER_DISPATCH"
+        else set()
+    )
+    minimum = required - compatibility_optional
+    if not minimum.issubset(payload) or not set(payload).issubset(required):
         raise RuntimeRejection(
             "DISPATCH_PAYLOAD_SCHEMA_INVALID",
             "/payload",
             {
-                "missing": sorted(required.difference(payload)),
+                "missing": sorted(minimum.difference(payload)),
                 "unexpected": sorted(set(payload).difference(required)),
             },
         )
@@ -494,6 +617,58 @@ def _validate_dispatch_payload_shape(envelope_type: str, payload: Mapping[str, A
             _dispatch_payload_rejection("DISPATCH_PAYLOAD_FIELD_INVALID", "worker_role_kind")
         if payload["repo_mode"] not in {"existing_git", "new_git", "non_git"}:
             _dispatch_payload_rejection("DISPATCH_PAYLOAD_FIELD_INVALID", "repo_mode")
+        validation_matrix = payload.get("validation_matrix")
+        if validation_matrix is not None:
+            if (
+                not isinstance(validation_matrix, dict)
+                or set(validation_matrix) != set(VALIDATION_DIMENSIONS)
+            ):
+                _dispatch_payload_rejection(
+                    "DISPATCH_VALIDATION_MATRIX_INVALID", "validation_matrix"
+                )
+            for dimension, rule in validation_matrix.items():
+                if (
+                    not isinstance(rule, dict)
+                    or not isinstance(rule.get("required"), bool)
+                    or set(rule) - {"required", "evidence", "reason"}
+                ):
+                    _dispatch_payload_rejection(
+                        "DISPATCH_VALIDATION_MATRIX_INVALID",
+                        f"validation_matrix/{dimension}",
+                    )
+                if rule["required"] and (
+                    not isinstance(rule.get("evidence"), list)
+                    or not rule["evidence"]
+                    or any(
+                        not isinstance(item, str) or not item
+                        for item in rule["evidence"]
+                    )
+                ):
+                    _dispatch_payload_rejection(
+                        "DISPATCH_VALIDATION_MATRIX_INVALID",
+                        f"validation_matrix/{dimension}/evidence",
+                    )
+                if not rule["required"] and not (
+                    isinstance(rule.get("reason"), str) and rule["reason"]
+                ):
+                    _dispatch_payload_rejection(
+                        "DISPATCH_VALIDATION_MATRIX_INVALID",
+                        f"validation_matrix/{dimension}/reason",
+                    )
+        review_surface = payload.get("review_surface")
+        if review_surface is not None and not isinstance(review_surface, dict):
+            _dispatch_payload_rejection(
+                "DISPATCH_REVIEW_SURFACE_INVALID", "review_surface"
+            )
+        freshness_snapshot = payload.get("context_freshness_snapshot")
+        if freshness_snapshot is not None and (
+            not isinstance(freshness_snapshot, str)
+            or DIGEST_RE.fullmatch(freshness_snapshot) is None
+        ):
+            _dispatch_payload_rejection(
+                "DISPATCH_FRESHNESS_SNAPSHOT_INVALID",
+                "context_freshness_snapshot",
+            )
         permissions = payload["phase_permissions"]
         if (
             not isinstance(permissions, dict)
@@ -625,7 +800,7 @@ def materialize_dispatch_payload(specification: Any) -> dict[str, Any]:
     payload_digest = _bytes_digest(canonical_text.encode("utf-8"))
     materialized_payload = copy.deepcopy(canonical_payload)
     materialized_payload[PAYLOAD_DIGEST_FIELD] = payload_digest
-    transport_text = _dispatch_payload_text(envelope_type, materialized_payload)
+    transport_text = _dispatch_transport_text(envelope_type, materialized_payload)
     return {
         "ok": True,
         "status": "PAYLOAD_MATERIALIZED",
@@ -633,6 +808,7 @@ def materialize_dispatch_payload(specification: Any) -> dict[str, Any]:
         "payload_digest": payload_digest,
         "canonical_byte_count": len(canonical_text.encode("utf-8")),
         "transport_byte_count": len(transport_text.encode("utf-8")),
+        "transport_encoding": "APP_SAFE_JSON_V1",
         "transport_text": transport_text,
         "external_actions": [],
         "external_action_count": 0,
@@ -640,23 +816,32 @@ def materialize_dispatch_payload(specification: Any) -> dict[str, Any]:
 
 
 def verify_dispatch_payload(transport_text: Any) -> dict[str, Any]:
-    """Verify canonical dispatch bytes and digest without consulting loop state."""
+    """Verify canonical dispatch semantics and digest without consulting loop state."""
 
     if not isinstance(transport_text, str) or not transport_text:
         raise RuntimeRejection("DISPATCH_PAYLOAD_TEXT_INVALID", "/")
-    if "\r" in transport_text or transport_text.endswith("\n"):
+    normalized_transport = transport_text.replace("\r\n", "\n")
+    if "\r" in normalized_transport:
         raise RuntimeRejection(
             "DISPATCH_PAYLOAD_NONCANONICAL",
             "/",
-            {"reason": "LF_ONLY_WITH_NO_TRAILING_NEWLINE_REQUIRED"},
+            {"reason": "LONE_CR_NOT_ALLOWED"},
         )
-    if "\n" not in transport_text:
+    if normalized_transport.endswith("\n"):
+        normalized_transport = normalized_transport[:-1]
+        if normalized_transport.endswith("\n"):
+            raise RuntimeRejection(
+                "DISPATCH_PAYLOAD_NONCANONICAL",
+                "/",
+                {"reason": "AT_MOST_ONE_TRAILING_NEWLINE_ALLOWED"},
+            )
+    if "\n" not in normalized_transport:
         raise RuntimeRejection(
             "DISPATCH_PAYLOAD_TEXT_INVALID",
             "/",
             {"reason": "MISSING_ENVELOPE_SEPARATOR"},
         )
-    envelope_type, payload_text = transport_text.split("\n", 1)
+    envelope_type, payload_text = normalized_transport.split("\n", 1)
     payload = _strict_json_loads(
         payload_text,
         code="DISPATCH_PAYLOAD_JSON_INVALID",
@@ -670,12 +855,6 @@ def verify_dispatch_payload(transport_text: Any) -> dict[str, Any]:
         raise RuntimeRejection(
             "DISPATCH_PAYLOAD_DIGEST_INVALID",
             f"/payload/{PAYLOAD_DIGEST_FIELD}",
-        )
-    if _dispatch_payload_text(envelope_type, payload) != transport_text:
-        raise RuntimeRejection(
-            "DISPATCH_PAYLOAD_NONCANONICAL",
-            "/payload",
-            {"reason": "SORTED_COMPACT_UTF8_JSON_REQUIRED"},
         )
     canonical_payload = copy.deepcopy(payload)
     canonical_payload[PAYLOAD_DIGEST_FIELD] = PAYLOAD_DIGEST_PLACEHOLDER
@@ -694,6 +873,9 @@ def verify_dispatch_payload(transport_text: Any) -> dict[str, Any]:
         "payload_digest": actual_digest,
         "canonical_byte_count": len(canonical_text.encode("utf-8")),
         "transport_byte_count": len(transport_text.encode("utf-8")),
+        "normalized_transport_byte_count": len(normalized_transport.encode("utf-8")),
+        "transport_normalized": normalized_transport != transport_text,
+        "verification_mode": "STRICT_SEMANTIC_CANONICAL_V1",
         "external_actions": [],
         "external_action_count": 0,
     }
@@ -727,7 +909,10 @@ def verify_dispatch_payload_against_state(
     """Verify dispatch bytes plus the exact canonical SENT outbox identity."""
 
     byte_result = verify_dispatch_payload(transport_text)
-    envelope_type, payload_text = transport_text.split("\n", 1)
+    normalized_transport = transport_text.replace("\r\n", "\n")
+    if normalized_transport.endswith("\n"):
+        normalized_transport = normalized_transport[:-1]
+    envelope_type, payload_text = normalized_transport.split("\n", 1)
     payload = _strict_json_loads(
         payload_text,
         code="DISPATCH_PAYLOAD_JSON_INVALID",
@@ -827,6 +1012,7 @@ def verify_dispatch_payload_against_state(
             "target_thread_id": payload["target_thread_id"],
             "worker_role_kind": payload["worker_role_kind"],
         }
+        v32_enabled = state.get("schema_version") == 2
         if (
             identity != expected
             or definition is None
@@ -838,6 +1024,93 @@ def verify_dispatch_payload_against_state(
             raise RuntimeRejection(
                 "DISPATCH_GOAL_IDENTITY_MISMATCH", "/payload/goal_id"
             )
+        if v32_enabled:
+            if (
+                "validation_matrix" in definition
+                and payload.get("validation_matrix") != definition["validation_matrix"]
+            ):
+                raise RuntimeRejection(
+                    "DISPATCH_VALIDATION_MATRIX_MISMATCH",
+                    "/payload/validation_matrix",
+                )
+            if payload.get("review_surface") != definition.get("review_surface"):
+                raise RuntimeRejection(
+                    "DISPATCH_REVIEW_SURFACE_MISMATCH",
+                    "/payload/review_surface",
+                )
+            if isinstance(payload.get("review_surface"), dict):
+                try:
+                    validate_review_surface(
+                        payload["review_surface"],
+                        definition["allowed_write_scope"],
+                        root,
+                    )
+                except ValueError as exc:
+                    raise RuntimeRejection(
+                        "DISPATCH_REVIEW_SURFACE_INVALID",
+                        "/payload/review_surface",
+                        {"reason": str(exc)},
+                    ) from exc
+            parent_dispatch_id = payload.get("parent_dispatch_id")
+            if parent_dispatch_id is None:
+                freshness_checkpoint = "GOAL_DISPATCH"
+                freshness_dispatch_id = None
+                freshness_artifact_digest = None
+            else:
+                parent_dispatch = state["dispatch_outbox"].get(parent_dispatch_id)
+                parent_result = (
+                    parent_dispatch.get("result")
+                    if isinstance(parent_dispatch, dict)
+                    else None
+                )
+                latest_worker = state["goal_execution_ledger"].get(
+                    payload["goal_id"], {}
+                ).get("latest_worker")
+                if (
+                    not isinstance(parent_dispatch, dict)
+                    or parent_dispatch.get("status") != "COMPLETED"
+                    or parent_dispatch.get("identity", {}).get("goal_id")
+                    != payload["goal_id"]
+                    or not isinstance(parent_result, dict)
+                    or not isinstance(parent_result.get("artifact_digest"), str)
+                    or not isinstance(latest_worker, dict)
+                    or latest_worker.get("dispatch_id") != parent_dispatch_id
+                    or latest_worker.get("artifact_digest")
+                    != parent_result.get("artifact_digest")
+                ):
+                    raise RuntimeRejection(
+                        "DISPATCH_PARENT_IDENTITY_MISMATCH",
+                        "/payload/parent_dispatch_id",
+                    )
+                freshness_checkpoint = "REPAIR"
+                freshness_dispatch_id = parent_dispatch_id
+                freshness_artifact_digest = parent_result["artifact_digest"]
+            current_context_digest = runtime._freshness_context_digest(
+                state, payload["goal_id"], freshness_dispatch_id
+            )
+            applicable_freshness = [
+                item
+                for item in state["context_freshness_ledger"]
+                if item["checkpoint"] == freshness_checkpoint
+                and item["goal_id"] == payload["goal_id"]
+                and item.get("dispatch_id") == freshness_dispatch_id
+                and item.get("artifact_digest") == freshness_artifact_digest
+            ]
+            latest_freshness = (
+                applicable_freshness[-1] if applicable_freshness else None
+            )
+            if (
+                latest_freshness is None
+                or latest_freshness["classification"]
+                not in {"FRESH", "CHANGED_IRRELEVANT", "RELOAD_SAFE"}
+                or latest_freshness["context_state_digest"] != current_context_digest
+                or payload.get("context_freshness_snapshot")
+                != latest_freshness["context_state_digest"]
+            ):
+                raise RuntimeRejection(
+                    "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+                    "/payload/context_freshness_snapshot",
+                )
     elif envelope_type == "REVIEW_DISPATCH":
         expected = {
             "review_dispatch_id": payload["review_dispatch_id"],
@@ -859,6 +1132,51 @@ def verify_dispatch_payload_against_state(
             raise RuntimeRejection(
                 "DISPATCH_REVIEW_IDENTITY_MISMATCH", "/payload"
             )
+        if payload["review_kind"] == "CODE_REVIEW":
+            worker = state["goal_execution_ledger"].get(
+                payload["goal_id"], {}
+            ).get("latest_worker")
+            handoff = (
+                worker.get("review_handoff")
+                if isinstance(worker, dict)
+                else None
+            )
+            if not isinstance(handoff, dict):
+                raise RuntimeRejection(
+                    "WORKER_REVIEW_HANDOFF_MISSING",
+                    f"/goal_execution_ledger/{payload['goal_id']}/latest_worker",
+                )
+            expected_handoff = {
+                "artifact_identity": payload["artifact_identity"],
+                "evidence_refs": payload["evidence_refs"],
+                "projection_digest": handoff.get("projection_digest"),
+            }
+            if (
+                payload["artifact_identity"] != handoff.get("artifact_identity")
+                or payload["evidence_refs"] != handoff.get("evidence_refs")
+                or canonical_digest(
+                    {
+                        "artifact_identity": handoff.get("artifact_identity"),
+                        "evidence_refs": handoff.get("evidence_refs"),
+                    }
+                )
+                != handoff.get("projection_digest")
+            ):
+                raise RuntimeRejection(
+                    "DISPATCH_REVIEW_HANDOFF_MISMATCH",
+                    "/payload/artifact_identity",
+                )
+            projected_report = copy.deepcopy(handoff["artifact_identity"])
+            projected_report["evidence_artifacts"] = copy.deepcopy(
+                handoff["evidence_refs"]
+            )
+            if runtime._validate_worker_review_handoff(
+                state, projected_report
+            ) != expected_handoff:
+                raise RuntimeRejection(
+                    "DISPATCH_REVIEW_HANDOFF_MISMATCH",
+                    "/payload/artifact_identity",
+                )
     else:
         expected = {
             "local_dispatch_id": payload["local_dispatch_id"],
@@ -927,9 +1245,12 @@ class AdaptiveStateRuntime:
         self.events_path = self.control_dir / "LOOP_EVENTS.jsonl"
         self.goals_path = self.control_dir / "GOALS.md"
         self.dashboard_path = self.control_dir / "progress-dashboard.html"
+        self.status_path = self.control_dir / "STATUS.md"
+        self.projection_transactions_dir = self.control_dir / "projection-transactions"
         self.transactions_dir = self.control_dir / "transactions"
         self.reports_dir = self.control_dir / "reports"
         self.sources_dir = self.control_dir / "sources"
+        self.report_staging_dir = self.control_dir / "report-staging"
         # Lock the stable project-root inode. A lock file that is deleted during
         # virgin-layout cleanup can split writers across old and new inodes.
         self.lock_path = self.root
@@ -975,7 +1296,13 @@ class AdaptiveStateRuntime:
                     self.control_dir.exists() or self.control_dir.is_symlink()
                 )
                 self._ensure_layout()
-                state = self._read_state_locked(state_validator)
+                mutation_type = normalized["mutation"]["type"]
+                state = self._read_state_locked(
+                    state_validator,
+                    allow_legacy_review_contract=(
+                        mutation_type == "MIGRATE_V1_TO_V2"
+                    ),
+                )
                 state_version = state["state_version"] if state is not None else 0
                 recovery_ids = self._recovery_required_locked(
                     state_validator,
@@ -1002,11 +1329,27 @@ class AdaptiveStateRuntime:
                         {"expected": expected, "actual": state_version},
                     )
 
-                mutation_type = normalized["mutation"]["type"]
                 if state is None and mutation_type != "INITIALIZE":
                     raise RuntimeRejection("STATE_NOT_INITIALIZED", "/mutation/type")
                 if state is not None and mutation_type == "INITIALIZE":
                     raise RuntimeRejection("STATE_ALREADY_INITIALIZED", "/mutation/type")
+                if (
+                    state is not None
+                    and mutation_type == "MIGRATE_V1_TO_V2"
+                    and state["schema_version"] == 2
+                    and state.get("review_contract_version") == 2
+                ):
+                    return {
+                        "ok": True,
+                        "status": "STATE_WRITE_ALREADY_APPLIED",
+                        "operation_status": "SCHEMA_V2_ALREADY_APPLIED",
+                        "state_request_id": normalized["state_request_id"],
+                        "event_id": normalized["event_id"],
+                        "state_version_after": state_version,
+                        "evidence_paths": self._base_evidence_paths(),
+                        "external_actions": [],
+                        "external_action_count": 0,
+                    }
 
                 after_version = 1 if state is None else state_version + 1
                 next_state, operation_result = self._apply_mutation(
@@ -1035,6 +1378,7 @@ class AdaptiveStateRuntime:
                 )
                 self._record_artifacts(next_state, normalized["artifacts"], after_version)
                 self._refresh_roadmap_projection(next_state)
+                self._refresh_status_projection_target(next_state)
                 self._validate_canonical_state(next_state, state_validator)
                 self._validate_artifact_targets_locked(normalized["artifacts"])
 
@@ -1066,15 +1410,35 @@ class AdaptiveStateRuntime:
                 journal["status"] = "APPLIED"
                 journal["applied_state_digest"] = journal["after_state_digest"]
                 self._write_journal_locked(journal_path, journal, phase="APPLIED")
+                status_projection = (
+                    "CURRENT"
+                    if next_state.get("human_control_policy", {}).get(
+                        "status_projection_enabled", True
+                    )
+                    else "DISABLED"
+                )
+                try:
+                    self._write_status_projection_locked(next_state)
+                except (OSError, RuntimeRejection) as projection_error:
+                    status_projection = "PENDING_RECOVERY"
+                    projection_error_code = (
+                        projection_error.code
+                        if isinstance(projection_error, RuntimeRejection)
+                        else type(projection_error).__name__
+                    )
                 self._cleanup_temps_locked()
 
-                return self._applied_response(
+                response = self._applied_response(
                     normalized,
                     state_version,
                     after_version,
                     next_state,
                     operation_result,
                 )
+                response["status_projection"] = status_projection
+                if status_projection == "PENDING_RECOVERY":
+                    response["status_projection_error"] = projection_error_code
+                return response
         except InjectedCrash:
             raise
         except RuntimeRejection as rejection:
@@ -1126,6 +1490,7 @@ class AdaptiveStateRuntime:
                 state = self._read_state_locked(state_validator)
                 if state is not None:
                     self._ensure_projections_locked(state)
+                    self._write_status_projection_locked(state)
                 self._cleanup_temps_locked()
             version = state["state_version"] if state is not None else 0
             return {
@@ -1170,6 +1535,213 @@ class AdaptiveStateRuntime:
                 return None
             self._ensure_layout()
             return self._read_state_locked(state_validator)
+
+    def stage_formal_report(self, request: Any) -> dict[str, Any]:
+        """Validate and stage one formal report for an exact canonical SENT outbox."""
+
+        self._ensure_json_value(request, "/")
+        if not isinstance(request, dict) or set(request) != {
+            "outbox_id",
+            "result",
+            "report",
+        }:
+            raise RuntimeRejection(
+                "FORMAL_REPORT_STAGE_INPUT_INVALID",
+                "/",
+                {"required_keys": ["outbox_id", "report", "result"]},
+            )
+        outbox_id = request["outbox_id"]
+        result_input = request["result"]
+        report = request["report"]
+        if not isinstance(outbox_id, str) or SAFE_ID_RE.fullmatch(outbox_id) is None:
+            raise RuntimeRejection("UNSAFE_ID", "/outbox_id")
+        if not isinstance(result_input, dict) or set(result_input) != {
+            "status",
+            "artifact_digest",
+        }:
+            raise RuntimeRejection(
+                "FORMAL_REPORT_STAGE_RESULT_INVALID", "/result"
+            )
+        if not isinstance(report, dict):
+            raise RuntimeRejection("FORMAL_REPORT_NOT_OBJECT", "/report")
+        artifact_digest = result_input.get("artifact_digest")
+        if (
+            not isinstance(artifact_digest, str)
+            or DIGEST_RE.fullmatch(artifact_digest) is None
+        ):
+            raise RuntimeRejection(
+                "DIGEST_INVALID", "/result/artifact_digest"
+            )
+        try:
+            content = json.dumps(
+                report,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeRejection(
+                "FORMAL_REPORT_JSON_INVALID",
+                "/report",
+                {"error_type": type(exc).__name__},
+            ) from exc
+        payload = content.encode("utf-8")
+        if (
+            len(content) > MAX_ARTIFACT_CONTENT_SIZE
+            or len(payload) > MAX_ARTIFACT_CONTENT_SIZE
+        ):
+            raise RuntimeRejection(
+                "ARTIFACT_CONTENT_TOO_LARGE",
+                "/report",
+                {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
+            )
+        report_digest = _bytes_digest(payload)
+        result = {
+            "status": result_input.get("status"),
+            "artifact_digest": artifact_digest,
+            "report_digest": report_digest,
+        }
+
+        _, state_validator = self._load_validators()
+        self._require_root()
+        with self._exclusive_lock():
+            self._ensure_layout()
+            state = self._read_state_locked(state_validator)
+            if state is None:
+                raise RuntimeRejection("STATE_NOT_INITIALIZED", "/outbox_id")
+            matches = [
+                (kind, state[field][outbox_id])
+                for kind, field in (
+                    ("DISPATCH", "dispatch_outbox"),
+                    ("ASSURANCE", "assurance_dispatch_outbox"),
+                    ("LOCAL", "local_verification_outbox"),
+                )
+                if outbox_id in state[field]
+            ]
+            if len(matches) != 1:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_SENT_OUTBOX_NOT_FOUND", "/outbox_id"
+                )
+            outbox_kind, record = matches[0]
+            if record["status"] != "SENT":
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_OUTBOX_NOT_SENT",
+                    "/outbox_id",
+                    {"actual": record["status"]},
+                )
+            self._validate_identity_tokens(result, "/result")
+            self._validate_formal_report(state, record, result, report)
+            self._ensure_report_staging_locked()
+            source = self.report_staging_dir / (
+                f"{outbox_id}.{report_digest.removeprefix('sha256:')}.json"
+            )
+            self._assert_confined(source, self.report_staging_dir, "/source_path")
+            if source.exists() or source.is_symlink():
+                self._require_staged_report_file(
+                    source, report_digest, "/source_path"
+                )
+                if source.read_bytes() != payload:
+                    raise RuntimeRejection(
+                        "FORMAL_REPORT_STAGE_CONFLICT", "/source_path"
+                    )
+            else:
+                self._atomic_replace_bytes(
+                    source,
+                    payload,
+                    f"report-stage-{outbox_id}",
+                    "REPORT_STAGE",
+                )
+                os.chmod(source, 0o444, follow_symlinks=False)
+                self._fsync_dir(self.report_staging_dir)
+                self._require_staged_report_file(
+                    source, report_digest, "/source_path"
+                )
+            artifact_path = f".codex-loop/reports/{outbox_id}-ack.json"
+            return {
+                "ok": True,
+                "status": "FORMAL_REPORT_STAGED",
+                "state_version": state["state_version"],
+                "outbox_kind": outbox_kind,
+                "outbox_id": outbox_id,
+                "path": artifact_path,
+                "source_path": str(source),
+                "report_digest": report_digest,
+                "media_type": "application/json",
+                "ack_evidence_paths": [artifact_path],
+                "result": result,
+                "artifact": {
+                    "path": artifact_path,
+                    "source_path": str(source),
+                    "digest": report_digest,
+                    "media_type": "application/json",
+                },
+                "external_actions": [],
+                "external_action_count": 0,
+            }
+
+    def _ensure_report_staging_locked(self) -> None:
+        path = self.report_staging_dir
+        json_path = "/report-staging"
+        self._assert_confined(path, self.control_dir, json_path)
+        if path.exists() or path.is_symlink():
+            self._validate_report_staging_directory(path, json_path)
+        else:
+            path.mkdir(mode=0o700, parents=False, exist_ok=False)
+            self._fsync_dir(path.parent)
+
+    def _validate_report_staging_locked(self) -> None:
+        self._validate_report_staging_directory(
+            self.report_staging_dir, "/report-staging"
+        )
+
+    def _validate_report_staging_directory(
+        self, path: Path, json_path: str
+    ) -> None:
+        self._assert_confined(path, self.control_dir, json_path)
+        self._reject_symlink(path, json_path)
+        try:
+            metadata = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise RuntimeRejection(
+                "REPORT_STAGING_DIRECTORY_INVALID",
+                json_path,
+                {"error_type": type(exc).__name__},
+            ) from exc
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise RuntimeRejection("REPORT_STAGING_DIRECTORY_INVALID", json_path)
+
+    def _require_staged_report_file(
+        self, source: Path, expected_digest: str, json_path: str
+    ) -> None:
+        self._reject_symlink(source, json_path)
+        self._assert_confined(source, self.report_staging_dir, json_path)
+        try:
+            metadata = os.stat(source, follow_symlinks=False)
+            payload = source.read_bytes()
+        except OSError as exc:
+            raise RuntimeRejection(
+                "ARTIFACT_SOURCE_UNAVAILABLE",
+                json_path,
+                {"error_type": type(exc).__name__},
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o444
+        ):
+            raise RuntimeRejection("STAGED_REPORT_FILE_INVALID", json_path)
+        actual_digest = _bytes_digest(payload)
+        if actual_digest != expected_digest:
+            raise RuntimeRejection(
+                "ARTIFACT_DIGEST_MISMATCH",
+                json_path,
+                {"expected": actual_digest, "actual": expected_digest},
+            )
 
     def _load_validators(self) -> tuple[Any, Any]:
         if self._validators is not None:
@@ -1271,16 +1843,23 @@ class AdaptiveStateRuntime:
             self.transactions_dir,
             self.reports_dir,
             self.sources_dir,
+            self.projection_transactions_dir,
         ):
             self._reject_symlink(path, "/layout")
         self._assert_confined(self.control_dir, self.root, "/root")
         self._assert_confined(self.transactions_dir, self.control_dir, "/transactions")
         self._assert_confined(self.reports_dir, self.control_dir, "/reports")
         self._assert_confined(self.sources_dir, self.control_dir, "/sources")
+        self._assert_confined(
+            self.projection_transactions_dir,
+            self.control_dir,
+            "/projection-transactions",
+        )
         self.control_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
         self.transactions_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
         self.reports_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
         self.sources_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
+        self.projection_transactions_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
 
     def _cleanup_virgin_layout(self) -> None:
         try:
@@ -1292,6 +1871,7 @@ class AdaptiveStateRuntime:
                     self.events_path,
                     self.goals_path,
                     self.dashboard_path,
+                    self.status_path,
                 )
                 if any(path.exists() or path.is_symlink() for path in protected):
                     return
@@ -1299,6 +1879,7 @@ class AdaptiveStateRuntime:
                     self.transactions_dir,
                     self.reports_dir,
                     self.sources_dir,
+                    self.projection_transactions_dir,
                 ):
                     if directory.exists() and any(directory.iterdir()):
                         return
@@ -1306,6 +1887,7 @@ class AdaptiveStateRuntime:
                     self.transactions_dir,
                     self.reports_dir,
                     self.sources_dir,
+                    self.projection_transactions_dir,
                 ):
                     if directory.exists():
                         directory.rmdir()
@@ -1394,10 +1976,51 @@ class AdaptiveStateRuntime:
                     mutation[key], f"/mutation/{key}"
                 )
         self._normalize_nested_path_fields(mutation, "/mutation")
-        request["artifacts"] = self._normalize_artifacts(request["artifacts"])
+        self._reject_inline_formal_report_transport(request["artifacts"], mutation)
+        request["artifacts"] = self._normalize_artifacts(
+            request["artifacts"], mutation=mutation
+        )
         return request
 
-    def _normalize_artifacts(self, artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _reject_inline_formal_report_transport(
+        artifacts: list[dict[str, Any]], mutation: dict[str, Any]
+    ) -> None:
+        """Require helper-staged formal reports before they cross App transport."""
+
+        if mutation.get("type") == "RECORD_REVIEW":
+            for index, artifact in enumerate(artifacts):
+                if (
+                    artifact.get("media_type") == "application/json"
+                    and "content" in artifact
+                ):
+                    raise RuntimeRejection(
+                        "FORMAL_REPORT_INLINE_TRANSPORT_FORBIDDEN",
+                        f"/artifacts/{index}/content",
+                    )
+            return
+        if (
+            mutation.get("type") != "ACK_OUTBOX"
+            or mutation.get("outbox_kind")
+            not in {"DISPATCH", "ASSURANCE", "LOCAL"}
+        ):
+            return
+        for index, artifact in enumerate(artifacts):
+            if (
+                artifact.get("media_type") == "application/json"
+                and "content" in artifact
+            ):
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_INLINE_TRANSPORT_FORBIDDEN",
+                    f"/artifacts/{index}/content",
+                )
+
+    def _normalize_artifacts(
+        self,
+        artifacts: list[dict[str, Any]],
+        *,
+        mutation: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
         seen: set[str] = set()
         for index, artifact in enumerate(artifacts):
@@ -1420,7 +2043,104 @@ class AdaptiveStateRuntime:
             )
             if not allowed:
                 raise RuntimeRejection("ARTIFACT_PATH_INVALID", f"/artifacts/{index}/path")
-            payload = artifact["content"].encode("utf-8")
+            normalized_artifact = {**artifact, "path": relative}
+            if "source_path" in artifact:
+                source_json_path = f"/artifacts/{index}/source_path"
+                raw_source = Path(artifact["source_path"]).expanduser()
+                if not raw_source.is_absolute():
+                    raise RuntimeRejection(
+                        "ARTIFACT_SOURCE_PATH_INVALID",
+                        source_json_path,
+                    )
+                self._reject_symlink(raw_source, source_json_path)
+                try:
+                    source = raw_source.resolve(strict=True)
+                except (FileNotFoundError, OSError) as exc:
+                    raise RuntimeRejection(
+                        "ARTIFACT_SOURCE_UNAVAILABLE",
+                        source_json_path,
+                        {"error_type": type(exc).__name__},
+                    ) from exc
+                self._assert_confined(source, self.root, source_json_path)
+                controller_pack_source = bool(
+                    relative == ".codex-loop/sources/CONTROLLER_PACK.md"
+                    and artifact["media_type"] == "text/markdown"
+                    and not self._path_is_within(source, self.control_dir)
+                    and source.is_file()
+                )
+                staged_report_source = bool(
+                    target.parent == self.reports_dir
+                    and target.suffix == ".json"
+                    and artifact["media_type"] == "application/json"
+                    and mutation is not None
+                    and mutation.get("type") == "ACK_OUTBOX"
+                    and mutation.get("outbox_kind")
+                    in {"DISPATCH", "ASSURANCE", "LOCAL"}
+                )
+                if staged_report_source:
+                    outbox_id = mutation.get("outbox_id")
+                    result = mutation.get("result")
+                    expected_name = (
+                        f"{outbox_id}.{artifact['digest'].removeprefix('sha256:')}.json"
+                        if isinstance(outbox_id, str)
+                        and isinstance(artifact.get("digest"), str)
+                        and DIGEST_RE.fullmatch(artifact["digest"])
+                        else None
+                    )
+                    if (
+                        source.parent != self.report_staging_dir.resolve(strict=False)
+                        or source.name != expected_name
+                        or relative
+                        != f".codex-loop/reports/{outbox_id}-ack.json"
+                        or not isinstance(result, dict)
+                        or result.get("report_digest") != artifact.get("digest")
+                        or relative not in mutation.get("ack_evidence_paths", [])
+                    ):
+                        raise RuntimeRejection(
+                            "ARTIFACT_SOURCE_PATH_NOT_ALLOWED", source_json_path
+                        )
+                    self._validate_report_staging_locked()
+                    self._require_staged_report_file(
+                        source, artifact["digest"], source_json_path
+                    )
+                elif not controller_pack_source:
+                    raise RuntimeRejection(
+                        "ARTIFACT_SOURCE_PATH_NOT_ALLOWED",
+                        source_json_path,
+                    )
+                try:
+                    if source.stat().st_size > MAX_ARTIFACT_CONTENT_SIZE:
+                        raise RuntimeRejection(
+                            "ARTIFACT_CONTENT_TOO_LARGE",
+                            source_json_path,
+                            {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
+                        )
+                    payload = source.read_bytes()
+                    content = payload.decode("utf-8", errors="strict")
+                    if len(content) > MAX_ARTIFACT_CONTENT_SIZE:
+                        raise RuntimeRejection(
+                            "ARTIFACT_CONTENT_TOO_LARGE",
+                            source_json_path,
+                            {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
+                        )
+                except RuntimeRejection:
+                    raise
+                except (OSError, UnicodeDecodeError) as exc:
+                    raise RuntimeRejection(
+                        "ARTIFACT_SOURCE_UNAVAILABLE",
+                        source_json_path,
+                        {"error_type": type(exc).__name__},
+                    ) from exc
+                normalized_artifact.pop("source_path", None)
+                normalized_artifact["content"] = content
+            else:
+                payload = artifact["content"].encode("utf-8")
+                if len(payload) > MAX_ARTIFACT_CONTENT_SIZE:
+                    raise RuntimeRejection(
+                        "ARTIFACT_CONTENT_TOO_LARGE",
+                        f"/artifacts/{index}/content",
+                        {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
+                    )
             actual_digest = _bytes_digest(payload)
             if artifact["digest"] != actual_digest:
                 raise RuntimeRejection(
@@ -1428,7 +2148,7 @@ class AdaptiveStateRuntime:
                     f"/artifacts/{index}/digest",
                     {"expected": actual_digest, "actual": artifact["digest"]},
                 )
-            normalized.append({**artifact, "path": relative})
+            normalized.append(normalized_artifact)
         return sorted(normalized, key=lambda item: item["path"])
 
     def _normalize_nested_path_fields(self, value: Any, path: str) -> None:
@@ -1613,6 +2333,436 @@ class AdaptiveStateRuntime:
 """
         return payload.encode("utf-8")
 
+    @staticmethod
+    def _status_digest_payload(state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in state.items()
+            if key != "status_projection_target"
+        }
+
+    def _refresh_status_projection_target(self, state: dict[str, Any]) -> None:
+        if state.get("schema_version") != 2:
+            return
+        if not state.get("human_control_policy", {}).get(
+            "status_projection_enabled", True
+        ):
+            state["status_projection_target"] = None
+            return
+        payload = self._render_status(
+            state, contract_version=CURRENT_STATUS_RENDER_CONTRACT
+        )
+        if payload is None:
+            return
+        state["status_projection_target"] = {
+            "path": ".codex-loop/STATUS.md",
+            "target_state_version": state["state_version"],
+            "target_digest": _bytes_digest(payload),
+            "render_contract_version": CURRENT_STATUS_RENDER_CONTRACT,
+        }
+
+    def _render_status(
+        self,
+        state: dict[str, Any],
+        *,
+        contract_version: str | None = None,
+    ) -> bytes | None:
+        if state.get("schema_version") != 2:
+            return None
+        if not state.get("human_control_policy", {}).get(
+            "status_projection_enabled", True
+        ):
+            return None
+        version = contract_version or CURRENT_STATUS_RENDER_CONTRACT
+        if version == LEGACY_STATUS_RENDER_CONTRACT:
+            return self._render_status_v1(state)
+        if version != CURRENT_STATUS_RENDER_CONTRACT:
+            raise RuntimeRejection(
+                "STATUS_RENDER_CONTRACT_UNSUPPORTED",
+                "/status_projection_target/render_contract_version",
+                {"render_contract_version": version},
+            )
+        return self._render_status_v2(state)
+
+    def _render_status_v1(self, state: dict[str, Any]) -> bytes:
+        active_outboxes = [
+            record
+            for field in OUTBOX_FIELDS.values()
+            for record in state[field].values()
+            if record["status"] == "SENT"
+        ]
+        active_goal_id = next(
+            (
+                record["identity"].get("goal_id")
+                for record in active_outboxes
+                if record["identity"].get("goal_id") is not None
+            ),
+            None,
+        )
+        active_goal = (
+            next(
+                (
+                    item
+                    for item in state["goal_queue"]
+                    if item["goal_id"] == active_goal_id
+                ),
+                None,
+            )
+            if active_goal_id is not None
+            else next(
+                (item for item in state["goal_queue"] if item["status"] == "READY"),
+                None,
+            )
+        )
+        active_task_ids = {
+            record["target_id"]
+            for record in active_outboxes
+            if record.get("target_id") in state["thread_registry"]
+        }
+        active_tasks = [state["thread_registry"][task_id] for task_id in active_task_ids]
+        pending_steering = [
+            item["steering_id"]
+            for item in state["steering_queue"]
+            if item["status"] in {"RECEIVED", "CLASSIFIED", "DEFERRED"}
+        ]
+        pending_decisions = sorted(
+            key
+            for key, value in state["pending_decisions"].items()
+            if value["status"] == "PENDING"
+        )
+        outboxes = [
+            f"{kind}:{record['outbox_id']}:{record['status']}"
+            for kind, field in OUTBOX_FIELDS.items()
+            for record in state[field].values()
+            if record["status"] in {"PREPARED", "SENT", "ACKED"}
+        ]
+        review_surfaces = sorted(
+            f"{goal_id}:{surface.get('artifact_path') or surface.get('preview_url') or surface['type']}"
+            for goal_id, definition in state["goal_definition_registry"].items()
+            if isinstance((surface := definition.get("review_surface")), dict)
+            and surface.get("type") != "NOT_APPLICABLE"
+        )
+        run_status = state["run_control"]["status"]
+        if state["terminal_status"] is not None:
+            human_status = (
+                "COMPLETE" if "COMPLETE" in state["terminal_status"] else "BLOCKED"
+            )
+        elif run_status == "PAUSED_AT_SAFE_POINT":
+            human_status = "PAUSED_BY_USER"
+        elif active_tasks:
+            human_status = "WAITING_ACTIVE_TASK"
+        else:
+            human_status = "RUNNING_PROGRESS"
+        projection_freshness = "MAY_BE_STALE" if active_tasks else "CURRENT"
+        task_observations = [
+            item
+            for item in state["context_freshness_ledger"]
+            if item["checkpoint"] == "WORKER_RECOVERY"
+            and (active_goal_id is None or item["goal_id"] == active_goal_id)
+        ]
+        last_observed_at = (
+            task_observations[-1]["checked_at"]
+            if task_observations
+            else "UNKNOWN_NOT_OBSERVED"
+        )
+        lines = [
+            "# Loop Status",
+            "",
+            "## What's done",
+            "",
+            f"- Loop: `{state['loop_id']}`",
+            f"- Status: `{human_status}`",
+            f"- State confirmed at: `{state['logical_time']}`",
+            f"- State version: `{state['state_version']}`",
+            f"- Roadmap version: `{state['roadmap_version']}`",
+            f"- Active milestone: `{state['active_milestone_id']}`",
+            f"- Validation gate: `{state['validation_gate_status']}`",
+            "",
+            "## What's next",
+            "",
+            f"- Active Goal: `{active_goal['goal_id'] if active_goal else 'NONE'}`",
+            f"- Remaining Goals: `{len(state['goal_queue'])}`",
+            f"- Run control: `{run_status}`",
+            f"- Lease: `{state['controller_lease']['claim']['lease_id'] if state['controller_lease'] else 'NONE'}`",
+            f"- Active outboxes: `{', '.join(sorted(outboxes)) or 'NONE'}`",
+            "",
+            "## Any blockers",
+            "",
+            f"- Pending Steering: `{', '.join(pending_steering) or 'NONE'}`",
+            f"- Pending Decisions: `{', '.join(pending_decisions) or 'NONE'}`",
+            f"- Review surfaces: `{', '.join(review_surfaces) or 'NONE'}`",
+            f"- Active task last observed at: `{last_observed_at}`",
+            f"- Projection freshness: `{projection_freshness}`",
+            "",
+            "This file is derived from canonical state and is not a second state source.",
+            "",
+        ]
+        return "\n".join(lines).encode("utf-8")
+
+    def _render_status_v2(self, state: dict[str, Any]) -> bytes:
+        active_outbox_entries = [
+            (kind, record)
+            for kind, field in OUTBOX_FIELDS.items()
+            for record in state[field].values()
+            if record["status"] == "SENT"
+        ]
+        active_outboxes = [record for _, record in active_outbox_entries]
+        active_goal_id = next(
+            (
+                record["identity"].get("goal_id")
+                for record in active_outboxes
+                if record["identity"].get("goal_id") is not None
+            ),
+            None,
+        )
+        active_goal = (
+            next(
+                (
+                    item
+                    for item in state["goal_queue"]
+                    if item["goal_id"] == active_goal_id
+                ),
+                None,
+            )
+            if active_goal_id is not None
+            else next(
+                (item for item in state["goal_queue"] if item["status"] == "READY"),
+                None,
+            )
+        )
+        active_task_ids = {
+            record["target_id"]
+            for record in active_outboxes
+            if record.get("target_id") in state["thread_registry"]
+        }
+        active_tasks = [state["thread_registry"][task_id] for task_id in active_task_ids]
+        role_statuses = []
+        for task_id, record in sorted(state["thread_registry"].items()):
+            display_status = (
+                "ACTIVE"
+                if task_id in active_task_ids
+                else record["status"]
+            )
+            role_statuses.append(
+                f"{record['role_kind']}:{task_id}:{display_status}"
+            )
+        pending_steering = [
+            item["steering_id"]
+            for item in state["steering_queue"]
+            if item["status"] in {"RECEIVED", "CLASSIFIED", "DEFERRED"}
+        ]
+        pending_decisions = sorted(
+            key
+            for key, value in state["pending_decisions"].items()
+            if value["status"] == "PENDING"
+        )
+        outboxes = [
+            f"{kind}:{record['outbox_id']}:{record['status']}"
+            for kind, field in OUTBOX_FIELDS.items()
+            for record in state[field].values()
+            if record["status"] in {"PREPARED", "SENT", "ACKED"}
+        ]
+        review_surfaces = sorted(
+            f"{goal_id}:{surface.get('artifact_path') or surface.get('preview_url') or surface['type']}"
+            for goal_id, definition in state["goal_definition_registry"].items()
+            if isinstance((surface := definition.get("review_surface")), dict)
+            and surface.get("type") != "NOT_APPLICABLE"
+        )
+        run_status = state["run_control"]["status"]
+        if state["terminal_status"] is not None:
+            human_status = "COMPLETE" if "COMPLETE" in state["terminal_status"] else "BLOCKED"
+        elif run_status == "PAUSED_AT_SAFE_POINT":
+            human_status = "PAUSED_BY_USER"
+        elif active_tasks:
+            human_status = "WAITING_ACTIVE_TASK"
+        else:
+            human_status = "RUNNING_PROGRESS"
+        projection_freshness = "MAY_BE_STALE" if active_tasks else "CURRENT"
+        task_observations = [
+            item
+            for item in state["context_freshness_ledger"]
+            if item["checkpoint"] == "WORKER_RECOVERY"
+            and (active_goal_id is None or item["goal_id"] == active_goal_id)
+        ]
+        last_observed_at = (
+            task_observations[-1]["checked_at"]
+            if task_observations
+            else "UNKNOWN_NOT_OBSERVED"
+        )
+        active_goal_id_display = active_goal["goal_id"] if active_goal else "NONE"
+        active_definition = state["goal_definition_registry"].get(
+            active_goal_id_display, {}
+        )
+        active_goal_objective = active_definition.get("objective", "NONE")
+        phase_by_outbox = {
+            "THREAD": "CREATING_TASK",
+            "AUTOMATION": "CREATING_HEARTBEAT",
+            "GOAL": "CREATING_GOAL",
+            "DISPATCH": "WAITING_WORKER",
+            "ASSURANCE": "REVIEWING",
+            "LOCAL": "VERIFYING_LOCALLY",
+            "DELEGATION": "WAITING_READ_ONLY_SIDECAR",
+        }
+        if state["terminal_status"] is not None:
+            control_phase = "FINALIZED"
+        elif run_status != "RUNNING":
+            control_phase = run_status
+        elif active_outbox_entries:
+            control_phase = phase_by_outbox.get(
+                active_outbox_entries[0][0], "WAITING_STATE_ACK"
+            )
+        elif state["controller_lease"] is not None:
+            control_phase = "ROUTING"
+        else:
+            control_phase = "PLANNING"
+        if run_status == "PAUSED_AT_SAFE_POINT":
+            next_action = "WAIT_FOR_RESUME"
+        elif pending_steering:
+            next_action = "RESOLVE_PENDING_STEERING"
+        elif active_outbox_entries:
+            next_action = f"WAIT_FOR_{active_outbox_entries[0][0]}_RESULT_OR_ACK"
+        elif active_goal:
+            next_action = "ROUTE_NEXT_LEGAL_GOAL_OR_ASSURANCE_ACTION"
+        else:
+            next_action = "FINALIZE_OR_WAIT_FOR_CANONICAL_GATE"
+        heartbeat_records = sorted(
+            state["automation_outbox"].values(),
+            key=lambda item: item["outbox_id"],
+        )
+        heartbeat_summary = "NONE"
+        if heartbeat_records:
+            heartbeat = heartbeat_records[-1]
+            observed = heartbeat.get("result") or {}
+            heartbeat_summary = ":".join(
+                [
+                    heartbeat["outbox_id"],
+                    str(observed.get("status", heartbeat["status"])),
+                    str(
+                        heartbeat.get("identity", {}).get(
+                            "rrule", "SCHEDULE_UNKNOWN"
+                        )
+                    ),
+                ]
+            )
+        failure_summaries = [
+            f"{goal_id}:{history[-1].get('classification', 'UNCLASSIFIED')}"
+            for goal_id, history in sorted(state["failure_history"].items())
+            if history
+        ]
+        limitations = []
+        if state["validation_gate_status"] != "PASS":
+            limitations.append(
+                f"VALIDATION_{state['validation_gate_status']}"
+            )
+        if state["run_control"].get("reason"):
+            limitations.append(str(state["run_control"]["reason"]))
+        limitations.extend(failure_summaries)
+        if state["terminal_status"] and "COMPLETE" not in state["terminal_status"]:
+            limitations.append(str(state["terminal_status"]))
+        key_paths = sorted(
+            path
+            for path in state["artifact_ledger"]
+            if path.startswith(".codex-loop/reports/")
+        )
+        key_paths.extend(
+            surface.split(":", 1)[1]
+            for surface in review_surfaces
+            if ":" in surface
+        )
+        progress_signal = (
+            f"STATE_ADVANCED:{state.get('last_event_id') or 'INITIALIZED'}"
+        )
+        lines = [
+            "# Loop Status",
+            "",
+            "## What's done",
+            "",
+            f"- Loop: `{state['loop_id']}`",
+            f"- Status: `{human_status}`",
+            f"- State confirmed at: `{state['logical_time']}`",
+            f"- State version: `{state['state_version']}`",
+            f"- Projected state version: `{state['state_version']}`",
+            f"- Roadmap version: `{state['roadmap_version']}`",
+            f"- Active milestone: `{state['active_milestone_id']}`",
+            f"- Control phase: `{control_phase}`",
+            f"- Last meaningful progress: `{progress_signal}` at `{state['logical_time']}`",
+            f"- Role status: `{', '.join(role_statuses) or 'NONE'}`",
+            f"- Validation gate: `{state['validation_gate_status']}`",
+            "",
+            "## What's next",
+            "",
+            f"- Active Goal: `{active_goal_id_display}`",
+            f"- Goal objective: `{active_goal_objective}`",
+            f"- Remaining Goals: `{len(state['goal_queue'])}`",
+            f"- Run control: `{run_status}`",
+            f"- Lease: `{state['controller_lease']['claim']['lease_id'] if state['controller_lease'] else 'NONE'}`",
+            f"- Active outboxes: `{', '.join(sorted(outboxes)) or 'NONE'}`",
+            f"- Next action: `{next_action}`",
+            f"- Next heartbeat: `{heartbeat_summary}`",
+            "",
+            "## Any blockers",
+            "",
+            f"- Pending Steering: `{', '.join(pending_steering) or 'NONE'}`",
+            f"- Pending Decisions: `{', '.join(pending_decisions) or 'NONE'}`",
+            f"- Blockers or limitations: `{'; '.join(limitations) or 'NONE'}`",
+            f"- Review surfaces: `{', '.join(review_surfaces) or 'NONE'}`",
+            f"- Key reports/artifacts: `{', '.join(sorted(set(key_paths))) or 'NONE'}`",
+            f"- Active task last observed at: `{last_observed_at}`",
+            f"- Projection freshness: `{projection_freshness}`",
+            "",
+            "This file is derived from canonical state and is not a second state source.",
+            "",
+        ]
+        return "\n".join(lines).encode("utf-8")
+
+    def _write_status_projection_locked(self, state: dict[str, Any]) -> None:
+        if state.get("schema_version") != 2:
+            return
+        target = state["status_projection_target"]
+        if target is None:
+            if not state.get("human_control_policy", {}).get(
+                "status_projection_enabled", True
+            ):
+                return
+            raise RuntimeRejection(
+                "STATUS_PROJECTION_TARGET_INVALID", "/status_projection_target"
+            )
+        contract_version = target["render_contract_version"]
+        payload = self._render_status(state, contract_version=contract_version)
+        if payload is None:
+            return
+        journal_path = self.projection_transactions_dir / (
+            f"status-v{state['state_version']}.json"
+        )
+        journal = {
+            "journal_version": 1,
+            "status": "PREPARED",
+            "target_state_version": state["state_version"],
+            "target_digest": target["target_digest"],
+            "render_contract_version": contract_version,
+            "projected_digest": _bytes_digest(payload),
+        }
+        self._atomic_replace_bytes(
+            journal_path,
+            _canonical_json(journal, indent=2).encode("utf-8") + b"\n",
+            f"status-v{state['state_version']}",
+            "STATUS_JOURNAL",
+        )
+        self._atomic_replace_bytes(
+            self.status_path,
+            payload,
+            f"status-v{state['state_version']}",
+            "STATUS",
+        )
+        journal["status"] = "APPLIED"
+        journal["readback_digest"] = _bytes_digest(self.status_path.read_bytes())
+        self._atomic_replace_bytes(
+            journal_path,
+            _canonical_json(journal, indent=2).encode("utf-8") + b"\n",
+            f"status-v{state['state_version']}",
+            "STATUS_JOURNAL",
+        )
+
     def _record_artifacts(
         self,
         state: dict[str, Any],
@@ -1677,7 +2827,12 @@ class AdaptiveStateRuntime:
                 "ARTIFACT",
             )
 
-    def _read_state_locked(self, state_validator: Any) -> dict[str, Any] | None:
+    def _read_state_locked(
+        self,
+        state_validator: Any,
+        *,
+        allow_legacy_review_contract: bool = False,
+    ) -> dict[str, Any] | None:
         if not self.state_path.exists():
             return None
         self._reject_symlink(self.state_path, "/state")
@@ -1700,7 +2855,18 @@ class AdaptiveStateRuntime:
             code="CANONICAL_STATE_INVALID",
             path="/state",
         )
-        self._validate_canonical_state(state, state_validator)
+        if (
+            allow_legacy_review_contract
+            and state.get("schema_version") == 2
+            and "review_contract_version" not in state
+        ):
+            legacy_validation_state = copy.deepcopy(state)
+            legacy_validation_state["schema_version"] = 1
+            self._validate_canonical_state(
+                legacy_validation_state, state_validator
+            )
+        else:
+            self._validate_canonical_state(state, state_validator)
         if self._render_state(state) != raw:
             raise RuntimeRejection(
                 "CANONICAL_STATE_INVALID",
@@ -1720,6 +2886,7 @@ class AdaptiveStateRuntime:
         self._validate_milestones(state)
         self._validate_goal_graph(state)
         self._validate_controller_goal_identity(state)
+        self._validate_controller_goal_resume_receipt(state)
         self._validate_authorization_boundary(
             state["goal_definition_registry"],
             state["milestones"],
@@ -1742,10 +2909,100 @@ class AdaptiveStateRuntime:
         self._validate_assurance_consistency(state)
         self._validate_finalization_state(state)
         self._validate_lease_state(state)
+        self._validate_human_control_state(state)
         if state["external_action_count"] != 0:
             raise RuntimeRejection(
                 "RUNTIME_EXTERNAL_ACTION_VIOLATION", "/external_action_count"
             )
+
+    def _validate_human_control_state(self, state: dict[str, Any]) -> None:
+        if state["schema_version"] == 1:
+            return
+        target = state["status_projection_target"]
+        projection_enabled = state["human_control_policy"][
+            "status_projection_enabled"
+        ]
+        target_version = (
+            target.get("render_contract_version")
+            if isinstance(target, dict)
+            else None
+        )
+        valid_versions = {
+            LEGACY_STATUS_RENDER_CONTRACT,
+            CURRENT_STATUS_RENDER_CONTRACT,
+        }
+        if projection_enabled and (
+            not isinstance(target, dict)
+            or target_version not in valid_versions
+            or target["target_state_version"] != state["state_version"]
+            or target["target_digest"]
+            != _bytes_digest(
+                self._render_status(state, contract_version=target_version) or b""
+            )
+        ):
+            raise RuntimeRejection(
+                "STATUS_PROJECTION_TARGET_INVALID", "/status_projection_target"
+            )
+        if not projection_enabled and target is not None:
+            raise RuntimeRejection(
+                "STATUS_PROJECTION_TARGET_INVALID", "/status_projection_target"
+            )
+        definitions = set(state["goal_definition_registry"])
+        if not set(state["validation_requirements"]).issubset(definitions):
+            raise RuntimeRejection(
+                "VALIDATION_GOAL_IDENTITY_INVALID", "/validation_requirements"
+            )
+        allow_legacy = bool(state.get("v1_migration_source_digest"))
+        expected_requirements = {
+            goal_id: self._validation_requirements_for_definition(
+                definition,
+                allow_legacy=allow_legacy,
+                path=f"/goal_definition_registry/{goal_id}/validation_matrix",
+            )
+            for goal_id, definition in state["goal_definition_registry"].items()
+        }
+        if state["validation_requirements"] != expected_requirements:
+            raise RuntimeRejection(
+                "VALIDATION_REQUIREMENTS_MISMATCH", "/validation_requirements"
+            )
+        threshold = state["failure_policy"]["same_strategy_failure_threshold"]
+        repair_limit = state["authorization_envelope"]["repair_policy"][
+            "max_repair_attempts_per_goal"
+        ]
+        if any(
+            "validation_matrix" in definition
+            for definition in state["goal_definition_registry"].values()
+        ) and threshold > 1 + repair_limit:
+            raise RuntimeRejection(
+                "FAILURE_THRESHOLD_EXCEEDS_REPAIR_BUDGET", "/failure_policy"
+            )
+        ledger_ids = set(state["steering_ledger"])
+        queue_ids = [item["steering_id"] for item in state["steering_queue"]]
+        if len(queue_ids) != len(set(queue_ids)) or not set(queue_ids).issubset(ledger_ids):
+            raise RuntimeRejection("STEERING_LEDGER_INVALID", "/steering_queue")
+        if state["active_steering_id"] is not None and state["active_steering_id"] not in ledger_ids:
+            raise RuntimeRejection("STEERING_LEDGER_INVALID", "/active_steering_id")
+
+    @staticmethod
+    def _validation_requirements_for_definition(
+        definition: dict[str, Any],
+        *,
+        allow_legacy: bool,
+        path: str,
+    ) -> dict[str, Any]:
+        matrix = definition.get("validation_matrix")
+        if matrix is None:
+            if not allow_legacy:
+                raise RuntimeRejection("V2_VALIDATION_MATRIX_REQUIRED", path)
+            return {
+                "functional": {
+                    "required": False,
+                    "reason": "migrated v1 Goal without validation_matrix",
+                }
+            }
+        if not isinstance(matrix, dict) or set(matrix) != set(VALIDATION_DIMENSIONS):
+            raise RuntimeRejection("V2_VALIDATION_MATRIX_INVALID", path)
+        return copy.deepcopy(matrix)
 
     def _validate_milestones(self, state: dict[str, Any]) -> None:
         milestones = state["milestones"]
@@ -1793,6 +3050,7 @@ class AdaptiveStateRuntime:
         if set(definitions) != set(ledger):
             raise RuntimeRejection("GOAL_LEDGER_COVERAGE_INVALID", "/goal_execution_ledger")
         dependencies: dict[str, list[str]] = {}
+        review_surface_decision_ids: dict[str, str] = {}
         for goal_id, definition in definitions.items():
             if goal_id != definition["goal_id"]:
                 raise RuntimeRejection(
@@ -1824,6 +3082,45 @@ class AdaptiveStateRuntime:
                     scope,
                     f"/goal_definition_registry/{goal_id}/allowed_write_scope/{index}",
                 )
+            surface = definition.get("review_surface")
+            if surface is not None:
+                try:
+                    validate_review_surface(
+                        surface,
+                        definition["allowed_write_scope"],
+                        self.root,
+                    )
+                except ValueError as exc:
+                    raise RuntimeRejection(
+                        "REVIEW_SURFACE_INVALID",
+                        f"/goal_definition_registry/{goal_id}/review_surface",
+                        {"reason": str(exc)},
+                    ) from exc
+                decision_gate_id = surface.get("decision_gate_id")
+                if surface.get("required") and isinstance(decision_gate_id, str):
+                    prior_goal_id = review_surface_decision_ids.get(decision_gate_id)
+                    if prior_goal_id is not None:
+                        raise RuntimeRejection(
+                            "REVIEW_SURFACE_DECISION_ID_CONFLICT",
+                            f"/goal_definition_registry/{goal_id}/review_surface/decision_gate_id",
+                            {
+                                "decision_gate_id": decision_gate_id,
+                                "prior_goal_id": prior_goal_id,
+                            },
+                        )
+                    review_surface_decision_ids[decision_gate_id] = goal_id
+                artifact_path = surface.get("artifact_path")
+                if artifact_path:
+                    candidate = self.root / artifact_path
+                    self._reject_symlink(
+                        candidate,
+                        f"/goal_definition_registry/{goal_id}/review_surface/artifact_path",
+                    )
+                    self._assert_confined(
+                        candidate,
+                        self.root,
+                        f"/goal_definition_registry/{goal_id}/review_surface/artifact_path",
+                    )
             record = ledger[goal_id]
             if (
                 record["goal_id"] != goal_id
@@ -1932,6 +3229,75 @@ class AdaptiveStateRuntime:
                 "CONTROLLER_GOAL_STATE_IDENTITY_INVALID",
                 "/controller_goal",
             )
+
+    @staticmethod
+    def _validate_controller_goal_resume_receipt(state: dict[str, Any]) -> None:
+        receipt = state.get("controller_goal_resume_receipt")
+        if receipt is None:
+            return
+        matching_goal_creates = [
+            record
+            for record in state["controller_goal_outbox"].values()
+            if record["status"] == "ACKED"
+            and record["identity"].get("action") == "CREATE"
+            and isinstance(record.get("result"), dict)
+            and record["result"].get("goal_id") == receipt["goal_id"]
+            and all(
+                record["identity"].get(key) == receipt[key]
+                for key in (
+                    "loop_id",
+                    "pack_digest",
+                    "milestone_id",
+                    "objective_digest",
+                    "marker",
+                )
+            )
+        ]
+        if (
+            len(matching_goal_creates) != 1
+            or receipt["loop_id"] != state["loop_id"]
+            or receipt["pack_digest"]
+            != state["controller_pack_identity"]["digest"]
+            or _parse_time(
+                receipt["pre_blocked_observed_at"],
+                "/controller_goal_resume_receipt/pre_blocked_observed_at",
+            )
+            >= _parse_time(
+                receipt["authorized_at"],
+                "/controller_goal_resume_receipt/authorized_at",
+            )
+            or _parse_time(
+                receipt["authorized_at"],
+                "/controller_goal_resume_receipt/authorized_at",
+            )
+            > _parse_time(
+                receipt["post_resume_observed_at"],
+                "/controller_goal_resume_receipt/post_resume_observed_at",
+            )
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_GOAL_RESUME_RECEIPT_INVALID",
+                "/controller_goal_resume_receipt",
+            )
+        for prefix in (
+            "pre_blocked_observation",
+            "resume_authorization",
+            "post_resume_observation",
+        ):
+            path = receipt[f"{prefix}_path"]
+            digest = receipt[f"{prefix}_digest"]
+            record = state["artifact_ledger"].get(path)
+            if (
+                record is None
+                or record["digest"] != digest
+                or record["media_type"] != "application/json"
+                or record["archived_state_version"]
+                != receipt["recorded_state_version"]
+            ):
+                raise RuntimeRejection(
+                    "CONTROLLER_GOAL_RESUME_RECEIPT_INVALID",
+                    f"/controller_goal_resume_receipt/{prefix}_digest",
+                )
 
     def _validate_authorization_boundary(
         self,
@@ -2359,6 +3725,16 @@ class AdaptiveStateRuntime:
                 "FINALIZATION_STATE_INCONSISTENT",
                 "/finalization_outbox/automation_target_status",
             )
+        capability_fields = (
+            outbox.get("native_goal_policy"),
+            outbox.get("closeout_capability"),
+        )
+        if (capability_fields[0] is None) != (capability_fields[1] is None):
+            raise RuntimeRejection(
+                "FINALIZATION_STATE_INCONSISTENT",
+                "/finalization_outbox",
+                {"reason": "PARTIAL_CLOSEOUT_CAPABILITY"},
+            )
         if (outbox["status"] == "ACKED") != (receipt is not None):
             raise RuntimeRejection(
                 "FINALIZATION_STATE_INCONSISTENT",
@@ -2380,6 +3756,21 @@ class AdaptiveStateRuntime:
             "blocker_report_path": outbox["blocker_report_path"],
             "blocker_report_digest": outbox["blocker_report_digest"],
         }
+        if capability_fields[0] is not None:
+            receipt_matches.update(
+                {
+                    "native_goal_policy": capability_fields[0],
+                    "closeout_capability": capability_fields[1],
+                }
+            )
+        elif receipt.get("native_goal_policy") is not None or receipt.get(
+            "closeout_capability"
+        ) is not None:
+            raise RuntimeRejection(
+                "FINALIZATION_STATE_INCONSISTENT",
+                "/finalization_receipt",
+                {"reason": "UNBOUND_CLOSEOUT_CAPABILITY"},
+            )
         if any(receipt.get(key) != value for key, value in receipt_matches.items()):
             raise RuntimeRejection(
                 "FINALIZATION_STATE_INCONSISTENT",
@@ -2686,6 +4077,7 @@ class AdaptiveStateRuntime:
                 ".LOOP_STATE.md.*.STATE.tmp",
                 ".GOALS.md.*.GOALS.tmp",
                 ".progress-dashboard.html.*.DASHBOARD.tmp",
+                ".STATUS.md.*.STATUS.tmp",
             ),
             self.transactions_dir: (
                 ".*.PREPARED_JOURNAL.tmp",
@@ -2693,6 +4085,7 @@ class AdaptiveStateRuntime:
             ),
             self.reports_dir: (".*.ARTIFACT.tmp",),
             self.sources_dir: (".*.ARTIFACT.tmp",),
+            self.projection_transactions_dir: (".*.STATUS_JOURNAL.tmp",),
         }
         for directory, directory_patterns in patterns.items():
             if not directory.exists():
@@ -2809,12 +4202,70 @@ class AdaptiveStateRuntime:
             or self.goals_path.read_bytes() != self._render_goals(state)
         ):
             return True
+        target = state.get("status_projection_target")
+        contract_version = (
+            target.get("render_contract_version")
+            if isinstance(target, dict)
+            else CURRENT_STATUS_RENDER_CONTRACT
+        )
+        status = self._render_status(state, contract_version=contract_version)
+        if status is None:
+            if self.status_path.exists():
+                return True
+        elif not self.status_path.exists() or self.status_path.read_bytes() != status:
+            return True
+        elif self._status_projection_journal_needs_recovery_locked(state, status):
+            return True
         dashboard = self._render_dashboard(state)
         if dashboard is None:
             return self.dashboard_path.exists()
         return (
             not self.dashboard_path.exists()
             or self.dashboard_path.read_bytes() != dashboard
+        )
+
+    def _status_projection_journal_needs_recovery_locked(
+        self, state: dict[str, Any], payload: bytes
+    ) -> bool:
+        journal_path = self.projection_transactions_dir / (
+            f"status-v{state['state_version']}.json"
+        )
+        if (
+            not journal_path.exists()
+            or journal_path.is_symlink()
+            or not journal_path.is_file()
+        ):
+            return True
+        try:
+            journal = _strict_json_loads(
+                journal_path.read_text(encoding="utf-8"),
+                code="STATUS_PROJECTION_JOURNAL_INVALID",
+                path=f"/projection-transactions/{journal_path.name}",
+            )
+        except (OSError, UnicodeDecodeError, RuntimeRejection):
+            return True
+        expected_digest = _bytes_digest(payload)
+        required = {
+            "journal_version",
+            "status",
+            "target_state_version",
+            "target_digest",
+            "render_contract_version",
+            "projected_digest",
+            "readback_digest",
+        }
+        return (
+            not isinstance(journal, dict)
+            or set(journal) != required
+            or journal.get("journal_version") != 1
+            or journal.get("status") != "APPLIED"
+            or journal.get("target_state_version") != state["state_version"]
+            or journal.get("target_digest")
+            != state["status_projection_target"]["target_digest"]
+            or journal.get("render_contract_version")
+            != state["status_projection_target"]["render_contract_version"]
+            or journal.get("projected_digest") != expected_digest
+            or journal.get("readback_digest") != expected_digest
         )
 
     def _read_journal(self, path: Path) -> dict[str, Any]:
@@ -3181,7 +4632,7 @@ class AdaptiveStateRuntime:
         state: dict[str, Any],
         operation_result: dict[str, Any],
     ) -> dict[str, Any]:
-        return {
+        response = {
             "ok": True,
             "status": "STATE_WRITE_APPLIED",
             "operation_status": operation_result["code"],
@@ -3198,6 +4649,9 @@ class AdaptiveStateRuntime:
             "external_actions": [],
             "external_action_count": 0,
         }
+        if "next_action_code" in operation_result:
+            response["next_action_code"] = operation_result["next_action_code"]
+        return response
 
     def _already_applied_response(
         self, request: dict[str, Any], applied_version: int
@@ -3297,10 +4751,49 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("LOOP_ALREADY_TERMINAL", "/mutation/type")
         if state["terminal_status"] is None and mutation_type == "ACK_FINALIZATION":
             raise RuntimeRejection("LOOP_NOT_FINALIZED", "/mutation/type")
+        if state["schema_version"] == 1 and mutation_type in V2_ONLY_MUTATIONS:
+            raise RuntimeRejection(
+                "STATE_MIGRATION_REQUIRED",
+                "/mutation/type",
+                {"required_mutation": "MIGRATE_V1_TO_V2"},
+            )
+        if (
+            state["schema_version"] == 2
+            and state["run_control"]["status"] != "RUNNING"
+            and mutation_type in PAUSE_BLOCKED_ROUTING_MUTATIONS
+        ):
+            raise RuntimeRejection("LOOP_PAUSED", "/run_control/status")
 
         candidate = copy.deepcopy(state)
+        if candidate.get("schema_version") == 2:
+            candidate.setdefault("native_goal_policy", "required")
+            candidate.setdefault("controller_goal_resume_receipt", None)
         if mutation_type == "ACQUIRE_LEASE":
             result = self._acquire_lease(candidate, request, mutation)
+        elif mutation_type == "MIGRATE_V1_TO_V2":
+            result = self._migrate_v1_to_v2(
+                candidate, request, mutation, after_version
+            )
+        elif mutation_type == "RECORD_STEERING":
+            result = self._record_steering(candidate, request, mutation, after_version)
+        elif mutation_type == "RESOLVE_STEERING":
+            result = self._resolve_steering(candidate, request, mutation, after_version)
+        elif mutation_type == "SET_RUN_CONTROL":
+            result = self._set_run_control(candidate, request, mutation, after_version)
+        elif mutation_type == "REGISTER_DECISION":
+            result = self._register_decision(candidate, request, mutation)
+        elif mutation_type == "RECORD_DECISION_RESPONSE":
+            result = self._record_decision_response(candidate, request, mutation, after_version)
+        elif mutation_type == "RECORD_FAILURE":
+            result = self._record_failure(candidate, request, mutation)
+        elif mutation_type == "RECORD_VALIDATION":
+            result = self._record_validation(candidate, request, mutation)
+        elif mutation_type == "RECORD_CONTEXT_FRESHNESS":
+            result = self._record_context_freshness(candidate, request, mutation)
+        elif mutation_type == "RECORD_CONTROLLER_GOAL_RESUME":
+            result = self._record_controller_goal_resume(
+                candidate, request, mutation, after_version
+            )
         elif mutation_type == "RELEASE_LEASE":
             result = self._release_lease(candidate, mutation, after_version)
         elif mutation_type == "RENEW_LEASE":
@@ -3312,7 +4805,7 @@ class AdaptiveStateRuntime:
         elif mutation_type == "CANCEL_OUTBOX":
             result = self._cancel_outbox(candidate, mutation, after_version)
         elif mutation_type == "MARK_OUTBOX_SENT":
-            result = self._mark_outbox_sent(candidate, mutation)
+            result = self._mark_outbox_sent(candidate, request, mutation)
         elif mutation_type == "ACK_OUTBOX":
             result = self._ack_outbox(candidate, request, mutation, after_version)
         elif mutation_type == "RECORD_REVIEW":
@@ -3339,7 +4832,1047 @@ class AdaptiveStateRuntime:
             )
         else:
             raise RuntimeRejection("MUTATION_TYPE_UNSUPPORTED", "/mutation/type")
+        if (
+            candidate.get("schema_version") == 2
+            and mutation_type
+            not in {"REGISTER_DECISION", "RECORD_DECISION_RESPONSE"}
+        ):
+            self._refresh_decision_staleness(candidate)
         return candidate, result
+
+    @staticmethod
+    def _empty_v2_fields(state_version: int) -> dict[str, Any]:
+        return {
+            "review_contract_version": 2,
+            "controller_goal_resume_receipt": None,
+            "human_control_policy": copy.deepcopy(DEFAULT_HUMAN_CONTROL_POLICY),
+            "run_control": {
+                "status": "RUNNING",
+                "reason": None,
+                "effective_state_version": state_version,
+            },
+            "steering_queue": [],
+            "steering_ledger": {},
+            "active_steering_id": None,
+            "pending_decisions": {},
+            "failure_history": {},
+            "failure_policy": {
+                "same_strategy_failure_threshold": 2,
+                "same_strategy_failure_threshold_min": 2,
+                "same_strategy_failure_threshold_max": 3,
+            },
+            "context_freshness_ledger": [],
+            "validation_requirements": {},
+            "validation_results": {},
+            "validation_evidence_identity": {},
+            "validation_gate_status": "PENDING",
+            "status_projection_target": {
+                "path": ".codex-loop/STATUS.md",
+                "target_state_version": state_version,
+                "target_digest": "sha256:" + "0" * 64,
+                "render_contract_version": CURRENT_STATUS_RENDER_CONTRACT,
+            },
+        }
+
+    def _migrate_v1_to_v2(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        self._require_controller_actor(state, request)
+        if state["schema_version"] == 2:
+            if state.get("review_contract_version") == 2:
+                return {
+                    "code": "SCHEMA_V2_ALREADY_APPLIED",
+                    "next_action_code": "READ_STATE",
+                }
+            if mutation["source_state_digest"] != _bytes_digest(
+                self._render_state(state)
+            ):
+                raise RuntimeRejection(
+                    "MIGRATION_SOURCE_DIGEST_MISMATCH",
+                    "/mutation/source_state_digest",
+                )
+            self._upgrade_review_contract(state, force=True)
+            return {
+                "code": "REVIEW_CONTRACT_V2_MIGRATED",
+                "next_action_code": "READ_STATUS",
+            }
+        if state["schema_version"] != 1:
+            raise RuntimeRejection("SCHEMA_VERSION_UNSUPPORTED", "/schema_version")
+        if mutation["source_state_digest"] != _bytes_digest(self._render_state(state)):
+            raise RuntimeRejection("MIGRATION_SOURCE_DIGEST_MISMATCH", "/mutation/source_state_digest")
+        state["schema_version"] = 2
+        state.update(self._empty_v2_fields(after_version))
+        self._upgrade_review_contract(state, force=True)
+        state["v1_migration_source_digest"] = mutation["source_state_digest"]
+        state["validation_requirements"] = {
+            goal_id: self._validation_requirements_for_definition(
+                definition,
+                allow_legacy=True,
+                path=f"/goal_definition_registry/{goal_id}/validation_matrix",
+            )
+            for goal_id, definition in state["goal_definition_registry"].items()
+        }
+        self._refresh_validation_gate_status(state)
+        return {"code": "SCHEMA_V2_MIGRATED", "next_action_code": "READ_STATUS"}
+
+    @staticmethod
+    def _upgrade_review_contract(
+        state: dict[str, Any], *, force: bool = False
+    ) -> None:
+        if not force and state.get("review_contract_version") == 2:
+            return
+        for review in state.get("assurance_ledger", {}).values():
+            outbox = state.get("assurance_dispatch_outbox", {}).get(
+                review.get("review_dispatch_id"), {}
+            )
+            identity = outbox.get("identity", {})
+            if review.get("review_kind") in {"ROADMAP_AUDIT", "FINAL_AUDIT"}:
+                if isinstance(identity.get("code_review_id"), str):
+                    review.setdefault("code_review_id", identity["code_review_id"])
+            if review.get("review_kind") == "FINAL_AUDIT" and isinstance(
+                identity.get("roadmap_audit_id"), str
+            ):
+                review.setdefault(
+                    "roadmap_audit_id", identity["roadmap_audit_id"]
+                )
+            review["legacy_revalidation_required"] = True
+        state["review_contract_version"] = 2
+
+    @staticmethod
+    def _require_controller_actor(state: dict[str, Any], request: dict[str, Any]) -> None:
+        record = state["thread_registry"].get(request["thread_id"])
+        if not record or record["role_kind"] != "CONTROLLER" or record["status"] != "REGISTERED":
+            raise RuntimeRejection("STEERING_ACTOR_INVALID", "/thread_id")
+
+    def _record_steering(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        if not state["human_control_policy"]["human_steering_enabled"]:
+            raise RuntimeRejection("HUMAN_STEERING_DISABLED", "/human_control_policy")
+        self._require_controller_actor(state, request)
+        if mutation["steering_type"] == "STATUS_QUERY":
+            raise RuntimeRejection(
+                "STATUS_QUERY_IS_READ_ONLY",
+                "/mutation/steering_type",
+                {"required_action": "READ_STATE_AND_STATUS"},
+            )
+        steering_id = mutation["steering_id"]
+        existing = state["steering_ledger"].get(steering_id)
+        identity = {
+            "message_item_id": mutation.get("message_item_id"),
+            "observed_turn_cursor": mutation.get("observed_turn_cursor"),
+            "normalized_digest": mutation["normalized_digest"],
+            "identity_algorithm": mutation["identity_algorithm"],
+        }
+        if mutation["identity_algorithm"] == "message-item-v1":
+            if mutation.get("message_item_id") is None or mutation.get("observed_turn_cursor") is not None:
+                raise RuntimeRejection(
+                    "STEERING_IDENTITY_ALGORITHM_MISMATCH",
+                    "/mutation/identity_algorithm",
+                )
+        elif mutation["identity_algorithm"] == "turn-cursor-v1":
+            if mutation.get("observed_turn_cursor") is None or mutation.get("message_item_id") is not None:
+                raise RuntimeRejection(
+                    "STEERING_IDENTITY_ALGORITHM_MISMATCH",
+                    "/mutation/identity_algorithm",
+                )
+        if existing is not None:
+            if existing["identity"] != identity:
+                raise RuntimeRejection("STEERING_IDENTITY_CONFLICT", "/mutation/steering_id")
+            return {"code": "STEERING_ALREADY_RECORDED", "next_action_code": "READ_STATE"}
+        if mutation["identity_algorithm"] == "message-item-v1":
+            same_message = next(
+                (
+                    record
+                    for record in state["steering_ledger"].values()
+                    if record["identity"]["identity_algorithm"]
+                    == "message-item-v1"
+                    and record["identity"]["message_item_id"]
+                    == mutation["message_item_id"]
+                ),
+                None,
+            )
+            if same_message is not None:
+                if (
+                    same_message["identity"]["normalized_digest"]
+                    != mutation["normalized_digest"]
+                    or same_message["steering_type"] != mutation["steering_type"]
+                    or same_message["target_goal_id"]
+                    != mutation.get("target_goal_id")
+                    or same_message["target_dispatch_id"]
+                    != mutation.get("target_dispatch_id")
+                ):
+                    raise RuntimeRejection(
+                        "STEERING_IDENTITY_CONFLICT", "/mutation/message_item_id"
+                    )
+                return {
+                    "code": "STEERING_ALREADY_RECORDED",
+                    "next_action_code": "READ_STATE",
+                    "result": {"steering_id": same_message["steering_id"]},
+                }
+        same_identity = next(
+            (
+                record
+                for record in state["steering_ledger"].values()
+                if record["identity"] == identity
+            ),
+            None,
+        )
+        if same_identity is not None:
+            return {
+                "code": "STEERING_ALREADY_RECORDED",
+                "next_action_code": "READ_STATE",
+                "result": {"steering_id": same_identity["steering_id"]},
+            }
+        target_goal_id = mutation.get("target_goal_id")
+        if (
+            target_goal_id is not None
+            and target_goal_id not in state["goal_definition_registry"]
+        ):
+            raise RuntimeRejection("STEERING_TARGET_GOAL_UNKNOWN", "/mutation/target_goal_id")
+        target_dispatch_id = mutation.get("target_dispatch_id")
+        if (
+            target_dispatch_id is not None
+            and target_dispatch_id not in state["dispatch_outbox"]
+        ):
+            raise RuntimeRejection(
+                "STEERING_TARGET_DISPATCH_UNKNOWN",
+                "/mutation/target_dispatch_id",
+            )
+        record = {
+            "steering_id": steering_id,
+            "steering_type": mutation["steering_type"],
+            "status": "CLASSIFIED",
+            "identity": identity,
+            "summary": mutation["summary"],
+            "classification_reason": mutation["classification_reason"],
+            "target_goal_id": mutation.get("target_goal_id"),
+            "target_dispatch_id": mutation.get("target_dispatch_id"),
+            "received_at": request["occurred_at"],
+            "applied_state_version": None,
+            "resolution": None,
+        }
+        state["steering_ledger"][steering_id] = record
+        state["steering_queue"].append(copy.deepcopy(record))
+        state["active_steering_id"] = steering_id
+        return {"code": "STEERING_CLASSIFIED", "next_action_code": "RESOLVE_STEERING"}
+
+    def _resolve_steering(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        if not state["human_control_policy"]["human_steering_enabled"]:
+            raise RuntimeRejection("HUMAN_STEERING_DISABLED", "/human_control_policy")
+        self._require_controller_actor(state, request)
+        steering_id = mutation["steering_id"]
+        record = state["steering_ledger"].get(steering_id)
+        if record is None:
+            raise RuntimeRejection("STEERING_NOT_FOUND", "/mutation/steering_id")
+        if record["status"] in {"APPLIED", "CONFLICT"}:
+            return {"code": "STEERING_ALREADY_RESOLVED", "next_action_code": "READ_STATE"}
+        if record["steering_type"] not in {"CONSTRAINT", "CORRECTION"}:
+            raise RuntimeRejection(
+                "STEERING_REQUIRES_SPECIALIZED_RESOLVER",
+                "/mutation/steering_id",
+                {"steering_type": record["steering_type"]},
+            )
+        status = mutation["resolution_status"]
+        if mutation["next_action_code"] not in {
+            "WAIT_SAFE_POINT",
+            "ROADMAP_REVISION",
+            "READ_STATE",
+            "NONE",
+        }:
+            raise RuntimeRejection(
+                "STEERING_NEXT_ACTION_INVALID", "/mutation/next_action_code"
+            )
+        active_dispatches = {
+            outbox_id
+            for outbox_id, outbox in state["dispatch_outbox"].items()
+            if outbox["status"] == "SENT"
+        }
+        if (
+            record["steering_type"] in {"CONSTRAINT", "CORRECTION"}
+            and status == "APPLIED"
+            and (
+                record["target_dispatch_id"] in active_dispatches
+                or (
+                    record["target_goal_id"] is not None
+                    and any(
+                        outbox["status"] == "SENT"
+                        and outbox["identity"].get("goal_id")
+                        == record["target_goal_id"]
+                        for outbox in state["dispatch_outbox"].values()
+                    )
+                )
+            )
+        ):
+            raise RuntimeRejection(
+                "INFLIGHT_STEERING_MUST_DEFER",
+                "/mutation/resolution_status",
+            )
+        record["status"] = status
+        record["resolution"] = mutation["resolution"]
+        record["applied_state_version"] = after_version if status == "APPLIED" else None
+        for index, queued in enumerate(state["steering_queue"]):
+            if queued["steering_id"] == steering_id:
+                state["steering_queue"][index] = copy.deepcopy(record)
+        state["active_steering_id"] = None
+        return {"code": f"STEERING_{status}", "next_action_code": mutation["next_action_code"]}
+
+    def _set_run_control(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        if not state["human_control_policy"]["human_steering_enabled"]:
+            raise RuntimeRejection("HUMAN_STEERING_DISABLED", "/human_control_policy")
+        self._require_controller_actor(state, request)
+        requested = mutation["requested_status"]
+        current = state["run_control"]["status"]
+        steering = state["steering_ledger"].get(mutation["steering_id"])
+        expected_type = "RESUME" if requested == "RESUME" else "PAUSE"
+        if (
+            steering is None
+            or steering["steering_type"] != expected_type
+            or steering["status"] not in {"CLASSIFIED", "DEFERRED"}
+        ):
+            raise RuntimeRejection(
+                "RUN_CONTROL_STEERING_INVALID", "/mutation/steering_id"
+            )
+        active_route = state["controller_lease"] is not None or any(
+            record["status"] in ACTIVE_OUTBOX_STATUSES
+            for field in OUTBOX_FIELDS.values()
+            for record in state[field].values()
+        )
+        if requested == "PAUSE":
+            target = "PAUSE_REQUESTED" if active_route else "PAUSED_AT_SAFE_POINT"
+        elif requested == "SAFE_POINT_REACHED":
+            if current != "PAUSE_REQUESTED" or active_route:
+                raise RuntimeRejection("RUN_CONTROL_TRANSITION_INVALID", "/mutation/requested_status")
+            target = "PAUSED_AT_SAFE_POINT"
+        elif requested == "RESUME":
+            if current != "PAUSED_AT_SAFE_POINT":
+                raise RuntimeRejection("RUN_CONTROL_TRANSITION_INVALID", "/mutation/requested_status")
+            target = "RUNNING"
+        else:
+            raise RuntimeRejection("RUN_CONTROL_TRANSITION_INVALID", "/mutation/requested_status")
+        state["run_control"] = {
+            "status": target,
+            "reason": mutation.get("reason"),
+            "effective_state_version": after_version,
+        }
+        steering["status"] = (
+            "DEFERRED" if target == "PAUSE_REQUESTED" else "APPLIED"
+        )
+        steering["resolution"] = target
+        steering["applied_state_version"] = (
+            after_version if steering["status"] == "APPLIED" else None
+        )
+        for index, queued in enumerate(state["steering_queue"]):
+            if queued["steering_id"] == steering["steering_id"]:
+                state["steering_queue"][index] = copy.deepcopy(steering)
+        state["active_steering_id"] = (
+            steering["steering_id"] if steering["status"] == "DEFERRED" else None
+        )
+        return {"code": target, "next_action_code": "WAIT" if target != "RUNNING" else "ACQUIRE_LEASE"}
+
+    def _register_decision(
+        self, state: dict[str, Any], request: dict[str, Any], mutation: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not state["human_control_policy"]["decision_cards_enabled"]:
+            raise RuntimeRejection("DECISION_CARDS_DISABLED", "/human_control_policy")
+        self._require_controller_actor(state, request)
+        self._validate_review_surface_decision(state, mutation)
+        decision_id = mutation["decision_id"]
+        existing = state["pending_decisions"].get(decision_id)
+        if existing is not None:
+            if existing["decision_context_digest"] == mutation["decision_context_digest"]:
+                return {
+                    "code": "DECISION_ALREADY_REGISTERED",
+                    "next_action_code": "WAIT_DECISION",
+                }
+            if existing.get("status") != "STALE":
+                raise RuntimeRejection("DECISION_IDENTITY_CONFLICT", "/mutation/decision_id")
+            old_scope = {
+                key: value
+                for key, value in existing["scope"].items()
+                if key not in {"dispatch_id", "artifact_digest"}
+            }
+            new_scope = {
+                key: value
+                for key, value in mutation["scope"].items()
+                if key not in {"dispatch_id", "artifact_digest"}
+            }
+            if (
+                old_scope != new_scope
+                or existing["options"] != mutation["options"]
+                or existing["exclusions"] != mutation["exclusions"]
+            ):
+                raise RuntimeRejection(
+                    "DECISION_IDENTITY_CONFLICT", "/mutation/decision_id"
+                )
+        if mutation["source_state_version"] != state["state_version"]:
+            raise RuntimeRejection(
+                "DECISION_SOURCE_VERSION_INVALID",
+                "/mutation/source_state_version",
+            )
+        if mutation["valid_through_state_version"] < mutation["source_state_version"] + 1:
+            raise RuntimeRejection(
+                "DECISION_STATE_RANGE_INVALID",
+                "/mutation/valid_through_state_version",
+            )
+        expected_context = self._decision_context_digest(state, mutation)
+        if mutation["decision_context_digest"] != expected_context:
+            raise RuntimeRejection(
+                "DECISION_CONTEXT_DIGEST_MISMATCH",
+                "/mutation/decision_context_digest",
+                {"expected": expected_context},
+            )
+        option_ids = [option["option_id"] for option in mutation["options"]]
+        if len(option_ids) != len(set(option_ids)):
+            raise RuntimeRejection(
+                "DECISION_OPTION_ID_CONFLICT", "/mutation/options"
+            )
+        for index, option in enumerate(mutation["options"]):
+            expected_capability = DECISION_EFFECT_CAPABILITY[option["option_effect"]]
+            capability = option["preauthorized_capability"]
+            if capability != expected_capability:
+                raise RuntimeRejection(
+                    "DECISION_CAPABILITY_MISMATCH",
+                    f"/mutation/options/{index}/preauthorized_capability",
+                )
+            if capability in PHASE_PERMISSION_FIELDS and not self._decision_phase_capability_authorized(
+                state, mutation["scope"], capability
+            ):
+                raise RuntimeRejection(
+                    "DECISION_CAPABILITY_NOT_AUTHORIZED",
+                    f"/mutation/options/{index}/preauthorized_capability",
+                )
+            if (
+                capability in state["authorization_envelope"]["control_plane_caps"]
+                and not state["authorization_envelope"]["control_plane_caps"][capability]
+            ):
+                raise RuntimeRejection(
+                    "DECISION_CAPABILITY_NOT_AUTHORIZED",
+                    f"/mutation/options/{index}/preauthorized_capability",
+                )
+        state["pending_decisions"][decision_id] = {
+            key: copy.deepcopy(mutation[key])
+            for key in (
+                "decision_id",
+                "decision_context_digest",
+                "source_state_version",
+                "valid_through_state_version",
+                "options",
+                "scope",
+                "exclusions",
+            )
+        } | {"status": "PENDING", "selected_option_id": None}
+        return {
+            "code": "DECISION_REGISTERED",
+            "next_action_code": "WAIT_DECISION",
+            "result": {
+                "decision_id": decision_id,
+                "decision_card": render_decision_card(
+                    state["pending_decisions"][decision_id]
+                ),
+            },
+        }
+
+    def _validate_review_surface_decision(
+        self, state: dict[str, Any], mutation: Mapping[str, Any]
+    ) -> None:
+        accepting = [
+            option
+            for option in mutation["options"]
+            if option["option_effect"] == "REVIEW_SURFACE_ACCEPTED"
+        ]
+        matching = [
+            (goal_id, definition["review_surface"])
+            for goal_id, definition in state["goal_definition_registry"].items()
+            if isinstance(definition.get("review_surface"), dict)
+            and definition["review_surface"].get("decision_gate_id")
+            == mutation["decision_id"]
+        ]
+        if not accepting and not matching:
+            return
+        if len(accepting) != 1 or len(matching) != 1:
+            raise RuntimeRejection(
+                "REVIEW_SURFACE_DECISION_IDENTITY_MISMATCH",
+                "/mutation/decision_id",
+            )
+        goal_id, surface = matching[0]
+        latest_worker = state["goal_execution_ledger"].get(goal_id, {}).get(
+            "latest_worker"
+        )
+        scope = mutation["scope"]
+        expected = {
+            "goal_id": goal_id,
+            "dispatch_id": (
+                latest_worker.get("dispatch_id")
+                if isinstance(latest_worker, dict)
+                else None
+            ),
+            "artifact_digest": (
+                latest_worker.get("artifact_digest")
+                if isinstance(latest_worker, dict)
+                else None
+            ),
+        }
+        if surface.get("artifact_path") is not None:
+            expected["artifact_path"] = surface["artifact_path"]
+        if surface.get("preview_url") is not None:
+            expected["preview_url"] = surface["preview_url"]
+        if (
+            not isinstance(latest_worker, dict)
+            or latest_worker.get("status") != "PASS"
+            or any(scope.get(key) != value for key, value in expected.items())
+        ):
+            raise RuntimeRejection(
+                "REVIEW_SURFACE_DECISION_IDENTITY_MISMATCH",
+                "/mutation/scope",
+                {"required_fields": sorted(expected)},
+            )
+
+    def _refresh_decision_staleness(self, state: dict[str, Any]) -> None:
+        for decision in state.get("pending_decisions", {}).values():
+            if decision.get("status") not in {"PENDING", "APPLIED"}:
+                continue
+            if (
+                self._decision_context_digest(state, decision)
+                != decision.get("decision_context_digest")
+            ):
+                decision["status"] = "STALE"
+
+    @staticmethod
+    def _decision_phase_capability_authorized(
+        state: dict[str, Any], scope: Mapping[str, Any], capability: str
+    ) -> bool:
+        goal_id = scope.get("goal_id")
+        definition = state["goal_definition_registry"].get(goal_id)
+        if definition is None:
+            return False
+        milestone_id = definition["milestone_id"]
+        envelope = state["authorization_envelope"]
+        milestone_cap = envelope["phase_permission_caps"]["by_milestone"].get(
+            milestone_id, {}
+        )
+        goal_cap = envelope["phase_permission_caps"]["by_goal"].get(goal_id, {})
+        return all(
+            (
+                envelope["phase_permissions"].get(capability) is True,
+                milestone_cap.get(capability) is True,
+                goal_cap.get("phase_permissions", {}).get(capability) is True,
+                definition["phase_permissions"].get(capability) is True,
+            )
+        )
+
+    @staticmethod
+    def _decision_context_digest(
+        state: dict[str, Any], decision: Mapping[str, Any]
+    ) -> str:
+        scope = decision["scope"]
+        goal_id = scope.get("goal_id")
+        dispatch_id = scope.get("dispatch_id")
+        artifact_digest = scope.get("artifact_digest")
+        worker_artifacts = {
+            goal_id: (
+                record["latest_worker"]["artifact_digest"]
+                if record["latest_worker"] is not None
+                else None
+            )
+            for goal_id, record in state["goal_execution_ledger"].items()
+            if scope.get("goal_id") is None or goal_id == scope.get("goal_id")
+        }
+        relevant_freshness = [
+            copy.deepcopy(record)
+            for record in state["context_freshness_ledger"]
+            if (goal_id is None or record["goal_id"] == goal_id)
+            and (
+                dispatch_id is None
+                or record.get("dispatch_id") in {None, dispatch_id}
+            )
+            and (
+                artifact_digest is None
+                or record.get("artifact_digest") in {None, artifact_digest}
+            )
+            and record.get("classification")
+            not in {"FRESH", "CHANGED_IRRELEVANT"}
+        ]
+        return canonical_digest(
+            {
+                "roadmap_version": state["roadmap_version"],
+                "active_milestone_id": state["active_milestone_id"],
+                "terminal_status": state["terminal_status"],
+                "scope": scope,
+                "options": decision["options"],
+                "exclusions": decision["exclusions"],
+                "authorization_envelope": state["authorization_envelope"],
+                "goal_definition": (
+                    state["goal_definition_registry"].get(goal_id)
+                    if goal_id is not None
+                    else None
+                ),
+                "validation_requirements": (
+                    state["validation_requirements"].get(goal_id, {})
+                    if goal_id is not None
+                    else state["validation_requirements"]
+                ),
+                "validation_results": (
+                    state["validation_results"].get(goal_id, {})
+                    if goal_id is not None
+                    else state["validation_results"]
+                ),
+                "validation_evidence_identity": state[
+                    "validation_evidence_identity"
+                ],
+                "worker_artifacts": worker_artifacts,
+                "failure_history": (
+                    state["failure_history"].get(goal_id, [])
+                    if goal_id is not None
+                    else state["failure_history"]
+                ),
+                "context_freshness": relevant_freshness,
+            }
+        )
+
+    def _record_decision_response(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        if not state["human_control_policy"]["decision_cards_enabled"]:
+            raise RuntimeRejection("DECISION_CARDS_DISABLED", "/human_control_policy")
+        self._require_controller_actor(state, request)
+        identity = {
+            "message_item_id": mutation.get("message_item_id"),
+            "observed_turn_cursor": mutation.get("observed_turn_cursor"),
+            "normalized_digest": mutation["normalized_digest"],
+            "identity_algorithm": mutation["identity_algorithm"],
+        }
+        if mutation["identity_algorithm"] == "message-item-v1":
+            primary_matches = [
+                record
+                for record in state["steering_ledger"].values()
+                if record["identity"]["identity_algorithm"]
+                == "message-item-v1"
+                and record["identity"]["message_item_id"]
+                == mutation["message_item_id"]
+            ]
+        else:
+            primary_matches = [
+                record
+                for record in state["steering_ledger"].values()
+                if record["identity"] == identity
+            ]
+        existing_by_id = state["steering_ledger"].get(mutation["steering_id"])
+        if existing_by_id is not None and existing_by_id not in primary_matches:
+            raise RuntimeRejection(
+                "STEERING_IDENTITY_CONFLICT", "/mutation/steering_id"
+            )
+        if primary_matches:
+            existing_response = primary_matches[0]
+            expected_resolution = (
+                f"{mutation['decision_id']}:{mutation['option_id']}"
+            )
+            if (
+                existing_response["steering_type"] != "DECISION_RESPONSE"
+                or existing_response["identity"] != identity
+                or existing_response["resolution"] != expected_resolution
+            ):
+                raise RuntimeRejection(
+                    "STEERING_IDENTITY_CONFLICT", "/mutation/message_item_id"
+                )
+            return {
+                "code": "DECISION_RESPONSE_ALREADY_APPLIED",
+                "next_action_code": "READ_STATE",
+                "result": {"steering_id": existing_response["steering_id"]},
+            }
+        decision = state["pending_decisions"].get(mutation["decision_id"])
+        if isinstance(decision, dict) and decision.get("status") == "STALE":
+            raise RuntimeRejection("DECISION_STALE", "/mutation/decision_id")
+        if decision is None or decision["status"] != "PENDING":
+            raise RuntimeRejection("DECISION_NOT_PENDING", "/mutation/decision_id")
+        if not (decision["source_state_version"] <= state["state_version"] <= decision["valid_through_state_version"]):
+            raise RuntimeRejection("DECISION_STALE", "/mutation/decision_id")
+        if mutation["decision_context_digest"] != decision["decision_context_digest"]:
+            raise RuntimeRejection("DECISION_STALE", "/mutation/decision_context_digest")
+        if self._decision_context_digest(state, decision) != decision["decision_context_digest"]:
+            raise RuntimeRejection("DECISION_STALE", "/mutation/decision_context_digest")
+        option = next((item for item in decision["options"] if item["option_id"] == mutation["option_id"]), None)
+        if option is None:
+            raise RuntimeRejection("DECISION_OPTION_INVALID", "/mutation/option_id")
+        decision["status"] = "APPLIED"
+        decision["selected_option_id"] = option["option_id"]
+        decision["applied_state_version"] = after_version
+        steering_record = {
+            "steering_id": mutation["steering_id"],
+            "steering_type": "DECISION_RESPONSE",
+            "status": "APPLIED",
+            "identity": identity,
+            "summary": mutation["summary"],
+            "classification_reason": mutation["classification_reason"],
+            "target_goal_id": decision["scope"].get("goal_id"),
+            "target_dispatch_id": decision["scope"].get("dispatch_id"),
+            "received_at": request["occurred_at"],
+            "applied_state_version": after_version,
+            "resolution": f"{mutation['decision_id']}:{option['option_id']}",
+        }
+        state["steering_ledger"][mutation["steering_id"]] = steering_record
+        state["steering_queue"].append(copy.deepcopy(steering_record))
+        return {"code": "DECISION_RESPONSE_APPLIED", "next_action_code": option["option_effect"]}
+
+    def _record_failure(
+        self, state: dict[str, Any], request: dict[str, Any], mutation: dict[str, Any]
+    ) -> dict[str, Any]:
+        self._require_controller_actor(state, request)
+        goal_id = mutation["goal_id"]
+        if goal_id not in state["goal_definition_registry"]:
+            raise RuntimeRejection("GOAL_NOT_FOUND", "/mutation/goal_id")
+        fingerprint = copy.deepcopy(mutation["fingerprint"])
+        allowed_scopes = state["goal_definition_registry"][goal_id]["allowed_write_scope"]
+        for index, path in enumerate(fingerprint["changed_files"]):
+            self._validate_scope(path, f"/mutation/fingerprint/changed_files/{index}")
+            if not any(self._scope_contains(scope, path) for scope in allowed_scopes):
+                raise RuntimeRejection(
+                    "FAILURE_CHANGED_PATH_OUTSIDE_SCOPE",
+                    f"/mutation/fingerprint/changed_files/{index}",
+                )
+        history = state["failure_history"].setdefault(goal_id, [])
+        repair_limit = state["authorization_envelope"]["repair_policy"][
+            "max_repair_attempts_per_goal"
+        ]
+        attempts = state["goal_execution_ledger"][goal_id]["attempts"]
+        classification = classify_failure_progress(
+            history,
+            fingerprint,
+            same_strategy_threshold=state["failure_policy"]["same_strategy_failure_threshold"],
+            strategy_budget_exhausted=len(attempts) >= 1 + repair_limit,
+        )
+        fingerprint["classification"] = classification
+        fingerprint["recorded_at"] = request["occurred_at"]
+        history.append(fingerprint)
+        if classification in {"THRASHING_DETECTED", "STRATEGY_EXHAUSTED"}:
+            state["goal_execution_ledger"][goal_id]["status"] = classification
+        return {"code": "FAILURE_RECORDED", "next_action_code": classification}
+
+    def _record_validation(
+        self, state: dict[str, Any], request: dict[str, Any], mutation: dict[str, Any]
+    ) -> dict[str, Any]:
+        self._require_controller_actor(state, request)
+        goal_id = mutation["goal_id"]
+        requirements = state["validation_requirements"].get(goal_id)
+        if requirements is None or mutation["dimension"] not in requirements:
+            raise RuntimeRejection("VALIDATION_DIMENSION_UNKNOWN", "/mutation/dimension")
+        rule = requirements[mutation["dimension"]]
+        if rule.get("required") and mutation["status"] == "NOT_APPLICABLE":
+            raise RuntimeRejection(
+                "REQUIRED_VALIDATION_NOT_APPLICABLE",
+                "/mutation/status",
+            )
+        latest_worker = state["goal_execution_ledger"][goal_id]["latest_worker"]
+        if (
+            "validation_matrix" in state["goal_definition_registry"][goal_id]
+            and latest_worker is None
+        ):
+            raise RuntimeRejection(
+                "VALIDATION_WORKER_ARTIFACT_REQUIRED",
+                "/mutation/artifact_digest",
+            )
+        if (
+            latest_worker is not None
+            and mutation["artifact_digest"] != latest_worker["artifact_digest"]
+        ):
+            raise RuntimeRejection(
+                "VALIDATION_ARTIFACT_STALE",
+                "/mutation/artifact_digest",
+            )
+        evidence_matches = [
+            artifact
+            for artifact in request["artifacts"]
+            if artifact["path"] in request["evidence_paths"]
+            and artifact["digest"] == mutation["evidence_digest"]
+        ]
+        if len(evidence_matches) != 1:
+            raise RuntimeRejection(
+                "VALIDATION_EVIDENCE_UNBOUND",
+                "/mutation/evidence_digest",
+            )
+        state["validation_results"].setdefault(goal_id, {})[mutation["dimension"]] = mutation["status"]
+        state["validation_evidence_identity"].setdefault(goal_id, {})[mutation["dimension"]] = {
+            "evidence_path": evidence_matches[0]["path"],
+            "evidence_digest": mutation["evidence_digest"],
+            "artifact_digest": mutation["artifact_digest"],
+            "checked_at": request["occurred_at"],
+        }
+        self._refresh_validation_gate_status(state)
+        return {"code": "VALIDATION_RECORDED", "next_action_code": state["validation_gate_status"]}
+
+    @staticmethod
+    def _refresh_validation_gate_status(state: dict[str, Any]) -> None:
+        pending = False
+        failed = False
+        for goal_id, dimensions in state["validation_requirements"].items():
+            goal_record = state["goal_execution_ledger"].get(goal_id, {})
+            if goal_record.get("status") == "RETIRED":
+                continue
+            latest_worker = goal_record.get("latest_worker")
+            latest_artifact = (
+                latest_worker.get("artifact_digest")
+                if isinstance(latest_worker, dict)
+                else None
+            )
+            for dimension, rule in dimensions.items():
+                if not rule.get("required"):
+                    continue
+                result = state["validation_results"].get(goal_id, {}).get(dimension)
+                evidence_artifact = (
+                    state["validation_evidence_identity"]
+                    .get(goal_id, {})
+                    .get(dimension, {})
+                    .get("artifact_digest")
+                )
+                current_evidence = (
+                    latest_artifact is not None and evidence_artifact == latest_artifact
+                )
+                if result == "FAIL" and current_evidence:
+                    failed = True
+                elif result != "PASS" or not current_evidence:
+                    pending = True
+        state["validation_gate_status"] = (
+            "FAIL" if failed else "PENDING" if pending else "PASS"
+        )
+
+    @staticmethod
+    def _freshness_context_digest(
+        state: dict[str, Any], goal_id: str, dispatch_id: str | None
+    ) -> str:
+        relevant_steering = [
+            copy.deepcopy(record)
+            for record in state["steering_ledger"].values()
+            if record.get("target_goal_id") in {None, goal_id}
+            and record.get("target_dispatch_id") in {None, dispatch_id}
+        ]
+        relevant_decisions = [
+            copy.deepcopy(record)
+            for record in state["pending_decisions"].values()
+            if record.get("scope", {}).get("goal_id") in {None, goal_id}
+            and record.get("scope", {}).get("dispatch_id") in {None, dispatch_id}
+        ]
+        return canonical_digest(
+            {
+                "roadmap_version": state["roadmap_version"],
+                "goal_definition": state["goal_definition_registry"].get(goal_id),
+                "latest_worker": state["goal_execution_ledger"].get(goal_id, {}).get(
+                    "latest_worker"
+                ),
+                "authorization_envelope": state["authorization_envelope"],
+                "validation_requirements": state["validation_requirements"].get(
+                    goal_id, {}
+                ),
+                "validation_results": state["validation_results"].get(goal_id, {}),
+                "validation_evidence_identity": state[
+                    "validation_evidence_identity"
+                ].get(goal_id, {}),
+                "steering": sorted(
+                    relevant_steering, key=lambda item: item["steering_id"]
+                ),
+                "decisions": sorted(
+                    relevant_decisions, key=lambda item: item["decision_id"]
+                ),
+                "failure_history": state["failure_history"].get(goal_id, []),
+            }
+        )
+
+    def _record_context_freshness(
+        self, state: dict[str, Any], request: dict[str, Any], mutation: dict[str, Any]
+    ) -> dict[str, Any]:
+        self._require_controller_actor(state, request)
+        delta = mutation["observed_identity_delta"]
+        classification = mutation["classification"]
+        source = mutation["classification_source"]
+        goal_id = mutation["goal_id"]
+        if goal_id not in state["goal_definition_registry"]:
+            raise RuntimeRejection("GOAL_NOT_FOUND", "/mutation/goal_id")
+        expected_identity_digest = canonical_digest(delta)
+        if mutation["observed_identity_digest"] != expected_identity_digest:
+            raise RuntimeRejection(
+                "CONTEXT_IDENTITY_DIGEST_MISMATCH",
+                "/mutation/observed_identity_digest",
+                {"expected": expected_identity_digest},
+            )
+        if mutation["checkpoint"] in {
+            "REPAIR",
+            "CODE_REVIEW",
+            "ROADMAP_AUDIT",
+            "FINAL_AUDIT",
+        }:
+            latest_worker = state["goal_execution_ledger"][goal_id]["latest_worker"]
+            if (
+                latest_worker is None
+                or mutation.get("dispatch_id") != latest_worker["dispatch_id"]
+                or mutation.get("artifact_digest") != latest_worker["artifact_digest"]
+                or delta.get("artifact_digest") != latest_worker["artifact_digest"]
+                or delta.get("worker_report_digest")
+                != latest_worker["report_digest"]
+            ):
+                raise RuntimeRejection(
+                    "CONTEXT_ARTIFACT_IDENTITY_MISMATCH",
+                    "/mutation/artifact_digest",
+                )
+        if classification == "CHANGED_IRRELEVANT":
+            required_false = (
+                "base_sha_changed",
+                "head_sha_changed",
+                "scope_overlap",
+                "source_digest_changed",
+                "target_scope_changed",
+                "dependency_interface_changed",
+                "lockfile_digest_changed",
+                "generated_config_changed",
+                "worker_report_changed",
+                "artifact_digest_changed",
+                "diff_digest_changed",
+                "symlink_escape",
+                "wildcard_ambiguity",
+            )
+            if (
+                source != "DETERMINISTIC_SCOPE_RULE"
+                or not delta.get("changed_paths")
+                or any(delta.get(key) is not False for key in required_false)
+            ):
+                raise RuntimeRejection(
+                    "CONTEXT_CLASSIFICATION_UNPROVEN",
+                    "/mutation/classification",
+                )
+        if classification == "FRESH":
+            required_identity_fields = {
+                "repo_mode",
+                "repo_root_digest",
+                "worktree_root_digest",
+                "branch",
+                "base_sha",
+                "head_sha",
+                "dirty_boundary_digest",
+                "untracked_boundary_digest",
+                "source_artifact_digest",
+                "target_scope_digest",
+                "dependency_interface_digest",
+                "lockfile_digest",
+                "generated_config_digest",
+                "worker_report_digest",
+                "artifact_digest",
+                "diff_digest",
+                "changed_paths",
+                "base_sha_changed",
+                "head_sha_changed",
+                "dirty_boundary_changed",
+                "untracked_boundary_changed",
+                "source_digest_changed",
+                "target_scope_changed",
+                "dependency_interface_changed",
+                "lockfile_digest_changed",
+                "generated_config_changed",
+                "worker_report_changed",
+                "artifact_digest_changed",
+                "diff_digest_changed",
+                "scope_overlap",
+                "symlink_escape",
+                "wildcard_ambiguity",
+                "reload_completed",
+            }
+            change_flags = {
+                key
+                for key in required_identity_fields
+                if key.endswith("_changed")
+            } | {"scope_overlap", "symlink_escape", "wildcard_ambiguity"}
+            if (
+                source != "DETERMINISTIC_IDENTITY"
+                or set(delta) != required_identity_fields
+                or any(delta[key] is not False for key in change_flags)
+                or delta["changed_paths"]
+                or delta["reload_completed"] is not False
+                or delta["repo_mode"] not in {"git", "non_git"}
+            ):
+                raise RuntimeRejection(
+                    "CONTEXT_CLASSIFICATION_UNPROVEN",
+                    "/mutation/classification",
+                )
+        if classification == "RELOAD_SAFE":
+            unsafe_flags = (
+                "base_sha_changed",
+                "head_sha_changed",
+                "source_digest_changed",
+                "target_scope_changed",
+                "dependency_interface_changed",
+                "lockfile_digest_changed",
+                "generated_config_changed",
+                "worker_report_changed",
+                "artifact_digest_changed",
+                "diff_digest_changed",
+                "scope_overlap",
+                "symlink_escape",
+                "wildcard_ambiguity",
+            )
+            if (
+                source != "DETERMINISTIC_IDENTITY"
+                or delta.get("reload_completed") is not True
+                or any(delta.get(key) is True for key in unsafe_flags)
+            ):
+                raise RuntimeRejection(
+                    "CONTEXT_CLASSIFICATION_UNPROVEN",
+                    "/mutation/classification",
+                )
+        if classification == "JUDGMENT_REQUIRED" and source != "MODEL_JUDGMENT_REQUIRED":
+            raise RuntimeRejection(
+                "CONTEXT_CLASSIFICATION_SOURCE_INVALID",
+                "/mutation/classification_source",
+            )
+        record = {
+            "checkpoint_id": mutation["checkpoint_id"],
+            "checkpoint": mutation["checkpoint"],
+            "goal_id": goal_id,
+            "dispatch_id": mutation.get("dispatch_id"),
+            "artifact_digest": mutation.get("artifact_digest"),
+            "observed_identity_digest": mutation["observed_identity_digest"],
+            "context_state_digest": self._freshness_context_digest(
+                state, goal_id, mutation.get("dispatch_id")
+            ),
+            "observed_identity_delta": copy.deepcopy(delta),
+            "classification": classification,
+            "classification_source": source,
+            "evidence_refs": list(request["evidence_paths"]),
+            "checked_at_state_version": state["state_version"],
+            "checked_at": request["occurred_at"],
+        }
+        existing = next((item for item in state["context_freshness_ledger"] if item["checkpoint_id"] == record["checkpoint_id"]), None)
+        if existing is not None:
+            semantic_fields = set(record) - {
+                "evidence_refs",
+                "checked_at_state_version",
+                "checked_at",
+            }
+            if any(existing.get(field) != record[field] for field in semantic_fields):
+                raise RuntimeRejection("CONTEXT_CHECK_CONFLICT", "/mutation/checkpoint_id")
+            return {"code": "CONTEXT_CHECK_ALREADY_RECORDED", "next_action_code": existing["classification"]}
+        state["context_freshness_ledger"].append(record)
+        return {"code": "CONTEXT_FRESHNESS_RECORDED", "next_action_code": record["classification"]}
 
     def _initialize_state(
         self,
@@ -3367,6 +5900,23 @@ class AdaptiveStateRuntime:
             )
         roadmap_version = 1
         definitions = copy.deepcopy(mutation["goal_definition_registry"])
+        validation_requirements = {
+            goal_id: self._validation_requirements_for_definition(
+                definition,
+                allow_legacy=False,
+                path=f"/mutation/goal_definition_registry/{goal_id}/validation_matrix",
+            )
+            for goal_id, definition in definitions.items()
+        }
+        validation_gate_status = (
+            "PENDING"
+            if any(
+                rule.get("required") is True
+                for matrix in validation_requirements.values()
+                for rule in matrix.values()
+            )
+            else "PASS"
+        )
         queue = copy.deepcopy(mutation["goal_queue"])
         for entry in queue:
             if entry["roadmap_version"] != roadmap_version:
@@ -3405,7 +5955,9 @@ class AdaptiveStateRuntime:
                 "projection_digest": mutation["projection_digest"],
             }
         return {
-            "schema_version": 1,
+            "schema_version": 2,
+            "review_contract_version": 2,
+            "native_goal_policy": mutation.get("native_goal_policy", "required"),
             "loop_id": mutation["loop_id"],
             "root": str(self.root),
             "controller_pack_identity": {
@@ -3414,6 +5966,9 @@ class AdaptiveStateRuntime:
                 "media_type": pack_artifact["media_type"],
             },
             "dashboard_required": mutation["dashboard_required"],
+            "human_control_policy": copy.deepcopy(
+                mutation.get("human_control_policy", DEFAULT_HUMAN_CONTROL_POLICY)
+            ),
             "state_version": 1,
             "roadmap_version": roadmap_version,
             "terminal_status": None,
@@ -3454,6 +6009,7 @@ class AdaptiveStateRuntime:
                 },
             },
             "controller_goal": None,
+            "controller_goal_resume_receipt": None,
             "controller_lease": None,
             "lease_epoch_counter": 0,
             "consumed_controller_lease_ids": [],
@@ -3485,6 +6041,32 @@ class AdaptiveStateRuntime:
             "last_event_id": None,
             "last_transaction_id": None,
             "external_action_count": 0,
+            "run_control": {
+                "status": "RUNNING",
+                "reason": None,
+                "effective_state_version": 1,
+            },
+            "steering_queue": [],
+            "steering_ledger": {},
+            "active_steering_id": None,
+            "pending_decisions": {},
+            "failure_history": {},
+            "failure_policy": {
+                "same_strategy_failure_threshold": 2,
+                "same_strategy_failure_threshold_min": 2,
+                "same_strategy_failure_threshold_max": 3,
+            },
+            "context_freshness_ledger": [],
+            "validation_requirements": validation_requirements,
+            "validation_results": {},
+            "validation_evidence_identity": {},
+            "validation_gate_status": validation_gate_status,
+            "status_projection_target": {
+                "path": ".codex-loop/STATUS.md",
+                "target_state_version": 1,
+                "target_digest": "sha256:" + "0" * 64,
+                "render_contract_version": CURRENT_STATUS_RENDER_CONTRACT,
+            },
         }
 
     def _registered_controller(self, state: dict[str, Any], thread_id: str) -> bool:
@@ -3517,6 +6099,8 @@ class AdaptiveStateRuntime:
         request: dict[str, Any],
         mutation: dict[str, Any],
     ) -> dict[str, Any]:
+        if state.get("schema_version") == 2 and state["run_control"]["status"] != "RUNNING":
+            raise RuntimeRejection("LOOP_PAUSED", "/run_control/status")
         observed = self._observe_time(state, mutation["observed_at"], "/mutation/observed_at")
         expires = _parse_time(mutation["expires_at"], "/mutation/expires_at")
         if expires <= observed:
@@ -3874,6 +6458,35 @@ class AdaptiveStateRuntime:
                 "OWNER_READ_EVIDENCE_MISMATCH",
                 path,
             )
+
+    @staticmethod
+    def _require_bound_strict_json_artifact(
+        request: dict[str, Any],
+        path: str,
+        digest: str,
+        json_path: str,
+    ) -> dict[str, Any]:
+        matches = [
+            artifact
+            for artifact in request["artifacts"]
+            if artifact["path"] == path
+            and artifact["digest"] == digest
+            and artifact["media_type"] == "application/json"
+        ]
+        if len(matches) != 1:
+            raise RuntimeRejection(
+                "OBSERVATION_ARTIFACT_UNBOUND",
+                json_path,
+                {"path": path, "digest": digest},
+            )
+        observed = _strict_json_loads(
+            matches[0]["content"],
+            code="OBSERVATION_ARTIFACT_INVALID",
+            path=json_path,
+        )
+        if not isinstance(observed, dict):
+            raise RuntimeRejection("OBSERVATION_ARTIFACT_INVALID", json_path)
+        return observed
 
     @staticmethod
     def _require_json_observation_artifact(
@@ -4236,6 +6849,204 @@ class AdaptiveStateRuntime:
                 {"milestone_id": milestone_id},
             )
 
+    def _record_controller_goal_resume(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        """Record one evidence-bound user resume without changing native Goal state."""
+
+        self._require_controller_actor(state, request)
+        if state.get("native_goal_policy", "required") != "required":
+            raise RuntimeRejection(
+                "CONTROLLER_GOAL_RESUME_POLICY_INVALID",
+                "/native_goal_policy",
+            )
+        if state.get("controller_goal_resume_receipt") is not None:
+            raise RuntimeRejection(
+                "CONTROLLER_GOAL_RESUME_ALREADY_RECORDED",
+                "/controller_goal_resume_receipt",
+            )
+        goal = state.get("controller_goal")
+        identity_fields = (
+            "goal_id",
+            "loop_id",
+            "pack_digest",
+            "milestone_id",
+            "objective_digest",
+            "marker",
+        )
+        if (
+            not isinstance(goal, dict)
+            or goal.get("status") != "ACTIVE"
+            or goal.get("milestone_id") != state.get("active_milestone_id")
+            or any(mutation.get(key) != goal.get(key) for key in identity_fields)
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_GOAL_RESUME_IDENTITY_MISMATCH",
+                "/mutation",
+            )
+        claim = mutation["lease_claim"]
+        lease = self._require_exact_lease(state, claim, mutation["observed_at"])
+        if claim["owner_kind"] != "GOAL_TURN":
+            raise RuntimeRejection(
+                "CONTROLLER_GOAL_RESUME_OWNER_INVALID",
+                "/mutation/lease_claim/owner_kind",
+            )
+        self._reserve_route(
+            lease, "CONTROLLER_GOAL_RESUME", mutation["resume_id"]
+        )
+
+        artifact_fields = (
+            ("pre_blocked_observation_path", "pre_blocked_observation_digest"),
+            ("resume_authorization_path", "resume_authorization_digest"),
+            ("post_resume_observation_path", "post_resume_observation_digest"),
+        )
+        bound_paths = [mutation[path_key] for path_key, _ in artifact_fields]
+        if len(set(bound_paths)) != 3 or set(bound_paths) != {
+            artifact["path"] for artifact in request["artifacts"]
+        }:
+            raise RuntimeRejection(
+                "CONTROLLER_GOAL_RESUME_EVIDENCE_SET_INVALID",
+                "/artifacts",
+            )
+        bound = [
+            self._require_bound_strict_json_artifact(
+                request,
+                mutation[path_key],
+                mutation[digest_key],
+                f"/mutation/{digest_key}",
+            )
+            for path_key, digest_key in artifact_fields
+        ]
+        pre_observation, authorization, post_observation = bound
+
+        expected_observation_keys = {
+            "observation_kind",
+            "threadId",
+            "objective",
+            "status",
+            "createdAt",
+            "updatedAt",
+            "observed_at",
+        }
+        observation_times: list[datetime] = []
+        for label, observation in (
+            ("pre_blocked_observation", pre_observation),
+            ("post_resume_observation", post_observation),
+        ):
+            path = f"/artifacts/{label}"
+            if set(observation) != expected_observation_keys:
+                raise RuntimeRejection(
+                    "CONTROLLER_GOAL_RESUME_OBSERVATION_INVALID", path
+                )
+            objective = observation["objective"]
+            if (
+                observation["observation_kind"] != "CODEX_GOAL_READBACK"
+                or observation["threadId"] != goal["goal_id"]
+                or observation["status"] != "blocked"
+                or not isinstance(objective, str)
+                or "\r" in objective
+                or "\n" not in objective
+                or objective.rsplit("\n", 1)[1] != goal["marker"]
+                or _bytes_digest(objective.rsplit("\n", 1)[0].encode("utf-8"))
+                != goal["objective_digest"]
+                or not isinstance(observation["createdAt"], int)
+                or isinstance(observation["createdAt"], bool)
+                or not isinstance(observation["updatedAt"], int)
+                or isinstance(observation["updatedAt"], bool)
+                or observation["createdAt"] < 0
+                or observation["updatedAt"] < observation["createdAt"]
+            ):
+                raise RuntimeRejection(
+                    "CONTROLLER_GOAL_RESUME_OBSERVATION_INVALID", path
+                )
+            observed_at = _parse_time(
+                observation["observed_at"], f"{path}/observed_at"
+            )
+            if observation["updatedAt"] > observed_at.timestamp():
+                raise RuntimeRejection(
+                    "CONTROLLER_GOAL_RESUME_OBSERVATION_FROM_FUTURE", path
+                )
+            observation_times.append(observed_at)
+        if (
+            post_observation["createdAt"] != pre_observation["createdAt"]
+            or post_observation["updatedAt"] < pre_observation["updatedAt"]
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_GOAL_RESUME_CONTINUITY_INVALID",
+                "/artifacts/post_resume_observation",
+            )
+
+        expected_authorization = {
+            "authorization_kind",
+            "source_actor",
+            "source_message_id",
+            "authorized_at",
+            *identity_fields,
+        }
+        if (
+            set(authorization) != expected_authorization
+            or authorization["authorization_kind"] != "SAME_GOAL_RESUME"
+            or authorization["source_actor"] != "USER"
+            or not isinstance(authorization["source_message_id"], str)
+            or SAFE_ID_RE.fullmatch(authorization["source_message_id"]) is None
+            or any(authorization.get(key) != goal[key] for key in identity_fields)
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_GOAL_RESUME_AUTHORIZATION_INVALID",
+                "/artifacts/resume_authorization",
+            )
+        authorized_at = _parse_time(
+            authorization["authorized_at"],
+            "/artifacts/resume_authorization/authorized_at",
+        )
+        if (
+            not observation_times[0] < authorized_at <= observation_times[1]
+            or authorized_at.timestamp() <= pre_observation["updatedAt"]
+            or _parse_time(mutation["observed_at"], "/mutation/observed_at")
+            < observation_times[1]
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_GOAL_RESUME_TIMELINE_INVALID",
+                "/artifacts/resume_authorization/authorized_at",
+            )
+
+        receipt = {
+            "resume_id": mutation["resume_id"],
+            **{key: goal[key] for key in identity_fields},
+            "pre_blocked_observation_path": mutation[
+                "pre_blocked_observation_path"
+            ],
+            "pre_blocked_observation_digest": mutation[
+                "pre_blocked_observation_digest"
+            ],
+            "pre_blocked_observed_at": pre_observation["observed_at"],
+            "resume_authorization_path": mutation["resume_authorization_path"],
+            "resume_authorization_digest": mutation[
+                "resume_authorization_digest"
+            ],
+            "authorized_at": authorization["authorized_at"],
+            "post_resume_observation_path": mutation[
+                "post_resume_observation_path"
+            ],
+            "post_resume_observation_digest": mutation[
+                "post_resume_observation_digest"
+            ],
+            "post_resume_observed_at": post_observation["observed_at"],
+            "native_goal_observed_status": "BLOCKED",
+            "recorded_state_version": after_version,
+        }
+        state["controller_goal_resume_receipt"] = receipt
+        self._finish_route(state, claim, after_version)
+        return {
+            "code": "CONTROLLER_GOAL_RESUME_RECORDED",
+            "next_action_code": "CONTINUE_CANONICAL_EXECUTION",
+            "result": copy.deepcopy(receipt),
+        }
+
     def _validate_outbox_prepare_semantics(
         self,
         state: dict[str, Any],
@@ -4348,6 +7159,12 @@ class AdaptiveStateRuntime:
                 "RETIRED",
             }:
                 raise RuntimeRejection("DISPATCH_GOAL_ALREADY_SATISFIED", "/mutation/identity/goal_id")
+            if ledger["status"] in {"THRASHING_DETECTED", "STRATEGY_EXHAUSTED"}:
+                raise RuntimeRejection(
+                    "FAILURE_CONVERGENCE_BLOCKED",
+                    f"/goal_execution_ledger/{goal_id}/status",
+                    {"classification": ledger["status"]},
+                )
             if any(
                 record["status"] in {"PREPARED", "SENT"}
                 for record in state["dispatch_outbox"].values()
@@ -4669,13 +7486,131 @@ class AdaptiveStateRuntime:
         elif kind == "DELEGATION":
             self._validate_delegation_prepare(state, identity, target_id)
 
+    @staticmethod
+    def _validate_outbox_send_observation(
+        content: str,
+        record: dict[str, Any],
+        json_path: str,
+    ) -> None:
+        observed = _strict_json_loads(
+            content,
+            code="OUTBOX_SEND_EVIDENCE_INVALID",
+            path=json_path,
+        )
+        if not isinstance(observed, dict):
+            raise RuntimeRejection("OUTBOX_SEND_EVIDENCE_INVALID", json_path)
+
+        observation_kind = observed.get("observation_kind")
+        expected_fields = {
+            "observation_kind",
+            "outbox_kind",
+            "outbox_id",
+            "payload_digest",
+        }
+        if observation_kind == "EXTERNAL_SEND":
+            expected_fields.add("target_id")
+            target_field = "target_id"
+        elif observation_kind == "CODEX_MESSAGE_SEND":
+            expected_fields.update({"target_thread_id", "status"})
+            target_field = "target_thread_id"
+        elif observation_kind == "CODEX_TOOL_RESULT":
+            expected_fields.update({"target_id", "result"})
+            target_field = "target_id"
+        else:
+            raise RuntimeRejection(
+                "OUTBOX_SEND_EVIDENCE_INVALID",
+                json_path,
+                {"reason": "OBSERVATION_KIND_UNSUPPORTED"},
+            )
+
+        if (
+            set(observed) != expected_fields
+            or observed["outbox_kind"] != record["outbox_kind"]
+            or observed["outbox_id"] != record["outbox_id"]
+            or observed["payload_digest"] != record["payload_digest"]
+            or observed[target_field] != record["target_id"]
+            or (
+                observation_kind == "CODEX_MESSAGE_SEND"
+                and observed["status"] != "SENT"
+            )
+        ):
+            raise RuntimeRejection(
+                "OUTBOX_SEND_EVIDENCE_INVALID",
+                json_path,
+                {"reason": "OBSERVATION_IDENTITY_MISMATCH"},
+            )
+
     def _mark_outbox_sent(
-        self, state: dict[str, Any], mutation: dict[str, Any]
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
     ) -> dict[str, Any]:
         claim = mutation["lease_claim"]
         lease = self._require_exact_lease(state, claim, mutation["observed_at"])
         self._reserve_route(lease, "OUTBOX", mutation["outbox_id"])
         record = self._require_outbox(state, mutation)
+        if (
+            mutation["outbox_kind"] == "GOAL"
+            and state.get("native_goal_policy", "required") != "required"
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_TOOL_CALL_FORBIDDEN",
+                "/native_goal_policy",
+            )
+        send_paths = mutation["send_evidence_paths"]
+        if not send_paths:
+            raise RuntimeRejection(
+                "OUTBOX_SEND_EVIDENCE_REQUIRED",
+                "/mutation/send_evidence_paths",
+            )
+        if len(send_paths) != len(set(send_paths)):
+            raise RuntimeRejection(
+                "OUTBOX_SEND_EVIDENCE_INVALID",
+                "/mutation/send_evidence_paths",
+            )
+        attached_by_path = {
+            artifact["path"]: artifact for artifact in request["artifacts"]
+        }
+        for index, path in enumerate(send_paths):
+            json_path = f"/mutation/send_evidence_paths/{index}"
+            archived = state["artifact_ledger"].get(path)
+            attached = attached_by_path.get(path)
+            content: str
+            if attached is not None and attached["media_type"] != "application/json":
+                raise RuntimeRejection(
+                    "OUTBOX_SEND_EVIDENCE_UNARCHIVED", json_path
+                )
+            if archived is not None:
+                target = self.root / path
+                self._assert_confined(target, self.control_dir, json_path)
+                self._reject_symlink(target, json_path)
+                try:
+                    payload = target.read_bytes()
+                except OSError as exc:
+                    raise RuntimeRejection(
+                        "OUTBOX_SEND_EVIDENCE_UNARCHIVED", json_path
+                    ) from exc
+                if (
+                    archived["media_type"] != "application/json"
+                    or _bytes_digest(payload) != archived["digest"]
+                ):
+                    raise RuntimeRejection(
+                        "OUTBOX_SEND_EVIDENCE_UNARCHIVED", json_path
+                    )
+                try:
+                    content = payload.decode("utf-8", errors="strict")
+                except UnicodeDecodeError as exc:
+                    raise RuntimeRejection(
+                        "OUTBOX_SEND_EVIDENCE_INVALID", json_path
+                    ) from exc
+            elif attached is None:
+                raise RuntimeRejection(
+                    "OUTBOX_SEND_EVIDENCE_UNARCHIVED", json_path
+                )
+            else:
+                content = attached["content"]
+            self._validate_outbox_send_observation(content, record, json_path)
         if record["status"] == "PREPARED":
             record["status"] = "SENT"
             record["sent_evidence_paths"] = list(mutation["send_evidence_paths"])
@@ -4724,6 +7659,25 @@ class AdaptiveStateRuntime:
             and state.get("controller_goal", {}).get("status")
             == "EMULATED_SINGLE_ACTIVE_MILESTONE"
         )
+        native_goal_policy = state.get("native_goal_policy", "required")
+        if (
+            kind == "GOAL"
+            and record["status"] == "PREPARED"
+            and native_goal_policy == "required"
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_EMULATION_FORBIDDEN",
+                "/native_goal_policy",
+            )
+        if (
+            kind == "GOAL"
+            and record["status"] == "SENT"
+            and native_goal_policy != "required"
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_TOOL_CALL_FORBIDDEN",
+                "/native_goal_policy",
+            )
         if record["status"] != "SENT" and not (
             emulated_goal_create or emulated_goal_update
         ):
@@ -4745,7 +7699,11 @@ class AdaptiveStateRuntime:
                 result.get("report_digest"),
                 "/mutation/result/report_digest",
             )
-            self._validate_formal_report(state, record, result, report)
+            review_handoff = self._validate_formal_report(
+                state, record, result, report
+            )
+        else:
+            review_handoff = None
         if emulated_goal_create or emulated_goal_update:
             self._require_single_json_evidence_artifact(
                 request,
@@ -4761,7 +7719,9 @@ class AdaptiveStateRuntime:
                 result.get("report_digest"),
                 "/mutation/result/report_digest",
             )
-            self._record_worker_result(state, record, result)
+            self._record_worker_result(
+                state, record, result, review_handoff=review_handoff
+            )
             record["status"] = "COMPLETED"
             self._finish_route(state, claim, after_version)
             next_action = "PREPARE_CODE_REVIEW" if result["status"] == "PASS" else "REPAIR_REQUIRED"
@@ -4853,6 +7813,8 @@ class AdaptiveStateRuntime:
         state: dict[str, Any],
         record: dict[str, Any],
         result: dict[str, Any],
+        *,
+        review_handoff: dict[str, Any] | None,
     ) -> None:
         required = {"status", "report_digest", "artifact_digest"}
         if not required.issubset(result) or result["status"] not in {"PASS", "FAIL", "BLOCKED"}:
@@ -4869,10 +7831,31 @@ class AdaptiveStateRuntime:
             "roadmap_version": record["roadmap_version"],
             "evidence_paths": list(record["ack_evidence_paths"]),
         }
+        if result["status"] == "PASS":
+            if review_handoff is None:
+                raise RuntimeRejection(
+                    "WORKER_REVIEW_HANDOFF_MISSING", "/artifacts/report"
+                )
+            worker["review_handoff"] = copy.deepcopy(review_handoff)
         ledger = state["goal_execution_ledger"][goal_id]
+        previous_worker = ledger.get("latest_worker")
+        if (
+            isinstance(previous_worker, dict)
+            and previous_worker.get("artifact_digest") != result["artifact_digest"]
+        ):
+            for decision in state.get("pending_decisions", {}).values():
+                scope = decision.get("scope", {})
+                if (
+                    scope.get("goal_id") == goal_id
+                    and scope.get("artifact_digest")
+                    == previous_worker.get("artifact_digest")
+                    and decision.get("status") in {"PENDING", "APPLIED"}
+                ):
+                    decision["status"] = "STALE"
         ledger["attempts"].append(copy.deepcopy(worker))
         ledger["latest_worker"] = worker
         ledger["status"] = "WORKER_PASS" if result["status"] == "PASS" else "REPAIR_REQUIRED"
+        self._refresh_validation_gate_status(state)
 
     def _record_local_result(
         self,
@@ -4990,6 +7973,8 @@ class AdaptiveStateRuntime:
             )
             if result["status"] not in expected_statuses:
                 raise RuntimeRejection("CONTROLLER_GOAL_RESULT_INVALID", "/mutation/result/status")
+            if identity["action"] == "CREATE":
+                state["controller_goal_resume_receipt"] = None
             state["controller_goal"] = copy.deepcopy(result)
 
     @staticmethod
@@ -5171,6 +8156,7 @@ class AdaptiveStateRuntime:
             or review["artifact_digest"] != artifact_digest
             or review["roadmap_version"] != state["roadmap_version"]
             or review["decision"] not in allowed_decisions
+            or review.get("legacy_revalidation_required") is True
         ):
             raise RuntimeRejection("REVIEW_CHAIN_INVALID", f"/assurance_ledger/{review_id}")
         return review
@@ -5248,7 +8234,7 @@ class AdaptiveStateRuntime:
             roadmap_audit_id = self._identity_value(
                 identity, "roadmap_audit_id", "/mutation/identity"
             )
-            self._require_review(
+            roadmap_audit = self._require_review(
                 state,
                 roadmap_audit_id,
                 "ROADMAP_AUDIT",
@@ -5257,6 +8243,78 @@ class AdaptiveStateRuntime:
                 artifact_digest,
                 {"ROADMAP_AUDIT_PASS_FINAL_CANDIDATE"},
             )
+            if state.get("schema_version") == 2:
+                estimate_revision = roadmap_audit.get("estimate_revision")
+                if (
+                    not isinstance(estimate_revision, dict)
+                    or not state["estimate_history"]
+                    or state["estimate_history"][-1] != estimate_revision
+                ):
+                    raise RuntimeRejection(
+                        "FINAL_AUDIT_ESTIMATE_HISTORY_UNBOUND",
+                        "/estimate_history",
+                    )
+                missing_surface_decisions = self._missing_required_surface_decisions(
+                    state
+                )
+                if missing_surface_decisions:
+                    raise RuntimeRejection(
+                        "REQUIRED_REVIEW_SURFACE_NOT_ACCEPTED",
+                        "/pending_decisions",
+                        {"goal_ids": sorted(missing_surface_decisions)},
+                    )
+
+    def _final_audit_context_digest(
+        self, state: dict[str, Any], identity: Mapping[str, Any]
+    ) -> str:
+        goal_id = identity["goal_id"]
+        dispatch_id = identity["worker_dispatch_id"]
+        artifact_digest = identity["artifact_digest"]
+        surface_decisions: dict[str, Any] = {}
+        for candidate_goal_id, definition in state[
+            "goal_definition_registry"
+        ].items():
+            surface = definition.get("review_surface")
+            if not isinstance(surface, dict) or not surface.get("required"):
+                continue
+            decision_id = surface.get("decision_gate_id")
+            if isinstance(decision_id, str):
+                surface_decisions[decision_id] = copy.deepcopy(
+                    state["pending_decisions"].get(decision_id)
+                )
+        relevant_freshness = [
+            copy.deepcopy(record)
+            for record in state["context_freshness_ledger"]
+            if record["goal_id"] == goal_id
+            and record.get("dispatch_id") in {None, dispatch_id}
+            and record.get("artifact_digest") in {None, artifact_digest}
+        ]
+        return canonical_digest(
+            {
+                "roadmap_version": state["roadmap_version"],
+                "goal_definition": state["goal_definition_registry"].get(
+                    goal_id
+                ),
+                "worker": state["goal_execution_ledger"].get(goal_id, {}).get(
+                    "latest_worker"
+                ),
+                "code_review": state["assurance_ledger"].get(
+                    identity["code_review_id"]
+                ),
+                "roadmap_audit": state["assurance_ledger"].get(
+                    identity["roadmap_audit_id"]
+                ),
+                "validation_requirements": state["validation_requirements"],
+                "validation_results": state["validation_results"],
+                "validation_evidence_identity": state[
+                    "validation_evidence_identity"
+                ],
+                "validation_gate_status": state["validation_gate_status"],
+                "surface_decisions": surface_decisions,
+                "estimate_history": state["estimate_history"],
+                "context_freshness": relevant_freshness,
+            }
+        )
 
     def _record_review(
         self,
@@ -5289,12 +8347,68 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("ROADMAP_VERSION_CONFLICT", "/mutation/roadmap_version")
         if mutation["decision"] not in REVIEW_DECISIONS[mutation["review_kind"]]:
             raise RuntimeRejection("REVIEW_DECISION_INVALID", "/mutation/decision")
-        report = self._require_bound_json_report_artifact(
-            request,
-            mutation["review_evidence_paths"],
-            mutation["report_digest"],
-            "/mutation/report_digest",
+        human_control_enabled = (
+            state.get("schema_version") == 2
+            and state.get("human_control_policy", {}).get(
+                "context_freshness_required", True
+            )
         )
+        if human_control_enabled:
+            applicable_freshness = [
+                item
+                for item in state["context_freshness_ledger"]
+                if item["goal_id"] == mutation["goal_id"]
+                and item.get("dispatch_id")
+                in {None, mutation["worker_dispatch_id"]}
+                and item.get("artifact_digest")
+                in {None, mutation["artifact_digest"]}
+            ]
+            latest_freshness = (
+                applicable_freshness[-1] if applicable_freshness else None
+            )
+            current_context_digest = self._freshness_context_digest(
+                state, mutation["goal_id"], mutation["worker_dispatch_id"]
+            )
+            if (
+                latest_freshness is None
+                or latest_freshness["checkpoint"] != mutation["review_kind"]
+                or latest_freshness.get("dispatch_id")
+                != mutation["worker_dispatch_id"]
+                or latest_freshness.get("artifact_digest")
+                != mutation["artifact_digest"]
+                or latest_freshness["context_state_digest"] != current_context_digest
+                or latest_freshness["classification"] not in {
+                    "FRESH",
+                    "CHANGED_IRRELEVANT",
+                    "RELOAD_SAFE",
+                }
+            ):
+                raise RuntimeRejection("CONTEXT_FRESHNESS_REQUIRED", "/context_freshness_ledger")
+            if (
+                mutation["review_kind"] == "CODE_REVIEW"
+                and mutation["decision"] in CODE_REVIEW_PASS
+            ):
+                requirements = state["validation_requirements"].get(mutation["goal_id"], {})
+                results = state["validation_results"].get(mutation["goal_id"], {})
+                evidence_identity = state["validation_evidence_identity"].get(
+                    mutation["goal_id"], {}
+                )
+                missing = [
+                    name
+                    for name, rule in requirements.items()
+                    if rule.get("required")
+                    and (
+                        results.get(name) != "PASS"
+                        or evidence_identity.get(name, {}).get("artifact_digest")
+                        != mutation["artifact_digest"]
+                    )
+                ]
+                if missing:
+                    raise RuntimeRejection(
+                        "REQUIRED_VALIDATION_INCOMPLETE",
+                        "/validation_results",
+                        {"missing": missing},
+                    )
         ack_result = outbox.get("result")
         legacy_empty_result = ack_result in ({}, None)
         if legacy_empty_result:
@@ -5312,6 +8426,14 @@ class AdaptiveStateRuntime:
                 "REVIEW_ACK_RESULT_MISMATCH",
                 "/mutation",
             )
+        report = self._require_canonical_assurance_report(
+            state,
+            outbox,
+            request,
+            mutation["review_evidence_paths"],
+            mutation["report_digest"],
+            "/mutation/report_digest",
+        )
         self._validate_formal_report(state, outbox, ack_result, report)
         if legacy_empty_result:
             outbox["result"] = copy.deepcopy(ack_result)
@@ -5345,6 +8467,17 @@ class AdaptiveStateRuntime:
             "roadmap_proposal": copy.deepcopy(report.get("roadmap_proposal")),
             "evidence_paths": list(mutation["review_evidence_paths"]),
         }
+        if mutation["review_kind"] == "ROADMAP_AUDIT":
+            record["code_review_id"] = identity["code_review_id"]
+            record["estimate_revision"] = copy.deepcopy(
+                report["estimate_revision"]
+            )
+        elif mutation["review_kind"] == "FINAL_AUDIT":
+            record["code_review_id"] = identity["code_review_id"]
+            record["roadmap_audit_id"] = identity["roadmap_audit_id"]
+            record["final_audit_context_digest"] = (
+                self._final_audit_context_digest(state, identity)
+            )
         existing = state["assurance_ledger"].get(review_id)
         if existing is not None and existing != record:
             raise RuntimeRejection("REVIEW_ID_CONFLICT", "/mutation/review_id")
@@ -5366,6 +8499,10 @@ class AdaptiveStateRuntime:
                 else "REPAIR_REQUIRED"
             )
         elif kind == "ROADMAP_AUDIT":
+            if state.get("schema_version") == 2:
+                state["estimate_history"].append(
+                    copy.deepcopy(record["estimate_revision"])
+                )
             if decision == "ROADMAP_AUDIT_PASS_FINAL_CANDIDATE":
                 goal["status"] = "FINAL_CANDIDATE"
                 next_action = "PREPARE_FINAL_AUDIT"
@@ -5391,6 +8528,119 @@ class AdaptiveStateRuntime:
                 "decision": decision,
             },
         }
+
+    def _require_canonical_assurance_report(
+        self,
+        state: dict[str, Any],
+        outbox: dict[str, Any],
+        request: dict[str, Any],
+        evidence_paths: list[str],
+        report_digest: Any,
+        path: str,
+    ) -> dict[str, Any]:
+        """Reuse the one report already archived by an ACKED assurance outbox."""
+
+        if request["artifacts"]:
+            raise RuntimeRejection(
+                "RECORD_REVIEW_ARTIFACT_TRANSPORT_FORBIDDEN",
+                "/artifacts",
+            )
+        if not isinstance(report_digest, str) or DIGEST_RE.fullmatch(report_digest) is None:
+            raise RuntimeRejection("DIGEST_INVALID", path)
+        ack_paths = outbox.get("ack_evidence_paths")
+        expected_report_path = (
+            f".codex-loop/reports/{outbox['outbox_id']}-ack.json"
+        )
+        if (
+            not isinstance(ack_paths, list)
+            or len(ack_paths) != 1
+            or ack_paths[0] != expected_report_path
+            or evidence_paths != ack_paths
+        ):
+            raise RuntimeRejection(
+                "REVIEW_EVIDENCE_PATH_MISMATCH",
+                "/mutation/review_evidence_paths",
+                {"expected": ack_paths},
+            )
+
+        canonical_path = ack_paths[0]
+        ledger_record = state["artifact_ledger"].get(canonical_path)
+        if ledger_record is None:
+            raise RuntimeRejection(
+                "ASSURANCE_REPORT_LEDGER_MISSING",
+                f"/artifact_ledger/{canonical_path}",
+            )
+        archived_state_version = ledger_record.get("archived_state_version")
+        if (
+            ledger_record.get("path") != canonical_path
+            or ledger_record.get("digest") != report_digest
+            or ledger_record.get("media_type") != "application/json"
+            or not isinstance(archived_state_version, int)
+            or isinstance(archived_state_version, bool)
+            or archived_state_version <= outbox["prepared_state_version"]
+            or archived_state_version > state["state_version"]
+        ):
+            raise RuntimeRejection(
+                "ASSURANCE_REPORT_LEDGER_MISMATCH",
+                f"/artifact_ledger/{canonical_path}",
+                {
+                    "report_digest": report_digest,
+                    "media_type": "application/json",
+                },
+            )
+
+        artifact_path = self._artifact_target(canonical_path)
+        self._reject_symlink(artifact_path, path)
+        try:
+            artifact_stat = artifact_path.stat()
+            if not stat.S_ISREG(artifact_stat.st_mode):
+                raise RuntimeRejection("ASSURANCE_REPORT_ARCHIVE_INVALID", path)
+            if artifact_stat.st_size > MAX_ARTIFACT_CONTENT_SIZE:
+                raise RuntimeRejection(
+                    "ARTIFACT_CONTENT_TOO_LARGE",
+                    path,
+                    {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
+                )
+            payload = artifact_path.read_bytes()
+            content = payload.decode("utf-8", errors="strict")
+        except RuntimeRejection:
+            raise
+        except (OSError, UnicodeDecodeError) as exc:
+            raise RuntimeRejection(
+                "ASSURANCE_REPORT_ARCHIVE_INVALID",
+                path,
+                {"error_type": type(exc).__name__},
+            ) from exc
+        if len(content) > MAX_ARTIFACT_CONTENT_SIZE:
+            raise RuntimeRejection(
+                "ARTIFACT_CONTENT_TOO_LARGE",
+                path,
+                {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
+            )
+        actual_digest = _bytes_digest(payload)
+        if actual_digest != report_digest:
+            raise RuntimeRejection(
+                "ARTIFACT_DIGEST_MISMATCH",
+                path,
+                {"expected": report_digest, "actual": actual_digest},
+            )
+        report = _strict_json_loads(
+            content,
+            code="FORMAL_REPORT_JSON_INVALID",
+            path=path,
+        )
+        if not isinstance(report, dict):
+            raise RuntimeRejection("FORMAL_REPORT_NOT_OBJECT", path)
+        canonical = json.dumps(
+            report,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        if content != canonical:
+            raise RuntimeRejection("FORMAL_REPORT_NOT_CANONICAL", path)
+        return report
 
     @staticmethod
     def _require_bound_report_artifact(
@@ -5550,7 +8800,7 @@ class AdaptiveStateRuntime:
         record: dict[str, Any],
         result: dict[str, Any],
         report: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any] | None:
         kind = record["outbox_kind"]
         identity = record["identity"]
         required_result = {"status", "report_digest", "artifact_digest"}
@@ -5573,6 +8823,23 @@ class AdaptiveStateRuntime:
         if kind == "DISPATCH":
             definition = state["goal_definition_registry"][goal_id]
             milestone_id = definition["milestone_id"]
+            if state.get("schema_version") == 2:
+                after_snapshot = report.get("after_snapshot_sha256")
+                if (
+                    not isinstance(after_snapshot, str)
+                    or SHA256_HEX_RE.fullmatch(after_snapshot) is None
+                ):
+                    raise RuntimeRejection(
+                        "FORMAL_REPORT_ARTIFACT_SNAPSHOT_INVALID",
+                        "/artifacts/report/after_snapshot_sha256",
+                    )
+                derived_artifact_digest = f"sha256:{after_snapshot}"
+                if result.get("artifact_digest") != derived_artifact_digest:
+                    raise RuntimeRejection(
+                        "FORMAL_REPORT_ARTIFACT_DIGEST_NOT_DERIVED",
+                        "/mutation/result/artifact_digest",
+                        {"expected": derived_artifact_digest},
+                    )
             expected = {
                 "source_goal_definition_digest_or_none": identity[
                     "goal_definition_digest"
@@ -5651,6 +8918,9 @@ class AdaptiveStateRuntime:
                 "/artifacts/report",
                 {"fields": mismatched},
             )
+        review_handoff = None
+        if kind == "DISPATCH" and result["status"] == "PASS":
+            review_handoff = self._validate_worker_review_handoff(state, report)
         proposal_required = bool(
             kind == "ASSURANCE"
             and identity["review_kind"] == "ROADMAP_AUDIT"
@@ -5661,6 +8931,15 @@ class AdaptiveStateRuntime:
             "roadmap_proposal" in report
             or "roadmap_proposal_digest" in report
         )
+        if (
+            state.get("schema_version") == 2
+            and kind == "ASSURANCE"
+            and identity["review_kind"] == "ROADMAP_AUDIT"
+        ):
+            self._validate_estimate_revision(
+                report.get("estimate_revision"),
+                "/artifacts/report/estimate_revision",
+            )
         if proposal_required:
             if not {
                 "roadmap_proposal",
@@ -5693,6 +8972,389 @@ class AdaptiveStateRuntime:
                 "ROADMAP_PROPOSAL_UNEXPECTED",
                 "/artifacts/report/roadmap_proposal",
             )
+        return review_handoff
+
+    def _validate_worker_review_handoff(
+        self,
+        state: dict[str, Any],
+        report: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate and project the exact artifact surface needed by CODE_REVIEW."""
+
+        identity_fields = (
+            "worktree_path",
+            "current_branch",
+            "base_sha",
+            "head_sha",
+            "before_snapshot_sha256",
+            "after_snapshot_sha256",
+            "changed_files",
+            "diff_sha256",
+            "complete_diff_reference",
+            "validation_results",
+        )
+        missing = [field for field in identity_fields if field not in report]
+        if "evidence_artifacts" not in report:
+            missing.append("evidence_artifacts")
+        if missing:
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_MISSING",
+                "/artifacts/report",
+                {"fields": sorted(missing)},
+            )
+
+        worktree_path = report["worktree_path"]
+        if not isinstance(worktree_path, str) or not worktree_path:
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_PATH_INVALID",
+                "/artifacts/report/worktree_path",
+            )
+        worktree = self._assert_authorized_worktree(
+            state,
+            Path(worktree_path),
+            "/artifacts/report/worktree_path",
+        )
+        if not worktree.is_dir():
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_PATH_INVALID",
+                "/artifacts/report/worktree_path",
+            )
+
+        changed_files = report["changed_files"]
+        if (
+            not isinstance(changed_files, list)
+            or len(changed_files) != len(set(changed_files))
+            or changed_files != sorted(changed_files)
+        ):
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_CHANGED_FILES_INVALID",
+                "/artifacts/report/changed_files",
+            )
+        for index, path in enumerate(changed_files):
+            if not isinstance(path, str):
+                raise RuntimeRejection(
+                    "WORKER_REVIEW_HANDOFF_CHANGED_FILES_INVALID",
+                    f"/artifacts/report/changed_files/{index}",
+                )
+            self._validate_scope(
+                path, f"/artifacts/report/changed_files/{index}"
+            )
+
+        for field in ("before_snapshot_sha256", "after_snapshot_sha256"):
+            value = report[field]
+            if not isinstance(value, str) or SHA256_HEX_RE.fullmatch(value) is None:
+                raise RuntimeRejection(
+                    "WORKER_REVIEW_HANDOFF_HASH_INVALID",
+                    f"/artifacts/report/{field}",
+                )
+        diff_sha256 = report["diff_sha256"]
+        if not isinstance(diff_sha256, str) or SHA256_HEX_RE.fullmatch(diff_sha256) is None:
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_HASH_INVALID",
+                "/artifacts/report/diff_sha256",
+            )
+        validation_results = report["validation_results"]
+        evidence_artifacts = report["evidence_artifacts"]
+        if not isinstance(validation_results, list):
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_VALIDATION_INVALID",
+                "/artifacts/report/validation_results",
+            )
+        if not isinstance(evidence_artifacts, list):
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID",
+                "/artifacts/report/evidence_artifacts",
+            )
+        evidence_refs: list[str] = []
+        for index, item in enumerate(evidence_artifacts):
+            if isinstance(item, str):
+                evidence_path = item
+                evidence_claim = None
+            elif isinstance(item, dict):
+                evidence_path = item.get("path")
+                evidence_claim = item
+            else:
+                evidence_path = None
+                evidence_claim = None
+            if (
+                not isinstance(evidence_path, str)
+                or not evidence_path
+                or "\x00" in evidence_path
+                or "\\" in evidence_path
+            ):
+                raise RuntimeRejection(
+                    "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID",
+                    f"/artifacts/report/evidence_artifacts/{index}",
+                )
+            if evidence_path.startswith(".codex-loop/"):
+                evidence_record = state["artifact_ledger"].get(evidence_path)
+                evidence_target = self.root / evidence_path
+                self._assert_confined(
+                    evidence_target,
+                    self.control_dir,
+                    f"/artifacts/report/evidence_artifacts/{index}",
+                )
+                self._reject_symlink(
+                    evidence_target,
+                    f"/artifacts/report/evidence_artifacts/{index}",
+                )
+                try:
+                    evidence_payload = evidence_target.read_bytes()
+                except OSError as exc:
+                    raise RuntimeRejection(
+                        "WORKER_REVIEW_HANDOFF_EVIDENCE_UNARCHIVED",
+                        f"/artifacts/report/evidence_artifacts/{index}",
+                    ) from exc
+                actual_digest = _bytes_digest(evidence_payload)
+                if (
+                    evidence_record is None
+                    or evidence_record["path"] != evidence_path
+                    or evidence_record["media_type"]
+                    not in {"application/json", "text/markdown", "text/plain"}
+                    or actual_digest != evidence_record["digest"]
+                ):
+                    raise RuntimeRejection(
+                        "WORKER_REVIEW_HANDOFF_EVIDENCE_UNARCHIVED",
+                        f"/artifacts/report/evidence_artifacts/{index}",
+                    )
+                if evidence_claim is not None:
+                    expected_claims = {
+                        "media_type": evidence_record["media_type"],
+                        "digest": actual_digest,
+                        "sha256": actual_digest.removeprefix("sha256:"),
+                        "size_bytes": len(evidence_payload),
+                    }
+                    for claim_field, expected_value in expected_claims.items():
+                        if claim_field not in evidence_claim:
+                            continue
+                        claimed_value = evidence_claim[claim_field]
+                        type_invalid = (
+                            not isinstance(claimed_value, int)
+                            or isinstance(claimed_value, bool)
+                        ) if claim_field == "size_bytes" else not isinstance(
+                            claimed_value, str
+                        )
+                        if type_invalid or claimed_value != expected_value:
+                            raise RuntimeRejection(
+                                "WORKER_REVIEW_HANDOFF_EVIDENCE_CLAIM_MISMATCH",
+                                f"/artifacts/report/evidence_artifacts/{index}/{claim_field}",
+                                {
+                                    "expected": expected_value,
+                                    "actual": claimed_value,
+                                },
+                            )
+            evidence_refs.append(evidence_path)
+        if len(evidence_refs) != len(set(evidence_refs)):
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID",
+                "/artifacts/report/evidence_artifacts",
+            )
+
+        self._validate_complete_diff_reference(
+            worktree,
+            report,
+            diff_sha256,
+            changed_files,
+        )
+        artifact_identity = {
+            field: copy.deepcopy(report[field]) for field in identity_fields
+        }
+        handoff = {
+            "artifact_identity": artifact_identity,
+            "evidence_refs": copy.deepcopy(evidence_refs),
+        }
+        handoff["projection_digest"] = canonical_digest(handoff)
+        return handoff
+
+    def _validate_complete_diff_reference(
+        self,
+        worktree: Path,
+        report: dict[str, Any],
+        diff_sha256: str,
+        changed_files: list[str],
+    ) -> None:
+        reference = report["complete_diff_reference"]
+        path = "/artifacts/report/complete_diff_reference"
+        if not isinstance(reference, dict):
+            raise RuntimeRejection("COMPLETE_DIFF_REFERENCE_INVALID", path)
+        kind = reference.get("kind")
+        if reference.get("hash_algorithm") != "sha256":
+            raise RuntimeRejection(
+                "COMPLETE_DIFF_REFERENCE_ALGORITHM_MISMATCH",
+                f"{path}/hash_algorithm",
+            )
+        if reference.get("sha256") != diff_sha256:
+            raise RuntimeRejection(
+                "COMPLETE_DIFF_REFERENCE_HASH_MISMATCH",
+                f"{path}/sha256",
+            )
+
+        empty_sha256 = hashlib.sha256(b"").hexdigest()
+        if kind == "NO_DIFF":
+            if (
+                set(reference) != {"kind", "hash_algorithm", "sha256"}
+                or diff_sha256 != empty_sha256
+                or changed_files
+                or report["before_snapshot_sha256"]
+                != report["after_snapshot_sha256"]
+            ):
+                raise RuntimeRejection("COMPLETE_DIFF_REFERENCE_NO_DIFF_INVALID", path)
+            return
+
+        if kind == "MANIFEST_DELTA_V1":
+            required = {
+                "kind",
+                "hash_algorithm",
+                "media_type",
+                "content",
+                "sha256",
+            }
+            if set(reference) != required or reference["media_type"] != "text/tab-separated-values":
+                raise RuntimeRejection("COMPLETE_DIFF_REFERENCE_INVALID", path)
+            content = reference["content"]
+            if (
+                not isinstance(content, str)
+                or not content
+                or not content.endswith("\n")
+                or "\r" in content
+                or hashlib.sha256(content.encode("utf-8")).hexdigest()
+                != diff_sha256
+                or any(report[field] != "NOT_APPLICABLE" for field in (
+                    "current_branch",
+                    "base_sha",
+                    "head_sha",
+                ))
+            ):
+                raise RuntimeRejection(
+                    "MANIFEST_DELTA_IDENTITY_MISMATCH", path
+                )
+            manifest_paths: list[str] = []
+            for index, line in enumerate(content[:-1].split("\n")):
+                parts = line.split("\t")
+                line_path = f"{path}/content/{index}"
+                if len(parts) != 4:
+                    raise RuntimeRejection("MANIFEST_DELTA_LINE_INVALID", line_path)
+                status, relative_path, size_text, file_sha256 = parts
+                if status not in {"A", "M", "D"}:
+                    raise RuntimeRejection("MANIFEST_DELTA_STATUS_INVALID", line_path)
+                self._validate_scope(relative_path, line_path)
+                if (
+                    not size_text.isdigit()
+                    or (len(size_text) > 1 and size_text.startswith("0"))
+                    or SHA256_HEX_RE.fullmatch(file_sha256) is None
+                ):
+                    raise RuntimeRejection("MANIFEST_DELTA_LINE_INVALID", line_path)
+                manifest_paths.append(relative_path)
+                candidate = worktree / relative_path
+                self._assert_confined(candidate, worktree, line_path)
+                if status == "D":
+                    if candidate.exists() or candidate.is_symlink():
+                        raise RuntimeRejection(
+                            "MANIFEST_DELTA_PATH_STATE_MISMATCH", line_path
+                        )
+                    continue
+                self._reject_symlink(candidate, line_path)
+                try:
+                    metadata = os.stat(candidate, follow_symlinks=False)
+                    payload = candidate.read_bytes()
+                except OSError as exc:
+                    raise RuntimeRejection(
+                        "MANIFEST_DELTA_PATH_UNAVAILABLE",
+                        line_path,
+                        {"error_type": type(exc).__name__},
+                    ) from exc
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or len(payload) != int(size_text)
+                    or hashlib.sha256(payload).hexdigest() != file_sha256
+                ):
+                    raise RuntimeRejection(
+                        "MANIFEST_DELTA_PATH_STATE_MISMATCH", line_path
+                    )
+            if (
+                manifest_paths != sorted(manifest_paths)
+                or len(manifest_paths) != len(set(manifest_paths))
+                or manifest_paths != changed_files
+            ):
+                raise RuntimeRejection(
+                    "MANIFEST_DELTA_CHANGED_FILES_MISMATCH", path
+                )
+            return
+
+        if kind == "PATCH_FILE_V1":
+            required = {
+                "kind",
+                "hash_algorithm",
+                "media_type",
+                "artifact_path",
+                "sha256",
+            }
+            if set(reference) != required or reference["media_type"] != "text/x-diff":
+                raise RuntimeRejection("COMPLETE_DIFF_REFERENCE_INVALID", path)
+            artifact_path = reference["artifact_path"]
+            if not isinstance(artifact_path, str):
+                raise RuntimeRejection(
+                    "COMPLETE_DIFF_REFERENCE_PATH_INVALID",
+                    f"{path}/artifact_path",
+                )
+            self._validate_scope(artifact_path, f"{path}/artifact_path")
+            candidate = worktree / artifact_path
+            self._assert_confined(candidate, worktree, f"{path}/artifact_path")
+            self._reject_symlink(candidate, f"{path}/artifact_path")
+            try:
+                metadata = os.stat(candidate, follow_symlinks=False)
+                payload = candidate.read_bytes()
+            except OSError as exc:
+                raise RuntimeRejection(
+                    "COMPLETE_DIFF_REFERENCE_PATH_UNAVAILABLE",
+                    f"{path}/artifact_path",
+                    {"error_type": type(exc).__name__},
+                ) from exc
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or hashlib.sha256(payload).hexdigest() != diff_sha256
+            ):
+                raise RuntimeRejection(
+                    "COMPLETE_DIFF_REFERENCE_PATH_MISMATCH",
+                    f"{path}/artifact_path",
+                )
+            return
+
+        raise RuntimeRejection("COMPLETE_DIFF_REFERENCE_KIND_INVALID", f"{path}/kind")
+
+    @staticmethod
+    def _validate_estimate_revision(value: Any, path: str) -> None:
+        required = {
+            "min_minutes",
+            "typical_minutes",
+            "max_minutes",
+            "confidence",
+            "assumptions",
+            "excludes",
+        }
+        if not isinstance(value, dict) or set(value) != required:
+            raise RuntimeRejection("ESTIMATE_REVISION_INVALID", path)
+        minimum = value["min_minutes"]
+        typical = value["typical_minutes"]
+        maximum = value["max_minutes"]
+        if (
+            any(
+                isinstance(item, bool) or not isinstance(item, int)
+                for item in (minimum, typical, maximum)
+            )
+            or minimum < 0
+            or not minimum <= typical <= maximum
+            or value["confidence"] not in {"LOW", "MEDIUM", "HIGH"}
+            or not isinstance(value["assumptions"], list)
+            or not value["assumptions"]
+            or any(
+                not isinstance(item, str) or not item
+                for item in value["assumptions"]
+            )
+            or not isinstance(value["excludes"], str)
+            or not value["excludes"]
+        ):
+            raise RuntimeRejection("ESTIMATE_REVISION_INVALID", path)
 
     @staticmethod
     def _require_single_json_evidence_artifact(
@@ -5974,6 +9636,19 @@ class AdaptiveStateRuntime:
                     "IMMUTABLE_GOAL_DEFINITION_CONFLICT",
                     f"/mutation/goal_definition_registry/{goal_id}",
                 )
+        legacy_goal_ids = (
+            set(old_definitions) if state.get("v1_migration_source_digest") else set()
+        )
+        proposed_validation_requirements = {
+            goal_id: self._validation_requirements_for_definition(
+                definition,
+                allow_legacy=goal_id in legacy_goal_ids,
+                path=(
+                    f"/mutation/goal_definition_registry/{goal_id}/validation_matrix"
+                ),
+            )
+            for goal_id, definition in proposed_definitions.items()
+        }
         new_version = base + 1
         proposed_queue = copy.deepcopy(mutation["goal_queue"])
         if any(entry["roadmap_version"] != new_version for entry in proposed_queue):
@@ -6003,7 +9678,16 @@ class AdaptiveStateRuntime:
             {"roadmap_version": base, "goal_queue": old_queue}
         )
         state["milestones"] = copy.deepcopy(mutation["milestones"])
+        old_validation_requirements = copy.deepcopy(state["validation_requirements"])
         state["goal_definition_registry"] = proposed_definitions
+        new_validation_requirements: dict[str, Any] = {}
+        for goal_id, requirements in proposed_validation_requirements.items():
+            requirements = copy.deepcopy(requirements)
+            new_validation_requirements[goal_id] = requirements
+            if old_validation_requirements.get(goal_id) != requirements:
+                state["validation_results"].pop(goal_id, None)
+                state["validation_evidence_identity"].pop(goal_id, None)
+        state["validation_requirements"] = new_validation_requirements
         state["authorization_envelope"] = proposed_authorization
         state["goal_queue"] = proposed_queue
         state["roadmap_version"] = new_version
@@ -6018,6 +9702,9 @@ class AdaptiveStateRuntime:
             "projection_digest": mutation["projection_digest"],
         }
         if "estimate" in mutation:
+            self._validate_estimate_revision(
+                mutation["estimate"], "/mutation/estimate"
+            )
             state["estimate_history"].append(copy.deepcopy(mutation["estimate"]))
 
         existing_ledger = state["goal_execution_ledger"]
@@ -6051,6 +9738,7 @@ class AdaptiveStateRuntime:
             ):
                 existing_ledger[goal_id]["status"] = "RETIRED"
                 existing_ledger[goal_id]["completed_roadmap_version"] = new_version
+        self._refresh_validation_gate_status(state)
         state["roadmap_change_outbox"][state_request_id] = {
             "proposal_id": mutation["roadmap_proposal"]["proposal_id"],
             "status": "APPLIED",
@@ -6099,6 +9787,20 @@ class AdaptiveStateRuntime:
                 "/mutation/base_roadmap_version",
                 {"expected": base, "actual": state["roadmap_version"]},
             )
+        if any(
+            "validation_matrix" in definition
+            for definition in state["goal_definition_registry"].values()
+        ) and state["validation_gate_status"] not in {"PASS", "PASS_WITH_LIMITATION"}:
+            raise RuntimeRejection(
+                "REQUIRED_VALIDATION_INCOMPLETE", "/validation_gate_status"
+            )
+        missing_surface_decisions = self._missing_required_surface_decisions(state)
+        if missing_surface_decisions:
+            raise RuntimeRejection(
+                "REQUIRED_REVIEW_SURFACE_NOT_ACCEPTED",
+                "/pending_decisions",
+                {"goal_ids": sorted(missing_surface_decisions)},
+            )
         if self._unfinished_finalization_outboxes(state):
             raise RuntimeRejection("FINALIZE_ACTIVE_OUTBOX", "/mutation")
         goal_id = mutation["final_goal_id"]
@@ -6117,6 +9819,7 @@ class AdaptiveStateRuntime:
             mutation["artifact_digest"],
             CODE_REVIEW_PASS,
         )
+
         self._require_review(
             state,
             mutation["roadmap_audit_id"],
@@ -6135,6 +9838,29 @@ class AdaptiveStateRuntime:
             mutation["artifact_digest"],
             FINAL_PASS,
         )
+        if (
+            final_review.get("code_review_id") != mutation["code_review_id"]
+            or final_review.get("roadmap_audit_id")
+            != mutation["roadmap_audit_id"]
+        ):
+            raise RuntimeRejection(
+                "FINAL_AUDIT_REVIEW_CHAIN_MISMATCH",
+                f"/assurance_ledger/{mutation['final_audit_id']}",
+            )
+        final_context_identity = {
+            "goal_id": goal_id,
+            "worker_dispatch_id": worker["dispatch_id"],
+            "artifact_digest": mutation["artifact_digest"],
+            "code_review_id": mutation["code_review_id"],
+            "roadmap_audit_id": mutation["roadmap_audit_id"],
+        }
+        if final_review.get(
+            "final_audit_context_digest"
+        ) != self._final_audit_context_digest(state, final_context_identity):
+            raise RuntimeRejection(
+                "FINAL_AUDIT_CONTEXT_STALE",
+                f"/assurance_ledger/{mutation['final_audit_id']}",
+            )
         current_chain_has_limitation = any(
             review["worker_dispatch_id"] == worker["dispatch_id"]
             and review["artifact_digest"] == mutation["artifact_digest"]
@@ -6219,12 +9945,25 @@ class AdaptiveStateRuntime:
             "projection_digest": mutation["projection_digest"],
         }
         state["terminal_status"] = mutation["terminal_status"]
+        native_goal_policy = state.get("native_goal_policy", "required")
+        closeout_capability = _closeout_capability(
+            loop_id=state["loop_id"],
+            controller_pack_digest=state["controller_pack_identity"]["digest"],
+            finalization_id=mutation["finalization_id"],
+            finalized_state_version=after_version,
+            controller_goal_id=mutation["controller_goal_id"],
+            controller_goal_target_status="COMPLETE",
+            automation_id=mutation["automation_id"],
+            native_goal_policy=native_goal_policy,
+        )
         state["finalization_outbox"] = {
             "finalization_id": mutation["finalization_id"],
             "status": "PREPARED",
             "finalized_state_version": after_version,
             "controller_goal_id": mutation["controller_goal_id"],
             "automation_id": mutation["automation_id"],
+            "native_goal_policy": native_goal_policy,
+            "closeout_capability": closeout_capability,
             "outcome_kind": "SUCCESS",
             "controller_goal_target_status": "COMPLETE",
             "automation_target_status": "PAUSED",
@@ -6244,8 +9983,63 @@ class AdaptiveStateRuntime:
                 "finalization_id": mutation["finalization_id"],
                 "controller_goal_id": mutation["controller_goal_id"],
                 "automation_id": mutation["automation_id"],
+                "native_goal_policy": native_goal_policy,
+                "closeout_capability": closeout_capability,
             },
         }
+
+    @staticmethod
+    def _missing_required_surface_decisions(state: dict[str, Any]) -> list[str]:
+        missing_surface_decisions: list[str] = []
+        for candidate_goal_id, definition in state[
+            "goal_definition_registry"
+        ].items():
+            goal_record = state["goal_execution_ledger"].get(candidate_goal_id, {})
+            if goal_record.get("status") == "RETIRED":
+                continue
+            surface = definition.get("review_surface")
+            if not isinstance(surface, dict) or not surface.get("required"):
+                continue
+            decision_id = surface.get("decision_gate_id")
+            decision = state["pending_decisions"].get(decision_id)
+            selected = None
+            if isinstance(decision, dict) and decision.get("selected_option_id"):
+                selected = next(
+                    (
+                        option
+                        for option in decision["options"]
+                        if option["option_id"] == decision["selected_option_id"]
+                    ),
+                    None,
+                )
+            if (
+                not decision_id
+                or not isinstance(decision, dict)
+                or decision.get("status") != "APPLIED"
+                or AdaptiveStateRuntime._decision_context_digest(
+                    state, decision
+                )
+                != decision.get("decision_context_digest")
+                or selected is None
+                or selected["option_effect"] != "REVIEW_SURFACE_ACCEPTED"
+                or decision.get("scope", {}).get("goal_id")
+                != candidate_goal_id
+                or not isinstance(goal_record.get("latest_worker"), dict)
+                or decision.get("scope", {}).get("artifact_digest")
+                != goal_record["latest_worker"]["artifact_digest"]
+                or (
+                    surface.get("artifact_path") is not None
+                    and decision.get("scope", {}).get("artifact_path")
+                    != surface["artifact_path"]
+                )
+                or (
+                    surface.get("preview_url") is not None
+                    and decision.get("scope", {}).get("preview_url")
+                    != surface["preview_url"]
+                )
+            ):
+                missing_surface_decisions.append(candidate_goal_id)
+        return missing_surface_decisions
 
     def _validate_blocker_observations(
         self,
@@ -6443,12 +10237,25 @@ class AdaptiveStateRuntime:
         state["active_milestone_id"] = None
         state["roadmap_version"] = base + 1
         state["terminal_status"] = "LOOP_BLOCKED"
+        native_goal_policy = state.get("native_goal_policy", "required")
+        closeout_capability = _closeout_capability(
+            loop_id=state["loop_id"],
+            controller_pack_digest=state["controller_pack_identity"]["digest"],
+            finalization_id=mutation["finalization_id"],
+            finalized_state_version=after_version,
+            controller_goal_id=mutation["controller_goal_id"],
+            controller_goal_target_status="BLOCKED",
+            automation_id=mutation["automation_id"],
+            native_goal_policy=native_goal_policy,
+        )
         state["finalization_outbox"] = {
             "finalization_id": mutation["finalization_id"],
             "status": "PREPARED",
             "finalized_state_version": after_version,
             "controller_goal_id": mutation["controller_goal_id"],
             "automation_id": mutation["automation_id"],
+            "native_goal_policy": native_goal_policy,
+            "closeout_capability": closeout_capability,
             "outcome_kind": "BLOCKED",
             "controller_goal_target_status": "BLOCKED",
             "automation_target_status": "PAUSED",
@@ -6470,6 +10277,8 @@ class AdaptiveStateRuntime:
                 "controller_goal_target_status": "BLOCKED",
                 "automation_id": mutation["automation_id"],
                 "automation_target_status": "PAUSED",
+                "native_goal_policy": native_goal_policy,
+                "closeout_capability": closeout_capability,
                 "blocker_code": mutation["blocker_code"],
                 "blocker_fingerprint": mutation["blocker_fingerprint"],
                 "blocker_observation_turn_ids": [
@@ -6490,6 +10299,40 @@ class AdaptiveStateRuntime:
         outbox = state["finalization_outbox"]
         if outbox is None or outbox["status"] != "PREPARED":
             raise RuntimeRejection("FINALIZATION_NOT_PREPARED", "/finalization_outbox")
+        if (
+            outbox.get("native_goal_policy") is None
+            or outbox.get("closeout_capability") is None
+        ):
+            raise RuntimeRejection(
+                "FINALIZATION_CAPABILITY_MIGRATION_REQUIRED",
+                "/finalization_outbox",
+            )
+        expected_capability = _closeout_capability(
+            loop_id=state["loop_id"],
+            controller_pack_digest=state["controller_pack_identity"]["digest"],
+            finalization_id=outbox["finalization_id"],
+            finalized_state_version=outbox["finalized_state_version"],
+            controller_goal_id=outbox["controller_goal_id"],
+            controller_goal_target_status=outbox[
+                "controller_goal_target_status"
+            ],
+            automation_id=outbox["automation_id"],
+            native_goal_policy=outbox["native_goal_policy"],
+        )
+        if outbox["closeout_capability"] != expected_capability:
+            raise RuntimeRejection(
+                "FINALIZATION_CAPABILITY_INVALID",
+                "/finalization_outbox/closeout_capability",
+            )
+        if (
+            mutation["native_goal_policy"] != outbox["native_goal_policy"]
+            or mutation["closeout_capability"]
+            != outbox["closeout_capability"]
+        ):
+            raise RuntimeRejection(
+                "FINALIZATION_CAPABILITY_MISMATCH",
+                "/mutation/closeout_capability",
+            )
         expected = {
             "finalization_id": mutation["finalization_id"],
             "finalized_state_version": mutation["finalized_state_version"],
@@ -6544,6 +10387,8 @@ class AdaptiveStateRuntime:
         )
         receipt = {
             "finalization_id": mutation["finalization_id"],
+            "native_goal_policy": mutation["native_goal_policy"],
+            "closeout_capability": mutation["closeout_capability"],
             "controller_goal_id": mutation["controller_goal_id"],
             "controller_goal_status": mutation["controller_goal_status"],
             "controller_goal_observation_path": mutation[
@@ -6615,6 +10460,7 @@ __all__ = [
     "PAYLOAD_DIGEST_FIELD",
     "PAYLOAD_DIGEST_PLACEHOLDER",
     "PERSISTENT_STAGES",
+    "STATUS_PROJECTION_STAGES",
     "RuntimeRejection",
     "goal_definition_payload_digest",
     "materialize_dispatch_payload",

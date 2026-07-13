@@ -15,6 +15,7 @@ from loop_architect.state_runtime import (
     materialize_dispatch_payload,
     verify_dispatch_payload_against_state,
 )
+from loop_architect.human_control import build_failure_fingerprint
 
 
 def _response(code: str, path: str = "/", details: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -54,18 +55,31 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
                 raise ValueError(token)
             mode = "payload-verify"
             index += 1
+        elif token == "--report-stage":
+            if mode != "apply":
+                raise ValueError(token)
+            mode = "report-stage"
+            index += 1
+        elif token == "--fingerprint-normalize":
+            if mode != "apply":
+                raise ValueError(token)
+            mode = "fingerprint-normalize"
+            index += 1
         elif token == "--crash-at" and index + 1 < len(argv):
             crash_at = argv[index + 1]
             index += 2
         else:
             raise ValueError(token)
-    if mode in {"apply", "recover", "payload-verify"} and root is None:
+    if mode in {"apply", "recover", "payload-verify", "report-stage"} and root is None:
         raise ValueError("--root")
-    if mode == "payload-materialize" and root is not None:
+    if mode in {"payload-materialize", "fingerprint-normalize"} and root is not None:
         raise ValueError("--root")
     if crash_at is not None and crash_at not in CRASH_STAGES:
         raise ValueError("--crash-at")
-    if mode.startswith("payload-") and crash_at is not None:
+    if (
+        mode.startswith("payload-")
+        or mode in {"fingerprint-normalize", "report-stage"}
+    ) and crash_at is not None:
         raise ValueError("--crash-at")
     return root, mode, crash_at
 
@@ -83,16 +97,17 @@ def _load_request(payload: str) -> Any:
 
 
 def _emit(response: dict[str, Any]) -> None:
-    sys.stdout.write(
-        json.dumps(
-            response,
-            sort_keys=True,
-            ensure_ascii=True,
-            allow_nan=False,
-            separators=(",", ":"),
-        )
-        + "\n"
+    payload = json.dumps(
+        response,
+        sort_keys=True,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
     )
+    payload = payload.replace("<", "\\u003c").replace(">", "\\u003e").replace(
+        "&", "\\u0026"
+    )
+    sys.stdout.write(payload + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -103,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        payload = sys.stdin.read()
+        payload = "" if mode == "recover" else sys.stdin.read()
         if mode == "payload-materialize":
             if not payload.strip():
                 response = _response("DISPATCH_MATERIALIZATION_INPUT_INVALID", "/")
@@ -117,9 +132,40 @@ def main(argv: list[str] | None = None) -> int:
                         "/",
                         {"error_type": type(exc).__name__},
                     )
+        elif mode == "fingerprint-normalize":
+            try:
+                value = _load_request(payload)
+                if not isinstance(value, dict):
+                    raise ValueError("object required")
+                fingerprint = build_failure_fingerprint(**value)
+                response = {
+                    "ok": True,
+                    "status": "FAILURE_FINGERPRINT_NORMALIZED",
+                    "fingerprint": fingerprint,
+                    "external_actions": [],
+                    "external_action_count": 0,
+                }
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                response = _response(
+                    "FAILURE_FINGERPRINT_INPUT_INVALID",
+                    "/",
+                    {"error_type": type(exc).__name__},
+                )
         elif mode == "payload-verify":
             assert root is not None
             response = verify_dispatch_payload_against_state(root, payload)
+        elif mode == "report-stage":
+            assert root is not None
+            try:
+                request = _load_request(payload)
+            except (json.JSONDecodeError, ValueError) as exc:
+                response = _response(
+                    "FORMAL_REPORT_STAGE_INPUT_INVALID",
+                    "/",
+                    {"error_type": type(exc).__name__},
+                )
+            else:
+                response = AdaptiveStateRuntime(root).stage_formal_report(request)
         else:
             assert root is not None
             runtime = AdaptiveStateRuntime(root, crash_at=crash_at)
