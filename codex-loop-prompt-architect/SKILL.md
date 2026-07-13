@@ -1,6 +1,6 @@
 ---
 name: codex-loop-prompt-architect
-description: Turn rough prompts into validated Standard or Adaptive Codex macOS App Controller Pack Markdown files with real project tasks, durable state, heartbeat automation, exact-worktree review, bounded retries, evidence gates, and separate Chinese usage instructions. Use for loop化, long-running/adaptive project loops, Controller/Worker/Reviewer/State-Writer orchestration, or diagnosis of a loop that stalls, duplicates work, loses state, or follows an obsolete plan.
+description: Quality-gate rough ideas or PRDs, then turn only READY_FOR_LOOP requirements into validated Standard or Adaptive Codex macOS App Controller Pack Markdown files. Use for 需求质检, READY_FOR_LOOP checks, intake-only review, loop化, long-running/adaptive loops, Controller/Worker/Reviewer/State-Writer orchestration, or stalled-loop diagnosis.
 ---
 
 # Codex Loop Prompt Architect
@@ -11,10 +11,13 @@ Design, diagnose, and rewrite loop prompt systems for the Codex macOS App.
 Generate prompts; do not execute the engineering mission or operate its threads
 unless the user separately asks for live execution.
 
-Default deliverables:
+In `generate` mode, default deliverables are:
 1. one self-contained `<project>-codex-loop-controller-pack.md` file for the
    Controller thread
 2. separate Simplified Chinese usage instructions for the user
+
+In `intake-only` mode, return only the stable readiness report and, when ready,
+validated generator-compatible input. Do not create a Controller Pack.
 
 Never make the user copy multiple internal prompt blocks when a Markdown file
 can be sent.
@@ -29,66 +32,47 @@ the user approved that location.
 Accept concise requests such as:
 
 ```text
+先检查这个需求是否适合进入 Loop。
+intake 模式：只做需求质检，不生成 Controller Pack。
 loop化这个提示词：...
-用 $codex-loop-prompt-architect，短版：...
-把这个 PRD 做成 Codex App 自动 loop；信息不够先问。
 把这个长期项目做成 Adaptive loop，允许新证据调整后续里程碑。
 修复这个已有 Controller Pack 的断停问题。
 ```
 
-## Two Independent Mode Axes
+## Workflow And Generation Modes
 
-Output mode controls detail: `compact` by default, `full` for high-risk or
-formal diagnosis, and `minimal_patch` only for an existing-pack repair.
-Coordination mode controls runtime: `standard` preserves the fixed validated
-Goal Queue; `adaptive` is a beta/experimental strategy that adds a mutable
+First choose `intake-only` or `generate`. Only Generate uses two independent
+axes: output detail is `compact`, `full`, or `minimal_patch`; coordination is
+`standard` for a fixed validated Goal Queue or `adaptive` for a mutable
 milestone roadmap and project-judgment audit. Keep the axes separate.
 
 Use Adaptive when explicitly requested, when there are more than three
 milestones, when acceptance/scope may change with evidence, when machine-local
 verification is required, or when work is expected to exceed half a day.
-Existing inputs default to Standard. Clarification and risk override brevity.
+Ready Generate inputs default to Standard. Clarification and risk override brevity.
 
-If required facts remain missing and the user insists on a draft, label it
-`NON_DISPATCHABLE_DRAFT`. Do not describe it as ready to send.
+## Intake Gate And Existing-Pack Repair
 
-## Clarification Gate
-Before ready output, separate `Confirmed Facts / Inferred Intent / Unresolved Facts / Proposed Safe Defaults / Blocking Questions`; ask one to three focused questions when facts are missing or contradictory:
+Before a new Pack, read
+[references/loop-intake-gate.md](references/loop-intake-gate.md); it is the sole
+G1-G10, readiness, output, evidence, permission, and generator-handoff contract.
 
-- objective and concrete acceptance criteria
-- Codex Project name and root folder
-- `repo_mode`: `existing_git`, `new_git`, or `non_git`
-- current/base/target branches when `existing_git`
-- source PRD/spec/image/PDF/dataset paths visible to child threads
-- Worker roles, ownership, explicit permission, allowed and forbidden paths
-- coordination mode; Adaptive reason, explicit input `role_kind`, initial milestones,
-  exactly one Active milestone, and collision-free post-injection role/task ids
-- dependency-ordered goals when more than one dispatch Worker or phase exists
-- validation commands, evidence layer, and claim boundary
-- canonical state path and review policy
-- heartbeat interval, wake/idle limits, per-goal repair limit, retry limits, and
-  hard stops
-- for a separate long-lived cron: exact schedule, workspace, self-contained
-  prompt, local/worktree environment, activation/stop policy, and budget
-- connector/worktree requirements
-- Local Verifier policy; explicit subagent concurrency/lifetime/retry/input
-  limits when delegation is enabled; and dashboard policy in Adaptive Mode
-- cost/call/token cap or explicit deferred/forbidden policy for metered runtime
-- production/external side effects and which are pre-authorized
+- `intake-only` stays read-only and returns the stable report, never a Pack.
+- `generate` runs the same gate and proceeds only after `READY_FOR_LOOP` plus a
+  real scaffold `--check-only` succeeds.
+- Other outcomes are `NEEDS_CLARIFICATION`, `BLOCKED`, or
+  `DIRECT_TASK_RECOMMENDED`; never emit `READY_WITH_ASSUMPTIONS` or fabricate
+  complete JSON. Ask only one to three new, highest-priority blockers per round.
 
-Placeholder-only values such as `TBD`, `TODO`, `unknown`, `待定`,
-`稍后补充`, or `?` do not satisfy this gate.
+Read-only forbids product, repo, canonical control-plane, task, Goal, and
+heartbeat mutation. It permits one disposable generator input under a temporary
+directory solely for `--check-only`; never leave it in the target repo without
+approval.
 
-Do not ask the user whether Codex App exposes thread tools. The generated
-Controller probes those tools at runtime and reports `THREAD_TOOLS_UNAVAILABLE`
-when absent.
-
-A Controller-only attachment is not automatically visible to a new child
-thread. Require a workspace path or absolute local path before dispatch.
-Require an absolute repo root. Canonical control files stay under that repo's
-`.codex-loop/`; writable scopes cannot traverse or point outside the repo.
-Source artifacts are concrete absolute/workspace-relative paths, http(s) URLs,
-or the explicit `SELF_CONTAINED` sentinel.
+Existing-pack diagnosis and `minimal_patch` repair preserve the existing
+workflow. Re-enter Intake only when objective, scope, acceptance, sources,
+permissions, budget, side effects, or coordination mode changes. Never weaken
+existing review, runtime, or finalization contracts.
 
 ## Required Runtime Model
 

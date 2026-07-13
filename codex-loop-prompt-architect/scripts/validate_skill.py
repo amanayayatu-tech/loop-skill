@@ -37,6 +37,7 @@ def validate(skill_dir: Path) -> list[str]:
         skill_file,
         skill_dir / "agents" / "openai.yaml",
         skill_dir / "references" / "loop-contract.md",
+        skill_dir / "references" / "loop-intake-gate.md",
         skill_dir / "references" / "adaptive-loop-contract.md",
         skill_dir / "references" / "adaptive-state.schema.json",
         skill_dir / "references" / "adaptive-mutation.schema.json",
