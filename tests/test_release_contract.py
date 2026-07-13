@@ -44,6 +44,11 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request'", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("github.event.pull_request.head.ref || github.ref_name", workflow)
+        self.assertIn("actions/checkout@v7", workflow)
+        self.assertIn("actions/setup-python@v6", workflow)
+        self.assertIn("actions/upload-artifact@v7", workflow)
+        self.assertNotIn("actions/checkout@v4", workflow)
+        self.assertNotIn("actions/setup-python@v5", workflow)
 
     def test_coverage_baseline_is_branch_aware_and_bounded(self) -> None:
         config = (ROOT / "pyproject.toml").read_text()

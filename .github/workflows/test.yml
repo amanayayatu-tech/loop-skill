@@ -21,8 +21,8 @@ jobs:
       ADAPTIVE_STATE_FUZZ_CASES: "25"
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.9"
           cache: pip
@@ -48,8 +48,8 @@ jobs:
       ADAPTIVE_STATE_FUZZ_CASES: "5000"
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip
@@ -67,8 +67,8 @@ jobs:
       ADAPTIVE_STATE_FUZZ_CASES: "25"
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip
@@ -80,7 +80,7 @@ jobs:
         run: coverage report
       - name: Export coverage XML
         run: coverage xml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: coverage.xml
@@ -93,8 +93,8 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip
