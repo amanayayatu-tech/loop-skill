@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .human_control import VALIDATION_DIMENSIONS
+
 
 COORDINATION_MODES = {"standard", "adaptive"}
 
@@ -13,6 +15,7 @@ ADAPTIVE_HEARTBEAT_PROMPT_MARKER = "ADAPTIVE_HEARTBEAT_PROMPT_V1"
 
 SAFE_GOAL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
 SAFE_MILESTONE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+SAFE_ID_PATTERN = SAFE_MILESTONE_ID_PATTERN
 
 ROLE_KINDS = {
     "implementation",
@@ -48,6 +51,12 @@ DASHBOARD_POLICIES = {
     "required",
 }
 
+NATIVE_GOAL_POLICIES = {
+    "disabled",
+    "advisory",
+    "required",
+}
+
 MILESTONE_STATUSES = {
     "PLANNED",
     "ACTIVE",
@@ -80,6 +89,7 @@ ADAPTIVE_STATE_SCHEMA_TYPES = {
     "authorization_envelope": "closed canonical object for objective, paths, top-level permission ceiling, per-milestone/per-goal permission caps, budget, connectors, side effects, evidence, claims, production, and secrets",
     "roadmap_change_outbox": "object of APPLIED ROADMAP_REVISION receipts; the durable structured proposal is the acknowledged ROADMAP_AUDIT report",
     "controller_goal": "closed object or null with action, loop/Pack/milestone/objective identity, final-line marker, goal id, optional update target, and observed status",
+    "native_goal_policy": "disabled/advisory/required external adapter policy; omitted legacy state means required",
     "thread_registry": "closed records binding bootstrap_role_kind to deterministic formal role_kind plus exact project/task/bootstrap/worktree identity",
     "controller_goal_outbox": "generic GOAL outbox keyed by create/update action id with PREPARED/SENT/ACKED identity and exact native-or-emulated result",
     "controller_lease": "object or null with lease_epoch, never-reused lease_id, owner_kind, owner_identity as the exact registered real Controller threadId string, acquired_at, expires_at, intended_transition, and route actions",
@@ -98,10 +108,34 @@ ADAPTIVE_STATE_SCHEMA_TYPES = {
     "subagent_attempt_ledger": "object keyed by exploration_id with bounded attempts, payload/report digests, agent identity, and terminal status",
     "finalization_outbox": "null or PREPARED finalization action binding exact Controller Goal and business heartbeat identities",
     "finalization_receipt": "null or evidence-bound ACK proving the exact Goal observation and PAUSED automation observation",
+    "run_control": "RUNNING/PAUSE_REQUESTED/PAUSED_AT_SAFE_POINT with effective state version",
+    "steering_queue": "ordered classified Steering records",
+    "steering_ledger": "idempotent message/turn-bound Steering identity map",
+    "active_steering_id": "safe id or null",
+    "pending_decisions": "scoped Decision Cards with context digest and preauthorized options",
+    "failure_history": "per-Goal deterministic fingerprint history that survives redispatch",
+    "failure_policy": "materialized same-strategy threshold 2-3",
+    "context_freshness_ledger": "identity deltas and deterministic/judgment classifications",
+    "validation_requirements": "per-Goal materialized Validation Matrix",
+    "validation_results": "per-Goal acknowledged dimension results",
+    "validation_evidence_identity": "exact evidence and artifact digests per dimension",
+    "validation_gate_status": "PENDING/PASS/FAIL/PASS_WITH_LIMITATION",
+    "status_projection_target": "derived STATUS.md target state version, digest, and render contract",
+    "human_control_policy": "canonical switches for optional Steering/STATUS/Decision UX; failure fingerprint, freshness, and evidence safety gates remain mandatory",
 }
 
 ADAPTIVE_RUNTIME_MUTATIONS = (
     "INITIALIZE",
+    "MIGRATE_V1_TO_V2",
+    "RECORD_STEERING",
+    "RESOLVE_STEERING",
+    "SET_RUN_CONTROL",
+    "REGISTER_DECISION",
+    "RECORD_DECISION_RESPONSE",
+    "RECORD_FAILURE",
+    "RECORD_VALIDATION",
+    "RECORD_CONTEXT_FRESHNESS",
+    "RECORD_CONTROLLER_GOAL_RESUME",
     "ACQUIRE_LEASE",
     "RELEASE_LEASE",
     "RENEW_LEASE",
@@ -154,6 +188,25 @@ ADAPTIVE_RUNTIME_SUCCESS_CODES = (
     "STOP_LOOP_APPLIED",
     "FINALIZATION_ACKED",
     "IDEMPOTENT_REPLAY",
+    "SCHEMA_V2_MIGRATED",
+    "SCHEMA_V2_ALREADY_APPLIED",
+    "STEERING_CLASSIFIED",
+    "STEERING_ALREADY_RECORDED",
+    "STEERING_ALREADY_RESOLVED",
+    "STEERING_APPLIED",
+    "STEERING_DEFERRED",
+    "STEERING_CONFLICT",
+    "PAUSE_REQUESTED",
+    "PAUSED_AT_SAFE_POINT",
+    "RUNNING",
+    "DECISION_REGISTERED",
+    "DECISION_ALREADY_REGISTERED",
+    "DECISION_RESPONSE_APPLIED",
+    "DECISION_RESPONSE_ALREADY_APPLIED",
+    "FAILURE_RECORDED",
+    "VALIDATION_RECORDED",
+    "CONTEXT_FRESHNESS_RECORDED",
+    "CONTEXT_CHECK_ALREADY_RECORDED",
 )
 
 DEFAULT_ADAPTIVE_VALUES = {
@@ -166,7 +219,14 @@ DEFAULT_ADAPTIVE_VALUES = {
     "subagent_max_depth": 1,
     "local_verification_policy": "not_required",
     "dashboard_policy": "auto",
+    "native_goal_policy": "required",
     "dashboard_threshold_hours": 12,
+    "human_steering_policy": "auto",
+    "status_projection": "enabled",
+    "decision_card_policy": "on_real_gate",
+    "failure_fingerprint_policy": {"enabled": True},
+    "context_freshness_policy": "required_at_gates",
+    "review_evidence_policy": "deterministic_first",
 }
 
 
@@ -198,7 +258,14 @@ OPTIONAL = [
     "subagent_max_depth",
     "local_verification_policy",
     "dashboard_policy",
+    "native_goal_policy",
     "dashboard_threshold_hours",
+    "human_steering_policy",
+    "status_projection",
+    "decision_card_policy",
+    "failure_fingerprint_policy",
+    "context_freshness_policy",
+    "review_evidence_policy",
     "surface",
     "project_name",
     "project_root",
@@ -408,6 +475,8 @@ GOAL_FIELDS = {
     "depends_on",
     "dispatch_when",
     "phase_permissions",
+    "validation_matrix",
+    "review_surface",
 }
 
 STRING_OPTIONAL_FIELDS = (
@@ -417,6 +486,12 @@ STRING_OPTIONAL_FIELDS = (
     "subagent_input_policy",
     "local_verification_policy",
     "dashboard_policy",
+    "native_goal_policy",
+    "human_steering_policy",
+    "status_projection",
+    "decision_card_policy",
+    "context_freshness_policy",
+    "review_evidence_policy",
     "project_name",
     "project_root",
     "workspace_setup",
@@ -471,6 +546,89 @@ def _build_input_schema() -> dict:
         "additionalProperties": False,
         "properties": {field: {"type": "boolean"} for field in PHASE_PERMISSION_FIELDS},
     }
+    validation_rule = {
+        "type": "object",
+        "required": ["required"],
+        "additionalProperties": False,
+        "properties": {
+            "required": {"type": "boolean"},
+            "evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "reason": {"type": "string", "minLength": 1},
+        },
+        "allOf": [
+            {
+                "if": {"properties": {"required": {"const": True}}},
+                "then": {"required": ["evidence"], "properties": {"evidence": {"minItems": 1}}},
+            },
+            {
+                "if": {"properties": {"required": {"const": False}}},
+                "then": {"required": ["reason"]},
+            },
+        ],
+    }
+    validation_matrix = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(VALIDATION_DIMENSIONS),
+        "properties": {
+            name: validation_rule
+            for name in VALIDATION_DIMENSIONS
+        },
+    }
+    review_surface = {
+        "type": "object",
+        "required": [
+            "required",
+            "type",
+            "artifact_path",
+            "preview_url",
+            "evidence_refs",
+            "review_questions",
+            "decision_gate_id",
+        ],
+        "additionalProperties": False,
+        "properties": {
+            "required": {"type": "boolean"},
+            "type": {"enum": ["browser_preview", "screenshot", "markdown", "tabular_data", "pdf", "slides", "diff", "other_artifact", "NOT_APPLICABLE"]},
+            "artifact_path": {"type": ["string", "null"]},
+            "preview_url": {"type": ["string", "null"]},
+            "evidence_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "review_questions": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "decision_gate_id": {
+                "oneOf": [
+                    {"type": "null"},
+                    {"type": "string", "pattern": SAFE_ID_PATTERN},
+                ]
+            },
+            "reason": {"type": "string", "minLength": 1},
+        },
+        "allOf": [
+            {
+                "if": {"properties": {"required": {"const": True}}},
+                "then": {
+                    "required": ["decision_gate_id"],
+                    "properties": {
+                        "decision_gate_id": {
+                            "type": "string",
+                            "pattern": SAFE_ID_PATTERN,
+                        },
+                        "review_questions": {"minItems": 1},
+                    },
+                    "anyOf": [
+                        {"properties": {"artifact_path": {"type": "string", "minLength": 1}}},
+                        {"properties": {"preview_url": {"type": "string", "minLength": 1}}},
+                    ],
+                },
+            },
+            {
+                "if": {"properties": {"type": {"const": "NOT_APPLICABLE"}}},
+                "then": {
+                    "required": ["reason"],
+                    "properties": {"required": {"const": False}},
+                },
+            },
+        ],
+    }
     worker = {
         "type": "object",
         "required": ["role"],
@@ -515,6 +673,8 @@ def _build_input_schema() -> dict:
             "depends_on": dependency_schema,
             "dispatch_when": {"type": "string", "minLength": 1},
             "phase_permissions": phase_permissions,
+            "validation_matrix": validation_matrix,
+            "review_surface": review_surface,
         },
     }
     milestone = {
@@ -626,7 +786,19 @@ def _build_input_schema() -> dict:
             "subagent_max_depth": {"const": 1},
             "local_verification_policy": {"enum": sorted(LOCAL_VERIFICATION_POLICIES)},
             "dashboard_policy": {"enum": sorted(DASHBOARD_POLICIES)},
+            "native_goal_policy": {"enum": sorted(NATIVE_GOAL_POLICIES)},
             "dashboard_threshold_hours": {"type": "integer", "minimum": 1},
+            "human_steering_policy": {"enum": ["auto", "enabled", "disabled"]},
+            "status_projection": {"enum": ["enabled", "disabled"]},
+            "decision_card_policy": {"enum": ["on_real_gate", "disabled"]},
+            "failure_fingerprint_policy": {
+                "type": "object",
+                "required": ["enabled"],
+                "additionalProperties": False,
+                "properties": {"enabled": {"type": "boolean"}},
+            },
+            "context_freshness_policy": {"enum": ["required_at_gates", "disabled"]},
+            "review_evidence_policy": {"enum": ["deterministic_first"]},
         },
         "allOf": [
             {
@@ -647,6 +819,18 @@ def _build_input_schema() -> dict:
     schema["properties"]["delegation_policy"] = {"enum": sorted(DELEGATION_POLICIES)}
     schema["properties"]["local_verification_policy"] = {"enum": sorted(LOCAL_VERIFICATION_POLICIES)}
     schema["properties"]["dashboard_policy"] = {"enum": sorted(DASHBOARD_POLICIES)}
+    schema["properties"]["native_goal_policy"] = {"enum": sorted(NATIVE_GOAL_POLICIES)}
+    schema["properties"]["human_steering_policy"] = {"enum": ["auto", "enabled", "disabled"]}
+    schema["properties"]["status_projection"] = {"enum": ["enabled", "disabled"]}
+    schema["properties"]["decision_card_policy"] = {"enum": ["on_real_gate", "disabled"]}
+    schema["properties"]["context_freshness_policy"] = {"enum": ["required_at_gates", "disabled"]}
+    schema["properties"]["review_evidence_policy"] = {"enum": ["deterministic_first"]}
+    schema["properties"]["failure_fingerprint_policy"] = {
+        "type": "object",
+        "required": ["enabled"],
+        "additionalProperties": False,
+        "properties": {"enabled": {"type": "boolean"}},
+    }
     for field in ("runtime_blockers", "time_factors"):
         schema["properties"][field] = string_or_array
     for field in (

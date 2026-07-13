@@ -30,6 +30,11 @@ from loop_architect.adaptive_renderer import (  # noqa: E402
     state_writer_adaptive_protocol,
 )
 from loop_architect.forecast import dashboard_required, local_verifier_needed  # noqa: E402
+from loop_architect.human_control import (  # noqa: E402
+    VALIDATION_DIMENSIONS,
+    derive_validation_matrix,
+    validate_review_surface,
+)
 from loop_architect.schema import (  # noqa: E402
     ADAPTIVE_HEARTBEAT_PROMPT_MARKER,
     ADAPTIVE_REVIEW_ENVELOPE,
@@ -766,6 +771,34 @@ def normalize_goals(data: dict[str, Any], workers: list[dict[str, Any]]) -> list
         allowed = parse_csv_items(raw.get("allowed_write_scope", raw.get("allowed", [])))
         validation = parse_commands(raw.get("validation", []))
         success = parse_commands(raw.get("success_criteria", []))
+        objective = str(raw.get("objective") or data.get("objective") or "PLACEHOLDER").strip()
+        resolved_validation = validation or (worker.get("validation") if worker else []) or global_validation
+        review_surface = raw.get("review_surface")
+        if isinstance(review_surface, dict):
+            review_surface = {
+                "required": bool(review_surface.get("required", False)),
+                "type": review_surface.get("type"),
+                "artifact_path": review_surface.get("artifact_path"),
+                "preview_url": review_surface.get("preview_url"),
+                "evidence_refs": parse_csv_items(review_surface.get("evidence_refs", [])),
+                "review_questions": parse_csv_items(review_surface.get("review_questions", [])),
+                "decision_gate_id": review_surface.get("decision_gate_id"),
+                **(
+                    {"reason": review_surface["reason"]}
+                    if review_surface.get("reason")
+                    else {}
+                ),
+            }
+        validation_matrix = raw.get("validation_matrix")
+        if data.get("coordination_mode") == "adaptive" and not isinstance(validation_matrix, dict):
+            validation_matrix = derive_validation_matrix(
+                objective=objective,
+                validation_commands=resolved_validation,
+                has_review_surface=(
+                    isinstance(review_surface, dict)
+                    and review_surface.get("type") != "NOT_APPLICABLE"
+                ),
+            )
         goals.append(
             {
                 "goal_id": str(raw.get("goal_id") or f"G{index}").strip(),
@@ -777,9 +810,9 @@ def normalize_goals(data: dict[str, Any], workers: list[dict[str, Any]]) -> list
                     if worker
                     else "implementation"
                 ),
-                "objective": str(raw.get("objective") or data.get("objective") or "PLACEHOLDER").strip(),
+                "objective": objective,
                 "success_criteria": success or global_acceptance,
-                "validation": validation or (worker.get("validation") if worker else []) or global_validation,
+                "validation": resolved_validation,
                 "allowed_write_scope": allowed or (worker.get("allowed") if worker else []) or global_allowed,
                 "depends_on": parse_csv_items(raw.get("depends_on", [])),
                 "dispatch_when": str(raw.get("dispatch_when") or "all dependencies are complete and all gates are satisfied").strip(),
@@ -791,6 +824,8 @@ def normalize_goals(data: dict[str, Any], workers: list[dict[str, Any]]) -> list
                     if worker and is_local_verifier(worker)
                     else "implementation"
                 ),
+                "validation_matrix": validation_matrix,
+                "review_surface": review_surface,
             }
         )
     return goals
@@ -812,6 +847,10 @@ def adaptive_goal_definition(goal: dict[str, Any]) -> dict[str, Any]:
         "depends_on": list(goal["depends_on"]),
         "dispatch_when": goal["dispatch_when"],
     }
+    if isinstance(goal.get("validation_matrix"), dict):
+        template["validation_matrix"] = json.loads(json.dumps(goal["validation_matrix"]))
+    if isinstance(goal.get("review_surface"), dict):
+        template["review_surface"] = json.loads(json.dumps(goal["review_surface"]))
     serialized = json.dumps(
         template,
         ensure_ascii=False,
@@ -1251,6 +1290,7 @@ def heartbeat_cadence(data: dict[str, Any]) -> str:
 
 def validation_errors(data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    adaptive_mode = data.get("coordination_mode") == "adaptive"
     for key in REQUIRED:
         value = data.get(key)
         if value is None or value == "" or (value == [] and key != "allowed"):
@@ -1483,6 +1523,7 @@ def validation_errors(data: dict[str, Any]) -> list[str]:
     except (ValueError, json.JSONDecodeError) as exc:
         raw_goals = []
         errors.append(f"goals:invalid_json:{exc}")
+    review_surface_decision_ids: dict[str, int] = {}
     for index, raw_goal in enumerate(raw_goals, 1):
         for key in sorted(set(raw_goal) - GOAL_FIELDS):
             errors.append(f"goals:{index}:unknown_field:{key}")
@@ -1524,6 +1565,124 @@ def validation_errors(data: dict[str, Any]) -> list[str]:
             for key, value in phase_permissions.items():
                 if key in PHASE_PERMISSION_FIELDS and not boolean_like(value):
                     errors.append(f"goals:{index}:phase_permissions:{key}:must_be_boolean")
+        validation_matrix = raw_goal.get("validation_matrix")
+        if validation_matrix is not None:
+            if not isinstance(validation_matrix, dict):
+                errors.append(f"goals:{index}:validation_matrix:must_be_object")
+            else:
+                missing_dimensions = sorted(
+                    set(VALIDATION_DIMENSIONS) - set(validation_matrix)
+                )
+                unknown_dimensions = sorted(
+                    set(validation_matrix) - set(VALIDATION_DIMENSIONS)
+                )
+                for dimension in missing_dimensions:
+                    errors.append(
+                        f"goals:{index}:validation_matrix:missing_dimension:{dimension}"
+                    )
+                for dimension in unknown_dimensions:
+                    errors.append(
+                        f"goals:{index}:validation_matrix:unknown_dimension:{dimension}"
+                    )
+                for dimension, rule in validation_matrix.items():
+                    if dimension not in VALIDATION_DIMENSIONS:
+                        continue
+                    if not isinstance(rule, dict):
+                        errors.append(
+                            f"goals:{index}:validation_matrix:{dimension}:must_be_object"
+                        )
+                        continue
+                    if set(rule) - {"required", "evidence", "reason"}:
+                        errors.append(
+                            f"goals:{index}:validation_matrix:{dimension}:unknown_field"
+                        )
+                    if not isinstance(rule.get("required"), bool):
+                        errors.append(
+                            f"goals:{index}:validation_matrix:{dimension}:required_must_be_boolean"
+                        )
+                    if rule.get("required") is True:
+                        evidence = rule.get("evidence")
+                        if not isinstance(evidence, list) or not evidence or any(
+                            not isinstance(item, str) or not item.strip()
+                            for item in evidence
+                        ):
+                            errors.append(
+                                f"goals:{index}:validation_matrix:{dimension}:evidence_required"
+                            )
+                    elif rule.get("required") is False and not (
+                        isinstance(rule.get("reason"), str) and rule["reason"].strip()
+                    ):
+                        errors.append(
+                            f"goals:{index}:validation_matrix:{dimension}:reason_required"
+                        )
+                if adaptive_mode:
+                    derived_matrix = derive_validation_matrix(
+                        objective=str(raw_goal.get("objective") or data.get("objective") or ""),
+                        validation_commands=(
+                            parse_commands(raw_goal.get("validation", []))
+                            or parse_commands(data.get("validation", []))
+                        ),
+                        has_review_surface=(
+                            isinstance(raw_goal.get("review_surface"), dict)
+                            and raw_goal["review_surface"].get("type")
+                            != "NOT_APPLICABLE"
+                        ),
+                    )
+                    for dimension, derived_rule in derived_matrix.items():
+                        explicit_rule = validation_matrix.get(dimension)
+                        if (
+                            derived_rule.get("required")
+                            and isinstance(explicit_rule, dict)
+                            and explicit_rule.get("required") is not True
+                        ):
+                            errors.append(
+                                f"goals:{index}:validation_matrix:{dimension}:required_gate_cannot_be_disabled"
+                            )
+        review_surface = raw_goal.get("review_surface")
+        if review_surface is not None:
+            if not isinstance(review_surface, dict):
+                errors.append(f"goals:{index}:review_surface:must_be_object")
+            else:
+                try:
+                    role = str(
+                        raw_goal.get("worker_role") or raw_goal.get("role") or ""
+                    ).strip()
+                    worker = worker_by_role(workers, role)
+                    explicit_scope = parse_csv_items(
+                        raw_goal.get(
+                            "allowed_write_scope",
+                            raw_goal.get("allowed", []),
+                        )
+                    )
+                    effective_scope = (
+                        explicit_scope
+                        or (worker.get("allowed", []) if worker else [])
+                        or parse_csv_items(data.get("allowed", []))
+                    )
+                    raw_repo_root = data.get("repo")
+                    repo_root = None
+                    if isinstance(raw_repo_root, str) and raw_repo_root.strip():
+                        candidate_root = Path(raw_repo_root).expanduser()
+                        if candidate_root.is_dir():
+                            repo_root = candidate_root
+                    validate_review_surface(
+                        review_surface,
+                        effective_scope,
+                        repo_root,
+                    )
+                    decision_gate_id = review_surface.get("decision_gate_id")
+                    if review_surface.get("required") and isinstance(
+                        decision_gate_id, str
+                    ):
+                        previous = review_surface_decision_ids.get(decision_gate_id)
+                        if previous is not None:
+                            errors.append(
+                                f"goals:{index}:review_surface:duplicate_decision_gate_id:{decision_gate_id}:first_goal_index:{previous}"
+                            )
+                        else:
+                            review_surface_decision_ids[decision_gate_id] = index
+                except ValueError as exc:
+                    errors.append(f"goals:{index}:review_surface:{exc}")
     if dispatch_worker_count > 1 and not raw_goals:
         errors.append("goals:required_for_multiple_dispatch_workers")
 
@@ -1686,7 +1845,24 @@ def validation_errors(data: dict[str, Any]) -> list[str]:
             continue
         if number < minimum or number > maximum:
             errors.append(f"{key}:must_be_between_{minimum}_and_{maximum}")
-
+    fingerprint_policy = data.get("failure_fingerprint_policy", {"enabled": True})
+    if (
+        adaptive_mode
+        and isinstance(fingerprint_policy, dict)
+        and fingerprint_policy.get("enabled") is False
+    ):
+        errors.append("failure_fingerprint_policy:adaptive_safety_gate_cannot_be_disabled")
+    if adaptive_mode and data.get("context_freshness_policy") == "disabled":
+        errors.append("context_freshness_policy:adaptive_safety_gate_cannot_be_disabled")
+    if adaptive_mode and data.get("decision_card_policy") == "disabled":
+        if any(
+            isinstance(goal.get("review_surface"), dict)
+            and goal["review_surface"].get("required") is True
+            for goal in raw_goals
+        ):
+            errors.append(
+                "decision_card_policy:required_review_surface_needs_decision_cards"
+            )
     retry_total = int_value(data, "runtime_retry_total_minutes", 180)
     retry_attempts = int_value(data, "runtime_retry_attempts", 10)
     retry_attempt_timeout = int_value(data, "runtime_retry_attempt_timeout_minutes", 12)
@@ -1947,6 +2123,12 @@ def thread_bootstrap_protocol_block(adaptive: bool = False) -> str:
         else "/goal or /review"
     )
     role_kind_tokens = ", ".join(sorted(ROLE_KINDS))
+    pack_identity_contract = (
+        "- Before any child task, Goal, heartbeat, or state mutation, require one launcher-supplied PACK_IDENTITY_ATTESTATION in the initial Controller launch input. It binds the absolute on-disk Controller Pack path, exact byte length, lowercase SHA-256, and parent create_thread observation. Independently hash that local file and require an exact match. Never derive PACK_SHA256 from codex_delegation.input, an XML/HTML entity form, a UI/read_thread preview, or any transport wrapper; decoding such a wrapper is not an identity workaround. Missing or mismatched attestation stops PACK_IDENTITY_ATTESTATION_REQUIRED or CONTROLLER_PACK_TRANSPORT_IDENTITY_UNRESOLVED with zero child-task, Goal, heartbeat, or state side effects.\n"
+        "- PACK_SHA256 is the attested digest of that exact on-disk Controller Pack. Define LOOP_ID as SHA-256(CONTROLLER_THREAD_ID + canonical repo path + PACK_SHA256), truncated to a stable readable id. If current Controller id cannot be resolved, use deterministic SHA-256(PROJECT_ID + canonical repo path + PACK_SHA256) only after checking matching state/tasks; never use a random fallback.\n"
+        if adaptive
+        else "- Compute PACK_SHA256 from the exact Controller Pack. Define LOOP_ID as SHA-256(CONTROLLER_THREAD_ID + canonical repo path + PACK_SHA256), truncated to a stable readable id. If current Controller id cannot be resolved, use deterministic SHA-256(PROJECT_ID + canonical repo path + PACK_SHA256) only after checking matching state/tasks; never use a random fallback.\n"
+    )
     marker_contract = (
         "- BOOTSTRAP_MARKER_VALUE is LOOP_ID + `|` + the exact generated role_kind token + `|` + PACK_SHA256. BOOTSTRAP_PROMPT follows the exact serialization below and never includes First Goal.\n"
         if adaptive
@@ -1972,7 +2154,7 @@ def thread_bootstrap_protocol_block(adaptive: bool = False) -> str:
     )
     return (
         "Thread Creation And Bootstrap Idempotency:\n"
-        "- Compute PACK_SHA256 from the exact Controller Pack. Define LOOP_ID as SHA-256(CONTROLLER_THREAD_ID + canonical repo path + PACK_SHA256), truncated to a stable readable id. If current Controller id cannot be resolved, use deterministic SHA-256(PROJECT_ID + canonical repo path + PACK_SHA256) only after checking matching state/tasks; never use a random fallback.\n"
+        f"{pack_identity_contract}"
         f"{marker_contract}"
         f"{adaptive_identity_gate}"
         "- Before canonical state exists, recover or create State-Writer first: list_threads(query=BOOTSTRAP_MARKER), read exact candidates, require matching projectId/cwd/role marker, and adopt one unique task. If multiple exact candidates remain, stop THREAD_IDENTITY_UNRESOLVED instead of creating another.\n"
@@ -2021,7 +2203,7 @@ def review_runtime_mapping_block() -> str:
         "- If the writing Worker uses environment.type=\"local\", create the Reviewer in the same project checkout and pass base_sha/head_sha/current_branch.\n"
         "- If the writing Worker uses a worktree, create the Reviewer just in time with fork_thread(threadId=WORKER_THREAD_ID, environment={type:\"same-directory\"}) when available.\n"
         "- If same-directory fork is unavailable, use a separate Reviewer only after proving it can read the absolute worker_worktree_path and after passing base_sha, head_sha, changed_files, and a complete diff/patch reference.\n"
-        "- For non_git or an uncommitted new_git tree, use deterministic before/after manifests of the approved product scope, content SHA-256 values, and diff_sha256; exclude .codex-loop control files, declared pre-existing unrelated files, and generated caches from the product digest while listing those exclusions for separate final audit. Set unavailable Git SHAs to NOT_APPLICABLE instead of inventing them.\n"
+        "- Every Worker PASS report includes one structured complete_diff_reference; for non_git or an uncommitted new_git tree use sorted LF MANIFEST_DELTA_V1 `A|M|D<TAB>path<TAB>size<TAB>sha256`, equal NO_DIFF, or confined PATCH_FILE_V1, each hashing to diff_sha256; exclude .codex-loop control files and report the exclusion manifest separately; unavailable Git SHAs are NOT_APPLICABLE.\n"
         "- If neither route exposes the exact artifact, output REVIEW_ARTIFACT_UNAVAILABLE; do not issue REVIEW_PASS from report text alone.\n"
         "- Reviewer output must lead with findings ordered by severity and include file, line, evidence, test gaps, reviewed base/head SHA, and final decision.\n"
         "- After all queued goals pass, run one final integrated review over the complete Git base-to-head diff or non_git before-to-after snapshot diff and accumulated validation evidence before LOOP_COMPLETE."
@@ -2058,6 +2240,7 @@ def state_update_protocol_block(state_writer_role: str, adaptive: bool = False) 
             "confinement, authorization-cap and Goal-digest checks, fcntl locking, atomic state/event/journal "
             "persistence, crash recovery, lease fencing, outbox transitions, assurance, roadmap revision, "
             "FINALIZE_LOOP/STOP_LOOP/ACK_FINALIZATION, deterministic GOALS.md/dashboard rendering, and immutable Controller Pack/report archiving.\n"
+            "- Payloads use context_state_digest freshness. Worker PASS ACK projects artifact_identity/evidence_refs to latest_worker.review_handoff; CODE_REVIEW copies it exactly.\n"
             "- STATE_WRITE_APPLIED and STATE_WRITE_ALREADY_APPLIED are ACKs. Every other structured status "
             "is a rejection or recovery state; Controller must reread canonical state and may not bypass it "
             "with a prose or hand-written update.\n"
@@ -2081,6 +2264,7 @@ def state_update_protocol_block(state_writer_role: str, adaptive: bool = False) 
         "- Only an acknowledged in-envelope ROADMAP_AUDIT_PASS can enter ROADMAP_REVISION. Its mutation repeats the exact audited proposal/report digest; runtime recomputes component digests and typed operations. Cancel obsolete PREPARED dispatches first through separate CANCEL_OUTBOX ACKs and a fresh lease. ROADMAP_REVISION rejects every remaining active versioned outbox, then atomically applies milestones, the closed future queue, executable definitions/ledger, roadmap version, estimate and projection. ROADMAP_CHANGE_PROPOSED routes to approval instead.\n"
         "- FINALIZE_LOOP is a separate CAS after a Worker PASS, ROADMAP_AUDIT_PASS_FINAL_CANDIDATE, and FINAL_AUDIT ACK; it rejects unexecuted queued Goals and completes only the final evidenced Goal/milestone before terminal state. STOP_LOOP is the separate evidence-bound hard-block path and never claims PASS.\n"
         "- Assurance ACKs are keyed by review_kind + milestone_id + roadmap_version + review_dispatch_id + source Worker dispatch/report + source artifact digest + linked report identities. Never reuse an ACK across any changed identity.\n"
+        "- For payload materialization, use freshness context_state_digest (never observed_identity_digest), and copy canonical latest_worker.review_handoff artifact_identity/evidence_refs unchanged; runtime derived that projection from the acknowledged Worker report and rejects recomputation or substitution.\n"
         "- Dispatch recovery requires exact dispatch_id + payload_digest + target_thread_id + Goal definition digest. Allow only one PREPARED/SENT/IN_PROGRESS Worker dispatch across revisions. Worker PASS cannot be redispatched without matching REVIEW_NEEDS_REPAIR authorization."
         if adaptive
         else ""
@@ -2113,6 +2297,7 @@ def startup_transaction_gate_block(
     first_worker: str,
     audit_paths: dict[str, str],
     adaptive: bool = False,
+    native_goal_policy: str = "required",
 ) -> str:
     if adaptive:
         return (
@@ -2120,17 +2305,17 @@ def startup_transaction_gate_block(
             "- Startup is incomplete until First Goal is dispatched or a real hard blocker is durably recorded.\n"
             "- Required order:\n"
             "  1. Read the complete Controller Pack and validate repo_mode, project, sources, permissions, complete immutable Goal definition registry/queue, review, cost, and topology.\n"
-            "  2. Compute PACK_SHA256, resolve the real current CONTROLLER_THREAD_ID through project task reconciliation, then compute LOOP_ID, deterministic BOOTSTRAP_MARKER values, and every initial Goal payload_template_digest. Treat codex_delegation source_thread_id as parent metadata only.\n"
+            "  2. Validate the launcher PACK_IDENTITY_ATTESTATION against the exact local Pack file before computing PACK_SHA256; never hash or decode codex_delegation/XML/HTML/UI wrapper text. Then resolve the real current CONTROLLER_THREAD_ID through project task reconciliation and compute LOOP_ID, deterministic BOOTSTRAP_MARKER values, and every initial Goal payload_template_digest. Treat codex_delegation source_thread_id as parent metadata only.\n"
             "  3. Resolve projectId and run repo-mode-specific read-only preflight. If one unique real current Controller threadId cannot be proven from PACK_SHA256 + canonical repo path + matching launch payload, stop CONTROLLER_THREAD_ID_UNRESOLVED before State-Writer creation; do not use fallback identity for routing or leases.\n"
             f"  4. Before canonical state exists, reconcile or create exactly one {state_writer_role} using its BOOTSTRAP_MARKER. This State-Writer bootstrap is the only pre-state external-action exception; do not create any execution, review, verification, or sidecar role yet.\n"
             "     The create_thread prompt must contain the byte-for-byte entire generated State-Writer Prompt plus BOOTSTRAP_MARKER and BOOTSTRAP_ONLY. Never replace it with a Pack path, heading, line range, excerpt, summary, or loader instruction; its digest is lowercase sha256:<64 hex> over the exact UTF-8 bytes.\n"
             "     If the returned threadId is briefly unreadable, retain that exact id and retry only read/reconcile after 1, 2, 4, 8, and 16 seconds. Do not classify not found alone as a prompt mismatch and never create a replacement; readable identity mismatch is E2E_PROTOCOL_VIOLATION, while exhaustion is THREAD_IDENTITY_PROPAGATION_TIMEOUT.\n"
             "     If that task entity is readable with matching project/cwd but its initial turn remains active/pending with no materialized prompt or READY reply, classify WAITING_BOOTSTRAP_ACTIVE or WAITING_QUOTA_RECOVERY and keep the Controller turn nonterminal while polling only the same id. This is not propagation timeout or idle; never replace it or advance to LOOP_INITIALIZED until the full bootstrap becomes verifiable.\n"
-            f"  5. If no matching state exists, send one STATE_MUTATION whose mutation.type is INITIALIZE and expected_state_version=0 through {state_writer_role}. Parse and embed the exact arrays/objects between MILESTONE_REGISTRY_JSON, AUTHORIZATION_ENVELOPE_JSON, and GOAL_DEFINITION_REGISTRY_JSON delimiters; never reconstruct them from summaries. The authorization object includes max_child_threads, max_business_heartbeats=1, and the explicit external Codex worktree roots. Include project_id, controller_pack_digest, the real Controller and State-Writer thread ids, controller_bootstrap_prompt_digest, state_writer_bootstrap_prompt_digest, dashboard policy, local verification ids, closed Goal Queue, and max_routing_turns. These fields register both real project-task identities and their exact bootstrap bytes. Attach exactly the Pack at {audit_paths['sources']}CONTROLLER_PACK.md. Wait for operation_status=LOOP_INITIALIZED.\n"
+            f"  5. If no matching state exists, send one STATE_MUTATION whose mutation.type is INITIALIZE and expected_state_version=0 through {state_writer_role}. Parse and embed the exact arrays/objects between MILESTONE_REGISTRY_JSON, AUTHORIZATION_ENVELOPE_JSON, GOAL_DEFINITION_REGISTRY_JSON, and HUMAN_CONTROL_POLICY_JSON delimiters; never reconstruct them from summaries. The authorization object includes max_child_threads, max_business_heartbeats=1, and the explicit external Codex worktree roots. Include native_goal_policy={native_goal_policy}, project_id, controller_pack_digest, the real Controller and State-Writer thread ids, controller_bootstrap_prompt_digest, state_writer_bootstrap_prompt_digest, dashboard policy, local verification ids, closed Goal Queue, human_control_policy, and max_routing_turns. These fields register both real project-task identities and their exact bootstrap bytes. Attach exactly the Pack at {audit_paths['sources']}CONTROLLER_PACK.md. Wait for operation_status=LOOP_INITIALIZED.\n"
             "  6. Every routing turn starts with exactly one ACQUIRE_LEASE mutation. That mutation atomically creates the never-reused routing_turn_id, increments the shared routing budget, and returns the full lease_claim. No separate wake-start mutation exists. One lease may reserve exactly one route action.\n"
             f"  7. Worker task creation uses one complete lease cycle: ACQUIRE_LEASE -> PREPARE_OUTBOX(kind=THREAD) ACK -> reconcile/create {first_worker} once with BOOTSTRAP_PROMPT -> MARK_OUTBOX_SENT ACK -> ACK_OUTBOX. Runtime enforces the lifetime task budget, one registered formal/bootstrap role key, project identity, and repo-or-authorized external worktree path. ACK attaches one immutable strict JSON CODEX_TOOL_RESULT observation binding the outbox, payload, target, real threadId and complete result. The final ACK consumes that lease. Do not create Reviewer yet.\n"
             "  8. Heartbeat creation uses a fresh complete lease cycle with outbox kind=AUTOMATION. Runtime permits exactly one non-cancelled business heartbeat. Reconcile persisted readback, create only when no exact match exists, MARK_OUTBOX_SENT, then ACK_OUTBOX with one strict JSON CODEX_TOOL_RESULT observation binding the exact automation id, ACTIVE status and prepared identity.\n"
-            "  9. Controller Goal creation uses another fresh complete lease cycle with outbox kind=GOAL. Native path: reconcile get_goal, call create_goal at most once, MARK_OUTBOX_SENT, then ACK_OUTBOX with a strict JSON CODEX_TOOL_RESULT observation. Tool-unavailable path: attach the exact GOAL_TOOL_UNAVAILABLE observation and direct-ACK PREPARED as EMULATED_SINGLE_ACTIVE_MILESTONE. Runtime rejects early UPDATE unless a cross-milestone revision or finalization closeout authorizes it.\n"
+            f"  9. Goal creation uses a fresh GOAL-outbox lease. With native_goal_policy={native_goal_policy}, required reconciles get_goal, creates once, marks SENT, then ACKs a strict CODEX_TOOL_RESULT; disabled/advisory direct-ACK PREPARED as EMULATED_SINGLE_ACTIVE_MILESTONE without a Goal call. Terminal FINALIZE/STOP consumes its lease; acquire no new lease or GOAL outbox. Its one-use capability directly fences the terminal update before ACK_FINALIZATION. Tool failure stays external-sync pending, never FINALIZATION_ACKED.\n"
             f"  10. First Goal dispatch uses a fourth fresh complete lease cycle. Materialize the payload from the canonical Goal definition, PREPARE_OUTBOX(kind=DISPATCH) with dispatch_id + payload_digest + target_thread_id + goal_definition_digest, send once, MARK_OUTBOX_SENT, then ACK_OUTBOX only from the exact Worker report. The ACK consumes that lease. Never reuse a consumed startup claim across steps 7-10.\n"
             "- A stale active flag is not a blocker: re-read task/terminal evidence, then classify WAITING_ACTIVE or STALLED_ACTIVE.\n"
             "- Forbidden startup outcomes: any outbox before LOOP_INITIALIZED, any post-initialization outbox before lease ACK, notify-only, waiting for a user reminder, treating idle bootstrap as failure, or creating future blocked-stage Workers."
@@ -2166,11 +2351,12 @@ def heartbeat_prompt_block(
     active_stale_after_minutes: int,
     max_repair_attempts_per_goal: int,
     adaptive: bool = False,
+    native_goal_policy: str = "required",
 ) -> str:
     adaptive_wake = ""
     if adaptive:
         adaptive_wake = (
-            "Adaptive routing: begin this wake with one ACQUIRE_LEASE mutation. "
+            "Adaptive pre-route order: first recover pending transactions/projections, read canonical state and registered tasks, then classify and durably ACK every new Steering item. STATUS_QUERY remains read-only and PAUSE/CONSTRAINT/CORRECTION is processed before any route reservation. Only after that pre-route phase, and only when exactly one legal external route is ready, send one ACQUIRE_LEASE mutation. "
             "ACQUIRE_LEASE atomically creates the never-reused routing_turn_id, increments the shared "
             "Goal/heartbeat routing budget, and returns the full lease_claim. No separate wake-start "
             "mutation exists. If another valid lease exists, return "
@@ -2189,7 +2375,17 @@ def heartbeat_prompt_block(
             "then, only when the Active milestone changed, complete/ACK the old Controller Goal and create/ACK the new Active-milestone Goal before "
             "dispatching at most one dependency-satisfied READY Goal. Runtime rejects a Worker dispatch whose "
             "Controller Goal is missing, non-active, or bound to another milestone. If the shared routing budget is "
-            "exhausted, persist ROUTING_BUDGET_EXHAUSTED and stop external routing.\n\n"
+            "exhausted, persist ROUTING_BUDGET_EXHAUSTED and stop external routing. Only when native_goal_policy is required, before any new route or resume, "
+            "reconcile the canonical native Controller Goal with get_goal. If canonical ACTIVE returns goal:null or unacknowledged COMPLETE, classify "
+            "NATIVE_CONTROLLER_GOAL_IDENTITY_LOST, pause the exact heartbeat, do not create, emulate, or recreate a Goal, and send nothing. "
+            "Same-identity BLOCKED continues only after fresh-lease RECORD_CONTROLLER_GOAL_RESUME binds strict pre-readback, later SAME_GOAL_RESUME, and post-BLOCKED readback; its receipt changes no Goal/outbox and never implies ACTIVE. When REGISTER_DECISION returns WAIT_DECISION, pause the exact heartbeat, keep the "
+            "native Goal unchanged, and end the turn. A pending human Decision is expected waiting, not a hard blocker; "
+            "never call update_goal(status=blocked) unless STOP_LOOP_APPLIED has returned the matching one-use BLOCKED "
+            "closeout capability. A task read, indexing, message-send, or transport timeout while a PREPARED/SENT outbox "
+            "still reserves the route is recoverable WAITING_ACTIVE/WAITING_QUOTA_RECOVERY, never a hard-block observation "
+            "and never grounds for update_goal(status=blocked); poll the same task in the same active turn, or same-owner renew "
+            "and rebind only that exact outbox when TTL requires it. Resume the heartbeat only after a real matching "
+            "DECISION_RESPONSE is durably applied.\n\n"
         )
     pack_read_instruction = (
         f"Read the trusted Controller Pack snapshot at {audit_paths['sources']}CONTROLLER_PACK.md and verify its SHA-256 against canonical artifact_ledger['.codex-loop/sources/CONTROLLER_PACK.md'].digest; use the copy in this task only as corroboration."
@@ -2197,22 +2393,22 @@ def heartbeat_prompt_block(
         else f"Read the trusted Controller Pack snapshot at {audit_paths['sources']}CONTROLLER_PACK.md and verify its SHA-256 against canonical controller_pack_identity; use the copy in this thread only as corroboration."
     )
     wake_instruction = (
-        f"{adaptive_wake}Before routing this wake, resolve any earlier pending state request. ACQUIRE_LEASE is itself the counted idempotent Adaptive wake event. Inflight, queued, or active work is not idle."
+        f"{adaptive_wake}After the pre-route phase, resolve any earlier pending state request before reserving work. ACQUIRE_LEASE is the counted idempotent Adaptive routing event, not the first action of the wake. Inflight, queued, or active work is not idle."
         if adaptive
         else f"Before routing this wake, resolve any earlier pending state request. Derive WAKE_EVENT_ID from the stored automation id and the next canonical wake_count, persist one HEARTBEAT_WAKE compare-and-swap mutation through {state_writer_role}, and wait for ACK. A replay reuses the same WAKE_EVENT_ID and must not increment twice. Reset consecutive_idle_wakeups when inflight/queued/active work exists; increment it only when all three are absent."
     )
     active_worker_instruction = (
-        f"Apply the deterministic transition table idempotently. If a state request lacks ACK, return WAITING_STATE_ACK and send nothing else. If a dispatch is PREPARED but not SENT, inspect the target task for its dispatch_id before any resend. If a Worker is active with progress newer than {active_stale_after_minutes} minutes, renew the exact same-owner claim with attached Controller read evidence before or after TTL when needed; atomically rebind only the same PREPARED/SENT record, record WAITING_ACTIVE, keep this heartbeat active, and never resend the dispatch. If that exact target later completes under an expired claim, perform the same renewal and ACK its existing report with the renewed claim. Probe a stale Worker at most once. Archive every Worker/Reviewer report through the runtime artifact bundle and wait for State-Writer ACK before review, repair, next Goal, or closeout."
+        f"Apply the deterministic transition table idempotently. If a state request lacks ACK, return WAITING_STATE_ACK and send nothing else. If a dispatch is PREPARED but not SENT, inspect the target task for its dispatch_id before any resend. If a Worker is active with progress newer than {active_stale_after_minutes} minutes, renew the exact same-owner claim with attached Controller read evidence before or after TTL when needed; atomically rebind only the same PREPARED/SENT record, record WAITING_ACTIVE, keep this heartbeat active, and never resend the dispatch. If that exact target later completes under an expired claim, perform the same renewal and ACK its existing report with the renewed claim. Probe a stale Worker at most once. Require each Worker/Reviewer/Local target task to stage its own report with adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage before replying. Accept and forward only its ASCII-safe FORMAL_REPORT_STAGED source_path/digest/result handle to State-Writer; never read or transport the formal REPORT bytes. Wait for ACK before review, repair, next Goal, or closeout."
         if adaptive
         else f"Apply the deterministic transition table idempotently. If a state request lacks ACK, return WAITING_STATE_ACK and send nothing else. If a dispatch is PREPARED but not SENT, inspect the target task for its dispatch_id before any resend. If a Worker is active with progress newer than {active_stale_after_minutes} minutes, record WAITING_ACTIVE, keep this heartbeat active, and do not increment idle count or duplicate work. Probe a stale Worker at most once. Persist every Worker/Reviewer report and wait for State-Writer ACK before review, repair, next Goal, or closeout."
     )
     closeout_instruction = (
-        "When the final milestone has CODE_REVIEW, required Local Verification, and ROADMAP_AUDIT_PASS_FINAL_CANDIDATE ACKs, send tagged FINAL_AUDIT to the same Reviewer. Only FINAL_AUDIT report ACK may unlock the separate FINALIZE_LOOP CAS; wait for that state ACK before completing the native Goal and pausing heartbeat, then submit ACK_FINALIZATION in the same Controller turn."
+        "When the final milestone has CODE_REVIEW, required Local Verification, and ROADMAP_AUDIT_PASS_FINAL_CANDIDATE ACKs, send tagged FINAL_AUDIT to the same Reviewer. Only FINAL_AUDIT report ACK may unlock the separate FINALIZE_LOOP CAS; wait for FINALIZE_LOOP_APPLIED and use only its exact one-use closeout capability according to native_goal_policy before pausing heartbeat and submitting ACK_FINALIZATION."
         if adaptive
         else "When the queue is empty, run exact-artifact FINAL_AUDIT for any diff, or FINAL_READ_ONLY_AUDIT only when every Goal is read-only/no-diff and review policy explicitly permits omission."
     )
     completion_instruction = (
-        "After FINAL_AUDIT report ACK plus acknowledged FINALIZE_LOOP, complete the exact native Goal and pause this exact heartbeat, then send ACK_FINALIZATION with observed Goal=COMPLETE and automation=PAUSED identities. Report completion only after FINALIZATION_ACKED/finalization_receipt is canonical."
+        "After FINAL_AUDIT report ACK plus acknowledged FINALIZE_LOOP, apply native_goal_policy to the exact closeout capability and pause this exact heartbeat, then send ACK_FINALIZATION with runtime-required observations. CORE_FINALIZATION_ACKED and FINALIZATION_PENDING_EXTERNAL_SYNC are not release success. Report completion only after exact FINALIZATION_ACKED/finalization_receipt is canonical."
         if adaptive
         else "Only after FINAL_REVIEW_PASS, bounded FINAL_REVIEW_PASS_WITH_LIMITATION, or the allowed read-only audit equivalent plus acknowledged terminal state set the matching completion status and pause this heartbeat using its stored automation id."
     )
@@ -2232,7 +2428,7 @@ def heartbeat_prompt_block(
         else "If automation_outbox is PREPARED but automation id is missing, inspect canonical state and `$CODEX_HOME/automations/*/automation.toml` for the exact deterministic name, Controller target, rrule, and prompt digest. Adopt one exact match instead of creating another. If duplicates exist, record them, keep one canonical id, and pause the extras after State-Writer ACK.\nIf that PREPARED recovery surface is inaccessible or identity remains ambiguous, persist AUTOMATION_IDENTITY_UNRESOLVED and stop; never create speculatively."
     )
     dispatch_instruction = (
-        "Dispatch exactly one unlocked Goal through PREPARE_OUTBOX(kind=DISPATCH) -> send once -> MARK_OUTBOX_SENT -> report-bound ACK_OUTBOX."
+        "Dispatch exactly one unlocked Goal through PREPARE_OUTBOX(kind=DISPATCH) -> send once -> MARK_OUTBOX_SENT -> report-bound ACK_OUTBOX. Before reserving a repair route, require canonical repair authorization from an acknowledged Worker FAIL/BLOCKED or review/local/audit repair decision. A deferred CONSTRAINT/CORRECTION applied after a Worker PASS is not repair authorization; route CODE_REVIEW on the exact current artifact first, and never acquire then release a speculative repair lease."
         if adaptive
         else "Dispatch exactly one unlocked Goal through DISPATCH_PREPARED ACK -> send once -> DISPATCH_SENT ACK."
     )
@@ -2310,20 +2506,28 @@ Only the mutation types declared by `adaptive-mutation.schema.json` may change c
 | SENT native `GOAL` outbox | `ACK_OUTBOX` only with the exact native Goal identity and observed status | replace the active Goal or update an unrelated Goal id |
 | PREPARED `DELEGATION` outbox | Spawn exactly once within the read-only policy, then `MARK_OUTBOX_SENT` | spawn first and backfill the ledger |
 | SENT `DELEGATION` outbox | Attach the strict JSON result and `ACK_OUTBOX`; only COMPLETED+ACKED evidence may influence routing | treat INTERRUPTED/DROPPED as success |
-| PREPARED Worker `DISPATCH` outbox | Send the immutable payload once, then `MARK_OUTBOX_SENT` | generate a new dispatch id after send |
+| PREPARED Worker `DISPATCH` outbox | Send once; `MARK_OUTBOX_SENT` with immutable archived JSON send evidence | resend or omit evidence |
+| PREPARED/SENT route and task read/index/message transport times out | Keep the same Goal ACTIVE and classify recoverable `WAITING_ACTIVE`/`WAITING_QUOTA_RECOVERY`; poll the same task in the same active turn, or same-owner renew/rebind only the exact outbox when TTL requires it | count timeout turns as hard-block observations, call `update_goal(status=blocked)`, create a new Worker/dispatch, or enter STOP logic |
+| Target local capture/CLI framing makes payload verification uncertain | Keep the same SENT outbox; return `PAYLOAD_VERIFICATION_RETRY_REQUIRED` and retry verification locally in the same target/task/dispatch/payload identity, same-owner renewing only when TTL requires | execute, stage business BLOCKED, ACK, consume repair, resend, or create another dispatch |
+| Exact App-delivered semantic payload is proven invalid with `execution_started=false` | Target self-stages one zero-effect BLOCKED formal report and returns only FORMAL_REPORT_STAGED so the existing SENT outbox can close | infer invalidity from local capture, execute work, or cancel SENT |
+| Product work completed but report staging/archive failed | Target self-restages the same report identity and Controller ACKs the new handle | re-execute product work or MARK_OUTBOX_SENT again |
 | SENT Worker `DISPATCH` with task active under {active_stale_after_minutes} minutes | Read the same task; renew the same-owner lease with bound JSON evidence when TTL requires it; never resend | release the live route or create another Worker |
-| Worker PASS report | Attach the exact JSON report and `ACK_OUTBOX`. If no compatible registered Reviewer exists, use a fresh lease for `THREAD` PREPARED -> create/fork once -> SENT -> ACKED and wait for the real threadId; only then use another fresh lease for CODE_REVIEW `ASSURANCE` | review before Worker ACK, create Reviewer outside THREAD outbox, or reuse the THREAD lease for review |
+| Worker returns FORMAL_REPORT_STAGED handle | Forward only its helper-produced source_path/digest/ACK-ready result in `ACK_OUTBOX`; never read REPORT bytes. If no compatible registered Reviewer exists, use a fresh lease for `THREAD` PREPARED -> create/fork once -> SENT -> ACKED and wait for the real threadId; only then use another fresh lease for CODE_REVIEW `ASSURANCE` | accept raw report through App, inline report bytes, write staging manually, review before Worker ACK, create Reviewer outside THREAD outbox, or reuse the THREAD lease for review |
 | Worker FAIL/BLOCKED report | ACK the exact report; prepare one repair dispatch only while completed attempts remain within initial+{max_repair_attempts_per_goal} | reset budget with a new Worker |
 | Runtime returns `REPAIR_BUDGET_EXHAUSTED` | Stop dispatching that Goal and report the bounded blocker | bypass the runtime cap |
-| PREPARED/SENT `ASSURANCE` outbox | Send/read the same Reviewer task; `ACK_OUTBOX`, archive the strict JSON report, then `RECORD_REVIEW` on the same lease | treat ACKED assurance as completed before `RECORD_REVIEW` |
+| `ASSURANCE` | staged ACK, then zero-artifact `RECORD_REVIEW` from its ACK path | inline/retransmit report bytes |
 | CODE_REVIEW pass and required Local Verification exists | If no compatible registered Local Verifier exists, use a fresh lease for `THREAD` PREPARED -> create/fork once -> SENT -> ACKED; after its real threadId is registered, use another fresh lease for `LOCAL` PREPARED -> SENT -> COMPLETED on the exact artifact, then ROADMAP_AUDIT | skip the JIT THREAD lifecycle, reuse its lease, or reuse stale local evidence |
 | CODE_REVIEW pass and no Local Verification is required | On a fresh lease, dispatch ROADMAP_AUDIT to the already registered Reviewer with the exact Worker and CODE_REVIEW identities | create a Local Verifier or jump directly to the next Goal |
 | ROADMAP_AUDIT pass/change proposal | After its `RECORD_REVIEW`, acquire a fresh lease and submit one `ROADMAP_REVISION` with the exact computed projection digest | invent an intermediate roadmap mutation |
 | ROADMAP_AUDIT final-candidate pass | Dispatch and record independent FINAL_AUDIT on the exact artifact | finalize from code review alone |
 | FINAL_AUDIT pass | Submit `FINALIZE_LOOP` on a fresh lease with the exact computed final projection digest | change Goal/heartbeat before finalize ACK |
-| `FINALIZE_LOOP_APPLIED` | Complete the exact Controller Goal and pause the exact heartbeat once; attach two distinct strict JSON readbacks; send `ACK_FINALIZATION` | reuse one file, plain text, or inferred status |
+| `FINALIZE_LOOP_APPLIED` with matching closeout capability | Apply native_goal_policy to that one-use capability, pause the exact heartbeat once, and send `ACK_FINALIZATION` with runtime-required observations | update Goal before capability, from a wait/timeout, or from inferred status |
+| `REGISTER_DECISION` returns `WAIT_DECISION` | Pause the exact heartbeat, preserve the native Goal unchanged, end the turn, and wait for one real matching `DECISION_RESPONSE` | keep heartbeat active, count repeated human-wait turns as a blocker, or call `update_goal(status=blocked)` |
+| Canonical native Goal is ACTIVE but `get_goal` returns `goal:null` or unacknowledged COMPLETE | Persist `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, pause heartbeat, stop | recreate, emulate, replace, or infer completion |
+| Same-identity Goal BLOCKED after explicit resume | Fresh Goal-turn lease records pre-BLOCKED + `SAME_GOAL_RESUME` + post-BLOCKED via `RECORD_CONTROLLER_GOAL_RESUME`; require its receipt | claim ACTIVE, create/update, add attempt/milestone, or repeat |
 | Same hard blocker observed in fewer than three genuine consecutive Goal turns | Attach one immutable turn-bound observation to that turn's `RELEASE_LEASE`, wait for its artifact/state-version ACK, and remain nonterminal until a natural Goal continuation | submit STOP_LOOP, backfill observations later, fabricate a turn, or count heartbeat-only wakes |
-| Same hard blocker observed in the last three genuine consecutive Goal turns | Submit `STOP_LOOP` with the three distinct bound observations and aggregate report; after ACK mark the exact Goal BLOCKED, pause the heartbeat, and `ACK_FINALIZATION` in the same turn | repeat diagnosis, leave heartbeat ACTIVE, or create another loop |
+| Same hard blocker observed in the last three genuine consecutive Goal turns | Submit `STOP_LOOP` with the three distinct bound observations and aggregate report; only its matching one-use closeout capability may authorize Goal BLOCKED, then pause the heartbeat and `ACK_FINALIZATION` in the same turn | update Goal from wait/timeout, repeat diagnosis, leave heartbeat ACTIVE, or create another loop |
+| `CORE_FINALIZATION_ACKED` or `FINALIZATION_PENDING_EXTERNAL_SYNC` | Preserve the exact terminal core evidence and finish/reconcile only the authorized external adapter action | claim FINALIZATION_ACKED or release success |
 | `FINALIZATION_ACKED` | Re-read canonical receipt and stop the business heartbeat | continue routing or claim broader validation |
 | Routing turn count reaches {max_wakeups} before terminal state | Stop new routing and report `ROUTING_BUDGET_EXHAUSTED` | invent more wake budget |
 | Transient dependency/network failure, retry count below {runtime_retry_attempts} | Close the current Worker report and dispatch the next bounded repair attempt through a new outbox | ask the user after the first fluctuation or retry outside the ledger |
@@ -2385,8 +2589,12 @@ def deterministic_transition_table_block(
         "| FINAL_REVIEW_PASS and FINAL_AUDIT report ACKed | Send separate FINALIZE_LOOP CAS; prove every required Goal executed, complete only the final evidenced Goal/milestone, retire/empty the resolved queue, refresh projection, and set LOOP_COMPLETE; wait for ACK | bulk-complete unexecuted queue, terminal ROADMAP_REVISION, or direct completion |\n"
         "| FINAL_REVIEW_PASS_WITH_LIMITATION and limitations satisfy declared policy | Send separate FINALIZE_LOOP CAS for LOOP_COMPLETE_WITH_LIMITATION with explicit evidence/claim limits; wait for ACK | silently upgrade to full completion |\n"
         "| FINAL_AUDIT repair/blocker decision | Persist exact findings; after ACK return repair to the same Worker within budget. A real unrecoverable blocker remains nonterminal until three natural consecutive Goal turns have distinct immutable observations with the same code/fingerprint | reuse stale final audit, manufacture Goal turns, or invent a terminal status |\n"
-        "| FINALIZE_LOOP acknowledged with PREPARED finalization_outbox | Complete the matching native Controller Goal, pause the registered heartbeat using its stored full configuration, then send ACK_FINALIZATION with actual ids/statuses/evidence and wait for FINALIZATION_ACKED | pause or complete Goal before state ACK; omit final receipt ACK |"
-        "\n| Three runtime-validated consecutive Goal-turn blocker observations exist | On a fresh lease submit STOP_LOOP with all three artifacts plus the aggregate blocker report; after STOP_LOOP_APPLIED mark the exact native Goal BLOCKED, pause the exact business heartbeat, and ACK_FINALIZATION in this same Controller turn | submit STOP_LOOP early, return with heartbeat ACTIVE, delete heartbeat, or claim PASS |"
+        "| Required Decision is PENDING | Pause the exact heartbeat and end the turn while preserving the native Goal; resume only after a real matching DECISION_RESPONSE is durable | leave heartbeat active, manufacture repeated Goal turns, or mark the Goal blocked |\n"
+        "| Canonical ACTIVE Goal returns absent/unacknowledged COMPLETE | Stop NATIVE_CONTROLLER_GOAL_IDENTITY_LOST with heartbeat PAUSED | recreate or infer completion |\n"
+        "| Same-identity Goal BLOCKED after resume | One 3-artifact RECORD_CONTROLLER_GOAL_RESUME receipt; continue | claim ACTIVE, create/update, or repeat |\n"
+        "| FINALIZE_LOOP acknowledged with PREPARED finalization_outbox and closeout capability | Apply native_goal_policy to the matching one-use capability, pause the registered heartbeat using its stored full configuration, then send ACK_FINALIZATION with runtime-required observations and wait for exact FINALIZATION_ACKED | update Goal before capability or from wait/timeout; omit final receipt ACK |"
+        "\n| Three runtime-validated consecutive Goal-turn blocker observations exist | On a fresh lease submit STOP_LOOP with all three artifacts plus the aggregate blocker report; only STOP_LOOP_APPLIED with its matching one-use capability may authorize native Goal BLOCKED, then pause the exact business heartbeat and ACK_FINALIZATION in this same Controller turn | update Goal from wait/timeout, submit STOP_LOOP early, return with heartbeat ACTIVE, delete heartbeat, or claim PASS |"
+        "\n| CORE_FINALIZATION_ACKED or FINALIZATION_PENDING_EXTERNAL_SYNC | Preserve exact core evidence and reconcile only the authorized external adapter action | claim FINALIZATION_ACKED or release success |"
         "\n| ACK_FINALIZATION acknowledged | Re-read canonical finalization_receipt, state/events/journal, and only then report loop completion or evidence-bounded blocked closeout | completion before receipt or heartbeat still ACTIVE |"
         if adaptive
         else "| Queue empty, every Goal read-only/no-diff, review explicitly not required | Controller runs FINAL_READ_ONLY_AUDIT over sources, reports, validation, state/events, evidence, and claim boundary; persist result and wait for ACK | create fake code review |\n"
@@ -2833,9 +3041,19 @@ def cost_usage_user_block(data: dict[str, Any], workers: list[dict[str, Any]]) -
 
 
 def worker_allowed_scope(
-    worker: dict[str, Any], allowed: list[str], audit_paths: dict[str, str]
+    worker: dict[str, Any],
+    allowed: list[str],
+    audit_paths: dict[str, str],
+    *,
+    adaptive: bool = False,
 ) -> str:
     if worker["permission"] == "read_only":
+        if adaptive:
+            return (
+                "- product/review artifacts: read-only\n"
+                "- runtime-only spool: installed `--report-stage` may write "
+                f"`{control_plane_root(audit_paths)}/report-staging/**`"
+            )
         return "- read-only; do not modify files"
     if worker["permission"] == "state_write_only":
         state_scopes = [
@@ -2850,25 +3068,44 @@ def worker_allowed_scope(
             state_scopes.extend([audit_paths["goals"], audit_paths["dashboard"]])
         return bullets(state_scopes)
     product_scopes = list(allowed or worker.get("allowed") or [])
-    product_scopes.append(
-        f"EXPLICIT EXCLUSION (State-Writer only): {control_plane_root(audit_paths)}/**"
-    )
+    if adaptive:
+        product_scopes.extend(
+            [
+                "RUNTIME-ONLY: installed --report-stage may write "
+                f"{control_plane_root(audit_paths)}/report-staging/**",
+                "EXCLUDE all other control-plane paths: "
+                f"{control_plane_root(audit_paths)}/**",
+            ]
+        )
+    else:
+        product_scopes.append(
+            "EXPLICIT EXCLUSION (State-Writer only): "
+            f"{control_plane_root(audit_paths)}/**"
+        )
     return bullets(product_scopes)
 
 
-def state_permission_text(worker: dict[str, Any]) -> str:
+def state_permission_text(worker: dict[str, Any], adaptive: bool = False) -> str:
     if worker["permission"] == "state_write_only":
         return "single writer for Controller-approved control-plane audit bundles"
+    if adaptive and worker["permission"] == "read_only":
+        return "product read-only; only installed --report-stage may write runtime-owned report-staging"
+    if adaptive:
+        return "product writes only in allowed scope; only installed --report-stage may write runtime-owned report-staging"
     return "read-only; output state_change_request only"
 
 
 def sandbox_text(worker: dict[str, Any], adaptive: bool = False) -> str:
     if worker["permission"] == "read_only":
+        if adaptive:
+            return "product/artifact read_only; allow only installed runtime's confined report-staging write"
         return "read_only behavior; never modify the review/discovery artifact"
     if worker["permission"] == "state_write_only":
         if adaptive:
             return "state_write_only behavior; write only canonical state/event/triage/report/transaction-journal paths, the trusted Controller Pack snapshot, GOALS projection, and derived progress dashboard after Controller approval"
         return "state_write_only behavior; write only canonical state/event/triage/report/transaction-journal paths and the trusted Controller Pack snapshot after Controller approval"
+    if adaptive:
+        return "workspace_write only inside the goal scope; allow installed runtime's confined report-staging write"
     return "workspace_write only inside the current goal's allowed write scope"
 
 
@@ -2876,19 +3113,17 @@ def formal_role_delegation_boundary(adaptive: bool = False) -> str:
     if not adaptive:
         return ""
     return (
-        "\nFormal Role Delegation Boundary: This real project task must perform its assigned "
-        "State-Writer, Worker, Reviewer, or Local Verifier work directly. Never call any "
-        "subagent/collaboration spawn tool; never create, fork, message, or replace another "
-        "formal task. Only the Controller may use the explicitly budgeted depth-one read-only "
-        "sidecar, and that sidecar may not delegate further. If this role cannot finish directly, "
-        "return exact blocker evidence to the Controller instead of delegating. "
-        "Worker, Reviewer, and Local Verifier final reports must be one strict JSON object "
-        "with no Markdown fence or trailing prose and report_digest set to the literal "
-        "PENDING_CONTROLLER_ARCHIVE. Controller rejects duplicate keys/non-finite values, "
-        "validates every required field, then serializes sorted-key compact UTF-8 JSON "
-        "(ensure_ascii=false, no trailing newline), archives that exact application/json "
-        "artifact, and uses its real sha256 digest in canonical state; roles never guess "
-        "their own durable report digest."
+        "\nFormal Role Delegation Boundary: perform this role directly. Never call any "
+        "subagent/collaboration spawn tool or create/fork/message/replace another formal task. "
+        "Only Controller may use the bounded depth-one read-only sidecar. If blocked, return "
+        "evidence instead of delegating. Worker/Reviewer/Local builds one strict JSON report "
+        "with report_digest=PENDING_CONTROLLER_ARCHIVE. Before any final answer crosses App "
+        "transport, send {outbox_id,result:{status,artifact_digest},report:{...}} to installed "
+        "runtime --root CANONICAL_ROOT --report-stage. Return only its ASCII-safe "
+        "FORMAL_REPORT_STAGED handle. Controller forwards the confined "
+        ".codex-loop/report-staging/ source_path/media_type/report_digest/result unchanged. "
+        "Controller never reads, copies, parses, or transports REPORT bytes; never hand-write "
+        "staging or guess the digest."
     )
 
 
@@ -2899,7 +3134,8 @@ def worker_input_gate(worker: dict[str, Any], adaptive: bool = False) -> str:
                 "Input Gate:\n"
                 "- BOOTSTRAP_ONLY: write nothing and reply READY_IDLE_AWAITING_STATE_UPDATE.\n"
                 f"- Execute only {ADAPTIVE_STATE_MUTATION_ENVELOPE} followed by one strict JSON request matching references/adaptive-mutation.schema.json. Pass it unchanged to adaptive_state_runtime.py; never translate it into prose or rewrite LOOP_STATE.md manually.\n"
-                "- INITIALIZE is the only state-creation mutation and returns LOOP_INITIALIZED. It must register the real Controller and State-Writer thread ids and may include the exact Controller Pack artifact bundle. ACQUIRE_LEASE atomically creates and counts the routing turn; no separate wake-start mutation exists.\n"
+                "- INITIALIZE is the only state-creation mutation and returns LOOP_INITIALIZED. It must register the real Controller and State-Writer thread ids and archive the exact Controller Pack through an artifact with `source_path` set to the frozen root-confined local Pack file plus its attested digest; never transport the Pack as inline `content`, Base64, wrapper text, or decoded entities. The installed runtime reads those local bytes directly. ACQUIRE_LEASE atomically creates and counts the routing turn; no separate wake-start mutation exists.\n"
+                "- Formal report artifacts are never inline. Accept only the ASCII-safe FORMAL_REPORT_STAGED handle produced inside the Worker/Reviewer/Local target task by `adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage`; its source_path must be a helper-generated root-confined non-canonical `.codex-loop/report-staging/` regular non-symlink read-only JSON file whose outbox-bound filename, digest, media type, and ACK-ready result all match. Never accept a Controller-written staging file or raw REPORT bytes relayed through App transport. ASSURANCE RECORD_REVIEW has zero artifacts and its ACK path; runtime reopens it.\n"
                 "- Supported operations include RELEASE_LEASE for observation-only WAITING_ACTIVE/WAITING_QUOTA_RECOVERY turns. One claim reserves one route action; terminal ACK, RECORD_REVIEW, ROADMAP_REVISION, FINALIZE_LOOP, or valid RELEASE_LEASE consumes it. Reject release while a route or outbox remains reserved.\n"
                 "- The runtime owns CAS, idempotency, file locking, artifact immutability, GOALS.md projection, journal recovery, lease fencing, outbox state, reviews, roadmap revisions, and finalization. On restart run adaptive_state_runtime.py --recover before accepting another request.\n"
                 "- Return only the runtime JSON. STATE_WRITE_APPLIED and STATE_WRITE_ALREADY_APPLIED are ACKs; all other statuses are explicit wait, conflict, rejection, or recovery results with evidence paths."
@@ -2915,12 +3151,13 @@ def worker_input_gate(worker: dict[str, Any], adaptive: bool = False) -> str:
             return (
                 "Input Gate:\n"
                 "- BOOTSTRAP_ONLY: do not review and reply REVIEW_IDLE_AWAITING_ARTIFACTS.\n"
-                f"- Execute only a closed tagged {ADAPTIVE_REVIEW_ENVELOPE} with review_kind=CODE_REVIEW, review_kind=ROADMAP_AUDIT, or review_kind=FINAL_AUDIT plus typed decision contract, milestone_id, roadmap_version, unique review_dispatch_id, source Worker dispatch/report identities, source artifact digest, target Reviewer threadId, canonical payload digest, and full lease_claim including routing_turn_id. Pass the exact received codexDelegation.input body unchanged to adaptive_state_runtime.py --root CANONICAL_REPO_ROOT --payload-verify and proceed only on PAYLOAD_VERIFIED; PAYLOAD_BYTES_VERIFIED alone is never execution permission. Never manually replace a substring, preserve a sha256: prefix, add angle brackets, hash the visible XML/UI wrapper, or reserialize the transport. The embedded snapshot is the pre-PREPARE snapshot: accept its older state_version only when the matching SENT outbox has prepared_state_version exactly one higher and every bound identity is unchanged.\n"
+                f"- Execute only a closed tagged {ADAPTIVE_REVIEW_ENVELOPE} with review_kind=CODE_REVIEW, review_kind=ROADMAP_AUDIT, or review_kind=FINAL_AUDIT plus typed decision contract, milestone_id, roadmap_version, unique review_dispatch_id, source Worker dispatch/report identities, source artifact digest, target Reviewer threadId, canonical payload digest, and full lease_claim including routing_turn_id. Pass the exact received codexDelegation.input body unchanged to adaptive_state_runtime.py --root CANONICAL_REPO_ROOT --payload-verify and proceed only on PAYLOAD_VERIFIED; runtime alone may normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization. Entity substitution or any field/value change still fails. PAYLOAD_BYTES_VERIFIED alone is never execution permission. Never manually replace a substring, preserve a sha256: prefix, add angle brackets, hash the visible XML/UI wrapper, or reserialize the transport. The embedded snapshot is the pre-PREPARE snapshot: accept its older state_version only when the matching SENT outbox has prepared_state_version exactly one higher and every bound identity is unchanged.\n"
                 "- CODE_REVIEW requires a durably acknowledged completed Worker PASS dispatch, source_worker_dispatch_id, source_worker_report_digest, worker_thread_id, exact worktree/snapshot identity, changed_files, diff_sha256, complete diff/patch reference, validation results, and evidence artifacts. A no-diff milestone uses artifact_kind=NO_DIFF and the exact source report digest.\n"
                 "- Repeat source_worker_dispatch_id, source_worker_report_digest, worker_thread_id, and source_artifact_digest as top-level report fields. Nested copies in state_change_request, findings, or evidence_artifacts do not satisfy the formal report contract.\n"
                 "- ROADMAP_AUDIT requires the matching acknowledged Worker and CODE_REVIEW report identities, canonical roadmap and future Goal Queue, complete definitions for new Goals, current Local Verification ACK identity when required, authorization envelope, original objective, and estimate history. It is dispatched only after those ACKs.\n"
                 "- FINAL_AUDIT requires matching CODE_REVIEW and ROADMAP_AUDIT report digests, required Local Verification ACK identity, exact integrated Git/non_git artifact identity, all Goal reports, validation, forbidden-artifact scan, state/event consistency, evidence/claim boundary, and approval ledger.\n"
                 "- When a dedicated code-review tool or installed code-review skill exists, use it for CODE_REVIEW and FINAL_AUDIT against the exact artifact. Missing or mismatched identity returns REVIEW_ARTIFACT_UNAVAILABLE, ROADMAP_AUDIT_IDENTITY_MISMATCH, or FINAL_AUDIT_IDENTITY_MISMATCH, never PASS."
+                " Before replying, invoke installed runtime --root CANONICAL_ROOT --report-stage inside this Reviewer task with the exact outbox/result/report specification; return only its ASCII-safe FORMAL_REPORT_STAGED handle, never the raw review report."
             )
         return (
             "Input Gate:\n"
@@ -2934,8 +3171,9 @@ def worker_input_gate(worker: dict[str, Any], adaptive: bool = False) -> str:
             return (
                 "Input Gate:\n"
                 "- BOOTSTRAP_ONLY: do not verify and reply LOCAL_VERIFIER_IDLE_AWAITING_ARTIFACT.\n"
-                "- Execute only LOCAL_VERIFY_DISPATCH after matching CODE_REVIEW ACK. It contains verification_id, Goal ID, milestone_id, roadmap_version, local Dispatch ID, real Target Thread ID, canonical payload digest, full lease_claim including routing_turn_id, exact source artifact digest and branch/commit/worktree/snapshot identity, local prerequisites, exact steps, expected result, evidence capture rules, privacy boundary, and stop conditions. Pass the exact received codexDelegation.input body unchanged to adaptive_state_runtime.py --root CANONICAL_REPO_ROOT --payload-verify and proceed only on PAYLOAD_VERIFIED; PAYLOAD_BYTES_VERIFIED alone is never execution permission. Never recompute manually or hash a wrapper. The embedded snapshot is expected to predate PREPARE/SENT; require matching SENT outbox identity and prepared_state_version == snapshot.state_version + 1 instead of latest-version equality.\n"
+                "- Execute only LOCAL_VERIFY_DISPATCH after matching CODE_REVIEW ACK. It contains verification_id, Goal ID, milestone_id, roadmap_version, local Dispatch ID, real Target Thread ID, canonical payload digest, full lease_claim including routing_turn_id, exact source artifact digest and branch/commit/worktree/snapshot identity, local prerequisites, exact steps, expected result, evidence capture rules, privacy boundary, and stop conditions. Pass the exact received codexDelegation.input body unchanged to adaptive_state_runtime.py --root CANONICAL_REPO_ROOT --payload-verify and proceed only on PAYLOAD_VERIFIED; runtime alone may normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization. Entity substitution or any field/value change still fails. PAYLOAD_BYTES_VERIFIED alone is never execution permission. Never recompute manually or hash a wrapper. The embedded snapshot is expected to predate PREPARE/SENT; require matching SENT outbox identity and prepared_state_version == snapshot.state_version + 1 instead of latest-version equality.\n"
                 "- Never edit product code or expose local credentials. FAIL must preserve verification_id for Worker repair and exact-item retest; a changed artifact requires a new CODE_REVIEW before retest, and an old milestone/version/artifact result is stale."
+                " Before replying, invoke installed runtime --root CANONICAL_ROOT --report-stage inside this Local Verifier task and return only its ASCII-safe FORMAL_REPORT_STAGED handle, never the raw verification report."
             )
         return (
             "Input Gate:\n"
@@ -2947,9 +3185,10 @@ def worker_input_gate(worker: dict[str, Any], adaptive: bool = False) -> str:
         return (
             "Input Gate:\n"
             "- BOOTSTRAP_ONLY: do not execute and reply READY_IDLE_AWAITING_GOAL.\n"
-            f"- Execute only {ADAPTIVE_WORKER_ENVELOPE} containing Goal ID, milestone_id, roadmap_version, Dispatch ID, canonical Dispatch Payload Digest, full dispatch lease_claim including routing_turn_id, real Target Thread ID, objective, acceptance criteria, scope, validation, phase permissions, and stop conditions. Pass the exact received codexDelegation.input body unchanged to adaptive_state_runtime.py --root CANONICAL_REPO_ROOT --payload-verify and proceed only on PAYLOAD_VERIFIED; PAYLOAD_BYTES_VERIFIED alone is never execution permission. Never manually replace text, retain a sha256: prefix, add angle brackets, hash the visible XML/UI wrapper, or reserialize it. Epoch alone or any digest/identity mismatch is invalid. The embedded snapshot is intentionally from immediately before PREPARE_OUTBOX: require the matching current SENT outbox to have prepared_state_version == snapshot.state_version + 1 and unchanged roadmap/Goal/lease/target/payload/definition identities; do not reject it merely because PREPARE and SENT advanced the latest state_version.\n"
+            f"- Execute only {ADAPTIVE_WORKER_ENVELOPE} containing Goal ID, milestone_id, roadmap_version, Dispatch ID, canonical Dispatch Payload Digest, full dispatch lease_claim including routing_turn_id, real Target Thread ID, objective, acceptance criteria, scope, validation, phase permissions, and stop conditions. Pass the exact received codexDelegation.input body unchanged to adaptive_state_runtime.py --root CANONICAL_REPO_ROOT --payload-verify and proceed only on PAYLOAD_VERIFIED; runtime alone may normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization. Entity substitution or any field/value change still fails. PAYLOAD_BYTES_VERIFIED alone is never execution permission. Never manually replace text, retain a sha256: prefix, add angle brackets, hash the visible XML/UI wrapper, or reserialize it. Epoch alone or any digest/identity mismatch is invalid. The embedded snapshot is intentionally from immediately before PREPARE_OUTBOX: require the matching current SENT outbox to have prepared_state_version == snapshot.state_version + 1 and unchanged roadmap/Goal/lease/target/payload/definition identities; do not reject it merely because PREPARE and SENT advanced the latest state_version.\n"
             "- Reject a Goal absent from the current versioned Goal Queue or containing an unresolved MATERIALIZE_* token.\n"
             "- If the same Dispatch ID is already active or completed in this task, do not execute it again; return the existing report/status with duplicate_dispatch=true."
+            " Before replying, invoke installed runtime --root CANONICAL_ROOT --report-stage inside this Worker task and return only its ASCII-safe FORMAL_REPORT_STAGED handle, never the raw Worker report."
         )
     return (
         "Input Gate:\n"
@@ -3029,7 +3268,8 @@ def status_report_fields(worker: dict[str, Any], adaptive: bool = False) -> str:
                 "source_goal_definition_digest_or_none",
                 "source_artifact_digest",
                 "report_digest: literal PENDING_CONTROLLER_ARCHIVE in the task output; canonical state uses the bound archived application/json SHA-256",
-                "adaptive_artifact_identity_rule: non_git current_branch/base_sha/head_sha are literal NOT_APPLICABLE (never null); changed_files are repo-relative POSIX paths",
+                "adaptive_artifact_identity_rule: source_artifact_digest is exactly the literal sha256: prefix followed by after_snapshot_sha256; non_git current_branch/base_sha/head_sha are literal NOT_APPLICABLE (never null); changed_files are repo-relative POSIX paths",
+                "complete_diff_reference: PASS; NO_DIFF, sorted-LF MANIFEST_DELTA_V1 A|M|D<TAB>path<TAB>size<TAB>sha256, or confined PATCH_FILE_V1; hash=diff_sha256",
             ]
         )
     if is_review_role(worker):
@@ -3043,6 +3283,7 @@ def status_report_fields(worker: dict[str, Any], adaptive: bool = False) -> str:
                     "linked_code_review_report_digest_or_none",
                     "linked_local_verification_ack_identity_or_none",
                     "linked_roadmap_audit_report_digest_or_none",
+                    "ROADMAP_AUDIT only: estimate_revision with min_minutes, typical_minutes, max_minutes, confidence=LOW|MEDIUM|HIGH, nonempty assumptions, and excluded external waiting time",
                 ]
             )
         common.extend(
@@ -3111,11 +3352,9 @@ def render_goal_block(
                 "acceptance_criteria": list(goal["success_criteria"]),
                 "allowed_write_scope": allowed_write_scope,
                 "artifact_identity_rule": (
-                    "Use Git base/head plus diff_sha256 when available; otherwise use "
-                    "deterministic before/after approved-product-scope manifests plus "
-                    "diff_sha256. Exclude .codex-loop, declared unrelated files, and "
-                    "caches. For non_git use literal NOT_APPLICABLE for current_branch, "
-                    "base_sha, and head_sha; changed_files are repo-relative POSIX paths."
+                    "PASS uses complete_diff_reference: PATCH_FILE_V1, deterministic MANIFEST_DELTA_V1, or NO_DIFF; "
+                    "hash equals diff_sha256. Exclude control/cache paths. For non_git, branch/base/head are "
+                    "NOT_APPLICABLE and changed_files are repo-relative POSIX paths."
                 ),
                 "canonical_state_path": audit_paths["state"],
                 "canonical_state_snapshot": (
@@ -3154,7 +3393,7 @@ def render_goal_block(
                 ),
                 "source_artifacts": parse_csv_items(data.get("source_artifacts")),
                 "state_rule": (
-                    f"{state_permission_text(worker)}. A relative worktree .codex-loop "
+                    f"{state_permission_text(worker, adaptive)}. A relative worktree .codex-loop "
                     "copy is never canonical."
                 ),
                 "stop_conditions": [
@@ -3168,6 +3407,11 @@ def render_goal_block(
                 "target_branch": target_branch,
                 "target_thread_id": target_id,
                 "validation_commands": list(goal["validation"]),
+                "validation_matrix": goal.get("validation_matrix"),
+                "review_surface": goal.get("review_surface"),
+                "context_freshness_snapshot": (
+                    "sha256:" + "0" * 64
+                ),
                 "worker_permission": worker["permission"],
                 "worker_role": goal["worker_role"],
                 "worker_role_kind": goal["worker_role_kind"],
@@ -3220,13 +3464,13 @@ Validation Commands:
 {commands(goal['validation'])}
 
 Allowed Write Scope:
-{worker_allowed_scope(worker, goal['allowed_write_scope'], audit_paths)}
+{worker_allowed_scope(worker, goal['allowed_write_scope'], audit_paths, adaptive=adaptive)}
 
 Phase Side-Effect Permissions:
 {phase_permissions_block(goal['phase_permissions'])}
 
 Canonical Control-Plane State: {audit_paths['state']}
-Worker State Rule: {state_permission_text(worker)}. Do not assume a relative .codex-loop copy in a worktree is canonical.
+Worker State Rule: {state_permission_text(worker, adaptive)}. Do not assume a relative .codex-loop copy in a worktree is canonical.
 
 Forbidden:
 {bullets(parse_csv_items(data.get('forbidden')))}
@@ -3237,7 +3481,7 @@ Review Gate: {data.get('review')}
 Prompt Injection Boundary: {PROMPT_INJECTION_BOUNDARY}
 Dispatch Idempotency: If this exact Dispatch ID already appears in this thread's completed or active work, do not execute it again. Return the existing status/report and mark duplicate_dispatch=true.
 
-Artifact Identity: use Git base/head plus diff_sha256 when available; otherwise deterministic before/after approved-product-scope snapshot SHA-256 manifests plus diff_sha256. Exclude .codex-loop, declared pre-existing unrelated files, and caches from the product digest and report the exclusion manifest separately. Never invent a Git SHA.{' For adaptive non_git work, current_branch, base_sha, and head_sha must each be the exact string NOT_APPLICABLE, never null/empty; changed_files must be repo-relative POSIX paths.' if adaptive else ''}
+Artifact Identity: use Git base/head plus diff_sha256 when available; otherwise deterministic before/after approved-product-scope snapshot SHA-256 manifests plus diff_sha256. Every Adaptive PASS includes structured complete_diff_reference: explicit NO_DIFF, MANIFEST_DELTA_V1 canonical UTF-8 tab-separated content, or a root-confined PATCH_FILE_V1 artifact_path; hash_algorithm is sha256 and reference sha256 equals diff_sha256. Exclude .codex-loop, declared pre-existing unrelated files, and caches from the product digest and report the exclusion manifest separately. Never invent a Git SHA.{' For adaptive non_git work, current_branch, base_sha, and head_sha must each be the exact string NOT_APPLICABLE, never null/empty; changed_files must be repo-relative POSIX paths.' if adaptive else ''}
 
 Required Completion Report:
 {status_report_fields(worker, adaptive)}
@@ -3402,7 +3646,7 @@ Prompt Injection Boundary: {PROMPT_INJECTION_BOUNDARY}{formal_role_delegation_bo
 {worker_input_gate(worker, adaptive)}
 
 Allowed Write Scope:
-{worker_allowed_scope(worker, worker.get('allowed') or allowed, audit_paths)}
+{worker_allowed_scope(worker, worker.get('allowed') or allowed, audit_paths, adaptive=adaptive)}
 
 Canonical Control-Plane Audit Paths:
 - state: {audit_paths['state']}
@@ -3411,7 +3655,7 @@ Canonical Control-Plane Audit Paths:
 - reports: {audit_paths['reports']}
 - transactions: {audit_paths['transactions']}
 - trusted pack snapshot: {audit_paths['sources']}CONTROLLER_PACK.md
-{adaptive_audit_lines}- Permission: {state_permission_text(worker)}
+{adaptive_audit_lines}- Permission: {state_permission_text(worker, adaptive)}
 - Execution/Review Workers receive the current state snapshot in messages; a relative worktree .codex-loop path is never canonical.
 
 Forbidden:
@@ -3465,6 +3709,7 @@ Required Report Fields:
         active_stale,
         max_repair_attempts,
         adaptive,
+        str(data.get("native_goal_policy", "required")),
     )
     transition_table = deterministic_transition_table_block(
         state_writer_role,
@@ -3552,7 +3797,7 @@ Required Report Fields:
     )
     adaptive_materialization_lines = (
         "- Adaptive only: each Goal template is a PAYLOAD_MATERIALIZATION_SPEC strict JSON object. Parse it, replace each whole MATERIALIZE_* value with the correctly typed runtime value (integer, object, string, or null), and reject any remaining token. The claim contains lease_epoch, lease_id, owner_kind, owner_identity equal to the exact registered real Controller threadId, routing_turn_id, and intended_transition. A codex_delegation source_thread_id is parent metadata and is never valid owner identity.\n"
-        "- Keep dispatch_payload_digest equal to the literal PAYLOAD_DIGEST_PLACEHOLDER in that specification. Pass the specification unchanged on stdin to the installed adaptive_state_runtime.py --payload-materialize. Only PAYLOAD_MATERIALIZED is valid: use its payload_digest in PREPARE_OUTBOX and, after the PREPARE ACK, send its transport_text unchanged as the exact codexDelegation.input body. Never manually replace/hash text, preserve a sha256: prefix, add angle brackets, reserialize transport_text, or hash the visible XML/UI wrapper.\n"
+        "- Keep dispatch_payload_digest equal to the literal PAYLOAD_DIGEST_PLACEHOLDER in that specification. Pass the specification unchanged on stdin to the installed adaptive_state_runtime.py --payload-materialize. Only PAYLOAD_MATERIALIZED is valid: use its payload_digest in PREPARE_OUTBOX and, after the PREPARE ACK, send its transport_text unchanged as the exact codexDelegation.input body. Receiver passes received bytes unchanged to --payload-verify; runtime alone may normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization. Entity substitution or any field/value change still fails. Never manually replace/hash text, preserve a sha256: prefix, add angle brackets, reserialize transport_text, or hash the visible XML/UI wrapper.\n"
         "- Every Adaptive PREPARE_OUTBOX(kind=DISPATCH) record binds dispatch_id + exact payload_digest + target_thread_id + immutable Goal definition digest. Recover only when all four match, and allow only one PREPARED/SENT Worker dispatch.\n"
         if adaptive
         else ""
@@ -3569,7 +3814,7 @@ Required Report Fields:
         "- Reuse the same exact-artifact Reviewer task for CODE_REVIEW, post-local-verification ROADMAP_AUDIT, and final FINAL_AUDIT; these remain three distinct tagged reports and State-Writer ACKs.\n"
         "- Use a dedicated Codex code-review capability when exposed for CODE_REVIEW and FINAL_AUDIT, plus the real Reviewer task. Findings are severity-first with file/line anchors, evidence, required fix, and test gaps.\n"
         "- A final candidate is not terminal. After ROADMAP_AUDIT_PASS_FINAL_CANDIDATE ACK, run FINAL_AUDIT over the full Git base-to-head or non_git baseline-to-current artifact, validation logs, forbidden artifacts, unresolved comments, Controller Pack identity, state/event consistency, evidence layer, claim boundary, and approval ledger.\n"
-        "- FINAL_REVIEW_PASS or an explicitly permitted bounded limitation unlocks only the separate FINALIZE_LOOP CAS. Wait for FINALIZE_LOOP ACK, complete the exact Goal, pause the exact heartbeat, then submit ACK_FINALIZATION and wait for FINALIZATION_ACKED; never use ROADMAP_REVISION as a terminal shortcut or report completion without the receipt."
+        "- FINAL_REVIEW_PASS or an explicitly permitted bounded limitation unlocks only the separate FINALIZE_LOOP CAS. Wait for FINALIZE_LOOP_APPLIED and its exact one-use closeout capability, apply native_goal_policy, pause the exact heartbeat, then submit ACK_FINALIZATION and wait for exact FINALIZATION_ACKED. CORE_FINALIZATION_ACKED or FINALIZATION_PENDING_EXTERNAL_SYNC is not release success; never use ROADMAP_REVISION as a terminal shortcut or report completion without the receipt."
         if adaptive
         else "- Per-goal review is required for every diff, and /review dispatches use the same prepared-outbox/idempotency protocol as /goal.\n"
         "- Only when review policy explicitly permits omission and every Goal is read-only/no-diff, run Controller FINAL_READ_ONLY_AUDIT instead of creating Reviewer.\n"
@@ -3641,7 +3886,7 @@ Thread Topology:
 {integration_topology_block(repo_mode)}
 - Reuse one Reviewer per integration workspace/worktree across repair/review rounds when possible. After a completed task is acknowledged and no longer reusable, record its lifecycle and call set_thread_archived(threadId=..., archived=true). Do not archive State-Writer before final state ACK.
 
-    {startup_transaction_gate_block(state_writer_role, first_goal['worker_role'], audit_paths, adaptive)}
+    {startup_transaction_gate_block(state_writer_role, first_goal['worker_role'], audit_paths, adaptive, str(data.get('native_goal_policy', 'required')))}
 
 Worker Routing:
 | Role | Runtime Thread ID Template | Permission | Responsibility |

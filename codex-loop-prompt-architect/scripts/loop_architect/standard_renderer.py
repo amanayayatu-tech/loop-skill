@@ -195,6 +195,11 @@ def render_standard_user_guide(
     max_idle = runtime.int_value(data, "max_idle_wakeups", 8)
     errors = runtime.validation_errors(data)
     adaptive = data.get("coordination_mode") == "adaptive"
+    controller_launch_step = (
+        "4. 先对生成的 Controller Pack 本地文件计算精确 byte length 和 SHA-256；在同一条初始 Controller launch input 中附上 `PACK_IDENTITY_ATTESTATION`（绝对路径、byte length、SHA-256、parent create_thread observation），再发送完整 `.md`。Controller 必须从该本地路径独立复算，禁止 hash/decode `codex_delegation`、XML/HTML entities、UI 或 read_thread wrapper；缺失/不匹配时在创建任何子任务前停止。"
+        if adaptive
+        else "4. 在这个工作区中新建一个“控制线程”，发送生成的 Controller Pack `.md` 文件。"
+    )
     task_setup_steps = (
         "5. 控制线程使用 `list_projects`、`list_threads`、`create_thread`、`read_thread`、`send_message_to_thread` 创建和恢复真实项目任务，禁止用 sub-agent 冒充；Adaptive 必须先以 `THREAD` outbox 的 `PREPARED -> SENT -> ACKED` 登记真实 threadId，才能派发。\n"
         "6. 控制线程先通过确定性 runtime 完成 `INITIALIZE`，收到 `LOOP_INITIALIZED`；再以独立 lease 执行 `AUTOMATION` outbox 的 `PREPARED -> SENT -> ACKED`，核对本机记录后只创建或认领一个 heartbeat。\n"
@@ -256,7 +261,7 @@ def render_standard_user_guide(
 {workspace_selection_line}
 2. 当前 repo_mode 是 `{repo_mode}`：`existing_git` 先检查现有 git/worktree/脏文件；`new_git` 第一阶段先用 local Worker，且只有 Goal 的 `git_init/branch_create` 为 true 才初始化；`non_git` 不执行分支/worktree 检查。
 3. 把资料放进工作区或提供子线程可读的绝对路径：{', '.join(source_artifacts)}。只附在控制聊天里的文件不会自动传给新线程。
-4. 在这个工作区中新建一个“控制线程”，发送生成的 Controller Pack `.md` 文件。
+{controller_launch_step}
 {task_setup_steps}
 8. Reviewer 不在启动时预创建；Worker 报告已写入且存在可审 diff 后再即时创建。worktree Reviewer 优先用 `fork_thread(... same-directory)`，否则传递可验证的绝对 worktree 路径和完整 diff。
 9. 每次 Worker/Reviewer 回报先写状态并等待 `STATE_WRITE_APPLIED`，再进入 review、repair 或下一 Goal。

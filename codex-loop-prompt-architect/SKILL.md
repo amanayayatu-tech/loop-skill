@@ -53,9 +53,7 @@ If required facts remain missing and the user insists on a draft, label it
 `NON_DISPATCHABLE_DRAFT`. Do not describe it as ready to send.
 
 ## Clarification Gate
-
-Ask one to three focused questions before ready-to-send output when any required
-fact is missing or contradictory:
+Before ready output, separate `Confirmed Facts / Inferred Intent / Unresolved Facts / Proposed Safe Defaults / Blocking Questions`; ask one to three focused questions when facts are missing or contradictory:
 
 - objective and concrete acceptance criteria
 - Codex Project name and root folder
@@ -98,8 +96,7 @@ For automated, multi-round, worktree, paid-runtime, or high-risk loops, read
 [references/loop-contract.md](references/loop-contract.md) before producing the
 pack. That reference is authoritative for Goal Queue, state schemas,
 idempotency, worktree review, heartbeat lifecycle, and Full Mode.
-For Adaptive Mode, also read
-[references/adaptive-loop-contract.md](references/adaptive-loop-contract.md).
+For Adaptive Mode, read [references/adaptive-loop-contract.md](references/adaptive-loop-contract.md) and [references/human-steering-and-convergence.md](references/human-steering-and-convergence.md).
 
 Keep these invariants in every ready pack:
 
@@ -134,9 +131,11 @@ Adaptive state before acquiring a lease; each Goal turn or heartbeat wake uses
 one ACQUIRE_LEASE request that both counts the routing turn and returns its
 one-route claim. All task, automation, Goal, review, and dispatch outboxes use
 that claim; roadmap/final CAS checks Worker, review, and local outboxes together.
+Adaptive generation rejects `max_wakeups` below the route floor for declared Goals, repairs, assurance, and finalization.
 Initial queues cover every routable Goal definition; scopes reject traversal;
 routing events are immutable/idempotent; same-owner renewal may rebind the one exact active
 route without resending it; control-plane caps and external-worktree roots are runtime enforced.
+Adaptive v2 stores Steering, Decision, failure, freshness, and validation facts in canonical state; `STATUS.md` and review guidance stay derived.
 
 Subagents default to disabled. Only the Controller under explicitly bounded Adaptive input may allow
 an authorization ceiling of two depth-one read-only sidecars; the deterministic router serializes one active delegation per lease, and no task delegates further.
@@ -180,7 +179,7 @@ Do not substitute:
 allowed for a real Reviewer thread that must inspect the same Worker worktree.
 It is not a sub-agent or `fork_context`.
 
-Compute a stable pack digest and loop id before child creation. Bootstrap only
+Compute a stable pack digest and loop id before child creation from a launcher PACK_IDENTITY_ATTESTATION that matches the exact local Pack path/bytes; never hash or decode delegation/XML/HTML/UI wrapper text. Bootstrap only
 State-Writer first, initialize canonical state, then use a thread-creation
 outbox for Worker/Reviewer. `BOOTSTRAP_PROMPT` is the byte-exact full role prompt plus a
 loop/role/pack marker and `BOOTSTRAP_ONLY`, never a path/line summary; its digest is full lowercase SHA-256 and it never contains First Goal.
@@ -301,7 +300,9 @@ Workers reject unresolved runtime tokens.
 Each extracted child prompt is self-contained. Executable Workers receive the
 full retry ladder; Reviewer receives exact-artifact rules. Standard State-Writer
 receives CAS/idempotency protocol. Adaptive State-Writer accepts only
-`STATE_MUTATION`, invokes the installed deterministic runtime, and never hand-writes canonical state/events/journals.
+`STATE_MUTATION`, invokes the installed deterministic runtime, and never hand-writes canonical state/events/journals. Adaptive `INITIALIZE` archives the frozen root-confined Pack by local `source_path` plus attested digest, never inline Pack content, Base64, wrapper decoding, or entity replacement.
+Adaptive Worker/Reviewer/Local reports never cross App transport inline: each target task invokes installed `adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage` before replying and returns only its ASCII-safe `FORMAL_REPORT_STAGED` handle. Controller forwards the helper-produced root-confined `.codex-loop/report-staging/` source path, media type, digest, and ACK-ready result; it never reads REPORT bytes, hand-writes staging, or computes report digests in prose.
+Dispatch verification is semantic after runtime-only CRLF-to-LF and at most one trailing-newline normalization; entity or field changes still fail.
 
 Minimum state includes:
 
@@ -385,11 +386,11 @@ unresolved comments, audit trail, budget/approval ledgers, evidence layer, and
 claim boundary. In Adaptive Mode this is a tagged third dispatch to the same
 Reviewer after final Roadmap Audit. FINALIZE_LOOP prepares the receipt; Controller
 completes the Goal, pauses heartbeat, and sends evidence-bound ACK_FINALIZATION.
-Only FINALIZATION_ACKED closes the loop. Formal review ACK/ledger decision and digests must match exactly. Adaptive THREAD identity maps explicit
+`native_goal_policy` defaults to `required`: required uses native Goal; disabled/advisory use only `EMULATED_SINGLE_ACTIVE_MILESTONE` and never call the Goal tool. Only a matching one-use capability from `FINALIZE_LOOP_APPLIED`/`STOP_LOOP_APPLIED` authorizes `update_goal(complete|blocked)`; waits, timeouts, quota recovery, and Decisions never do. `CORE_FINALIZATION_ACKED`/`FINALIZATION_PENDING_EXTERNAL_SYNC` are evidence, not release success; only exact FINALIZATION_ACKED closes the loop. Formal review ACK/ledger decision and digests must match exactly. Adaptive THREAD identity maps explicit
 bootstrap to formal roles without title inference. STOP_LOOP requires three
 prior consecutive observation-only turn artifacts; none can be backfilled. The next dedicated
 turn blocks Goal and pauses heartbeat. A bounded final limitation may set
-`LOOP_COMPLETE_WITH_LIMITATION` only when no required fix remains.
+`LOOP_COMPLETE_WITH_LIMITATION` only when no required fix remains. A PENDING Decision pauses heartbeat but never blocks Goal; task read/index/message timeouts on PREPARED/SENT routes are recoverable waits, not hard blockers. Before resuming/routing, `get_goal` must match canonical ACTIVE identity or stop as `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST` without replacement/emulation.
 
 Reject any configuration that disables review while a `workspace_write` Worker
 exists. Review may be omitted only for a fully read-only, no-diff loop.
@@ -452,7 +453,6 @@ forecasts. Do not weaken validated invariants.
 
 ## Output Contract
 ### Controller Pack File
-
 Start with `# Codex Loop Controller Pack` and include:
 
 - at most three key risks

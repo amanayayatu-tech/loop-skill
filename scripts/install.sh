@@ -74,7 +74,7 @@ chmod +x "$STAGING_DIR/scripts/validate_skill.py"
 chmod +x "$STAGING_DIR/scripts/adaptive_state_runtime.py"
 mkdir -p "$RUNTIME_SMOKE_ROOT"
 "$PYTHON_BIN" "$STAGING_DIR/scripts/adaptive_state_runtime.py" \
-  --root "$RUNTIME_SMOKE_ROOT" --recover >/dev/null
+  --root "$RUNTIME_SMOKE_ROOT" --recover </dev/null >/dev/null
 rm -rf "$RUNTIME_SMOKE_ROOT"
 find "$STAGING_DIR" -name ".DS_Store" -delete
 find "$STAGING_DIR" -type d -name "__pycache__" -prune -exec rm -rf {} +

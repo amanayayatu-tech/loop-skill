@@ -14,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from loop_architect.schema import INPUT_SCHEMA  # noqa: E402
+from loop_architect.protocol_model import mutation_schema  # noqa: E402
 import loop_prompt_scaffold as scaffold  # noqa: E402
 
 
@@ -30,6 +31,46 @@ class PublicDraft202012SchemaTests(unittest.TestCase):
 
     def test_schema_is_valid_draft_2020_12(self) -> None:
         Draft202012Validator.check_schema(INPUT_SCHEMA)
+
+    def test_native_goal_policy_input_and_state_schema_are_closed(self) -> None:
+        validator = Draft202012Validator(INPUT_SCHEMA)
+        payload = json.loads(
+            (ROOT / "examples" / "03-adaptive-passkey-input.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for policy in ("disabled", "advisory", "required"):
+            candidate = {**payload, "native_goal_policy": policy}
+            self.assertEqual(list(validator.iter_errors(candidate)), [])
+        self.assertTrue(
+            list(
+                validator.iter_errors(
+                    {**payload, "native_goal_policy": "best_effort"}
+                )
+            )
+        )
+
+        state_schema = json.loads(
+            (
+                ROOT
+                / "codex-loop-prompt-architect"
+                / "references"
+                / "adaptive-state.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            state_schema["properties"]["native_goal_policy"],
+            {"enum": ["disabled", "advisory", "required"]},
+        )
+        self.assertNotIn("native_goal_policy", state_schema["required"])
+        self.assertNotIn(
+            "native_goal_policy",
+            state_schema["$defs"]["finalizationOutbox"]["required"],
+        )
+        self.assertNotIn(
+            "closeout_capability",
+            state_schema["$defs"]["finalizationReceipt"]["required"],
+        )
 
     def test_all_committed_example_inputs_validate(self) -> None:
         validator = Draft202012Validator(INPUT_SCHEMA)
@@ -54,6 +95,115 @@ class PublicDraft202012SchemaTests(unittest.TestCase):
         payload["milestones"][0]["depends_on"] = []
         errors = list(Draft202012Validator(INPUT_SCHEMA).iter_errors(payload))
         self.assertEqual(errors, [])
+
+    def test_v32_goal_contracts_are_complete_before_rendering(self) -> None:
+        validator = Draft202012Validator(INPUT_SCHEMA)
+        payload = json.loads(
+            (ROOT / "examples" / "03-adaptive-passkey-input.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        payload["goals"][1]["review_surface"] = {"required": True}
+        self.assertTrue(list(validator.iter_errors(payload)))
+
+        payload = json.loads(
+            (ROOT / "examples" / "03-adaptive-passkey-input.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        payload["goals"][1]["validation_matrix"] = {
+            "functional": {"required": True}
+        }
+        self.assertTrue(list(validator.iter_errors(payload)))
+
+    def test_decision_scope_is_closed_and_persistable(self) -> None:
+        schema = mutation_schema()
+        register = schema["$defs"]["registerDecision"]
+        scope = register["properties"]["scope"]
+        self.assertEqual(scope, {"$ref": "#/$defs/decisionScope"})
+        self.assertFalse(schema["$defs"]["decisionScope"]["additionalProperties"])
+
+    def test_v2_review_records_are_tagged_and_chain_bound(self) -> None:
+        state_schema = json.loads(
+            (
+                ROOT
+                / "codex-loop-prompt-architect"
+                / "references"
+                / "adaptive-state.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        wrapper = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": state_schema["$defs"],
+            "$ref": "#/$defs/reviewRecordV2",
+        }
+        validator = Draft202012Validator(wrapper)
+        base = {
+            "review_id": "review-1",
+            "review_kind": "CODE_REVIEW",
+            "review_dispatch_id": "dispatch-1",
+            "goal_id": "goal-1",
+            "worker_dispatch_id": "worker-1",
+            "worker_report_digest": "sha256:" + "1" * 64,
+            "reviewer_thread_id": "reviewer-1",
+            "roadmap_version": 1,
+            "artifact_digest": "sha256:" + "2" * 64,
+            "report_digest": "sha256:" + "3" * 64,
+            "decision": "REVIEW_PASS",
+            "roadmap_proposal_digest": None,
+            "roadmap_proposal": None,
+            "evidence_paths": [".codex-loop/reports/review.json"],
+        }
+        self.assertEqual(list(validator.iter_errors(base)), [])
+        self.assertTrue(
+            list(
+                validator.iter_errors(
+                    {**base, "decision": "FINAL_REVIEW_PASS"}
+                )
+            )
+        )
+        estimate = {
+            "min_minutes": 1,
+            "typical_minutes": 2,
+            "max_minutes": 5,
+            "confidence": "MEDIUM",
+            "assumptions": ["No new blocker"],
+            "excludes": "external waiting time",
+        }
+        roadmap = {
+            **base,
+            "review_kind": "ROADMAP_AUDIT",
+            "decision": "ROADMAP_AUDIT_PASS_FINAL_CANDIDATE",
+            "code_review_id": "code-review-1",
+        }
+        self.assertTrue(list(validator.iter_errors(roadmap)))
+        roadmap["estimate_revision"] = estimate
+        self.assertEqual(list(validator.iter_errors(roadmap)), [])
+        self.assertTrue(
+            list(validator.iter_errors({**base, "estimate_revision": estimate}))
+        )
+        final = {
+            **base,
+            "review_kind": "FINAL_AUDIT",
+            "decision": "FINAL_REVIEW_PASS",
+            "code_review_id": "code-review-1",
+            "roadmap_audit_id": "roadmap-audit-1",
+            "final_audit_context_digest": "sha256:" + "4" * 64,
+        }
+        self.assertEqual(list(validator.iter_errors(final)), [])
+        self.assertTrue(
+            list(validator.iter_errors({**final, "estimate_revision": estimate}))
+        )
+        legacy = {
+            **roadmap,
+            "legacy_revalidation_required": True,
+        }
+        legacy.pop("estimate_revision")
+        self.assertEqual(list(validator.iter_errors(legacy)), [])
+        self.assertIn(
+            "review_contract_version",
+            state_schema["allOf"][0]["then"]["required"],
+        )
 
     def test_empty_permissions_object_matches_runtime_when_workers_are_explicit(self) -> None:
         payload = json.loads(

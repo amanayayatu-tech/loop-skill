@@ -115,6 +115,7 @@ def validate(skill_dir: Path) -> list[str]:
     with tempfile.TemporaryDirectory() as runtime_root:
         runtime_result = subprocess.run(
             [sys.executable, str(state_runtime), "--root", runtime_root, "--recover"],
+            input="",
             text=True,
             capture_output=True,
             check=False,

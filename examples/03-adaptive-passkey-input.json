@@ -7,6 +7,12 @@
   "target_branch": "codex/adaptive-passkey",
   "coordination_mode": "adaptive",
   "adaptive_reason": "The final UX and session behavior may need to change after authenticated browser verification",
+  "human_steering_policy": "auto",
+  "status_projection": "enabled",
+  "decision_card_policy": "on_real_gate",
+  "failure_fingerprint_policy": {"enabled": true},
+  "context_freshness_policy": "required_at_gates",
+  "review_evidence_policy": "deterministic_first",
   "workers": [
     {
       "role": "implementation",
@@ -173,7 +179,19 @@
       "depends_on": [
         "PASSKEY-G1"
       ],
-      "dispatch_when": "M1 code review and Roadmap Audit are acknowledged and M2 is the sole Active milestone"
+      "dispatch_when": "M1 code review and Roadmap Audit are acknowledged and M2 is the sole Active milestone",
+      "review_surface": {
+        "required": true,
+        "type": "browser_preview",
+        "artifact_path": null,
+        "preview_url": "http://localhost:3000/passkey",
+        "evidence_refs": [".codex-loop/reports/PASSKEY-G2-browser-smoke.json"],
+        "review_questions": [
+          "Can a user understand and complete passkey sign-in?",
+          "Are errors and recovery actions visible without exposing credentials?"
+        ],
+        "decision_gate_id": "DEC-PASSKEY-UX"
+      }
     },
     {
       "goal_id": "PASSKEY-G3",

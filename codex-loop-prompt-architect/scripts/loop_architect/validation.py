@@ -7,7 +7,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Any
 
-from .forecast import duration_minutes
+from .forecast import duration_minutes, local_verifier_needed
 from .schema import (
     COORDINATION_MODES,
     DASHBOARD_POLICIES,
@@ -15,6 +15,7 @@ from .schema import (
     LOCAL_VERIFICATION_POLICIES,
     MILESTONE_FIELDS,
     MILESTONE_STATUSES,
+    NATIVE_GOAL_POLICIES,
     ROLE_KINDS,
     SAFE_GOAL_ID_PATTERN,
     SAFE_MILESTONE_ID_PATTERN,
@@ -182,6 +183,83 @@ def _integer_value(value: Any) -> int | None:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return None
+
+
+def minimum_adaptive_routing_turns(data: dict[str, Any]) -> int | None:
+    """Return the bounded route capacity needed to exercise declared repair limits.
+
+    This counts external route actions, not state-only mutations. Invalid or
+    incomplete Adaptive input is left to the surrounding schema validation.
+    """
+
+    raw_goals = data.get("goals")
+    raw_milestones = data.get("milestones")
+    max_repairs = _integer_value(data.get("max_repair_attempts_per_goal", 3))
+    if (
+        not isinstance(raw_goals, list)
+        or not raw_goals
+        or any(not isinstance(goal, dict) for goal in raw_goals)
+        or not isinstance(raw_milestones, list)
+        or not raw_milestones
+        or any(not isinstance(milestone, dict) for milestone in raw_milestones)
+        or max_repairs is None
+        or max_repairs < 0
+    ):
+        return None
+
+    routable_milestone_ids: set[str] = set()
+    for milestone in raw_milestones:
+        milestone_id = milestone.get("milestone_id")
+        status = milestone.get("status")
+        if not isinstance(milestone_id, str) or not isinstance(status, str):
+            return None
+        if status in {"ACTIVE", "PLANNED"} and milestone_id:
+            routable_milestone_ids.add(milestone_id)
+
+    routable_goals: list[dict[str, Any]] = []
+    worker_roles: set[str] = set()
+    for goal in raw_goals:
+        milestone_id = goal.get("milestone_id")
+        worker_role = goal.get("worker_role") or goal.get("role")
+        if not isinstance(milestone_id, str) or not isinstance(worker_role, str):
+            return None
+        if milestone_id in routable_milestone_ids:
+            routable_goals.append(goal)
+            role = _role_key(worker_role)
+            if not role:
+                return None
+            worker_roles.add(role)
+    goal_count = len(routable_goals)
+    milestone_count = len(routable_milestone_ids)
+    if not goal_count or not milestone_count or not worker_roles:
+        return None
+
+    try:
+        needs_local_verifier = local_verifier_needed(data)
+    except (TypeError, ValueError):
+        return None
+
+    # JIT formal tasks: execution role(s), one Reviewer, and optional Local Verifier.
+    task_routes = len(worker_roles) + 1 + int(needs_local_verifier)
+    # One business heartbeat plus the initial native Controller Goal.
+    bootstrap_routes = 2
+    # Each later milestone completes the old native Goal and creates the new one.
+    milestone_goal_routes = 2 * (milestone_count - 1)
+    # Every initial/repair Worker dispatch is followed by CODE_REVIEW. Local
+    # verification repeats for the same item after repair when it is required.
+    attempt_count = goal_count * (1 + max_repairs)
+    goal_routes = attempt_count * (2 + int(needs_local_verifier))
+    # One ROADMAP_AUDIT per milestone, then FINAL_AUDIT and FINALIZE_LOOP.
+    # A bounded repair triggered by ROADMAP_AUDIT or FINAL_AUDIT must rerun
+    # that exact assurance stage after Worker repair and CODE_REVIEW.
+    assurance_routes = milestone_count + 2 + (2 * goal_count * max_repairs)
+    return (
+        task_routes
+        + bootstrap_routes
+        + milestone_goal_routes
+        + goal_routes
+        + assurance_routes
+    )
 
 
 def adaptive_validation_errors(data: dict[str, Any]) -> list[str]:
@@ -373,6 +451,9 @@ def adaptive_validation_errors(data: dict[str, Any]) -> list[str]:
     dashboard_policy = data.get("dashboard_policy", "auto")
     if not isinstance(dashboard_policy, str) or dashboard_policy not in DASHBOARD_POLICIES:
         errors.append("dashboard_policy:unsupported")
+    native_goal_policy = data.get("native_goal_policy", "required")
+    if not isinstance(native_goal_policy, str) or native_goal_policy not in NATIVE_GOAL_POLICIES:
+        errors.append("native_goal_policy:unsupported")
     threshold = data.get("dashboard_threshold_hours", 12)
     if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold <= 0:
         errors.append("dashboard_threshold_hours:must_be_positive_integer")
@@ -388,4 +469,14 @@ def adaptive_validation_errors(data: dict[str, Any]) -> list[str]:
         and heartbeat_interval * max_wakeups < maximum_minutes
     ):
         errors.append("heartbeat:coverage_below_time_max")
+    minimum_routes = minimum_adaptive_routing_turns(data)
+    if (
+        max_wakeups is not None
+        and max_wakeups > 0
+        and minimum_routes is not None
+        and max_wakeups < minimum_routes
+    ):
+        errors.append(
+            f"max_wakeups:below_adaptive_minimum_routing_turns:{minimum_routes}"
+        )
     return errors

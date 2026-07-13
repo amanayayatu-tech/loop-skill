@@ -68,6 +68,22 @@ both normalized role names and thread placeholder slugs after injection.
 - `artifact_ledger`
 - `finalization_outbox`
 - `finalization_receipt`
+- `run_control`, `steering_queue`, `steering_ledger`, and `active_steering_id`
+- `pending_decisions`, `failure_history`, and `failure_policy`
+- `context_freshness_ledger`
+- `validation_requirements`, `validation_results`, and exact evidence identity
+- `validation_gate_status` and `status_projection_target`
+
+`schema_version: 2` is the current format. Existing v1 state changes only
+through `MIGRATE_V1_TO_V2` with its exact source digest. The migration is a
+locked, journaled, CAS-protected transaction with no external actions; ordinary
+reads do not migrate. Repeating an applied migration is idempotent, while an
+unknown version or changed source digest is a zero-side-effect rejection.
+
+Human steering, STATUS projection, Decision Card, review surface, convergence,
+Validation Matrix, Context Freshness, and evidence-order rules are defined in
+[human-steering-and-convergence.md](human-steering-and-convergence.md). Runtime
+and the two schemas remain authoritative for their mutation and state shapes.
 
 ### Deterministic State Runtime
 
@@ -93,7 +109,11 @@ strict JSON object with exactly `envelope_type` and `payload` to
 sent. Its `transport_text` is the exact task-message body. A receiver passes the
 exact received `codexDelegation.input` unchanged to
 `--root <absolute repo root> --payload-verify` and acts only on
-`PAYLOAD_VERIFIED`. `PAYLOAD_BYTES_VERIFIED` proves only canonical bytes; the
+`PAYLOAD_VERIFIED`. Runtime alone may normalize CRLF to LF and remove at most
+one trailing newline before strict JSON parsing and semantic canonicalization.
+The digest survives those transport-framing differences, while HTML/XML entity
+substitution or any field/value change still fails. `PAYLOAD_BYTES_VERIFIED`
+proves only canonical bytes; the
 public verify path additionally requires the matching canonical SENT outbox,
 pre-PREPARE state snapshot, lease route, target task, and Goal/review/local
 identity. Neither side manually replaces substrings, preserves
@@ -114,9 +134,34 @@ one State-Writer before state exists; apply one `INITIALIZE` CAS containing the
 exact parsed milestone array, Goal definition registry/queue, closed
 authorization envelope, project id, Pack digest/artifact, real Controller and
 State-Writer ids plus bootstrap digests, dashboard policy, local-verification
-set, and empty ledgers/outboxes. After `LOOP_INITIALIZED`, every startup action
+set, explicit `native_goal_policy`, and empty ledgers/outboxes. The policy enum
+is `disabled|advisory|required`; new inputs default to `required`, and an omitted
+legacy state value is interpreted as `required`. After `LOOP_INITIALIZED`, every startup action
 uses a fresh `ACQUIRE_LEASE`; it atomically counts the routing turn and returns
 the one-route claim. No separate wake-start mutation exists.
+Historical ACKED terminal states without nested capability fields remain readable.
+A historical PREPARED finalization without them fails closed as
+`FINALIZATION_CAPABILITY_MIGRATION_REQUIRED` and cannot authorize an adapter call.
+
+The `INITIALIZE` Controller Pack artifact uses `source_path` to the frozen local
+Pack file inside the canonical root plus its attested digest. The runtime reads
+and archives those bytes directly after rejecting symlinks, path escape,
+non-UTF-8 data, or digest mismatch. Never transport the Pack as inline artifact
+`content`, Base64, wrapper text, or decoded HTML/XML entities. Other immutable
+formal report artifacts must not use inline `content`. The exact specification
+`{"outbox_id":ID,"result":{"status":STATUS,"artifact_digest":DIGEST},"report":REPORT}`
+is constructed and sent by Worker/Reviewer/Local inside its own target task to
+installed `adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage`
+before its final App reply. Only
+`FORMAL_REPORT_STAGED` is usable. Runtime infers the canonical SENT outbox,
+validates and canonicalizes the report, and returns its true digest, media type,
+ACK-ready result, and a regular non-symlink read-only `source_path` under the
+root-confined non-canonical staging directory `.codex-loop/report-staging/`.
+State-Writer accepts only such helper-produced files and runtime archives them
+under `.codex-loop/reports/`. The formal role returns only the ASCII-safe handle;
+Controller only forwards it and never reads, copies, parses, or transports
+REPORT bytes. The same outbox identity may be restaged after
+an archive failure without re-executing product work.
 
 Heartbeat identity uses the exact UTF-8 body between its BEGIN/END delimiter
 lines, excluding the LF adjacent to each delimiter. That same no-trailing-LF
@@ -153,6 +198,9 @@ Outbox lifecycles are kind-specific: Worker and Local are
 Automation, Thread, and Delegation are `PREPARED -> SENT -> ACKED`; an emulated
 Goal direct-ACKs `PREPARED` and never claims SENT. Every kind also has the one
 safe cancellation branch `PREPARED -> CANCELLED`; SENT work is never cancelled.
+Every `MARK_OUTBOX_SENT` binds at least one immutable `application/json` send
+observation already archived or atomically archived by that mutation; empty,
+duplicate, unarchived, or digest-mismatched evidence is rejected.
 `IDEMPOTENT_REPLAY` is a successful no-change runtime response, not a new state.
 
 Every formal task bootstrap is identity-bearing input. `ROLE_KIND` is the exact
@@ -167,6 +215,17 @@ excerpt, summary, or loader instruction cannot replace it. Its digest is lowerca
 Controller creates a task with a nonconforming prompt before state exists, that
 loop identity stops as `E2E_PROTOCOL_VIOLATION` without sending `STATE_MUTATION`
 or creating a replacement task.
+
+Before any child task, native Goal, heartbeat, or state mutation, the initial
+Controller launch input must carry one launcher-supplied
+`PACK_IDENTITY_ATTESTATION` binding the absolute on-disk Pack path, exact byte
+length, lowercase SHA-256, and parent `create_thread` observation. Controller
+independently hashes that local file. `codex_delegation.input`, XML/HTML entity
+forms, UI/read-thread previews, and transport wrappers are never Pack bytes and
+must not be hashed or decoded as an identity workaround. A missing or mismatched
+attestation stops `PACK_IDENTITY_ATTESTATION_REQUIRED` or
+`CONTROLLER_PACK_TRANSPORT_IDENTITY_UNRESOLVED` with zero child-task, Goal,
+heartbeat, and canonical-state side effects.
 
 `create_thread` success remains the pending identity if an immediate
 `read_thread` returns not found. Codex App task indexing may be eventually
@@ -259,14 +318,20 @@ evidence, or claim expansion becomes `ROADMAP_CHANGE_REQUIRES_APPROVAL` before
 mutation. Approval is phase-specific and cannot be inferred from unrelated
 ledger entries.
 
-## Native Controller Goal
+## Native Controller Goal Adapter
 
-The Controller's persistent milestone Goal is distinct from Worker Dispatch
-Goals.
+The Controller's persistent milestone Goal is an external adapter distinct from
+canonical execution truth and Worker Dispatch Goals. `native_goal_policy`
+controls it: `required` uses the exact native Goal lifecycle and requires its
+receipt for final closeout; `disabled` and `advisory` use the existing
+`EMULATED_SINGLE_ACTIVE_MILESTONE` control-plane representation and make no Goal
+tool call. Neither policy may be silently promoted or downgraded.
 
-When `get_goal`, `create_goal`, and `update_goal` are exposed:
+When policy is `required` and `get_goal`, `create_goal`, and `update_goal` are exposed:
 
-1. Acquire the fenced Controller lease.
+1. For create/read and nonterminal milestone transitions, acquire the fenced
+   Controller lease. After FINALIZE/STOP, do not acquire another lease: the exact
+   returned terminal closeout capability is the fence and authorization.
 2. Read the existing Goal.
 3. Build and recognize the stable objective marker
    `[CODEX_LOOP_MILESTONE loop_id=<LOOP_ID> pack_sha256=<FULL_64_HEX_SHA256> milestone_id=<ID> objective_sha256=<FULL_64_HEX_SHA256>]`
@@ -277,18 +342,20 @@ When `get_goal`, `create_goal`, and `update_goal` are exposed:
    marker alone is not recovery authority. A cross-loop/pack marker is a
    conflict. Do not expect Goal tools to return custom fields.
 5. Create a Goal only when no unfinished Goal exists. Native registration uses
-   `PREPARED -> create once -> SENT -> ACKED`. If tools are unavailable, attach
-   one immutable JSON observation and direct-ACK PREPARED as
+   `PREPARED -> create once -> SENT -> ACKED`. In required mode, unavailable
+   tools leave external sync pending and cannot be promoted to
+   `FINALIZATION_ACKED`. Disabled/advisory direct-ACK PREPARED as
    `EMULATED_SINGLE_ACTIVE_MILESTONE`; never mark that path SENT.
-6. Complete it only after an applied cross-milestone `ROADMAP_REVISION` proves
-   every Goal in the old milestone `COMPLETE` or `RETIRED`, or after
-   `FINALIZE_LOOP`/`STOP_LOOP` prepares the exact terminal closeout target. A
-   same-milestone sibling never closes the Controller Goal. Persist a
-   source-bound GOAL UPDATE outbox before `update_goal`: native transitions use
-   `PREPARED -> update once -> SENT -> ACKED` and include the strict tool-result
-   observation; emulated transitions direct-ACK PREPARED with the strict
-   unavailability/transition observation. Only then replace the canonical
-   mapping or create the next Goal.
+6. A cross-milestone `ROADMAP_REVISION` may transition the old Goal only after
+   all Goals in that milestone are `COMPLETE`/`RETIRED`; a same-milestone sibling
+   never closes it. This nonterminal transition uses a source-bound GOAL UPDATE
+   outbox: native is `PREPARED -> update once -> SENT -> ACKED`, while emulated
+   direct-ACKs PREPARED without a Goal call. After
+   `FINALIZE_LOOP_APPLIED`/`STOP_LOOP_APPLIED`, terminal state accepts only
+   `ACK_FINALIZATION`: do not prepare a GOAL UPDATE. Required policy calls
+   `update_goal` once under the returned one-use capability; disabled/advisory
+   make no Goal call; both return that capability plus Goal/heartbeat
+   observations to `ACK_FINALIZATION`.
 7. Runtime rejects every Worker dispatch unless canonical `controller_goal` is
    `ACTIVE` or `EMULATED_SINGLE_ACTIVE_MILESTONE` for that exact Active
    milestone. When `ROADMAP_REVISION` changes the Active milestone, obey
@@ -299,6 +366,34 @@ When `get_goal`, `create_goal`, and `update_goal` are exposed:
 8. Use `blocked` only after runtime `STOP_LOOP` validates three distinct
    evidence artifacts for the last three genuine consecutive Goal turns with
    one exact blocker code/fingerprint and Controller Goal identity.
+   Task read, indexing, message-send, or transport timeouts while a
+   PREPARED/SENT outbox reserves the route are recoverable
+   `WAITING_ACTIVE`/`WAITING_QUOTA_RECOVERY`, never hard-block observations and
+   never grounds for `update_goal(status=blocked)`. Only the exact one-use
+   closeout capability returned by `STOP_LOOP_APPLIED` authorizes that external
+   action. Poll the same task in the
+   same active turn, or same-owner renew and rebind only that exact outbox when
+   TTL requires it.
+9. A required human Decision in `PENDING` is expected waiting, not a hard
+   blocker. When `REGISTER_DECISION` returns `WAIT_DECISION`, pause the exact
+   heartbeat, preserve the native Goal unchanged, and end the turn. Resume the
+   heartbeat only after one real matching `DECISION_RESPONSE` is durably
+   applied. Never call `update_goal(status=blocked)` for Decision waiting;
+   native Goal blocking requires `STOP_LOOP_APPLIED` plus its matching one-use
+   BLOCKED closeout capability.
+10. In required mode, reconcile native Goal identity before every resume or new
+    route. `goal:null` or unacknowledged `COMPLETE` is
+    `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`. An asynchronous same-identity
+    `blocked` readback may continue only through one
+    `RECORD_CONTROLLER_GOAL_RESUME` for that current Goal: a fresh Goal-turn
+    lease atomically binds strict pre-blocked readback, later explicit user
+    `SAME_GOAL_RESUME`, and post-resume same-identity `blocked` readback in the
+    order pre < authorization <= post. It records
+    `controller_goal_resume_receipt`, consumes the lease, and changes no Goal,
+    outbox, or external-action state. It never calls or implies create/update,
+    ACTIVE, a new attempt, or a new milestone. Duplicate receipts fail; ACKing a
+    later milestone's valid Goal CREATE clears the prior receipt. Without that
+    exact three-artifact receipt, pause the heartbeat and send nothing.
 
 Marker and canonical/outbox identity validation precede recovery for every
 returned Goal status, including `complete`; an ACKED transition cannot
@@ -318,6 +413,13 @@ Goal turns and heartbeat wakes first consume one shared, bounded routing-turn
 counter, then share one CAS-protected `controller_lease`. Native Goal
 continuations therefore cannot bypass `max_wakeups`; exhaustion records
 `ROUTING_BUDGET_EXHAUSTED` and stops external routing.
+Adaptive generation also computes a terminal-reachability floor from the
+routable Goals and milestones, declared repair limit, just-in-time formal
+tasks, required Local Verification, CODE_REVIEW/ROADMAP_AUDIT/FINAL_AUDIT, and
+FINALIZE_LOOP. `max_wakeups` below that floor is non-dispatchable even when its
+wall-clock heartbeat coverage would otherwise be long enough. The floor covers
+the declared bounded repair path; it does not authorize extra work or side
+effects.
 The lease records a monotonically increasing `lease_epoch`, never-reused id, owner kind,
 owner task/turn identity, acquisition/expiry time, and intended transition.
 Reusing the same id with another owner does not transfer ownership. A competing
@@ -468,8 +570,17 @@ configured threshold. It is derived, static, escaped, script-free, and has no
 mutation controls or external assets. Embedded state/roadmap identities make a
 stale copy detectable, and runtime recovery rewrites a missing or stale file.
 
-After every Roadmap Audit, append min/typical/max, confidence, assumptions, and
-excluded external waits to `estimate_history`.
+Every Roadmap Audit report carries a closed min/typical/max estimate revision,
+confidence, assumptions, and excluded external waits. `RECORD_REVIEW` validates
+and stores it on the assurance record while appending it to `estimate_history`
+in the same transaction, including on the final-candidate path where no
+`ROADMAP_REVISION` follows. A schema-v2 FINAL_AUDIT is not dispatchable unless
+that exact estimate is the latest history entry and every required review
+surface has a current artifact-bound user response. Its assurance record stores
+the exact CODE_REVIEW and ROADMAP_AUDIT ids plus a digest over current
+validation, required Decision, estimate history, freshness, Worker, and review
+identities. `FINALIZE_LOOP` requires the same upstream ids and recomputes that
+digest, rejecting cross-chain or post-audit context changes with zero effects.
 
 ## Recovery And Completion
 
@@ -484,8 +595,20 @@ other runtime field is typed and materialized, Controller invokes
 `--payload-materialize`, persists the returned digest, and sends the returned
 `transport_text` unchanged. The receiver invokes
 `--root <absolute repo root> --payload-verify` on the exact received body. The
-byte-only helper status is not execution permission. Outbox, sent envelope, receiver report, and assurance identity
+runtime alone may normalize CRLF to LF and remove at most one trailing newline
+before strict JSON semantic canonicalization; entity or field changes still fail.
+The byte-only helper status is not execution permission. Outbox, sent envelope, receiver report, and assurance identity
 repeat the runtime-returned digest; model prose never implements the algorithm.
+If only local capture or CLI framing is uncertain, keep the same SENT outbox and
+return `PAYLOAD_VERIFICATION_RETRY_REQUIRED`. Retry verification locally in the
+same target/task/dispatch/payload identity, renewing only that exact same-owner
+route when TTL requires it. Do not execute, stage a business BLOCKED report,
+ACK, consume repair, resend, or create a new dispatch. Only after proving the
+exact App-delivered semantic payload is invalid and `execution_started=false`
+may the target task self-stage a zero-effect BLOCKED formal report to close the
+SENT outbox. If product work completed but report staging/archive failed,
+self-restage the same report identity and ACK the new handle; never re-execute
+work or MARK_OUTBOX_SENT twice.
 The bounded state snapshot is frozen immediately before `PREPARE_OUTBOX`.
 PREPARE and SENT advance canonical state, so a receiver validates
 `prepared_state_version == snapshot.state_version + 1`, current SENT status, and
@@ -494,15 +617,31 @@ does not require the embedded snapshot version to equal the later latest state.
 For `non_git`, report `current_branch`, `base_sha`, and `head_sha` as the exact
 string `NOT_APPLICABLE`, never null or empty. `changed_files` uses repo-relative
 POSIX paths; before/after manifests and `diff_sha256` carry artifact identity.
-Worker, Reviewer, and Local Verifier final answers are one strict JSON object,
-without fences or trailing prose, whose `report_digest` value is the literal
-`PENDING_CONTROLLER_ARCHIVE`. Controller validates required fields and duplicate
-keys, serializes sorted-key compact UTF-8 JSON (`ensure_ascii=false`, no trailing
-newline), archives that exact `application/json` artifact, and supplies its real
-SHA-256 to State-Writer. Formal DISPATCH/ASSURANCE/LOCAL `ACK_OUTBOX` results
-contain status, archived report digest, and artifact digest; each ACK and every
-`RECORD_REVIEW` reject unless exactly one evidence-path artifact has that digest
-and media type.
+Every Worker `PASS` report also carries one machine-replayable
+`complete_diff_reference`. `MANIFEST_DELTA_V1` is UTF-8 text containing exactly
+`STATUS<TAB>repo-relative-path<TAB>size_bytes<TAB>file_sha256` per line, with
+`A`, `M`, or `D` status, unique path ordering, and one final LF. Its SHA-256
+must equal `diff_sha256`, and every non-deleted file entry must match the
+current regular non-symlink file. `NO_DIFF` uses the SHA-256 of empty bytes,
+empty `changed_files`, and equal before/after snapshots. `PATCH_FILE_V1` names
+a root-confined regular non-symlink diff artifact whose bytes hash to
+`diff_sha256`. `FAIL` and `BLOCKED` reports remain archivable without this
+review handoff so a zero-effect failure can still close a SENT outbox.
+Worker, Reviewer, and Local Verifier build one strict JSON report inside the
+target task, without fences or trailing prose, whose `report_digest` value is
+the literal `PENDING_CONTROLLER_ARCHIVE`. That same role invokes
+`--report-stage` before replying and returns only the ASCII-safe
+`FORMAL_REPORT_STAGED` handle. Only its helper-produced
+`.codex-loop/report-staging/` source path, digest, media type, and ACK-ready
+result may be supplied to State-Writer. Controller never reads or transports
+REPORT bytes, writes staging bytes, or computes its SHA-256. Formal
+DISPATCH/ASSURANCE/LOCAL `ACK_OUTBOX` results
+contain status, archived report digest, and artifact digest. Each ACK rejects
+unless exactly one evidence-path artifact has that digest and media type.
+`RECORD_REVIEW` carries zero artifacts and repeats the exact sole canonical ACK
+report path; runtime reopens that immutable artifact through `artifact_ledger`,
+rechecks its bytes/digest/media type, and parses it again without Controller
+reading or retransmitting report bytes.
 The runtime parses every formal report before ACK. It binds the top-level
 dispatch, Goal, milestone, roadmap, target task, payload, artifact, decision,
 and source identities to the current SENT outbox. For Reviewer reports,
@@ -510,11 +649,26 @@ and source identities to the current SENT outbox. For Reviewer reports,
 and `source_artifact_digest` are mandatory top-level fields; a matching value
 only inside `state_change_request`, findings, or evidence metadata is not a
 substitute. A malformed or mismatched report is a zero-side-effect rejection and
-cannot move an assurance outbox to ACKED.
+cannot move an assurance outbox to ACKED. For a Worker `PASS`, the runtime
+validates `complete_diff_reference`, current file state, validation results, and
+evidence paths before staging and again before ACK. Every `.codex-loop/**`
+evidence ref must already exist byte-identically in `artifact_ledger` with its
+matching record path and an explicit canonical media type. The ACK stores a safe
+`latest_worker.review_handoff` projection containing the exact artifact
+identity, complete reference, validation results, evidence refs, and its
+canonical projection digest. The projection contains no formal report bytes.
+A `CODE_REVIEW` payload must copy `artifact_identity` and `evidence_refs` from
+this projection unchanged; payload verification rejects a missing projection,
+substitution, or digest mismatch.
 `RECORD_REVIEW` must repeat the exact decision, report digest, and artifact
 digest accepted by `ACK_OUTBOX`. A completed assurance outbox and its one
 assurance-ledger entry must remain one-to-one and identity-consistent;
 canonical state with a conflicting pair is rejected before any mutation.
+Worker payload materialization uses the latest applicable freshness record's
+`context_state_digest` for `context_freshness_snapshot`, never its
+`observed_identity_digest`. Review payloads reuse canonical
+`latest_worker.review_handoff` unchanged; Controller never opens the report or
+substitutes a newly computed content/prose digest.
 For upgrade compatibility only, `RECORD_REVIEW` may migrate an older already-
 ACKED assurance whose `result` is exactly null or empty. It derives the three
 result fields from the typed review mutation, validates the same report and
@@ -535,6 +689,10 @@ Roadmap Audit repair, and Final Audit repair; all consume the same per-Goal
 budget.
 The state machine enforces `max_repair_attempts_per_goal` and emits
 `REPAIR_BUDGET_EXHAUSTED` at the limit.
+Roadmap revisions replace the canonical Validation Matrix for the revised Goal
+set, discard results whose requirements changed, and recompute the global
+validation gate after retirement status is applied and before routing the next
+Goal. Retired Goals do not block validation or review-surface acceptance.
 
 Adaptive completion still requires an actual Worker PASS plus per-Goal
 CODE_REVIEW, required local verification,
@@ -544,14 +702,20 @@ execution ledger and rejects every unexecuted non-retired/non-superseded Goal,
 rejects any PREPARED/SENT/IN_PROGRESS Worker, assurance, or Local Verifier outbox,
 completes only the final evidenced Goal/milestone, retires the resolved queue,
 refreshes projections, sets terminal status, and writes a PREPARED
-`finalization_outbox`. After its ACK, Controller completes the exact native Goal,
-pauses the exact heartbeat, archives two distinct `application/json` observations
-whose parsed objects are exactly `{\"goal_id\": <canonical id>, \"status\":
-\"COMPLETE\"}` and `{\"automation_id\": <canonical id>, \"status\":
-\"PAUSED\"}`, and submits `ACK_FINALIZATION`. Runtime binds those digests to `finalization_receipt`;
-`FINALIZATION_ACKED`, not FINALIZE_LOOP alone, is the closeout gate.
+`finalization_outbox` and returns the only one-use capability that may authorize
+the external Goal COMPLETE action. Controller applies `native_goal_policy`,
+pauses the exact heartbeat, and submits `ACK_FINALIZATION` with the observations
+required by runtime. `CORE_FINALIZATION_ACKED` denotes deterministic core
+closeout only; `FINALIZATION_PENDING_EXTERNAL_SYNC` denotes an outstanding
+adapter receipt. Neither is release success. Runtime binds exact observation
+digests to `finalization_receipt`; `FINALIZATION_ACKED`, not FINALIZE_LOOP or
+either intermediate status, remains the closeout gate.
 `FINAL_REVIEW_PASS_WITH_LIMITATION` maps only to
 `LOOP_COMPLETE_WITH_LIMITATION`; it cannot be upgraded to full completion.
+If the exact native Goal is absent or terminal without an ACKED canonical Goal
+transition, the Controller must stop before `FINALIZE_LOOP`. A prepared
+finalization outbox never authorizes Goal recreation or a fabricated
+`{"status":"COMPLETE"}` observation.
 
 An unrecoverable blocker follows a different terminal transaction. On each
 natural Goal turn, Controller archives one strict observation in that turn's
@@ -569,8 +733,10 @@ dedicated Goal turn and a fresh lease, only after every external outbox is
 closed.
 Runtime sets `LOOP_BLOCKED`, blocks the active milestone, supersedes future work,
 retires unresolved Goals, and prepares a BLOCKED finalization outbox without any
-PASS claim. On that dedicated STOP turn Controller marks the exact Goal BLOCKED,
-pauses the exact business heartbeat, and never deletes it before evidence-bound
+PASS claim. On that dedicated STOP turn, only the exact one-use capability
+returned by `STOP_LOOP_APPLIED` may authorize marking the required-mode native
+Goal BLOCKED; disabled/advisory use the emulated transition. Controller then
+pauses the exact business heartbeat and never deletes it before evidence-bound
 ACK. Before eligibility it releases nonterminally and never manufactures wakeups.
 Once Goal=BLOCKED and
 automation=PAUSED are both exact observations, `ACK_FINALIZATION` records the

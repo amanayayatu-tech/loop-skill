@@ -4,6 +4,38 @@
   "title": "Deterministic Adaptive Loop Canonical State",
   "type": "object",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": 2}}},
+      "then": {
+        "required": [
+          "run_control", "steering_queue", "steering_ledger",
+          "active_steering_id", "pending_decisions", "failure_history",
+          "failure_policy", "context_freshness_ledger",
+          "validation_requirements", "validation_results",
+          "validation_evidence_identity", "validation_gate_status",
+          "status_projection_target", "human_control_policy",
+          "review_contract_version"
+        ],
+        "properties": {
+          "estimate_history": {
+            "type": "array", "items": {"$ref": "#/$defs/estimateRevision"}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["review_contract_version"],
+        "properties": {"review_contract_version": {"const": 2}}
+      },
+      "then": {
+        "properties": {
+          "assurance_ledger": {"$ref": "#/$defs/reviewMapV2"}
+        }
+      }
+    }
+  ],
   "required": [
     "schema_version",
     "loop_id",
@@ -56,7 +88,10 @@
     "external_action_count"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"enum": [1, 2]},
+    "review_contract_version": {"const": 2},
+    "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
+    "v1_migration_source_digest": {"$ref": "#/$defs/digest"},
     "loop_id": {"$ref": "#/$defs/safeId"},
     "root": {"type": "string", "minLength": 1},
     "controller_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
@@ -89,6 +124,9 @@
     "thread_registry": {"$ref": "#/$defs/threadRegistry"},
     "controller_goal": {
       "oneOf": [{"type": "null"}, {"$ref": "#/$defs/controllerGoal"}]
+    },
+    "controller_goal_resume_receipt": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/controllerGoalResumeReceipt"}]
     },
     "controller_lease": {
       "oneOf": [{"type": "null"}, {"$ref": "#/$defs/leaseState"}]
@@ -166,7 +204,21 @@
     "last_transaction_id": {
       "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
     },
-    "external_action_count": {"const": 0}
+    "external_action_count": {"const": 0},
+    "run_control": {"$ref": "#/$defs/runControl"},
+    "steering_queue": {"type": "array", "items": {"$ref": "#/$defs/steeringRecord"}},
+    "steering_ledger": {"$ref": "#/$defs/steeringMap"},
+    "active_steering_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+    "pending_decisions": {"$ref": "#/$defs/decisionMap"},
+    "failure_history": {"$ref": "#/$defs/failureHistoryMap"},
+    "failure_policy": {"$ref": "#/$defs/failurePolicy"},
+    "context_freshness_ledger": {"type": "array", "items": {"$ref": "#/$defs/freshnessRecord"}},
+    "validation_requirements": {"$ref": "#/$defs/validationRequirementMap"},
+    "validation_results": {"$ref": "#/$defs/validationResultMap"},
+    "validation_evidence_identity": {"$ref": "#/$defs/validationEvidenceMap"},
+    "validation_gate_status": {"enum": ["PENDING", "PASS", "FAIL", "PASS_WITH_LIMITATION"]},
+    "status_projection_target": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/statusProjectionTarget"}]},
+    "human_control_policy": {"$ref": "#/$defs/humanControlPolicy"}
   },
   "$defs": {
     "safeId": {
@@ -176,6 +228,10 @@
     "digest": {
       "type": "string",
       "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "sha256Hex": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     },
     "timestamp": {
       "type": "string",
@@ -278,7 +334,9 @@
         "phase_permissions": {"$ref": "#/$defs/booleanMap"},
         "depends_on": {"$ref": "#/$defs/safeIdArray"},
         "dispatch_when": {"type": "string", "minLength": 1},
-        "payload_template_digest": {"$ref": "#/$defs/digest"}
+        "payload_template_digest": {"$ref": "#/$defs/digest"},
+        "validation_matrix": {"$ref": "#/$defs/validationMatrix"},
+        "review_surface": {"$ref": "#/$defs/reviewSurface"}
       }
     },
     "goalDefinitionMap": {
@@ -301,6 +359,75 @@
         "depends_on": {"$ref": "#/$defs/safeIdArray"}
       }
     },
+    "completeDiffReference": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "hash_algorithm", "sha256"],
+          "properties": {
+            "kind": {"const": "NO_DIFF"},
+            "hash_algorithm": {"const": "sha256"},
+            "sha256": {"$ref": "#/$defs/sha256Hex"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "hash_algorithm", "media_type", "content", "sha256"],
+          "properties": {
+            "kind": {"const": "MANIFEST_DELTA_V1"},
+            "hash_algorithm": {"const": "sha256"},
+            "media_type": {"const": "text/tab-separated-values"},
+            "content": {"type": "string", "minLength": 1},
+            "sha256": {"$ref": "#/$defs/sha256Hex"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "hash_algorithm", "media_type", "artifact_path", "sha256"],
+          "properties": {
+            "kind": {"const": "PATCH_FILE_V1"},
+            "hash_algorithm": {"const": "sha256"},
+            "media_type": {"const": "text/x-diff"},
+            "artifact_path": {"type": "string", "minLength": 1},
+            "sha256": {"$ref": "#/$defs/sha256Hex"}
+          }
+        }
+      ]
+    },
+    "workerArtifactIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worktree_path", "current_branch", "base_sha", "head_sha",
+        "before_snapshot_sha256", "after_snapshot_sha256", "changed_files",
+        "diff_sha256", "complete_diff_reference", "validation_results"
+      ],
+      "properties": {
+        "worktree_path": {"type": "string", "minLength": 1},
+        "current_branch": {"type": "string", "minLength": 1},
+        "base_sha": {"type": "string", "minLength": 1},
+        "head_sha": {"type": "string", "minLength": 1},
+        "before_snapshot_sha256": {"$ref": "#/$defs/sha256Hex"},
+        "after_snapshot_sha256": {"$ref": "#/$defs/sha256Hex"},
+        "changed_files": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "diff_sha256": {"$ref": "#/$defs/sha256Hex"},
+        "complete_diff_reference": {"$ref": "#/$defs/completeDiffReference"},
+        "validation_results": {"type": "array"}
+      }
+    },
+    "workerReviewHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_identity", "evidence_refs", "projection_digest"],
+      "properties": {
+        "artifact_identity": {"$ref": "#/$defs/workerArtifactIdentity"},
+        "evidence_refs": {"$ref": "#/$defs/stringArray"},
+        "projection_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
     "workerResult": {
       "type": "object",
       "additionalProperties": false,
@@ -318,7 +445,8 @@
         "report_digest": {"$ref": "#/$defs/digest"},
         "artifact_digest": {"$ref": "#/$defs/digest"},
         "roadmap_version": {"type": "integer", "minimum": 1},
-        "evidence_paths": {"$ref": "#/$defs/stringArray"}
+        "evidence_paths": {"$ref": "#/$defs/stringArray"},
+        "review_handoff": {"$ref": "#/$defs/workerReviewHandoff"}
       }
     },
     "goalExecution": {
@@ -344,6 +472,8 @@
             "IN_PROGRESS",
             "WORKER_PASS",
             "REPAIR_REQUIRED",
+            "THRASHING_DETECTED",
+            "STRATEGY_EXHAUSTED",
             "CODE_REVIEW_PASS",
             "LOCAL_VERIFICATION_PASS",
             "FINAL_CANDIDATE",
@@ -538,6 +668,39 @@
         }
       ]
     },
+    "controllerGoalResumeReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resume_id", "goal_id", "loop_id", "pack_digest", "milestone_id",
+        "objective_digest", "marker", "pre_blocked_observation_path",
+        "pre_blocked_observation_digest", "pre_blocked_observed_at",
+        "resume_authorization_path", "resume_authorization_digest",
+        "authorized_at", "post_resume_observation_path",
+        "post_resume_observation_digest", "post_resume_observed_at",
+        "native_goal_observed_status", "recorded_state_version"
+      ],
+      "properties": {
+        "resume_id": {"$ref": "#/$defs/safeId"},
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "loop_id": {"$ref": "#/$defs/safeId"},
+        "pack_digest": {"$ref": "#/$defs/digest"},
+        "milestone_id": {"$ref": "#/$defs/safeId"},
+        "objective_digest": {"$ref": "#/$defs/digest"},
+        "marker": {"type": "string", "minLength": 1},
+        "pre_blocked_observation_path": {"type": "string", "minLength": 1},
+        "pre_blocked_observation_digest": {"$ref": "#/$defs/digest"},
+        "pre_blocked_observed_at": {"$ref": "#/$defs/timestamp"},
+        "resume_authorization_path": {"type": "string", "minLength": 1},
+        "resume_authorization_digest": {"$ref": "#/$defs/digest"},
+        "authorized_at": {"$ref": "#/$defs/timestamp"},
+        "post_resume_observation_path": {"type": "string", "minLength": 1},
+        "post_resume_observation_digest": {"$ref": "#/$defs/digest"},
+        "post_resume_observed_at": {"$ref": "#/$defs/timestamp"},
+        "native_goal_observed_status": {"const": "BLOCKED"},
+        "recorded_state_version": {"type": "integer", "minimum": 1}
+      }
+    },
     "threadRecord": {
       "type": "object",
       "additionalProperties": false,
@@ -602,7 +765,7 @@
       "additionalProperties": false,
       "required": ["action_type", "action_id"],
       "properties": {
-        "action_type": {"enum": ["OUTBOX", "ROADMAP_REVISION", "FINALIZE_LOOP", "STOP_LOOP"]},
+        "action_type": {"enum": ["OUTBOX", "CONTROLLER_GOAL_RESUME", "ROADMAP_REVISION", "FINALIZE_LOOP", "STOP_LOOP"]},
         "action_id": {"$ref": "#/$defs/safeId"}
       }
     },
@@ -725,6 +888,8 @@
         "finalized_state_version": {"type": "integer", "minimum": 1},
         "controller_goal_id": {"$ref": "#/$defs/safeId"},
         "automation_id": {"$ref": "#/$defs/safeId"},
+        "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
+        "closeout_capability": {"$ref": "#/$defs/digest"},
         "outcome_kind": {"enum": ["SUCCESS", "BLOCKED"]},
         "controller_goal_target_status": {"enum": ["COMPLETE", "BLOCKED"]},
         "automation_target_status": {"const": "PAUSED"},
@@ -799,6 +964,8 @@
       ],
       "properties": {
         "finalization_id": {"$ref": "#/$defs/safeId"},
+        "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
+        "closeout_capability": {"$ref": "#/$defs/digest"},
         "controller_goal_id": {"$ref": "#/$defs/safeId"},
         "controller_goal_status": {"enum": ["COMPLETE", "BLOCKED"]},
         "controller_goal_observation_path": {"type": "string", "minLength": 1},
@@ -1081,6 +1248,11 @@
         "roadmap_proposal": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/roadmapProposal"}]
         },
+        "code_review_id": {"$ref": "#/$defs/safeId"},
+        "roadmap_audit_id": {"$ref": "#/$defs/safeId"},
+        "final_audit_context_digest": {"$ref": "#/$defs/digest"},
+        "estimate_revision": {"$ref": "#/$defs/estimateRevision"},
+        "legacy_revalidation_required": {"const": true},
         "evidence_paths": {"$ref": "#/$defs/stringArray"}
       }
     },
@@ -1088,6 +1260,133 @@
       "type": "object",
       "patternProperties": {
         "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/reviewRecord"}
+      },
+      "additionalProperties": false
+    },
+    "reviewRecordV2": {
+      "allOf": [
+        {"$ref": "#/$defs/reviewRecord"},
+        {
+          "oneOf": [
+            {
+              "required": ["legacy_revalidation_required"]
+            },
+            {
+              "properties": {
+                "review_kind": {"const": "CODE_REVIEW"},
+                "decision": {
+                  "enum": [
+                    "REVIEW_PASS",
+                    "REVIEW_PASS_WITH_LIMITATION",
+                    "REVIEW_NEEDS_REPAIR",
+                    "REVIEW_ARTIFACT_UNAVAILABLE"
+                  ]
+                },
+                "roadmap_proposal": {"type": "null"},
+                "roadmap_proposal_digest": {"type": "null"}
+              },
+              "not": {
+                "anyOf": [
+                  {"required": ["legacy_revalidation_required"]},
+                  {"required": ["code_review_id"]},
+                  {"required": ["roadmap_audit_id"]},
+                  {"required": ["final_audit_context_digest"]},
+                  {"required": ["estimate_revision"]}
+                ]
+              }
+            },
+            {
+              "required": ["code_review_id", "estimate_revision"],
+              "properties": {
+                "review_kind": {"const": "ROADMAP_AUDIT"},
+                "decision": {
+                  "enum": [
+                    "ROADMAP_AUDIT_PASS",
+                    "ROADMAP_CHANGE_PROPOSED",
+                    "ROADMAP_AUDIT_PASS_FINAL_CANDIDATE",
+                    "ROADMAP_AUDIT_NEEDS_REPAIR"
+                  ]
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "decision": {
+                        "enum": [
+                          "ROADMAP_AUDIT_PASS",
+                          "ROADMAP_CHANGE_PROPOSED"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "roadmap_proposal": {"$ref": "#/$defs/roadmapProposal"},
+                      "roadmap_proposal_digest": {"$ref": "#/$defs/digest"}
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "decision": {
+                        "enum": [
+                          "ROADMAP_AUDIT_PASS_FINAL_CANDIDATE",
+                          "ROADMAP_AUDIT_NEEDS_REPAIR"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "roadmap_proposal": {"type": "null"},
+                      "roadmap_proposal_digest": {"type": "null"}
+                    }
+                  }
+                }
+              ],
+              "not": {
+                "anyOf": [
+                  {"required": ["legacy_revalidation_required"]},
+                  {"required": ["roadmap_audit_id"]},
+                  {"required": ["final_audit_context_digest"]}
+                ]
+              }
+            },
+            {
+              "required": [
+                "code_review_id",
+                "roadmap_audit_id",
+                "final_audit_context_digest"
+              ],
+              "properties": {
+                "review_kind": {"const": "FINAL_AUDIT"},
+                "decision": {
+                  "enum": [
+                    "FINAL_REVIEW_PASS",
+                    "FINAL_REVIEW_PASS_WITH_LIMITATION",
+                    "FINAL_REVIEW_NEEDS_REPAIR"
+                  ]
+                },
+                "roadmap_proposal": {"type": "null"},
+                "roadmap_proposal_digest": {"type": "null"}
+              },
+              "not": {
+                "anyOf": [
+                  {"required": ["legacy_revalidation_required"]},
+                  {"required": ["estimate_revision"]}
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "reviewMapV2": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/reviewRecordV2"}
       },
       "additionalProperties": false
     },
@@ -1127,6 +1426,122 @@
       },
       "additionalProperties": false
     },
+    "runControl": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "reason", "effective_state_version"],
+      "properties": {
+        "status": {"enum": ["RUNNING", "PAUSE_REQUESTED", "PAUSED_AT_SAFE_POINT", "RESUME_REQUESTED"]},
+        "reason": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 1024}]},
+        "effective_state_version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "steeringIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["message_item_id", "observed_turn_cursor", "normalized_digest", "identity_algorithm"],
+      "properties": {
+        "message_item_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+        "observed_turn_cursor": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+        "normalized_digest": {"$ref": "#/$defs/digest"},
+        "identity_algorithm": {"enum": ["message-item-v1", "turn-cursor-v1"]}
+      }
+    },
+    "steeringRecord": {
+      "type": "object", "additionalProperties": false,
+      "required": ["steering_id", "steering_type", "status", "identity", "summary", "classification_reason", "target_goal_id", "target_dispatch_id", "received_at", "applied_state_version", "resolution"],
+      "properties": {
+        "steering_id": {"$ref": "#/$defs/safeId"},
+        "steering_type": {"enum": ["STATUS_QUERY", "PAUSE", "RESUME", "CONSTRAINT", "CORRECTION", "DECISION_RESPONSE"]},
+        "status": {"enum": ["RECEIVED", "CLASSIFIED", "APPLIED", "DEFERRED", "CONFLICT"]},
+        "identity": {"$ref": "#/$defs/steeringIdentity"},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "classification_reason": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "target_goal_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+        "target_dispatch_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+        "received_at": {"$ref": "#/$defs/timestamp"},
+        "applied_state_version": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]},
+        "resolution": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 2048}]}
+      }
+    },
+    "steeringMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/steeringRecord"}}, "additionalProperties": false},
+    "decisionOption": {
+      "type": "object", "additionalProperties": false,
+      "required": ["option_id", "option_effect", "preauthorized_capability"],
+      "properties": {"option_id": {"$ref": "#/$defs/safeId"}, "option_effect": {"enum": ["CREATE_DRAFT_PR", "WAIT", "RETURN_FOR_REPAIR", "CONTINUE", "APPLY_ROADMAP_REVISION", "REVIEW_SURFACE_ACCEPTED"]}, "preauthorized_capability": {"enum": ["none", "pr_create", "thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"]}}
+    },
+    "decisionScope": {"type": "object", "additionalProperties": false, "properties": {"goal_id": {"$ref": "#/$defs/safeId"}, "dispatch_id": {"$ref": "#/$defs/safeId"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "artifact_path": {"type": "string", "minLength": 1}, "preview_url": {"type": "string", "pattern": "^https?://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^?]*)?$"}, "repository": {"type": "string", "minLength": 1}, "branch": {"type": "string", "minLength": 1}, "worktree_path": {"type": "string", "minLength": 1}, "review_surface_type": {"type": "string", "minLength": 1}}},
+    "decisionRecord": {
+      "type": "object", "additionalProperties": false,
+      "required": ["decision_id", "decision_context_digest", "source_state_version", "valid_through_state_version", "options", "scope", "exclusions", "status", "selected_option_id"],
+      "properties": {
+        "decision_id": {"$ref": "#/$defs/safeId"}, "decision_context_digest": {"$ref": "#/$defs/digest"},
+        "source_state_version": {"type": "integer", "minimum": 1}, "valid_through_state_version": {"type": "integer", "minimum": 1},
+        "options": {"type": "array", "minItems": 2, "maxItems": 3, "items": {"$ref": "#/$defs/decisionOption"}},
+        "scope": {"$ref": "#/$defs/decisionScope"},
+        "exclusions": {"$ref": "#/$defs/stringArray"}, "status": {"enum": ["PENDING", "APPLIED", "STALE"]},
+        "selected_option_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+        "applied_state_version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "decisionMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/decisionRecord"}}, "additionalProperties": false},
+    "estimateRevision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["min_minutes", "typical_minutes", "max_minutes", "confidence", "assumptions", "excludes"],
+      "properties": {
+        "min_minutes": {"type": "integer", "minimum": 0},
+        "typical_minutes": {"type": "integer", "minimum": 0},
+        "max_minutes": {"type": "integer", "minimum": 0},
+        "confidence": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+        "assumptions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "excludes": {"type": "string", "minLength": 1}
+      }
+    },
+    "failureFingerprint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["command_digest", "exit_code", "normalized_lines_digest", "failing_test_ids", "adapter", "error_class", "error_location", "changed_files", "diff_digest", "strategy_id", "hypothesis_digest", "raw_log_digest", "previously_passing_tests_regressed"],
+      "properties": {
+        "command_digest": {"$ref": "#/$defs/digest"}, "exit_code": {"type": "integer"}, "normalized_lines_digest": {"$ref": "#/$defs/digest"},
+        "failing_test_ids": {"$ref": "#/$defs/stringArray"}, "adapter": {"const": "generic-v1"}, "error_class": {"const": "UNKNOWN"}, "error_location": {"const": "UNKNOWN"},
+        "changed_files": {"$ref": "#/$defs/stringArray"}, "diff_digest": {"$ref": "#/$defs/digest"}, "strategy_id": {"$ref": "#/$defs/safeId"},
+        "hypothesis_digest": {"$ref": "#/$defs/digest"}, "raw_log_digest": {"$ref": "#/$defs/digest"}, "previously_passing_tests_regressed": {"$ref": "#/$defs/stringArray"},
+        "classification": {"enum": ["PROGRESSING", "SAME_FAILURE_NEW_STRATEGY", "THRASHING_DETECTED", "POSSIBLE_STRATEGY_REPEAT", "REGRESSION_INTRODUCED", "STRATEGY_EXHAUSTED"]},
+        "recorded_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "failureHistoryMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"type": "array", "items": {"$ref": "#/$defs/failureFingerprint"}}}, "additionalProperties": false},
+    "failurePolicy": {"type": "object", "additionalProperties": false, "required": ["same_strategy_failure_threshold", "same_strategy_failure_threshold_min", "same_strategy_failure_threshold_max"], "properties": {"same_strategy_failure_threshold": {"type": "integer", "minimum": 2, "maximum": 3}, "same_strategy_failure_threshold_min": {"const": 2}, "same_strategy_failure_threshold_max": {"const": 3}}},
+    "observedIdentityDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo_mode", "repo_root_digest", "worktree_root_digest", "branch", "base_sha", "head_sha", "dirty_boundary_digest", "untracked_boundary_digest", "source_artifact_digest", "target_scope_digest", "dependency_interface_digest", "lockfile_digest", "generated_config_digest", "worker_report_digest", "artifact_digest", "diff_digest", "changed_paths", "base_sha_changed", "head_sha_changed", "dirty_boundary_changed", "untracked_boundary_changed", "source_digest_changed", "target_scope_changed", "dependency_interface_changed", "lockfile_digest_changed", "generated_config_changed", "worker_report_changed", "artifact_digest_changed", "diff_digest_changed", "scope_overlap", "symlink_escape", "wildcard_ambiguity", "reload_completed"],
+      "properties": {
+        "repo_mode": {"enum": ["git", "non_git"]}, "repo_root_digest": {"$ref": "#/$defs/digest"}, "worktree_root_digest": {"$ref": "#/$defs/digest"},
+        "branch": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}, "base_sha": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}, "head_sha": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
+        "dirty_boundary_digest": {"$ref": "#/$defs/digest"}, "untracked_boundary_digest": {"$ref": "#/$defs/digest"}, "source_artifact_digest": {"$ref": "#/$defs/digest"}, "target_scope_digest": {"$ref": "#/$defs/digest"}, "dependency_interface_digest": {"$ref": "#/$defs/digest"}, "lockfile_digest": {"$ref": "#/$defs/digest"}, "generated_config_digest": {"$ref": "#/$defs/digest"},
+        "worker_report_digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}, "artifact_digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}, "diff_digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}, "changed_paths": {"$ref": "#/$defs/stringArray"},
+        "base_sha_changed": {"type": "boolean"}, "head_sha_changed": {"type": "boolean"}, "dirty_boundary_changed": {"type": "boolean"}, "untracked_boundary_changed": {"type": "boolean"}, "source_digest_changed": {"type": "boolean"}, "target_scope_changed": {"type": "boolean"}, "dependency_interface_changed": {"type": "boolean"}, "lockfile_digest_changed": {"type": "boolean"}, "generated_config_changed": {"type": "boolean"}, "worker_report_changed": {"type": "boolean"}, "artifact_digest_changed": {"type": "boolean"}, "diff_digest_changed": {"type": "boolean"}, "scope_overlap": {"type": "boolean"}, "symlink_escape": {"type": "boolean"}, "wildcard_ambiguity": {"type": "boolean"}, "reload_completed": {"type": "boolean"}
+      },
+      "allOf": [
+        {"if": {"properties": {"repo_mode": {"const": "git"}}}, "then": {"properties": {"branch": {"type": "string", "minLength": 1}, "base_sha": {"type": "string", "minLength": 1}, "head_sha": {"type": "string", "minLength": 1}}}},
+        {"if": {"properties": {"repo_mode": {"const": "non_git"}}}, "then": {"properties": {"branch": {"type": "null"}, "base_sha": {"type": "null"}, "head_sha": {"type": "null"}}}}
+      ]
+    },
+    "freshnessRecord": {
+      "type": "object", "additionalProperties": false,
+      "required": ["checkpoint_id", "checkpoint", "goal_id", "dispatch_id", "artifact_digest", "observed_identity_delta", "observed_identity_digest", "context_state_digest", "classification", "classification_source", "evidence_refs", "checked_at_state_version", "checked_at"],
+      "properties": {"checkpoint_id": {"$ref": "#/$defs/safeId"}, "checkpoint": {"enum": ["GOAL_DISPATCH", "WORKER_RECOVERY", "REPAIR", "STEERING_SCOPE", "CODE_REVIEW", "ROADMAP_AUDIT", "FINAL_AUDIT"]}, "goal_id": {"$ref": "#/$defs/safeId"}, "dispatch_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]}, "artifact_digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}, "observed_identity_delta": {"$ref": "#/$defs/observedIdentityDelta"}, "observed_identity_digest": {"$ref": "#/$defs/digest"}, "context_state_digest": {"$ref": "#/$defs/digest"}, "classification": {"enum": ["FRESH", "CHANGED_IRRELEVANT", "RELOAD_SAFE", "SCOPE_CONFLICT", "HARD_BLOCK", "JUDGMENT_REQUIRED"]}, "classification_source": {"enum": ["DETERMINISTIC_IDENTITY", "DETERMINISTIC_SCOPE_RULE", "MODEL_JUDGMENT_REQUIRED"]}, "evidence_refs": {"$ref": "#/$defs/stringArray"}, "checked_at_state_version": {"type": "integer", "minimum": 1}, "checked_at": {"$ref": "#/$defs/timestamp"}}
+    },
+    "reviewSurface": {"type": "object", "additionalProperties": false, "required": ["required", "type", "artifact_path", "preview_url", "evidence_refs", "review_questions", "decision_gate_id"], "properties": {"required": {"type": "boolean"}, "type": {"enum": ["browser_preview", "screenshot", "markdown", "tabular_data", "pdf", "slides", "diff", "other_artifact", "NOT_APPLICABLE"]}, "artifact_path": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}, "preview_url": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^https?://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^?]*)?$"}]}, "evidence_refs": {"$ref": "#/$defs/stringArray"}, "review_questions": {"$ref": "#/$defs/stringArray"}, "decision_gate_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]}, "reason": {"type": "string", "minLength": 1}}, "allOf": [{"if": {"properties": {"required": {"const": true}}}, "then": {"properties": {"decision_gate_id": {"$ref": "#/$defs/safeId"}, "review_questions": {"minItems": 1}}, "anyOf": [{"properties": {"artifact_path": {"type": "string", "minLength": 1}}}, {"properties": {"preview_url": {"type": "string", "minLength": 1}}}]}}, {"if": {"properties": {"type": {"const": "NOT_APPLICABLE"}}}, "then": {"required": ["reason"], "properties": {"required": {"const": false}}}}]},
+    "validationRule": {"type": "object", "additionalProperties": false, "required": ["required"], "properties": {"required": {"type": "boolean"}, "evidence": {"$ref": "#/$defs/stringArray"}, "reason": {"type": "string", "minLength": 1}}, "allOf": [{"if": {"properties": {"required": {"const": true}}}, "then": {"required": ["evidence"], "properties": {"evidence": {"minItems": 1}}}}, {"if": {"properties": {"required": {"const": false}}}, "then": {"required": ["reason"]}}]},
+    "validationDimensionMap": {"type": "object", "minProperties": 1, "propertyNames": {"enum": ["functional", "regression", "static_quality", "compatibility", "security", "performance", "user_experience", "change_impact"]}, "additionalProperties": {"$ref": "#/$defs/validationRule"}},
+    "validationMatrix": {"type": "object", "required": ["functional", "regression", "static_quality", "compatibility", "security", "performance", "user_experience", "change_impact"], "additionalProperties": false, "properties": {"functional": {"$ref": "#/$defs/validationRule"}, "regression": {"$ref": "#/$defs/validationRule"}, "static_quality": {"$ref": "#/$defs/validationRule"}, "compatibility": {"$ref": "#/$defs/validationRule"}, "security": {"$ref": "#/$defs/validationRule"}, "performance": {"$ref": "#/$defs/validationRule"}, "user_experience": {"$ref": "#/$defs/validationRule"}, "change_impact": {"$ref": "#/$defs/validationRule"}}},
+    "validationRequirementMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/validationDimensionMap"}}, "additionalProperties": false},
+    "validationResultDimensions": {"type": "object", "propertyNames": {"enum": ["functional", "regression", "static_quality", "compatibility", "security", "performance", "user_experience", "change_impact"]}, "additionalProperties": {"enum": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"]}},
+    "validationResultMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/validationResultDimensions"}}, "additionalProperties": false},
+    "validationEvidence": {"type": "object", "additionalProperties": false, "required": ["evidence_path", "evidence_digest", "artifact_digest", "checked_at"], "properties": {"evidence_path": {"type": "string", "minLength": 1}, "evidence_digest": {"$ref": "#/$defs/digest"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "checked_at": {"$ref": "#/$defs/timestamp"}}},
+    "validationEvidenceDimensions": {"type": "object", "propertyNames": {"enum": ["functional", "regression", "static_quality", "compatibility", "security", "performance", "user_experience", "change_impact"]}, "additionalProperties": {"$ref": "#/$defs/validationEvidence"}},
+    "validationEvidenceMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/validationEvidenceDimensions"}}, "additionalProperties": false},
+    "statusProjectionTarget": {"type": "object", "additionalProperties": false, "required": ["path", "target_state_version", "target_digest", "render_contract_version"], "properties": {"path": {"const": ".codex-loop/STATUS.md"}, "target_state_version": {"type": "integer", "minimum": 1}, "target_digest": {"$ref": "#/$defs/digest"}, "render_contract_version": {"enum": ["status-v1", "status-v2"]}}},
+    "humanControlPolicy": {"type": "object", "additionalProperties": false, "required": ["human_steering_enabled", "status_projection_enabled", "decision_cards_enabled", "failure_fingerprint_enabled", "context_freshness_required", "review_evidence_policy"], "properties": {"human_steering_enabled": {"type": "boolean"}, "status_projection_enabled": {"type": "boolean"}, "decision_cards_enabled": {"type": "boolean"}, "failure_fingerprint_enabled": {"const": true}, "context_freshness_required": {"const": true}, "review_evidence_policy": {"const": "deterministic_first"}}},
     "jsonValue": {
       "oneOf": [
         {"type": "null"},
