@@ -262,6 +262,11 @@ def validate_review_surface(
         if repo_root is not None:
             try:
                 root = Path(repo_root).expanduser().resolve(strict=False)
+                probe = root
+                for part in path.parts:
+                    probe /= part
+                    if probe.is_symlink():
+                        probe.resolve(strict=True)
                 resolved = (root / str(path)).resolve(strict=False)
             except (OSError, RuntimeError) as exc:
                 raise ValueError("review surface symlink cannot be resolved") from exc

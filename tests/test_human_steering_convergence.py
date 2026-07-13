@@ -31,7 +31,7 @@ from loop_architect.state_runtime import (  # noqa: E402
     RuntimeRejection,
     STATUS_PROJECTION_STAGES,
 )
-from tests.test_adaptive_state_runtime import (  # noqa: E402
+from tests.state_runtime_support import (  # noqa: E402
     Harness,
     authorization_envelope,
     complete_validation_matrix,
@@ -238,6 +238,21 @@ class HumanControlHelperTests(unittest.TestCase):
                         "evidence_refs": [],
                         "review_questions": ["Is this acceptable?"],
                         "decision_gate_id": "decision-symlink-loop",
+                    },
+                    ["docs/**"],
+                    root,
+                )
+            (docs / "missing").symlink_to("does-not-exist")
+            with self.assertRaisesRegex(ValueError, "symlink cannot be resolved"):
+                validate_review_surface(
+                    {
+                        "required": True,
+                        "type": "markdown",
+                        "artifact_path": "docs/missing/review.md",
+                        "preview_url": None,
+                        "evidence_refs": [],
+                        "review_questions": ["Is this acceptable?"],
+                        "decision_gate_id": "decision-symlink-missing",
                     },
                     ["docs/**"],
                     root,
