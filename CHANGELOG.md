@@ -27,6 +27,11 @@ First formally versioned public release.
   authoritative protocol detail remains in the linked references.
 - State-runtime tests are split by responsibility without changing test logic.
 
+### Fixed
+
+- Review-surface confinement now rejects symlink loops and dangling symlink
+  components consistently across Python 3.9 and 3.13.
+
 ### Evidence boundary
 
 The archived Codex App run proves only the bounded environment described in its

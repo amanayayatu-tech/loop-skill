@@ -242,6 +242,21 @@ class HumanControlHelperTests(unittest.TestCase):
                     ["docs/**"],
                     root,
                 )
+            (docs / "missing").symlink_to("does-not-exist")
+            with self.assertRaisesRegex(ValueError, "symlink cannot be resolved"):
+                validate_review_surface(
+                    {
+                        "required": True,
+                        "type": "markdown",
+                        "artifact_path": "docs/missing/review.md",
+                        "preview_url": None,
+                        "evidence_refs": [],
+                        "review_questions": ["Is this acceptable?"],
+                        "decision_gate_id": "decision-symlink-missing",
+                    },
+                    ["docs/**"],
+                    root,
+                )
 
     def test_scaffold_rejects_incomplete_v32_goal_contracts(self) -> None:
         payload = json.loads(
