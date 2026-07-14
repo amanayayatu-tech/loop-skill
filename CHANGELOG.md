@@ -27,6 +27,9 @@ All notable changes to this project are documented here. The project follows
   one-route-per-App-turn invariant.
 - Bound route acquisition and takeover to a real Controller App turn identity;
   the same turn cannot obtain a second route lease after completion or release.
+- Preserve explicit scoped-correction identity for reviewed Goals even before
+  repair exhaustion, so Roadmap Revision retires rather than falsely completes
+  the superseded Goal while retaining its full attempt history.
 
 ### Evidence boundary
 

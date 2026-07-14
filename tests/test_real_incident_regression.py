@@ -499,3 +499,27 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
             )
             self.assertEqual(second["status"], "CONTROLLER_TURN_ALREADY_ROUTED")
             self.assertEqual(before, persisted_snapshot(Path(temporary)))
+
+
+class ScopedCorrectionIdentityTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
+    def test_applied_correction_recognizes_a_non_exhausted_goal(self) -> None:
+        state = {
+            "steering_ledger": {
+                "real-incident-g03-correction": {
+                    "steering_type": "CORRECTION",
+                    "status": "APPLIED",
+                    "target_goal_id": "G03_AI_WEIGHT_ENGINE",
+                    "applied_state_version": 165,
+                }
+            }
+        }
+        self.assertTrue(
+            AdaptiveStateRuntime._applied_scoped_correction(
+                state, "G03_AI_WEIGHT_ENGINE"
+            )
+        )
+        self.assertFalse(
+            AdaptiveStateRuntime._applied_scoped_correction(
+                state, "G03_SECURITY_RECEIPT_CORRECTION"
+            )
+        )

@@ -10216,6 +10216,18 @@ class AdaptiveStateRuntime:
         )
 
     @staticmethod
+    def _applied_scoped_correction(
+        state: Mapping[str, Any], goal_id: str
+    ) -> bool:
+        return any(
+            record.get("steering_type") == "CORRECTION"
+            and record.get("status") == "APPLIED"
+            and record.get("target_goal_id") == goal_id
+            and record.get("applied_state_version") is not None
+            for record in state["steering_ledger"].values()
+        )
+
+    @staticmethod
     def _scoped_correction_for_exhausted_goal(
         state: Mapping[str, Any], goal_id: str
     ) -> bool:
@@ -10229,13 +10241,7 @@ class AdaptiveStateRuntime:
             or ledger.get("latest_worker", {}).get("status") == "PASS"
         ):
             return False
-        return any(
-            record.get("steering_type") == "CORRECTION"
-            and record.get("status") == "APPLIED"
-            and record.get("target_goal_id") == goal_id
-            and record.get("applied_state_version") is not None
-            for record in state["steering_ledger"].values()
-        )
+        return AdaptiveStateRuntime._applied_scoped_correction(state, goal_id)
 
     def _roadmap_revision(
         self,
@@ -10348,9 +10354,7 @@ class AdaptiveStateRuntime:
         source_goal_id = mutation["source_goal_id"]
         if any(entry["goal_id"] == source_goal_id for entry in proposed_queue):
             raise RuntimeRejection("COMPLETED_GOAL_REQUEUED", "/mutation/goal_queue")
-        scoped_correction = self._scoped_correction_for_exhausted_goal(
-            state, source_goal_id
-        )
+        scoped_correction = self._applied_scoped_correction(state, source_goal_id)
         source_attempts = _completed_product_attempts(
             state["goal_execution_ledger"][source_goal_id]
         )
