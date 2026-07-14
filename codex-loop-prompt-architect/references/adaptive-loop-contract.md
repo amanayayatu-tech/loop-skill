@@ -779,6 +779,20 @@ top-level `blocker_code`. Report staging binds both fields into the ACK-ready
 result even if the caller omitted them there. Such a closure remains in immutable attempt history but consumes
 no initial or repair slot. Historical results without the field keep legacy
 counting semantics.
+
+The deterministic zero-execution blocker set is closed and machine-checked
+against runtime plus both public schemas:
+
+<!-- ZERO_EXECUTION_BLOCKER_CODES_START -->
+- `DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH`
+- `DISPATCH_VALIDATION_MATRIX_MISMATCH`
+- `INPUT_TRANSPORT_TIMEOUT`
+- `INPUT_TRANSPORT_TOO_LARGE`
+- `INPUT_TRANSPORT_UTF8_INVALID`
+- `PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT`
+- `PAYLOAD_VERIFY_FAILED`
+- `REPORT_STAGING_FAILED`
+<!-- ZERO_EXECUTION_BLOCKER_CODES_END -->
 If an older ACK dropped a report's explicit zero-execution classification,
 `RECONCILE_WORKER_EXECUTION_CLASSIFICATION` is allowed only at
 `PAUSED_AT_SAFE_POINT` with no lease or active outbox. It re-reads the exact

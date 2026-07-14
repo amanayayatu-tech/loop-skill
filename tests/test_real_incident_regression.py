@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+import copy
+import json
+
 from state_runtime_support import *  # noqa: F403
 
 
 class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
+    @staticmethod
+    def _v208_fixture() -> dict[str, Any]:
+        path = (
+            Path(__file__).resolve().parent
+            / "fixtures"
+            / "v208-worker-classification-incident.json"
+        )
+        return json.loads(path.read_text(encoding="utf-8"))
+
     def _ack_worker(
         self,
         harness: Harness,
@@ -11,6 +23,7 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         index: int,
         *,
         execution_started: bool,
+        blocker_code: str = "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
     ) -> dict[str, Any]:
         claim = harness.acquire()
         outbox_id = f"incident-dispatch-{index}"
@@ -39,7 +52,7 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             "execution_started": execution_started,
         }
         if not execution_started:
-            result["blocker_code"] = "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH"
+            result["blocker_code"] = blocker_code
         report_content = harness.formal_report_content(
             "DISPATCH", outbox_id, result
         )
@@ -54,6 +67,142 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         )
         self.assertTrue(acked["ok"], acked)
         return acked
+
+    def _build_v208_incident(
+        self, root: Path
+    ) -> tuple[Harness, dict[str, Any], dict[str, Any]]:
+        fixture = self._v208_fixture()
+        definition = goal(fixture["goal_id"], fixture["milestone_id"])
+        definitions = {fixture["goal_id"]: definition}
+        milestones = [milestone(fixture["milestone_id"], "ACTIVE")]
+        harness = Harness(root)
+        initialized, _ = harness.initialize(
+            definitions=definitions,
+            milestones=milestones,
+            queue=[
+                queue_entry(
+                    fixture["goal_id"], fixture["milestone_id"], "READY", 1
+                )
+            ],
+            authorization=authorization_envelope(definitions, milestones),
+        )
+        self.assertTrue(initialized["ok"], initialized)
+        harness.ensure_controller_goal()
+        harness.register_control_result(
+            "THREAD",
+            "v208-worker-create",
+            "controller-1",
+            {"role_kind": "WORKER"},
+            {
+                "thread_id": fixture["worker_thread_id"],
+                "role_kind": "WORKER",
+                "worktree_path": ".",
+            },
+        )
+
+        def ack(dispatch_id: str, status: str, execution_started: bool) -> None:
+            claim = harness.acquire()
+            prepared, payload = harness.prepare_outbox(
+                claim,
+                "DISPATCH",
+                dispatch_id,
+                {
+                    "goal_id": fixture["goal_id"],
+                    "goal_definition_digest": definition["payload_template_digest"],
+                },
+                target_id=fixture["worker_thread_id"],
+            )
+            self.assertTrue(prepared["ok"], prepared)
+            self.assertTrue(
+                harness.mark_sent(
+                    claim,
+                    "DISPATCH",
+                    dispatch_id,
+                    payload,
+                    target_id=fixture["worker_thread_id"],
+                )["ok"]
+            )
+            result: dict[str, Any] = {
+                "status": status,
+                "artifact_digest": fixture["shared_artifact_digest"],
+                "execution_started": execution_started,
+            }
+            extra_fields = None
+            if not execution_started:
+                extra_fields = fixture["report_shape"]
+            report_content = harness.formal_report_content(
+                "DISPATCH", dispatch_id, result, extra_fields=extra_fields
+            )
+            staged = harness.runtime.stage_formal_report(
+                {
+                    "outbox_id": dispatch_id,
+                    "result": result,
+                    "report": json.loads(report_content),
+                }
+            )
+            acked = harness.ack_outbox(
+                claim,
+                "DISPATCH",
+                dispatch_id,
+                payload,
+                target_id=fixture["worker_thread_id"],
+                result={**result, "report_digest": staged["report_digest"]},
+                report_content=report_content,
+            )
+            self.assertTrue(acked["ok"], acked)
+
+        # A first product execution opens a legal repair route. The fixture
+        # then projects it as the unchanged historical PASS seen at real v208.
+        ack(fixture["initial_dispatch_id"], "FAIL", True)
+        ack(fixture["rejected_dispatch_id"], "BLOCKED", False)
+
+        state = harness.state()
+        ledger = state["goal_execution_ledger"][fixture["goal_id"]]
+        initial, rejected = ledger["attempts"]
+        initial["status"] = "PASS"
+
+        # Recreate the pre-v3.2.3 ACK projection loss while preserving the
+        # immutable archived report and its bounded blocker evidence.
+        report_path = rejected["evidence_paths"][0]
+        archived_digest = rejected["report_digest"]
+        rejected["execution_started"] = True
+        rejected.pop("blocker_code", None)
+        ledger["latest_worker"] = copy.deepcopy(rejected)
+        harness.runtime._write_state_locked(state, "sanitized-real-v208-fixture")
+
+        steering_id = "v208-fixture-pause"
+        recorded = harness.apply(
+            {
+                "type": "RECORD_STEERING",
+                "steering_id": steering_id,
+                "steering_type": "PAUSE",
+                "normalized_digest": digest("v208 fixture pause"),
+                "identity_algorithm": "message-item-v1",
+                "message_item_id": "v208-fixture-message",
+                "summary": "pause for fixture reconciliation",
+                "classification_reason": "real incident regression",
+            }
+        )
+        self.assertTrue(recorded["ok"], recorded)
+        paused = harness.apply(
+            {
+                "type": "SET_RUN_CONTROL",
+                "steering_id": steering_id,
+                "requested_status": "PAUSE",
+                "reason": "real incident reconciliation fixture",
+            }
+        )
+        self.assertTrue(paused["ok"], paused)
+        mutation = {
+            "type": "RECONCILE_WORKER_EXECUTION_CLASSIFICATION",
+            "goal_id": fixture["goal_id"],
+            "dispatch_id": fixture["rejected_dispatch_id"],
+            "report_path": report_path,
+            "report_digest": archived_digest,
+            "blocker_code": fixture["blocker_code"],
+            "reason": "archived report proves validation rejected before execution",
+        }
+        return harness, fixture, mutation
 
     def test_freshness_blocked_does_not_consume_repair_budget(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -442,6 +591,7 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 harness.definitions["g1"],
                 1,
                 execution_started=False,
+                blocker_code="DISPATCH_VALIDATION_MATRIX_MISMATCH",
             )
             corrupted = harness.state()
             attempt = corrupted["goal_execution_ledger"]["g1"]["attempts"][0]
@@ -486,7 +636,7 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                     "dispatch_id": attempt["dispatch_id"],
                     "report_path": report_path,
                     "report_digest": attempt["report_digest"],
-                    "blocker_code": "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+                    "blocker_code": "DISPATCH_VALIDATION_MATRIX_MISMATCH",
                     "reason": "formal report proved execution never started",
                 }
             )
@@ -496,9 +646,210 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             self.assertIs(corrected["attempts"][0]["execution_started"], False)
             self.assertEqual(
                 corrected["attempts"][0]["blocker_code"],
-                "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+                "DISPATCH_VALIDATION_MATRIX_MISMATCH",
             )
             self.assertIs(corrected["latest_worker"]["execution_started"], False)
+
+    def test_sanitized_v208_fixture_reconciles_atomically_and_rebuilds_projections(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, fixture, mutation = self._build_v208_incident(root)
+            before = harness.state()
+            ledger_before = before["goal_execution_ledger"][fixture["goal_id"]]
+            first_before = copy.deepcopy(ledger_before["attempts"][0])
+            self.assertEqual(before["run_control"]["status"], fixture["run_control_status"])
+            self.assertEqual(len(ledger_before["attempts"]), 2)
+            self.assertEqual(
+                sum(
+                    item.get("execution_started", True)
+                    for item in ledger_before["attempts"]
+                ),
+                fixture["expected"]["product_attempts_before"],
+            )
+            receipts_dir = root / ".codex-loop" / "external-receipts"
+            receipts_before = sorted(
+                (path.name, path.read_bytes())
+                for path in receipts_dir.glob("*")
+                if path.is_file()
+            )
+
+            reconciled = harness.apply(mutation)
+            self.assertTrue(reconciled["ok"], reconciled)
+            self.assertEqual(
+                reconciled["operation_status"],
+                "WORKER_EXECUTION_CLASSIFICATION_RECONCILED",
+            )
+
+            # Re-read from canonical bytes after the transactional commit.
+            after = Harness(root).state()
+            self.assertEqual(after["state_version"], before["state_version"] + 1)
+            ledger_after = after["goal_execution_ledger"][fixture["goal_id"]]
+            self.assertEqual(
+                len(ledger_after["attempts"]), fixture["expected"]["attempt_count"]
+            )
+            self.assertEqual(ledger_after["attempts"][0], first_before)
+            target = ledger_after["attempts"][1]
+            self.assertEqual(target["status"], "BLOCKED")
+            self.assertIs(target["execution_started"], False)
+            self.assertEqual(target["blocker_code"], fixture["blocker_code"])
+            self.assertEqual(ledger_after["latest_worker"], target)
+            self.assertEqual(
+                sum(
+                    item.get("execution_started", True)
+                    for item in ledger_after["attempts"]
+                ),
+                fixture["expected"]["product_attempts_after"],
+            )
+            self.assertEqual(
+                after["controller_pack_identity"], before["controller_pack_identity"]
+            )
+            self.assertEqual(after["thread_registry"], before["thread_registry"])
+            self.assertEqual(
+                sorted(
+                    (path.name, path.read_bytes())
+                    for path in receipts_dir.glob("*")
+                    if path.is_file()
+                ),
+                receipts_before,
+            )
+            self.assertIsNone(after["controller_lease"])
+            status_text = (root / ".codex-loop" / "STATUS.md").read_text(
+                encoding="utf-8"
+            )
+            goals_text = (root / ".codex-loop" / "GOALS.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(f"State version: `{after['state_version']}`", status_text)
+            self.assertIn(f"state_version: {after['state_version']}", goals_text)
+            transactions = list((root / ".codex-loop" / "transactions").glob("*.json"))
+            self.assertTrue(transactions)
+            self.assertTrue(
+                all(
+                    json.loads(path.read_text(encoding="utf-8"))["status"]
+                    == "APPLIED"
+                    for path in transactions
+                )
+            )
+
+    def test_v208_reconciliation_identity_guards_are_zero_effect(self) -> None:
+        overrides = {
+            "report_path": ".codex-loop/reports/wrong.json",
+            "report_digest": digest("wrong-report"),
+            "dispatch_id": "wrong-dispatch",
+            "goal_id": "wrong-goal",
+            "blocker_code": "REPORT_STAGING_FAILED",
+        }
+        for field, value in overrides.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness, _, mutation = self._build_v208_incident(root)
+                before = persisted_snapshot(root)
+                rejected = harness.apply({**mutation, field: value})
+                self.assertFalse(rejected["ok"], rejected)
+                self.assertEqual(before, persisted_snapshot(root))
+
+        # Artifact identity is bound independently of report path and digest.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, fixture, mutation = self._build_v208_incident(root)
+            corrupted = harness.state()
+            target = corrupted["goal_execution_ledger"][fixture["goal_id"]][
+                "attempts"
+            ][1]
+            target["artifact_digest"] = digest("wrong-artifact")
+            corrupted["goal_execution_ledger"][fixture["goal_id"]][
+                "latest_worker"
+            ]["artifact_digest"] = target["artifact_digest"]
+            harness.runtime._write_state_locked(corrupted, "artifact-mismatch-fixture")
+            before = persisted_snapshot(root)
+            rejected = harness.apply(mutation)
+            self.assertFalse(rejected["ok"], rejected)
+            self.assertEqual(before, persisted_snapshot(root))
+
+        # A code outside the closed enum is rejected by the mutation schema.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _, mutation = self._build_v208_incident(root)
+            before = persisted_snapshot(root)
+            rejected = harness.apply({**mutation, "blocker_code": "UNBOUNDED_CODE"})
+            self.assertFalse(rejected["ok"], rejected)
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_v208_reconciliation_rejects_lease_and_active_outbox_zero_effect(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _, mutation = self._build_v208_incident(root)
+            def persist_fixture_state(state: dict[str, Any], label: str) -> None:
+                harness.runtime._refresh_status_projection_target(state)
+                harness.runtime._write_state_locked(state, label)
+                harness.runtime._write_status_projection_locked(state)
+
+            state = harness.state()
+            state["run_control"] = {
+                "status": "RUNNING",
+                "reason": "synthetic setup for active-lease guard fixture",
+                "effective_state_version": state["state_version"],
+            }
+            persist_fixture_state(state, "active-lease-setup")
+            claim = harness.acquire()
+            state = harness.state()
+            state["run_control"] = {
+                "status": "PAUSED_AT_SAFE_POINT",
+                "reason": "synthetic active-lease guard fixture",
+                "effective_state_version": state["state_version"],
+            }
+            persist_fixture_state(state, "active-lease-fixture")
+            before = persisted_snapshot(root)
+            rejected = harness.apply(mutation)
+            self.assertEqual(
+                rejected["status"],
+                "WORKER_CLASSIFICATION_RECONCILIATION_ACTIVE_LEASE",
+            )
+            self.assertEqual(before, persisted_snapshot(root))
+
+            state = harness.state()
+            state["run_control"] = {
+                "status": "RUNNING",
+                "reason": "synthetic setup for active-outbox guard fixture",
+                "effective_state_version": state["state_version"],
+            }
+            persist_fixture_state(state, "active-outbox-setup")
+            definition = next(iter(harness.definitions.values()))
+            prepared, _ = harness.prepare_outbox(
+                claim,
+                "DISPATCH",
+                "active-route-fixture",
+                {
+                    "goal_id": definition["goal_id"],
+                    "goal_definition_digest": definition["payload_template_digest"],
+                },
+                target_id="sanitized-existing-worker",
+            )
+            self.assertTrue(prepared["ok"], prepared)
+            request = harness.make_request(mutation)
+            state = harness.state()
+            state["controller_lease"] = None
+            state["run_control"] = {
+                "status": "PAUSED_AT_SAFE_POINT",
+                "reason": "synthetic active-outbox guard fixture",
+                "effective_state_version": state["state_version"],
+            }
+            before = copy.deepcopy(state)
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                harness.runtime._reconcile_worker_execution_classification(
+                    state, request, mutation
+                )
+            self.assertEqual(
+                context.exception.code,
+                "WORKER_CLASSIFICATION_RECONCILIATION_ACTIVE_OUTBOX",
+            )
+            self.assertEqual(before, state)
 
 
 class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405

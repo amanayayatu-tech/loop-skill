@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.2.4] - 2026-07-14
+
+### Fixed
+
+- Added `DISPATCH_VALIDATION_MATRIX_MISMATCH` to both persisted Worker-result
+  and mutation-schema blocker enums. v3.2.3 accepted this deterministic
+  zero-execution classification in runtime logic but rejected its canonical
+  projection during paused-safe-point reconciliation.
+- Changed the positive real-incident reconciliation regression to exercise the
+  exact validation-matrix blocker, so runtime and both public schemas can no
+  longer drift independently without failing the suite.
+
+### Evidence boundary
+
+This schema correction enables the already bounded v3.2.3 reconciliation. It
+does not alter repair limits, authorize a provider retry, or turn a failed
+Local Verification into PASS.
+
 ## [3.2.3] - 2026-07-14
 
 ### Fixed
@@ -139,7 +157,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.3...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.4...HEAD
+[3.2.4]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.4
 [3.2.3]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.3
 [3.2.2]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.2
 [3.2.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.1

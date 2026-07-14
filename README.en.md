@@ -42,6 +42,13 @@ The skill creates one self-contained Controller Pack Markdown file plus separate
 Simplified Chinese usage instructions. It never silently authorizes push, merge,
 deploy, destructive operations, external writes, secrets, or paid runtime.
 
+### v3.2.4 canonical schema hotfix
+
+`DISPATCH_VALIDATION_MATRIX_MISMATCH` is now present in the runtime allowlist,
+mutation schema, and canonical state schema. A zero-execution validation-matrix
+rejection proved by the archived report can be reconciled at a paused safe point
+without a second schema rejection.
+
 ### v3.2.3 Worker classification hotfix
 
 `--report-stage` now binds top-level Worker `execution_started` and
