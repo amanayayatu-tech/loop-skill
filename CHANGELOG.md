@@ -5,6 +5,29 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.2.3] - 2026-07-14
+
+### Fixed
+
+- Worker formal-report staging now binds top-level `execution_started` and
+  `blocker_code` into the ACK-ready result. A target that omits those fields
+  from the small transport handle can no longer silently default a proven
+  control-plane rejection to product execution.
+- Added a paused-safe-point reconciliation mutation for already archived
+  misclassifications. It re-verifies the exact canonical report path and digest
+  and corrects only the existing attempt/latest-worker classification without
+  deleting history, clearing repair counters, or changing Controller Pack
+  identity.
+- Added `DISPATCH_VALIDATION_MATRIX_MISMATCH` to the bounded deterministic
+  zero-execution blocker set and regression coverage derived from the real Loop
+  failure that exposed the dropped classification.
+
+### Evidence boundary
+
+The reconciliation repairs repository runtime state accounting only. It does
+not turn a failed Local Verification into PASS, retry a provider call, or claim
+to fix Codex app-server process cleanup.
+
 ## [3.2.2] - 2026-07-14
 
 ### Changed
@@ -116,7 +139,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.2...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.3...HEAD
+[3.2.3]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.3
 [3.2.2]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.2
 [3.2.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.1
 [3.2.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.0

@@ -775,9 +775,16 @@ Roadmap Audit repair, and Final Audit repair; all consume the same per-Goal
 budget.
 Every new Worker result records `execution_started`. A deterministic
 control-plane BLOCKED closure may set it false only with a runtime-approved
-blocker code. Such a closure remains in immutable attempt history but consumes
+top-level `blocker_code`. Report staging binds both fields into the ACK-ready
+result even if the caller omitted them there. Such a closure remains in immutable attempt history but consumes
 no initial or repair slot. Historical results without the field keep legacy
 counting semantics.
+If an older ACK dropped a report's explicit zero-execution classification,
+`RECONCILE_WORKER_EXECUTION_CLASSIFICATION` is allowed only at
+`PAUSED_AT_SAFE_POINT` with no lease or active outbox. It re-reads the exact
+canonical report path and digest, validates the approved blocker code, and
+corrects only the existing attempt/latest-worker classification without
+deleting history, clearing counters, or changing Controller Pack identity.
 The state machine enforces `max_repair_attempts_per_goal` and emits
 `REPAIR_BUDGET_EXHAUSTED` at the limit. The generated default is five repairs
 beyond the initial execution; explicit inputs remain bounded to 0–20. Once the

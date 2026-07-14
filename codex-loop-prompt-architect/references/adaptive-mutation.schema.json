@@ -35,6 +35,7 @@
         {"$ref": "#/$defs/initialize"},
         {"$ref": "#/$defs/migrateV1ToV2"},
         {"$ref": "#/$defs/migrateControllerPack"},
+        {"$ref": "#/$defs/reconcileWorkerExecutionClassification"},
         {"$ref": "#/$defs/recordSteering"},
         {"$ref": "#/$defs/resolveSteering"},
         {"$ref": "#/$defs/setRunControl"},
@@ -471,6 +472,31 @@
           "pattern": "^\\.codex-loop/sources/CONTROLLER_PACK\\.[a-f0-9]{64}\\.md$"
         },
         "migration_reason": {"$ref": "#/$defs/boundedText"}
+      }
+    },
+    "reconcileWorkerExecutionClassification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "goal_id",
+        "dispatch_id",
+        "report_path",
+        "report_digest",
+        "blocker_code",
+        "reason"
+      ],
+      "properties": {
+        "type": {"const": "RECONCILE_WORKER_EXECUTION_CLASSIFICATION"},
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "dispatch_id": {"$ref": "#/$defs/safeId"},
+        "report_path": {
+          "type": "string",
+          "pattern": "^\\.codex-loop/reports/[A-Za-z0-9._-]+\\.json$"
+        },
+        "report_digest": {"$ref": "#/$defs/digest"},
+        "blocker_code": {"$ref": "#/$defs/safeId"},
+        "reason": {"$ref": "#/$defs/boundedText"}
       }
     },
     "recordSteering": {

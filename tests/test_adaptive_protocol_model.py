@@ -54,6 +54,7 @@ class AdaptiveProtocolCatalogTests(unittest.TestCase):
                 "INITIALIZE",
                 "MIGRATE_V1_TO_V2",
                 "MIGRATE_CONTROLLER_PACK",
+                "RECONCILE_WORKER_EXECUTION_CLASSIFICATION",
                 "RECORD_STEERING",
                 "RESOLVE_STEERING",
                 "SET_RUN_CONTROL",

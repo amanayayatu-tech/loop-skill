@@ -42,6 +42,17 @@ The skill creates one self-contained Controller Pack Markdown file plus separate
 Simplified Chinese usage instructions. It never silently authorizes push, merge,
 deploy, destructive operations, external writes, secrets, or paid runtime.
 
+### v3.2.3 Worker classification hotfix
+
+`--report-stage` now binds top-level Worker `execution_started` and
+`blocker_code` fields from the formal report into the ACK-ready result, so an
+omitted handle field cannot silently default to product execution. For an
+already misprojected ACK, `RECONCILE_WORKER_EXECUTION_CLASSIFICATION` is allowed
+only at canonical `PAUSED_AT_SAFE_POINT` with no lease or active outbox. It
+verifies the exact archived report and corrects only the existing
+attempt/latest-worker classification without deleting history, clearing repair
+counters, or changing Pack identity.
+
 ### v3.2.2 real-incident fixes
 
 The direct non-PTY contract now covers every runtime mode: launch the runtime

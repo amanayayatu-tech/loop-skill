@@ -180,6 +180,326 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             )
             self.assertEqual(before, persisted_snapshot(Path(temporary)))
 
+    def test_staging_binds_report_classification_when_handle_result_omits_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = Harness(Path(temporary))
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            harness.ensure_controller_goal()
+            harness.register_control_result(
+                "THREAD",
+                "worker-create",
+                "controller-1",
+                {"role_kind": "WORKER"},
+                {"thread_id": "worker-1", "role_kind": "WORKER", "worktree_path": "."},
+            )
+            claim = harness.acquire()
+            definition = harness.definitions["g1"]
+            prepared, payload = harness.prepare_outbox(
+                claim,
+                "DISPATCH",
+                "validation-matrix-rejected",
+                {
+                    "goal_id": "g1",
+                    "goal_definition_digest": definition["payload_template_digest"],
+                },
+                target_id="worker-1",
+            )
+            self.assertTrue(prepared["ok"], prepared)
+            self.assertTrue(
+                harness.mark_sent(
+                    claim,
+                    "DISPATCH",
+                    "validation-matrix-rejected",
+                    payload,
+                    target_id="worker-1",
+                )["ok"]
+            )
+            artifact_digest = digest("unchanged-artifact")
+            report = json.loads(
+                harness.formal_report_content(
+                    "DISPATCH",
+                    "validation-matrix-rejected",
+                    {"status": "BLOCKED", "artifact_digest": artifact_digest},
+                    extra_fields={
+                        "execution_started": False,
+                        "risks_or_blockers": [
+                            {
+                                "code": "DISPATCH_VALIDATION_MATRIX_MISMATCH",
+                                "path": "/payload/validation_matrix",
+                            }
+                        ],
+                    },
+                )
+            )
+            staged = harness.runtime.stage_formal_report(
+                {
+                    "outbox_id": "validation-matrix-rejected",
+                    "result": {
+                        "status": "BLOCKED",
+                        "artifact_digest": artifact_digest,
+                    },
+                    "report": report,
+                }
+            )
+            self.assertEqual(staged["result"]["execution_started"], False)
+            self.assertEqual(
+                staged["result"]["blocker_code"],
+                "DISPATCH_VALIDATION_MATRIX_MISMATCH",
+            )
+            normalized_report = json.loads(Path(staged["source_path"]).read_text())
+            self.assertEqual(
+                normalized_report["blocker_code"],
+                "DISPATCH_VALIDATION_MATRIX_MISMATCH",
+            )
+
+    def test_staging_rejects_conflicting_report_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = Harness(Path(temporary))
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            before = persisted_snapshot(Path(temporary))
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                harness.runtime.stage_formal_report(
+                    {
+                        "outbox_id": "classification-conflict",
+                        "result": {
+                            "status": "BLOCKED",
+                            "artifact_digest": digest("unchanged-artifact"),
+                            "execution_started": True,
+                        },
+                        "report": {
+                            "status": "BLOCKED",
+                            "execution_started": False,
+                            "risks_or_blockers": [
+                                {
+                                    "code": "DISPATCH_VALIDATION_MATRIX_MISMATCH",
+                                    "path": "/payload/validation_matrix",
+                                }
+                            ],
+                        },
+                    }
+                )
+            self.assertEqual(
+                context.exception.code,
+                "WORKER_EXECUTION_CLASSIFICATION_MISMATCH",
+            )
+            self.assertEqual(before, persisted_snapshot(Path(temporary)))
+
+    def test_staging_does_not_overwrite_unapproved_top_level_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            before = persisted_snapshot(root)
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                harness.runtime.stage_formal_report(
+                    {
+                        "outbox_id": "unapproved-top-level-blocker",
+                        "result": {
+                            "status": "BLOCKED",
+                            "artifact_digest": digest("unchanged-artifact"),
+                        },
+                        "report": {
+                            "status": "BLOCKED",
+                            "execution_started": False,
+                            "blocker_code": "UNBOUNDED_MODEL_JUDGMENT",
+                            "risks_or_blockers": [
+                                {
+                                    "code": "DISPATCH_VALIDATION_MATRIX_MISMATCH",
+                                    "path": "/payload/validation_matrix",
+                                }
+                            ],
+                        },
+                    }
+                )
+            self.assertEqual(
+                context.exception.code,
+                "WORKER_ZERO_EXECUTION_BLOCKER_INVALID",
+            )
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_reconciliation_rejects_unsafe_point_and_wrong_report_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            harness.ensure_controller_goal()
+            harness.register_control_result(
+                "THREAD",
+                "worker-create-negative",
+                "controller-1",
+                {"role_kind": "WORKER"},
+                {
+                    "thread_id": "incident-worker",
+                    "role_kind": "WORKER",
+                    "worktree_path": ".",
+                },
+            )
+            self._ack_worker(
+                harness,
+                harness.definitions["g1"],
+                1,
+                execution_started=False,
+            )
+            corrupted = harness.state()
+            attempt = corrupted["goal_execution_ledger"]["g1"]["attempts"][0]
+            latest = corrupted["goal_execution_ledger"]["g1"]["latest_worker"]
+            attempt["execution_started"] = True
+            attempt.pop("blocker_code")
+            latest["execution_started"] = True
+            latest.pop("blocker_code")
+            harness.runtime._write_state_locked(corrupted, "negative-misclassified-fixture")
+            report_path = attempt["evidence_paths"][0]
+            mutation = {
+                "type": "RECONCILE_WORKER_EXECUTION_CLASSIFICATION",
+                "goal_id": "g1",
+                "dispatch_id": attempt["dispatch_id"],
+                "report_path": report_path,
+                "report_digest": attempt["report_digest"],
+                "blocker_code": "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+                "reason": "formal report proved execution never started",
+            }
+
+            before = persisted_snapshot(root)
+            unsafe = harness.apply(mutation)
+            self.assertFalse(unsafe["ok"], unsafe)
+            self.assertEqual(
+                unsafe["status"],
+                "WORKER_CLASSIFICATION_RECONCILIATION_REQUIRES_PAUSED_SAFE_POINT",
+            )
+            self.assertEqual(before, persisted_snapshot(root))
+
+            steering_id = "classification-reconciliation-negative-pause"
+            self.assertTrue(
+                harness.apply(
+                    {
+                        "type": "RECORD_STEERING",
+                        "steering_id": steering_id,
+                        "steering_type": "PAUSE",
+                        "normalized_digest": digest("negative reconciliation pause"),
+                        "identity_algorithm": "message-item-v1",
+                        "message_item_id": "negative-reconciliation-message",
+                        "summary": "pause before negative reconciliation checks",
+                        "classification_reason": "canonical repair safety gate",
+                    }
+                )["ok"]
+            )
+            self.assertTrue(
+                harness.apply(
+                    {
+                        "type": "SET_RUN_CONTROL",
+                        "steering_id": steering_id,
+                        "requested_status": "PAUSE",
+                        "reason": "negative reconciliation checks",
+                    }
+                )["ok"]
+            )
+
+            before = persisted_snapshot(root)
+            wrong_digest = harness.apply(
+                {**mutation, "report_digest": digest("wrong-report")}
+            )
+            self.assertFalse(wrong_digest["ok"], wrong_digest)
+            self.assertEqual(
+                wrong_digest["status"],
+                "WORKER_CLASSIFICATION_RECONCILIATION_STATE_MISMATCH",
+            )
+            self.assertEqual(before, persisted_snapshot(root))
+
+            wrong_path = harness.apply(
+                {**mutation, "report_path": ".codex-loop/reports/wrong-report.json"}
+            )
+            self.assertFalse(wrong_path["ok"], wrong_path)
+            self.assertEqual(
+                wrong_path["status"],
+                "WORKER_CLASSIFICATION_RECONCILIATION_REPORT_MISMATCH",
+            )
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_reconcile_misclassified_archived_worker_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            harness.ensure_controller_goal()
+            harness.register_control_result(
+                "THREAD",
+                "worker-create",
+                "controller-1",
+                {"role_kind": "WORKER"},
+                {"thread_id": "incident-worker", "role_kind": "WORKER", "worktree_path": "."},
+            )
+            self._ack_worker(
+                harness,
+                harness.definitions["g1"],
+                1,
+                execution_started=False,
+            )
+            corrupted = harness.state()
+            attempt = corrupted["goal_execution_ledger"]["g1"]["attempts"][0]
+            latest = corrupted["goal_execution_ledger"]["g1"]["latest_worker"]
+            attempt["execution_started"] = True
+            attempt.pop("blocker_code")
+            latest["execution_started"] = True
+            latest.pop("blocker_code")
+            harness.runtime._write_state_locked(corrupted, "misclassified-fixture")
+
+            steering_id = "classification-reconciliation-pause"
+            self.assertTrue(
+                harness.apply(
+                    {
+                        "type": "RECORD_STEERING",
+                        "steering_id": steering_id,
+                        "steering_type": "PAUSE",
+                        "normalized_digest": digest("pause for classification repair"),
+                        "identity_algorithm": "message-item-v1",
+                        "message_item_id": "classification-reconciliation-message",
+                        "summary": "pause for classification repair",
+                        "classification_reason": "canonical repair safety gate",
+                    }
+                )["ok"]
+            )
+            self.assertTrue(
+                harness.apply(
+                    {
+                        "type": "SET_RUN_CONTROL",
+                        "steering_id": steering_id,
+                        "requested_status": "PAUSE",
+                        "reason": "reconcile dropped Worker classification",
+                    }
+                )["ok"]
+            )
+            attempt = harness.state()["goal_execution_ledger"]["g1"]["attempts"][0]
+            report_path = attempt["evidence_paths"][0]
+            reconciled = harness.apply(
+                {
+                    "type": "RECONCILE_WORKER_EXECUTION_CLASSIFICATION",
+                    "goal_id": "g1",
+                    "dispatch_id": attempt["dispatch_id"],
+                    "report_path": report_path,
+                    "report_digest": attempt["report_digest"],
+                    "blocker_code": "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+                    "reason": "formal report proved execution never started",
+                }
+            )
+            self.assertTrue(reconciled["ok"], reconciled)
+            corrected = harness.state()["goal_execution_ledger"]["g1"]
+            self.assertEqual(len(corrected["attempts"]), 1)
+            self.assertIs(corrected["attempts"][0]["execution_started"], False)
+            self.assertEqual(
+                corrected["attempts"][0]["blocker_code"],
+                "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+            )
+            self.assertIs(corrected["latest_worker"]["execution_started"], False)
+
 
 class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
     def test_completed_receipt_survives_lost_stdout_and_is_idempotent(self) -> None:
