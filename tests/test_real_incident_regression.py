@@ -385,6 +385,77 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
                 [old_digest, target_digest],
             )
 
+    def test_pack_migration_backfills_legacy_routes_before_turn_enforcement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            old_digest = harness.state()["controller_pack_identity"]["digest"]
+
+            for _ in range(2):
+                claim = harness.acquire()
+                released = harness.apply(
+                    {
+                        "type": "RELEASE_LEASE",
+                        "lease_claim": claim,
+                        "observed_at": T1,
+                        "reason_code": "NO_ROUTE_READY",
+                    }
+                )
+                self.assertTrue(released["ok"], released)
+            self._pause_at_safe_point(harness)
+
+            legacy = harness.state()
+            legacy.pop("controller_pack_history")
+            legacy.pop("controller_pack_revision")
+            legacy.pop("pack_identity_enforced")
+            legacy.pop("controller_turn_enforcement")
+            legacy.pop("consumed_controller_turn_ids")
+            for routing_turn in legacy["routing_turn_ledger"].values():
+                routing_turn.pop("controller_turn_id")
+            harness.runtime._write_state_locked(legacy, "legacy-pack-fixture")
+            self.assertNotIn(
+                "consumed_controller_turn_ids", harness.runtime.read_state()
+            )
+
+            content = "# Controller Pack\n\nlegacy route migration regression\n"
+            target_digest = digest(content)
+            target_path = (
+                ".codex-loop/sources/CONTROLLER_PACK."
+                f"{target_digest.removeprefix('sha256:')}.md"
+            )
+            migrated = harness.apply(
+                {
+                    "type": "MIGRATE_CONTROLLER_PACK",
+                    "source_pack_digest": old_digest,
+                    "target_pack_digest": target_digest,
+                    "target_pack_path": target_path,
+                    "migration_reason": "backfill legacy routing turn identities",
+                },
+                artifacts=[
+                    {
+                        "path": target_path,
+                        "content": content,
+                        "digest": target_digest,
+                        "media_type": "text/markdown",
+                    }
+                ],
+            )
+            self.assertTrue(migrated["ok"], migrated)
+            self.assertEqual(
+                migrated["result"]["legacy_routing_turns_backfilled"], 2
+            )
+            state = harness.state()
+            routed_ids = sorted(
+                item["controller_turn_id"]
+                for item in state["routing_turn_ledger"].values()
+            )
+            self.assertEqual(state["consumed_controller_turn_ids"], routed_ids)
+            self.assertTrue(
+                all(item.startswith("legacy-turn-") for item in routed_ids)
+            )
+
     def test_one_real_app_turn_cannot_acquire_a_second_route_lease(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             harness = Harness(Path(temporary))

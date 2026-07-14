@@ -22,7 +22,9 @@ All notable changes to this project are documented here. The project follows
   product repair slot; legacy unclassified attempts retain their old meaning.
 - Added atomic `MIGRATE_CONTROLLER_PACK`, immutable Pack revision history, and
   post-initialize Pack-digest attestation. A changed Pack cannot route until
-  canonical identity has migrated at a paused safe point.
+  canonical identity has migrated at a paused safe point. Migration now also
+  backfills deterministic legacy turn identities before enabling the new
+  one-route-per-App-turn invariant.
 - Bound route acquisition and takeover to a real Controller App turn identity;
   the same turn cannot obtain a second route lease after completion or release.
 

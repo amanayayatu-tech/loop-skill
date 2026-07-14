@@ -6596,8 +6596,22 @@ class AdaptiveStateRuntime:
         state["controller_pack_history"] = history
         state["controller_pack_revision"] = revision
         state["pack_identity_enforced"] = True
+        routed_controller_turn_ids: list[str] = []
+        legacy_routing_turns_backfilled = 0
+        for routing_turn_id, routing_turn in state["routing_turn_ledger"].items():
+            controller_turn_id = routing_turn.get("controller_turn_id")
+            if controller_turn_id is None:
+                controller_turn_id = (
+                    "legacy-turn-"
+                    + hashlib.sha256(routing_turn_id.encode("utf-8")).hexdigest()[:32]
+                )
+                routing_turn["controller_turn_id"] = controller_turn_id
+                legacy_routing_turns_backfilled += 1
+            routed_controller_turn_ids.append(controller_turn_id)
+        state["consumed_controller_turn_ids"] = sorted(
+            routed_controller_turn_ids
+        )
         state["controller_turn_enforcement"] = True
-        state.setdefault("consumed_controller_turn_ids", [])
         return {
             "code": "CONTROLLER_PACK_MIGRATED",
             "next_action_code": "RECONCILE_BEFORE_RESUME",
@@ -6606,6 +6620,7 @@ class AdaptiveStateRuntime:
                 "target_pack_digest": target_digest,
                 "target_pack_path": target_path,
                 "controller_pack_revision": revision,
+                "legacy_routing_turns_backfilled": legacy_routing_turns_backfilled,
             },
         }
 
