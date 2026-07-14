@@ -419,6 +419,7 @@ class HumanControlHelperTests(unittest.TestCase):
         for token in (
             "Human Steering And Convergence",
             "MIGRATE_V1_TO_V2",
+            "MIGRATE_CONTROLLER_PACK",
             "STATUS_QUERY",
             "PAUSE_REQUESTED",
             "Decision Cards",
@@ -429,8 +430,8 @@ class HumanControlHelperTests(unittest.TestCase):
             "EVIDENCE_CONFLICT",
         ):
             self.assertIn(token, pack)
-        self.assertLessEqual(len(pack.encode("utf-8")), int(207257 * 1.02))
-        self.assertLessEqual(len(pack.splitlines()), int(2601 * 1.01))
+        self.assertLessEqual(len(pack.encode("utf-8")), int(213556 * 1.02))
+        self.assertLessEqual(len(pack.splitlines()), int(2640 * 1.01))
 
     def test_skill_links_one_layer_v32_reference_and_stays_bounded(self) -> None:
         skill = (ROOT / "codex-loop-prompt-architect" / "SKILL.md").read_text()

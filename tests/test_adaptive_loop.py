@@ -505,6 +505,34 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             "adaptive_transport_contract:unsafe_shell_transport", errors
         )
 
+    def test_pack_rejects_pre_runtime_stdin_helpers_for_every_mode(self) -> None:
+        unsafe_examples = (
+            "Run with tty:true before applying state.",
+            "stty -icanon -echo; python3 adaptive_state_runtime.py --root /tmp/x",
+            "dd bs=1 count=8265 | python3 adaptive_state_runtime.py --root /tmp/x",
+            "Use stdin.buffer.read(8265) before starting the runtime.",
+            "python3 - <<'PY'\nprint('helper')\nPY",
+        )
+        for unsafe in unsafe_examples:
+            with self.subTest(unsafe=unsafe):
+                errors = validate_adaptive_pack_transport_contract(
+                    self.pack + "\n" + unsafe
+                )
+                self.assertIn(
+                    "adaptive_transport_contract:unsafe_shell_transport", errors
+                )
+
+    def test_pack_binds_pack_turn_receipt_and_repair_classification(self) -> None:
+        for marker in (
+            "MIGRATE_CONTROLLER_PACK",
+            "controller_pack_digest",
+            "controller_turn_id",
+            "--external-receipt-stage",
+            ".codex-loop/external-receipts/",
+            "execution_started=false",
+        ):
+            self.assertIn(marker, self.pack)
+
     def test_generated_initial_state_payload_is_accepted_by_runtime(self) -> None:
         workers = scaffold.normalize_workers(self.payload)
         goals = scaffold.normalize_goals(self.payload, workers)

@@ -168,6 +168,11 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
                 raise ValueError(token)
             mode = "report-stage"
             index += 1
+        elif token == "--external-receipt-stage":
+            if mode != "apply":
+                raise ValueError(token)
+            mode = "external-receipt-stage"
+            index += 1
         elif token == "--fingerprint-normalize":
             if mode != "apply":
                 raise ValueError(token)
@@ -178,7 +183,13 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
             index += 2
         else:
             raise ValueError(token)
-    if mode in {"apply", "recover", "payload-verify", "report-stage"} and root is None:
+    if mode in {
+        "apply",
+        "recover",
+        "payload-verify",
+        "report-stage",
+        "external-receipt-stage",
+    } and root is None:
         raise ValueError("--root")
     if mode in {"payload-materialize", "fingerprint-normalize"} and root is not None:
         raise ValueError("--root")
@@ -186,7 +197,11 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
         raise ValueError("--crash-at")
     if (
         mode.startswith("payload-")
-        or mode in {"fingerprint-normalize", "report-stage"}
+        or mode in {
+            "fingerprint-normalize",
+            "report-stage",
+            "external-receipt-stage",
+        }
     ) and crash_at is not None:
         raise ValueError("--crash-at")
     return root, mode, crash_at
@@ -274,6 +289,18 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 response = AdaptiveStateRuntime(root).stage_formal_report(request)
+        elif mode == "external-receipt-stage":
+            assert root is not None
+            try:
+                request = _load_request(payload)
+            except (json.JSONDecodeError, ValueError) as exc:
+                response = _response(
+                    "EXTERNAL_RECEIPT_INPUT_INVALID",
+                    "/",
+                    {"error_type": type(exc).__name__},
+                )
+            else:
+                response = AdaptiveStateRuntime(root).stage_external_receipt(request)
         else:
             assert root is not None
             runtime = AdaptiveStateRuntime(root, crash_at=crash_at)

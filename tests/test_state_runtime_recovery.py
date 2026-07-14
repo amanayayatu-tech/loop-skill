@@ -348,6 +348,7 @@ class AdaptiveStateRuntimeRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                         "thread_id": "controller-1",
                         "occurred_at": T0,
                         "evidence_paths": [f"evidence/process-race-{index}.json"],
+                        "controller_pack_digest": controller_pack_artifact()["digest"],
                         "mutation": {
                             "type": "ACQUIRE_LEASE",
                             "routing_turn_id": f"process-race-turn-{index}",
@@ -356,6 +357,7 @@ class AdaptiveStateRuntimeRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                             "owner_identity": "controller-1",
                             "observed_at": T1,
                             "expires_at": T4,
+                            "controller_turn_id": f"process-race-app-turn-{index}",
                         },
                     }
                 )

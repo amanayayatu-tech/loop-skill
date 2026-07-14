@@ -29,10 +29,12 @@
       "maxItems": 16,
       "items": {"$ref": "#/$defs/artifact"}
     },
+    "controller_pack_digest": {"$ref": "#/$defs/digest"},
     "mutation": {
       "oneOf": [
         {"$ref": "#/$defs/initialize"},
         {"$ref": "#/$defs/migrateV1ToV2"},
+        {"$ref": "#/$defs/migrateControllerPack"},
         {"$ref": "#/$defs/recordSteering"},
         {"$ref": "#/$defs/resolveSteering"},
         {"$ref": "#/$defs/setRunControl"},
@@ -94,7 +96,7 @@
       "properties": {
         "path": {
           "type": "string",
-          "pattern": "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/CONTROLLER_PACK\\.md)$"
+          "pattern": "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/CONTROLLER_PACK(?:\\.[a-f0-9]{64})?\\.md)$"
         },
         "content": {"type": "string", "maxLength": 4000000},
         "source_path": {
@@ -450,6 +452,27 @@
     },
     "humanControlPolicy": {"type": "object", "additionalProperties": false, "required": ["human_steering_enabled", "status_projection_enabled", "decision_cards_enabled", "failure_fingerprint_enabled", "context_freshness_required", "review_evidence_policy"], "properties": {"human_steering_enabled": {"type": "boolean"}, "status_projection_enabled": {"type": "boolean"}, "decision_cards_enabled": {"type": "boolean"}, "failure_fingerprint_enabled": {"const": true}, "context_freshness_required": {"const": true}, "review_evidence_policy": {"const": "deterministic_first"}}},
     "migrateV1ToV2": {"type": "object", "additionalProperties": false, "required": ["type", "source_state_digest"], "properties": {"type": {"const": "MIGRATE_V1_TO_V2"}, "source_state_digest": {"$ref": "#/$defs/digest"}}},
+    "migrateControllerPack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "source_pack_digest",
+        "target_pack_digest",
+        "target_pack_path",
+        "migration_reason"
+      ],
+      "properties": {
+        "type": {"const": "MIGRATE_CONTROLLER_PACK"},
+        "source_pack_digest": {"$ref": "#/$defs/digest"},
+        "target_pack_digest": {"$ref": "#/$defs/digest"},
+        "target_pack_path": {
+          "type": "string",
+          "pattern": "^\\.codex-loop/sources/CONTROLLER_PACK\\.[a-f0-9]{64}\\.md$"
+        },
+        "migration_reason": {"$ref": "#/$defs/boundedText"}
+      }
+    },
     "recordSteering": {
       "type": "object", "additionalProperties": false,
       "required": ["type", "steering_id", "steering_type", "normalized_digest", "identity_algorithm", "summary", "classification_reason"],
@@ -528,7 +551,19 @@
           ]
         },
         "report_digest": {"$ref": "#/$defs/digest"},
-        "artifact_digest": {"$ref": "#/$defs/digest"}
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "execution_started": {"type": "boolean"},
+        "blocker_code": {
+          "enum": [
+            "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+            "INPUT_TRANSPORT_TIMEOUT",
+            "INPUT_TRANSPORT_TOO_LARGE",
+            "INPUT_TRANSPORT_UTF8_INVALID",
+            "PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT",
+            "PAYLOAD_VERIFY_FAILED",
+            "REPORT_STAGING_FAILED"
+          ]
+        }
       }
     },
     "initialize": {
@@ -599,6 +634,7 @@
         "owner_identity": {"$ref": "#/$defs/safeId"},
         "observed_at": {"$ref": "#/$defs/timestamp"},
         "expires_at": {"$ref": "#/$defs/timestamp"},
+        "controller_turn_id": {"$ref": "#/$defs/safeId"},
         "intended_transition": {"const": "ROUTE_ONE_TRANSITION"}
       }
     },
@@ -674,7 +710,8 @@
         "new_owner_identity": {"$ref": "#/$defs/safeId"},
         "observed_at": {"$ref": "#/$defs/timestamp"},
         "expires_at": {"$ref": "#/$defs/timestamp"},
-        "takeover_evidence": {"$ref": "#/$defs/takeoverEvidence"}
+        "takeover_evidence": {"$ref": "#/$defs/takeoverEvidence"},
+        "controller_turn_id": {"$ref": "#/$defs/safeId"}
       }
     },
     "prepareOutbox": {

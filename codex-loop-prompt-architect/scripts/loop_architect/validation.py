@@ -27,7 +27,12 @@ SAFE_MILESTONE_ID_RE = re.compile(SAFE_MILESTONE_ID_PATTERN)
 SAFE_ID_RE = SAFE_MILESTONE_ID_RE
 
 ADAPTIVE_TRANSPORT_CONTRACT_MARKERS = (
+    "Universal runtime transport contract",
+    "every `adaptive_state_runtime.py` mode",
     "`tty:false`",
+    "launch the runtime itself first",
+    "Never place a stdin helper, shell wrapper, pipeline, heredoc, `dd`, `stty`, or fixed-byte reader before the runtime process.",
+    "write one compact JSON frame exactly once",
     "`exit_code=0`",
     "no longer returns `session_id`",
     "single `PAYLOAD_MATERIALIZED`",
@@ -37,18 +42,38 @@ ADAPTIVE_TRANSPORT_CONTRACT_MARKERS = (
 
 
 def validate_adaptive_pack_transport_contract(pack: str) -> list[str]:
-    """Reject an Adaptive Pack that weakens the non-PTY payload contract."""
+    """Reject an Adaptive Pack that weakens any runtime transport contract."""
 
     errors = [
         f"adaptive_transport_contract:missing:{marker}"
         for marker in ADAPTIVE_TRANSPORT_CONTRACT_MARKERS
         if marker not in pack
     ]
+    unsafe_patterns = (
+        r"\btty\s*:\s*true\b",
+        r"\bstty\s+-",
+        r"\bdd\s+[^\n]*\bbs\s*=",
+        r"stdin\.buffer\.read\s*\(\s*[1-9]",
+        r"<<\s*['\"]?[A-Za-z_][A-Za-z0-9_]*",
+        r"\|\s*(?:python3?\s+)?[^\n]*adaptive_state_runtime\.py",
+    )
     for line in pack.splitlines():
         lowered = line.lower()
-        if not any(token in lowered for token in ("`dd`", "`stty`", "heredoc")):
+        if not (
+            any(token in lowered for token in ("`dd`", "`stty`", "heredoc"))
+            or any(re.search(pattern, lowered) for pattern in unsafe_patterns)
+        ):
             continue
-        if not any(guard in lowered for guard in ("do not use", "never use", "禁止")):
+        if not any(
+            guard in lowered
+            for guard in (
+                "do not use",
+                "never use",
+                "never place",
+                "禁止",
+                "不得",
+            )
+        ):
             errors.append("adaptive_transport_contract:unsafe_shell_transport")
             break
     return errors

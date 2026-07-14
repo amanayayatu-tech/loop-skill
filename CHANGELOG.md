@@ -5,6 +5,33 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.2.2] - 2026-07-14
+
+### Fixed
+
+- Extended the direct non-PTY, bounded-frame transport contract to every
+  `adaptive_state_runtime.py` mode and reject pre-runtime stdin helpers,
+  `tty:true`, fixed-byte readers, heredocs, and shell pipelines in generated
+  Adaptive Packs.
+- Added immutable sanitized `STARTED`/`COMPLETED` external-call receipts so a
+  completed Local Verification remains recoverable when deferred execution
+  loses stdout; a lone `STARTED` receipt conservatively consumes one call and
+  forbids an automatic retry.
+- Split Worker history from repair consumption. Deterministic control-plane
+  closures with `execution_started=false` remain auditable without consuming a
+  product repair slot; legacy unclassified attempts retain their old meaning.
+- Added atomic `MIGRATE_CONTROLLER_PACK`, immutable Pack revision history, and
+  post-initialize Pack-digest attestation. A changed Pack cannot route until
+  canonical identity has migrated at a paused safe point.
+- Bound route acquisition and takeover to a real Controller App turn identity;
+  the same turn cannot obtain a second route lease after completion or release.
+
+### Evidence boundary
+
+The new regression fixture is derived from one stopped real-project incident
+and covers the repository runtime/Pack protocol. It does not claim to repair
+Codex app-server process-group cleanup or prove cross-version App behavior.
+
 ## [3.2.1] - 2026-07-14
 
 ### Changed
@@ -68,6 +95,7 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.1...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.2...HEAD
+[3.2.2]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.2
 [3.2.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.1
 [3.2.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.0

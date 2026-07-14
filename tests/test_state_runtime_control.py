@@ -22,6 +22,7 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                     "thread_id": "controller-1",
                     "occurred_at": T0,
                     "evidence_paths": [f"evidence/race-{index}.json"],
+                    "controller_pack_digest": controller_pack_artifact()["digest"],
                     "mutation": {
                         "type": "ACQUIRE_LEASE",
                         "routing_turn_id": f"race-turn-{index}",
@@ -30,6 +31,7 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                         "owner_identity": "controller-1",
                         "observed_at": T1,
                         "expires_at": T4,
+                        "controller_turn_id": f"race-app-turn-{index}",
                     },
                 }
                 barrier.wait()
@@ -152,6 +154,7 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                     "thread_id": "controller-1",
                     "occurred_at": T0,
                     "evidence_paths": [f"evidence/{suffix}.json"],
+                    "controller_pack_digest": controller_pack_artifact()["digest"],
                     "mutation": {
                         "type": "ACQUIRE_LEASE",
                         "routing_turn_id": f"wake-turn-{suffix}",
@@ -160,6 +163,7 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                         "owner_identity": "controller-1",
                         "observed_at": T1,
                         "expires_at": T4,
+                        "controller_turn_id": f"wake-app-turn-{suffix}",
                     },
                 }
                 barrier.wait()
