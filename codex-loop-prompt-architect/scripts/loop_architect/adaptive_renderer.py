@@ -15,6 +15,7 @@ from .schema import (
     ROADMAP_OPERATIONS,
 )
 from .validation import normalize_milestones
+from .state_runtime import ZERO_EXECUTION_BLOCKER_CODES
 
 
 def adaptive_state_schema_block() -> str:
@@ -65,6 +66,9 @@ def state_writer_adaptive_protocol(
     dashboard: bool,
 ) -> str:
     repo_root_json = json.dumps(repo_root, ensure_ascii=False)
+    zero_execution_blockers = ", ".join(
+        f"`{code}`" for code in sorted(ZERO_EXECUTION_BLOCKER_CODES)
+    )
     return f"""Adaptive State-Writer Protocol:
 - Deterministic runtime gate: accept only a `STATE_MUTATION` line followed by one strict JSON request matching `references/adaptive-mutation.schema.json`. Do not accept a legacy slash-form state command.
 - Resolve the runtime path from `CODEX_HOME` (falling back to `~/.codex`) and invoke it as an argv array, never through interpolated shell text: `["python3", RUNTIME_PATH, "--root", {repo_root_json}]`. Provide the exact request JSON on stdin. Never interpolate request fields, repository paths, or artifact names into shell syntax.
@@ -90,7 +94,7 @@ def state_writer_adaptive_protocol(
 - After FINALIZE_LOOP ACK, Controller uses the returned closeout capability according to native_goal_policy, pauses the exact registered heartbeat in the same Controller turn, and submits ACK_FINALIZATION with the exact external observations required by runtime. `CORE_FINALIZATION_ACKED` means deterministic core closeout only; `FINALIZATION_PENDING_EXTERNAL_SYNC` means the native adapter still lacks its exact observation. Neither is the existing release-success gate. Loop closeout is not complete until exact `FINALIZATION_ACKED` and finalization_receipt are canonical.
 - STOP_LOOP is the only hard-block terminal mutation and must declare `stop_basis`. `THREE_OBSERVATIONS` retains the three distinct artifact-bound observations for the last three genuine consecutive Goal turns. `DETERMINISTIC_REPAIR_BUDGET` is valid only for runtime-proven `REPAIR_BUDGET_EXHAUSTED` and may STOP on the next dedicated Goal turn when Decision Cards are disabled. `USER_DECISION` additionally binds one APPLIED `STOP_LOOP_CONFIRMED` Decision option, its context digest, and the exact Decision-response Steering. The latter two bases require no observation-only spins. Runtime rejects mismatched cards, counters, goal ids, late/backfilled observations, or fabricated turns with zero side effects. No basis bypasses the repair cap.
 - At repair exhaustion, dispatch no more Worker attempts and pause the exact heartbeat after registering one stable two-option Decision Card: stop on current evidence, or remain paused for a scoped correction. The WAIT option authorizes no repair. A later scoped `CORRECTION` may enter an audited `ROADMAP_REVISION` that retires the exhausted Goal and introduces a new Goal id; it preserves the original definition, attempt ledger, and repair counter. Only matching `STOP_LOOP_APPLIED` may authorize native Goal BLOCKED, followed by heartbeat pause and evidence-bound ACK_FINALIZATION. Other hard blockers still use `THREE_OBSERVATIONS`; waits and timeouts never authorize Goal BLOCKED.
-- Worker repair accounting is execution-aware. Every new DISPATCH report states top-level execution_started. PASS/FAIL are executions. BLOCKED with execution_started=false also states a top-level runtime-approved deterministic control-plane blocker_code; `--report-stage` binds both fields into its ACK-ready result even if the caller omits them there. The closure remains immutable history but consumes no initial/repair slot. Never relabel product failure as control-plane rejection.
+- Worker repair accounting is execution-aware. Every new DISPATCH report states top-level execution_started. PASS/FAIL are executions. BLOCKED with execution_started=false also states a top-level runtime-approved deterministic control-plane blocker_code; `--report-stage` binds both fields into its ACK-ready result even if the caller omits them there. The closed allowed set is: {zero_execution_blockers}. The closure remains immutable history but consumes no initial/repair slot. Never relabel product failure as control-plane rejection.
 - If an already archived Worker report proves execution_started=false but an older ACK projected true, pause at a canonical safe point and use RECONCILE_WORKER_EXECUTION_CLASSIFICATION with the exact Goal, dispatch, report path/digest, and approved blocker code. Runtime re-reads the immutable canonical report and corrects only that classification; it never deletes the attempt, clears history, changes Pack identity, or runs while a lease/outbox is active.
 - ROADMAP_CHANGE_REQUIRES_APPROVAL is a blocker record, never an applied mutation.
 - controller_lease acquisition/release is CAS-protected and idempotent. Missing, consumed, or mismatched claims are rejected as `STALE_OR_MISSING_CONTROLLER_LEASE`; failed claim/time probes are pure rejections and cannot advance logical time. A competing owner receives WAITING_CONTROLLER_LEASE. Expired takeover requires trustworthy current time plus structured read_thread evidence containing the exact owner task, last activity time, read digest, and STALE decision; only then may CAS replace the full claim and increment the epoch. A fresh route uses a fresh lease rather than bundling multiple startup or recovery actions.

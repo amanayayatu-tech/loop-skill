@@ -4,6 +4,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,10 +28,13 @@ from loop_architect.protocol_model import (  # noqa: E402
     assert_rendered_pack_aligned,
     authorization_fields,
     forbidden_rendered_tokens,
+    mutation_zero_execution_blocker_codes,
     runtime_success_codes,
+    state_zero_execution_blocker_codes,
     state_schema,
     validate_protocol_sources,
 )
+from loop_architect.state_runtime import ZERO_EXECUTION_BLOCKER_CODES  # noqa: E402
 
 
 class AdaptiveProtocolCatalogTests(unittest.TestCase):
@@ -45,6 +49,47 @@ class AdaptiveProtocolCatalogTests(unittest.TestCase):
     def test_all_protocol_sources_are_aligned(self) -> None:
         self.assertEqual(validate_protocol_sources(), [])
         assert_protocol_sources_aligned()
+
+    def test_zero_execution_blocker_contract_is_identical_everywhere(self) -> None:
+        runtime_codes = set(ZERO_EXECUTION_BLOCKER_CODES)
+        self.assertEqual(set(state_zero_execution_blocker_codes()), runtime_codes)
+        self.assertEqual(set(mutation_zero_execution_blocker_codes()), runtime_codes)
+
+        contract = (
+            ROOT
+            / "codex-loop-prompt-architect"
+            / "references"
+            / "adaptive-loop-contract.md"
+        ).read_text(encoding="utf-8")
+        public_block = contract.split(
+            "<!-- ZERO_EXECUTION_BLOCKER_CODES_START -->", 1
+        )[1].split("<!-- ZERO_EXECUTION_BLOCKER_CODES_END -->", 1)[0]
+        documented = {
+            line.strip()[3:-1]
+            for line in public_block.splitlines()
+            if line.strip().startswith("- `") and line.strip().endswith("`")
+        }
+        self.assertEqual(documented, runtime_codes)
+        for code in runtime_codes:
+            self.assertIn(f"`{code}`", self.pack)
+
+    def test_zero_execution_blocker_drift_is_a_release_gate_failure(self) -> None:
+        with mock.patch(
+            "loop_architect.protocol_model.state_zero_execution_blocker_codes",
+            return_value=("SCHEMA_DRIFT",),
+        ):
+            self.assertIn(
+                "state schema and runtime zero-execution blockers differ",
+                validate_protocol_sources(),
+            )
+        with mock.patch(
+            "loop_architect.protocol_model.mutation_zero_execution_blocker_codes",
+            return_value=("MUTATION_DRIFT",),
+        ):
+            self.assertIn(
+                "mutation schema and runtime zero-execution blockers differ",
+                validate_protocol_sources(),
+            )
 
     def test_mutation_types_come_from_public_schema(self) -> None:
         self.assertEqual(accepted_mutation_types(), ADAPTIVE_RUNTIME_MUTATIONS)

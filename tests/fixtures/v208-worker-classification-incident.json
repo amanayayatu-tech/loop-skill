@@ -1,0 +1,33 @@
+{
+  "fixture_version": 1,
+  "source": "sanitized-real-canonical-v208",
+  "source_state_version": 208,
+  "run_control_status": "PAUSED_AT_SAFE_POINT",
+  "controller_pack_digest": "sha256:22368033ebbb1b52ecaf9b86fa862345bf65b40b1461f0cfcbec4631e3682843",
+  "goal_id": "G03_SECURITY_RECEIPT_CORRECTION",
+  "milestone_id": "M03_AI_WEIGHT_ENGINE",
+  "initial_dispatch_id": "dispatch-g03-security-receipt-correction-001",
+  "rejected_dispatch_id": "dispatch-g03-security-receipt-correction-repair-phase3d-001",
+  "worker_thread_id": "sanitized-existing-worker",
+  "blocker_code": "DISPATCH_VALIDATION_MATRIX_MISMATCH",
+  "source_report_path": ".codex-loop/reports/dispatch-g03-security-receipt-correction-repair-phase3d-001-ack.json",
+  "source_report_digest": "sha256:c4fd3e31e5ea13db94337fc82943f98e17fdf42b72447955bdb5cf94678e0941",
+  "shared_artifact_digest": "sha256:487691acf85b9bc0df72c8c33cd4962114bb8631aec446eb3726460e2c33b701",
+  "report_shape": {
+    "status": "BLOCKED",
+    "execution_started": false,
+    "changed_files": [],
+    "external_call_count": 0,
+    "risks_or_blockers": [
+      {
+        "code": "DISPATCH_VALIDATION_MATRIX_MISMATCH",
+        "path": "/payload/validation_matrix"
+      }
+    ]
+  },
+  "expected": {
+    "attempt_count": 2,
+    "product_attempts_before": 2,
+    "product_attempts_after": 1
+  }
+}

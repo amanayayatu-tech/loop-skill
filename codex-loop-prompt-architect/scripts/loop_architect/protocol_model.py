@@ -17,7 +17,12 @@ from .schema import (
     ADAPTIVE_RUNTIME_MUTATIONS,
     ADAPTIVE_RUNTIME_SUCCESS_CODES,
 )
-from .state_runtime import ACTIVE_OUTBOX_STATUSES, OUTBOX_FIELDS, REVIEW_DECISIONS
+from .state_runtime import (
+    ACTIVE_OUTBOX_STATUSES,
+    OUTBOX_FIELDS,
+    REVIEW_DECISIONS,
+    ZERO_EXECUTION_BLOCKER_CODES,
+)
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
@@ -103,6 +108,22 @@ def authorization_fields() -> tuple[str, ...]:
     return tuple(schema["$defs"]["authorizationEnvelope"]["required"])
 
 
+def state_zero_execution_blocker_codes() -> tuple[str, ...]:
+    return tuple(
+        state_schema()["$defs"]["workerResult"]["properties"]["blocker_code"][
+            "enum"
+        ]
+    )
+
+
+def mutation_zero_execution_blocker_codes() -> tuple[str, ...]:
+    return tuple(
+        mutation_schema()["$defs"]["formalAckResult"]["properties"][
+            "blocker_code"
+        ]["enum"]
+    )
+
+
 def runtime_success_codes() -> tuple[str, ...]:
     kind_codes = [
         f"{kind}_{suffix}"
@@ -137,6 +158,11 @@ def validate_protocol_sources() -> list[str]:
         findings.append("mutation schema and runtime review decisions differ")
     if ACTIVE_OUTBOX_STATUSES != {"PREPARED", "SENT"}:
         findings.append("runtime active outbox states differ from the documented fence")
+    runtime_blockers = set(ZERO_EXECUTION_BLOCKER_CODES)
+    if set(state_zero_execution_blocker_codes()) != runtime_blockers:
+        findings.append("state schema and runtime zero-execution blockers differ")
+    if set(mutation_zero_execution_blocker_codes()) != runtime_blockers:
+        findings.append("mutation schema and runtime zero-execution blockers differ")
     if set(OUTBOX_LIFECYCLES) != set(OUTBOX_FIELDS):
         findings.append("one or more runtime outbox kinds lack a documented lifecycle")
     if set(OUTBOX_CANCELLATION_LIFECYCLES) != set(OUTBOX_FIELDS) or any(
