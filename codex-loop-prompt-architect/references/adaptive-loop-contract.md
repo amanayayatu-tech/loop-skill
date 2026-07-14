@@ -41,6 +41,7 @@ both normalized role names and thread placeholder slugs after injection.
 `LOOP_STATE.md` remains the only canonical state. Adaptive state adds:
 
 - `controller_pack_identity`
+- `controller_pack_history`, `controller_pack_revision`, and Pack enforcement
 - `dashboard_required`
 - `roadmap_version`
 - `milestones`
@@ -56,6 +57,7 @@ both normalized role names and thread placeholder slugs after injection.
 - `routing_turn_ledger`
 - `lease_epoch_counter`
 - `consumed_controller_lease_ids`
+- `controller_turn_enforcement` and `consumed_controller_turn_ids`
 - `assurance_ledger`
 - `assurance_dispatch_outbox`
 - `goal_queue_history`
@@ -79,6 +81,13 @@ through `MIGRATE_V1_TO_V2` with its exact source digest. The migration is a
 locked, journaled, CAS-protected transaction with no external actions; ordinary
 reads do not migrate. Repeating an applied migration is idempotent, while an
 unknown version or changed source digest is a zero-side-effect rejection.
+
+Every post-initialize request attests the active `controller_pack_digest`.
+`MIGRATE_CONTROLLER_PACK` is the only way to activate different Pack bytes. It
+runs only at `PAUSED_AT_SAFE_POINT` with no lease or active outbox, archives the
+new Pack at its digest-versioned source path, and appends immutable predecessor
+history. The native Controller Goal keeps its launch identity, which must remain
+in that history; a changed but unmigrated Pack has no routing authority.
 
 Human steering, STATUS projection, Decision Card, review surface, convergence,
 Validation Matrix, Context Freshness, and evidence-order rules are defined in
@@ -108,6 +117,49 @@ verification accepts its existing envelope-plus-JSON framing. Closed-pipe EOF
 remains compatible. Timeout, size, and encoding failures return structured
 `INPUT_TRANSPORT_TIMEOUT`, `INPUT_TRANSPORT_TOO_LARGE`, and
 `INPUT_TRANSPORT_UTF8_INVALID` responses with nonzero exit status.
+
+The App invocation contract applies to every mode, not only materialization:
+launch the runtime itself by direct argv with `tty:false`, then write one compact
+JSON frame exactly once (or no stdin for `--recover`). Never start a stdin
+helper, PTY configurator, fixed-byte reader, heredoc, or shell pipeline first.
+A yielded session may only be polled by its same id; success requires process
+exit, no live session, and one JSON response.
+
+#### Resource-bounded observation and validation
+
+Observation is projection-first. Before reparsing unchanged canonical bytes,
+Controller compares the canonical `LOOP_STATE.md` mtime/size and projected
+`STATUS.md` state version. It parses canonical state after an observed change,
+when an expected artifact remains unresolved, and before every mutation.
+`STATUS.md` is a derived observation surface and never mutation authority.
+
+After a send, the observation order is canonical mtime/version, expected
+artifact, compact projected fields, then a compact State-Writer task read only
+if unresolved. Controller itself is read only for phase completion, a blocker,
+or a Decision. Each target permits one in-flight
+`read_thread(threadId=..., turnLimit=1, includeOutputs=false)` call. Tool results
+are reduced internally to status, timestamps, item types, and the final bounded
+agent message; raw results and long transcripts are not forwarded. Unchanged
+work uses 30/60/120-second backoff, reset only on an observed change. Aggressive
+fixed polling and shell busy waits are invalid.
+
+Validation evidence is reusable only when artifact digest, command,
+environment/toolchain identity, and relevant config/lockfile digest all match.
+Narrow changes run narrow tests. Full fuzz, coverage, and install run once for
+the final artifact; an equivalent full local gate is not duplicated while CI
+is already running for the same commit.
+
+Runtime and external processes retain the direct non-PTY, same-session
+contract. Stdin modes must use an exposed process API that launches direct argv
+and supplies a writable non-PTY stdin pipe; a native child-process spawn meets
+that requirement. A shell execution API that closes stdin before the same-session
+write is ineligible, and temporary-file redirection is not a substitute. A local
+child owned by the current turn is cleaned up with bounded
+TERM, wait, KILL, and waitpid steps, followed by a residual-process check. A
+completed external result whose stdout was lost is recovered from its durable
+receipt; stdout loss never authorizes another external call. These constraints
+change no storage, schema, state, migration, repair-limit, or public completion
+semantics.
 
 The same runtime is also the only dispatch payload codec. Controller submits one
 strict JSON object with exactly `envelope_type` and `payload` to
@@ -442,6 +494,10 @@ Reusing the same id with another owner does not transfer ownership. A competing
 turn returns `WAITING_CONTROLLER_LEASE` and sends nothing. Expired takeover
 requires trustworthy current time plus structured `read_thread` evidence for
 the exact owner task, increments the epoch, and fences every old action.
+Each acquisition and takeover also carries the current real Codex App
+`controller_turn_id`. Runtime consumes it with the first route lease and rejects
+a second lease from that same App turn even after completion or voluntary
+release. A model-generated replacement id is not a valid continuation strategy.
 
 Except for initialization, counted routing-turn creation, and lease
 acquisition/takeover itself, every Adaptive
@@ -535,6 +591,20 @@ digest, full lease claim, and source artifact digest. FAIL returns to the implem
 retest the same verification id. If repair changes the artifact digest, the old
 CODE_REVIEW ACK is stale: review the repaired artifact, then retest. Never send
 credentials or sensitive local evidence to remote Workers.
+An applied scoped correction may bypass the Local PASS prerequisite only for a
+`ROADMAP_AUDIT` that proposes a never-reused replacement Goal, and only when the
+same Goal, Worker dispatch, artifact digest, and roadmap version already have an
+acknowledged Local `FAIL` or `BLOCKED` record. Roadmap Revision then preserves
+the original attempts and marks the source Goal `RETIRED`; it never upgrades the
+old Goal or Local result to PASS. Without that exact non-PASS evidence, the
+ordinary Local PASS gate remains mandatory.
+Before a metered external call or Local Verification, stage one sanitized,
+immutable `STARTED` receipt through `--external-receipt-stage`; stage its bound
+`COMPLETED` receipt before stdout. Lost stdout is recovered from
+`.codex-loop/external-receipts/`. A lone `STARTED` receipt conservatively
+consumes one call with unknown result/tokens and cannot authorize a retry.
+Receipts contain digests, status, usage counts, and process status only, never
+prompts, responses, keys, or secrets.
 `REVIEW_NEEDS_REPAIR`, Local Verification FAIL,
 `ROADMAP_AUDIT_NEEDS_REPAIR`, and `FINAL_REVIEW_NEEDS_REPAIR` share one closed
 repair-source union and the same per-Goal repair budget.
@@ -700,9 +770,14 @@ dispatch across revisions. A selected Goal must itself be `READY` with completed
 dependencies. Worker PASS closes it to redispatch; only a matching
 acknowledged failure from the closed repair-source union may authorize a bounded
 repair attempt.
-That union includes Worker FAIL or BLOCKED, code-review repair, Local Verification FAIL,
+That union includes Worker FAIL or product-execution BLOCKED, code-review repair, Local Verification FAIL,
 Roadmap Audit repair, and Final Audit repair; all consume the same per-Goal
 budget.
+Every new Worker result records `execution_started`. A deterministic
+control-plane BLOCKED closure may set it false only with a runtime-approved
+blocker code. Such a closure remains in immutable attempt history but consumes
+no initial or repair slot. Historical results without the field keep legacy
+counting semantics.
 The state machine enforces `max_repair_attempts_per_goal` and emits
 `REPAIR_BUDGET_EXHAUSTED` at the limit. The generated default is five repairs
 beyond the initial execution; explicit inputs remain bounded to 0–20. Once the

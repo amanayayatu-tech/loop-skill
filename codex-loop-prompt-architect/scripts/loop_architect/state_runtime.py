@@ -155,6 +155,16 @@ PHASE_PERMISSION_FIELDS = (
 )
 MAX_ARTIFACT_CONTENT_SIZE = 4_000_000
 
+ZERO_EXECUTION_BLOCKER_CODES = {
+    "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+    "INPUT_TRANSPORT_TIMEOUT",
+    "INPUT_TRANSPORT_TOO_LARGE",
+    "INPUT_TRANSPORT_UTF8_INVALID",
+    "PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT",
+    "PAYLOAD_VERIFY_FAILED",
+    "REPORT_STAGING_FAILED",
+}
+
 V2_ONLY_MUTATIONS = {
     "RECORD_STEERING",
     "RESOLVE_STEERING",
@@ -165,6 +175,7 @@ V2_ONLY_MUTATIONS = {
     "RECORD_VALIDATION",
     "RECORD_CONTEXT_FRESHNESS",
     "RECORD_CONTROLLER_GOAL_RESUME",
+    "MIGRATE_CONTROLLER_PACK",
 }
 
 PAUSE_BLOCKED_ROUTING_MUTATIONS = {
@@ -173,6 +184,28 @@ PAUSE_BLOCKED_ROUTING_MUTATIONS = {
     "ROADMAP_REVISION",
     "FINALIZE_LOOP",
 }
+
+
+def _attempt_consumes_repair_budget(attempt: Mapping[str, Any]) -> bool:
+    """Return whether an acknowledged Worker result represents product execution.
+
+    Historical Pack results predate ``execution_started`` and therefore retain
+    their old accounting semantics.  New zero-execution control-plane closures
+    must opt out explicitly and carry a bounded blocker code.
+    """
+
+    return attempt.get("execution_started", True) is not False
+
+
+def _completed_product_attempts(ledger: Mapping[str, Any]) -> int:
+    attempts = ledger.get("attempts", [])
+    if not isinstance(attempts, list):
+        return 0
+    return sum(
+        1
+        for attempt in attempts
+        if isinstance(attempt, Mapping) and _attempt_consumes_repair_budget(attempt)
+    )
 
 BOOTSTRAP_ROLE_TO_FORMAL_ROLE = {
     "implementation": "WORKER",
@@ -1252,6 +1285,7 @@ class AdaptiveStateRuntime:
         self.reports_dir = self.control_dir / "reports"
         self.sources_dir = self.control_dir / "sources"
         self.report_staging_dir = self.control_dir / "report-staging"
+        self.external_receipts_dir = self.control_dir / "external-receipts"
         # Lock the stable project-root inode. A lock file that is deleted during
         # virgin-layout cleanup can split writers across old and new inodes.
         self.lock_path = self.root
@@ -1334,6 +1368,21 @@ class AdaptiveStateRuntime:
                     raise RuntimeRejection("STATE_NOT_INITIALIZED", "/mutation/type")
                 if state is not None and mutation_type == "INITIALIZE":
                     raise RuntimeRejection("STATE_ALREADY_INITIALIZED", "/mutation/type")
+                if (
+                    state is not None
+                    and state.get("pack_identity_enforced") is True
+                    and mutation_type != "MIGRATE_CONTROLLER_PACK"
+                    and normalized.get("controller_pack_digest")
+                    != state["controller_pack_identity"]["digest"]
+                ):
+                    raise RuntimeRejection(
+                        "CONTROLLER_PACK_MIGRATION_REQUIRED",
+                        "/controller_pack_digest",
+                        {
+                            "expected": state["controller_pack_identity"]["digest"],
+                            "actual": normalized.get("controller_pack_digest"),
+                        },
+                    )
                 if (
                     state is not None
                     and mutation_type == "MIGRATE_V1_TO_V2"
@@ -1556,10 +1605,17 @@ class AdaptiveStateRuntime:
         report = request["report"]
         if not isinstance(outbox_id, str) or SAFE_ID_RE.fullmatch(outbox_id) is None:
             raise RuntimeRejection("UNSAFE_ID", "/outbox_id")
-        if not isinstance(result_input, dict) or set(result_input) != {
+        allowed_result_keys = {
             "status",
             "artifact_digest",
-        }:
+            "execution_started",
+            "blocker_code",
+        }
+        if (
+            not isinstance(result_input, dict)
+            or not {"status", "artifact_digest"}.issubset(result_input)
+            or not set(result_input).issubset(allowed_result_keys)
+        ):
             raise RuntimeRejection(
                 "FORMAL_REPORT_STAGE_RESULT_INVALID", "/result"
             )
@@ -1603,6 +1659,31 @@ class AdaptiveStateRuntime:
             "artifact_digest": artifact_digest,
             "report_digest": report_digest,
         }
+        for key in ("execution_started", "blocker_code"):
+            if key in result_input:
+                result[key] = result_input[key]
+        if "execution_started" in result:
+            execution_started = result["execution_started"]
+            blocker_code = result.get("blocker_code")
+            if type(execution_started) is not bool:
+                raise RuntimeRejection(
+                    "WORKER_EXECUTION_CLASSIFICATION_INVALID",
+                    "/result/execution_started",
+                )
+            if not execution_started and (
+                result["status"] != "BLOCKED"
+                or blocker_code not in ZERO_EXECUTION_BLOCKER_CODES
+            ):
+                raise RuntimeRejection(
+                    "WORKER_ZERO_EXECUTION_BLOCKER_INVALID",
+                    "/result/blocker_code",
+                    {"allowed": sorted(ZERO_EXECUTION_BLOCKER_CODES)},
+                )
+            if execution_started and blocker_code is not None:
+                raise RuntimeRejection(
+                    "WORKER_EXECUTION_CLASSIFICATION_INVALID",
+                    "/result/blocker_code",
+                )
 
         _, state_validator = self._load_validators()
         self._require_root()
@@ -1680,6 +1761,192 @@ class AdaptiveStateRuntime:
                 "external_actions": [],
                 "external_action_count": 0,
             }
+
+    def stage_external_receipt(self, request: Any) -> dict[str, Any]:
+        """Persist an immutable, sanitized before/after receipt for one external call."""
+
+        self._ensure_json_value(request, "/")
+        required = {
+            "receipt_id",
+            "phase",
+            "action_kind",
+            "request_digest",
+            "observed_at",
+            "calls_consumed",
+        }
+        completion_fields = {
+            "started_receipt_digest",
+            "result_status",
+            "artifact_digest",
+            "process_exit_code",
+            "usage",
+        }
+        allowed = required | completion_fields | {"model"}
+        if (
+            not isinstance(request, dict)
+            or not required.issubset(request)
+            or not set(request).issubset(allowed)
+        ):
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_INPUT_INVALID",
+                "/",
+                {"required_keys": sorted(required), "allowed_keys": sorted(allowed)},
+            )
+        receipt_id = request["receipt_id"]
+        phase = request["phase"]
+        if not isinstance(receipt_id, str) or SAFE_ID_RE.fullmatch(receipt_id) is None:
+            raise RuntimeRejection("UNSAFE_ID", "/receipt_id")
+        if phase not in {"STARTED", "COMPLETED"}:
+            raise RuntimeRejection("EXTERNAL_RECEIPT_PHASE_INVALID", "/phase")
+        if request["action_kind"] not in {
+            "EXTERNAL_MODEL_CALL",
+            "LOCAL_VERIFICATION",
+        }:
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_ACTION_KIND_INVALID", "/action_kind"
+            )
+        if (
+            not isinstance(request["request_digest"], str)
+            or DIGEST_RE.fullmatch(request["request_digest"]) is None
+        ):
+            raise RuntimeRejection("DIGEST_INVALID", "/request_digest")
+        _parse_time(request["observed_at"], "/observed_at")
+        if request["calls_consumed"] != 1:
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_CALL_COUNT_INVALID", "/calls_consumed"
+            )
+        model = request.get("model")
+        if model is not None and (
+            not isinstance(model, str) or not model or len(model) > 128
+        ):
+            raise RuntimeRejection("EXTERNAL_RECEIPT_MODEL_INVALID", "/model")
+        if phase == "STARTED" and set(request) & completion_fields:
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_INPUT_INVALID",
+                "/",
+                {"reason": "STARTED_HAS_COMPLETION_FIELDS"},
+            )
+        if phase == "COMPLETED":
+            if not completion_fields.issubset(request):
+                raise RuntimeRejection(
+                    "EXTERNAL_RECEIPT_INPUT_INVALID",
+                    "/",
+                    {"missing_completion_fields": sorted(completion_fields - set(request))},
+                )
+            if request["result_status"] not in {"PASS", "FAIL", "BLOCKED"}:
+                raise RuntimeRejection(
+                    "EXTERNAL_RECEIPT_RESULT_INVALID", "/result_status"
+                )
+            if type(request["process_exit_code"]) is not int:
+                raise RuntimeRejection(
+                    "EXTERNAL_RECEIPT_RESULT_INVALID", "/process_exit_code"
+                )
+            for key in ("started_receipt_digest", "artifact_digest"):
+                if (
+                    not isinstance(request[key], str)
+                    or DIGEST_RE.fullmatch(request[key]) is None
+                ):
+                    raise RuntimeRejection("DIGEST_INVALID", f"/{key}")
+            usage = request["usage"]
+            if (
+                not isinstance(usage, dict)
+                or set(usage)
+                != {"prompt_tokens", "completion_tokens", "total_tokens", "complete"}
+                or type(usage["complete"]) is not bool
+                or any(
+                    value is not None
+                    and (type(value) is not int or value < 0)
+                    for key, value in usage.items()
+                    if key != "complete"
+                )
+            ):
+                raise RuntimeRejection(
+                    "EXTERNAL_RECEIPT_USAGE_INVALID", "/usage"
+                )
+
+        payload = _canonical_json(request).encode("utf-8")
+        receipt_digest = _bytes_digest(payload)
+        _, state_validator = self._load_validators()
+        self._require_root()
+        with self._exclusive_lock():
+            self._ensure_layout()
+            state = self._read_state_locked(state_validator)
+            if state is None:
+                raise RuntimeRejection("STATE_NOT_INITIALIZED", "/receipt_id")
+            self._ensure_external_receipts_locked()
+            if phase == "COMPLETED":
+                started = self.external_receipts_dir / f"{receipt_id}.started.json"
+                self._require_external_receipt_file(
+                    started, request["started_receipt_digest"], "/started_receipt_digest"
+                )
+                started_value = _strict_json_loads(
+                    started.read_text(encoding="utf-8"),
+                    code="EXTERNAL_RECEIPT_STARTED_INVALID",
+                    path="/started_receipt_digest",
+                )
+                if any(
+                    started_value.get(key) != request.get(key)
+                    for key in ("receipt_id", "action_kind", "request_digest", "calls_consumed", "model")
+                ):
+                    raise RuntimeRejection(
+                        "EXTERNAL_RECEIPT_IDENTITY_CONFLICT", "/started_receipt_digest"
+                    )
+            suffix = phase.lower()
+            source = self.external_receipts_dir / f"{receipt_id}.{suffix}.json"
+            self._assert_confined(source, self.external_receipts_dir, "/source_path")
+            if source.exists() or source.is_symlink():
+                self._require_external_receipt_file(source, receipt_digest, "/source_path")
+                if source.read_bytes() != payload:
+                    raise RuntimeRejection(
+                        "EXTERNAL_RECEIPT_STAGE_CONFLICT", "/source_path"
+                    )
+            else:
+                self._atomic_replace_bytes(
+                    source,
+                    payload,
+                    f"external-receipt-{receipt_id}-{suffix}",
+                    "EXTERNAL_RECEIPT",
+                )
+                os.chmod(source, 0o444, follow_symlinks=False)
+                self._fsync_dir(self.external_receipts_dir)
+                self._require_external_receipt_file(
+                    source, receipt_digest, "/source_path"
+                )
+            return {
+                "ok": True,
+                "status": "EXTERNAL_CALL_RECEIPT_STAGED",
+                "state_version": state["state_version"],
+                "receipt_id": receipt_id,
+                "phase": phase,
+                "source_path": str(source),
+                "receipt_digest": receipt_digest,
+                "calls_consumed": 1,
+                "external_actions": [],
+                "external_action_count": 0,
+            }
+
+    def _ensure_external_receipts_locked(self) -> None:
+        path = self.external_receipts_dir
+        self._assert_confined(path, self.control_dir, "/external-receipts")
+        self._reject_symlink(path, "/external-receipts")
+        path.mkdir(mode=0o700, parents=False, exist_ok=True)
+
+    def _require_external_receipt_file(
+        self, source: Path, digest: str, path: str
+    ) -> None:
+        self._assert_confined(source, self.external_receipts_dir, path)
+        self._reject_symlink(source, path)
+        try:
+            mode = source.lstat().st_mode
+            payload = source.read_bytes()
+        except OSError as exc:
+            raise RuntimeRejection("EXTERNAL_RECEIPT_FILE_INVALID", path) from exc
+        if (
+            not stat.S_ISREG(mode)
+            or mode & 0o222
+            or _bytes_digest(payload) != digest
+        ):
+            raise RuntimeRejection("EXTERNAL_RECEIPT_FILE_INVALID", path)
 
     def _ensure_report_staging_locked(self) -> None:
         path = self.report_staging_dir
@@ -1844,6 +2111,7 @@ class AdaptiveStateRuntime:
             self.transactions_dir,
             self.reports_dir,
             self.sources_dir,
+            self.external_receipts_dir,
             self.projection_transactions_dir,
         ):
             self._reject_symlink(path, "/layout")
@@ -1851,6 +2119,9 @@ class AdaptiveStateRuntime:
         self._assert_confined(self.transactions_dir, self.control_dir, "/transactions")
         self._assert_confined(self.reports_dir, self.control_dir, "/reports")
         self._assert_confined(self.sources_dir, self.control_dir, "/sources")
+        self._assert_confined(
+            self.external_receipts_dir, self.control_dir, "/external-receipts"
+        )
         self._assert_confined(
             self.projection_transactions_dir,
             self.control_dir,
@@ -1860,6 +2131,7 @@ class AdaptiveStateRuntime:
         self.transactions_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
         self.reports_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
         self.sources_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
+        self.external_receipts_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
         self.projection_transactions_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
 
     def _cleanup_virgin_layout(self) -> None:
@@ -1880,6 +2152,7 @@ class AdaptiveStateRuntime:
                     self.transactions_dir,
                     self.reports_dir,
                     self.sources_dir,
+                    self.external_receipts_dir,
                     self.projection_transactions_dir,
                 ):
                     if directory.exists() and any(directory.iterdir()):
@@ -1888,6 +2161,7 @@ class AdaptiveStateRuntime:
                     self.transactions_dir,
                     self.reports_dir,
                     self.sources_dir,
+                    self.external_receipts_dir,
                     self.projection_transactions_dir,
                 ):
                     if directory.exists():
@@ -2035,8 +2309,15 @@ class AdaptiveStateRuntime:
             target = raw_target.resolve(strict=False)
             self._assert_confined(target, self.control_dir, f"/artifacts/{index}/path")
             relative = target.relative_to(self.root).as_posix()
+            versioned_pack = bool(
+                re.fullmatch(
+                    r"\.codex-loop/sources/CONTROLLER_PACK\.[a-f0-9]{64}\.md",
+                    relative,
+                )
+            )
             allowed = (
                 relative == ".codex-loop/sources/CONTROLLER_PACK.md"
+                or versioned_pack
                 or (
                     target.parent == self.reports_dir
                     and target.suffix in {".md", ".json", ".txt"}
@@ -2064,7 +2345,14 @@ class AdaptiveStateRuntime:
                     ) from exc
                 self._assert_confined(source, self.root, source_json_path)
                 controller_pack_source = bool(
-                    relative == ".codex-loop/sources/CONTROLLER_PACK.md"
+                    (
+                        relative == ".codex-loop/sources/CONTROLLER_PACK.md"
+                        or (
+                            versioned_pack
+                            and mutation is not None
+                            and mutation.get("type") == "MIGRATE_CONTROLLER_PACK"
+                        )
+                    )
                     and artifact["media_type"] == "text/markdown"
                     and not self._path_is_within(source, self.control_dir)
                     and source.is_file()
@@ -2906,6 +3194,7 @@ class AdaptiveStateRuntime:
                 "CONTROLLER_PACK_IDENTITY_MISMATCH",
                 "/controller_pack_identity",
             )
+        self._validate_controller_pack_history(state)
         self._validate_outboxes(state)
         self._validate_assurance_consistency(state)
         self._validate_finalization_state(state)
@@ -2983,6 +3272,39 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("STEERING_LEDGER_INVALID", "/steering_queue")
         if state["active_steering_id"] is not None and state["active_steering_id"] not in ledger_ids:
             raise RuntimeRejection("STEERING_LEDGER_INVALID", "/active_steering_id")
+
+    @staticmethod
+    def _validate_controller_pack_history(state: dict[str, Any]) -> None:
+        history = state.get("controller_pack_history")
+        if history is None:
+            return
+        revision = state.get("controller_pack_revision")
+        if (
+            not isinstance(history, list)
+            or not history
+            or revision != len(history)
+            or [item["revision"] for item in history]
+            != list(range(1, len(history) + 1))
+            or history[-1]["digest"]
+            != state["controller_pack_identity"]["digest"]
+            or history[-1]["path"] != state["controller_pack_identity"]["path"]
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_HISTORY_INVALID", "/controller_pack_history"
+            )
+        for index, item in enumerate(history):
+            expected_predecessor = None if index == 0 else history[index - 1]["digest"]
+            artifact = state["artifact_ledger"].get(item["path"])
+            if (
+                item["predecessor_digest"] != expected_predecessor
+                or artifact is None
+                or artifact["digest"] != item["digest"]
+                or artifact["media_type"] != item["media_type"]
+            ):
+                raise RuntimeRejection(
+                    "CONTROLLER_PACK_HISTORY_INVALID",
+                    f"/controller_pack_history/{index}",
+                )
 
     @staticmethod
     def _validation_requirements_for_definition(
@@ -3219,10 +3541,16 @@ class AdaptiveStateRuntime:
             f"objective_sha256={controller_goal['objective_digest'].removeprefix('sha256:')}]"
         )
         milestone_ids = {item["milestone_id"] for item in state["milestones"]}
+        valid_pack_digests = {
+            state["controller_pack_identity"]["digest"],
+            *(
+                item["digest"]
+                for item in state.get("controller_pack_history", [])
+            ),
+        }
         if (
             controller_goal["loop_id"] != state["loop_id"]
-            or controller_goal["pack_digest"]
-            != state["controller_pack_identity"]["digest"]
+            or controller_goal["pack_digest"] not in valid_pack_digests
             or controller_goal["milestone_id"] not in milestone_ids
             or controller_goal["marker"] != expected_marker
         ):
@@ -3258,7 +3586,10 @@ class AdaptiveStateRuntime:
             len(matching_goal_creates) != 1
             or receipt["loop_id"] != state["loop_id"]
             or receipt["pack_digest"]
-            != state["controller_pack_identity"]["digest"]
+            not in {
+                state["controller_pack_identity"]["digest"],
+                *(item["digest"] for item in state.get("controller_pack_history", [])),
+            }
             or _parse_time(
                 receipt["pre_blocked_observed_at"],
                 "/controller_goal_resume_receipt/pre_blocked_observed_at",
@@ -3891,6 +4222,25 @@ class AdaptiveStateRuntime:
         consumed = state["consumed_controller_lease_ids"]
         if len(consumed) != len(set(consumed)):
             raise RuntimeRejection("CONSUMED_LEASE_ID_CONFLICT", "/consumed_controller_lease_ids")
+        consumed_turns = state.get("consumed_controller_turn_ids", [])
+        if len(consumed_turns) != len(set(consumed_turns)):
+            raise RuntimeRejection(
+                "CONSUMED_CONTROLLER_TURN_ID_CONFLICT",
+                "/consumed_controller_turn_ids",
+            )
+        routed_turns = [
+            item.get("controller_turn_id")
+            for item in state["routing_turn_ledger"].values()
+            if item.get("controller_turn_id") is not None
+        ]
+        if state.get("controller_turn_enforcement") is True and (
+            len(routed_turns) != len(state["routing_turn_ledger"])
+            or sorted(routed_turns) != sorted(consumed_turns)
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_TURN_LEDGER_INVALID",
+                "/consumed_controller_turn_ids",
+            )
         if state["routing_turn_count"] != len(state["routing_turn_ledger"]):
             raise RuntimeRejection("ROUTING_TURN_COUNT_INVALID", "/routing_turn_count")
         if state["routing_turn_count"] > state["max_routing_turns"]:
@@ -4142,6 +4492,7 @@ class AdaptiveStateRuntime:
             ),
             self.reports_dir: (".*.ARTIFACT.tmp",),
             self.sources_dir: (".*.ARTIFACT.tmp",),
+            self.external_receipts_dir: (".*.EXTERNAL_RECEIPT.tmp",),
             self.projection_transactions_dir: (".*.STATUS_JOURNAL.tmp",),
         }
         for directory, directory_patterns in patterns.items():
@@ -4829,6 +5180,10 @@ class AdaptiveStateRuntime:
             result = self._acquire_lease(candidate, request, mutation)
         elif mutation_type == "MIGRATE_V1_TO_V2":
             result = self._migrate_v1_to_v2(
+                candidate, request, mutation, after_version
+            )
+        elif mutation_type == "MIGRATE_CONTROLLER_PACK":
+            result = self._migrate_controller_pack(
                 candidate, request, mutation, after_version
             )
         elif mutation_type == "RECORD_STEERING":
@@ -5615,12 +5970,14 @@ class AdaptiveStateRuntime:
         repair_limit = state["authorization_envelope"]["repair_policy"][
             "max_repair_attempts_per_goal"
         ]
-        attempts = state["goal_execution_ledger"][goal_id]["attempts"]
+        ledger = state["goal_execution_ledger"][goal_id]
+        completed_product_attempts = _completed_product_attempts(ledger)
         classification = classify_failure_progress(
             history,
             fingerprint,
             same_strategy_threshold=state["failure_policy"]["same_strategy_failure_threshold"],
-            strategy_budget_exhausted=len(attempts) >= 1 + repair_limit,
+            strategy_budget_exhausted=completed_product_attempts
+            >= 1 + repair_limit,
         )
         fingerprint["classification"] = classification
         fingerprint["recorded_at"] = request["occurred_at"]
@@ -6022,6 +6379,21 @@ class AdaptiveStateRuntime:
                 "digest": pack_artifact["digest"],
                 "media_type": pack_artifact["media_type"],
             },
+            "controller_pack_history": [
+                {
+                    "revision": 1,
+                    "path": pack_artifact["path"],
+                    "digest": pack_artifact["digest"],
+                    "media_type": pack_artifact["media_type"],
+                    "activated_state_version": 1,
+                    "predecessor_digest": None,
+                    "migration_reason": "INITIALIZE",
+                }
+            ],
+            "controller_pack_revision": 1,
+            "pack_identity_enforced": True,
+            "controller_turn_enforcement": True,
+            "consumed_controller_turn_ids": [],
             "dashboard_required": mutation["dashboard_required"],
             "human_control_policy": copy.deepcopy(
                 mutation.get("human_control_policy", DEFAULT_HUMAN_CONTROL_POLICY)
@@ -6126,6 +6498,132 @@ class AdaptiveStateRuntime:
             },
         }
 
+    def _migrate_controller_pack(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        self._require_controller_actor(state, request)
+        if state["run_control"]["status"] != "PAUSED_AT_SAFE_POINT":
+            raise RuntimeRejection(
+                "PACK_MIGRATION_REQUIRES_PAUSED_SAFE_POINT",
+                "/run_control/status",
+            )
+        if state["controller_lease"] is not None:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_ACTIVE_LEASE", "/controller_lease"
+            )
+        active = [
+            record["outbox_id"]
+            for field in OUTBOX_FIELDS.values()
+            for record in state[field].values()
+            if record["status"] in ACTIVE_OUTBOX_STATUSES
+            or (
+                record["outbox_kind"] == "ASSURANCE"
+                and record["status"] == "ACKED"
+            )
+        ]
+        if active:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_ACTIVE_OUTBOX",
+                "/mutation/type",
+                {"outbox_ids": sorted(active)},
+            )
+        source_digest = mutation["source_pack_digest"]
+        target_digest = mutation["target_pack_digest"]
+        target_path = mutation["target_pack_path"]
+        if source_digest != state["controller_pack_identity"]["digest"]:
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_SOURCE_MISMATCH",
+                "/mutation/source_pack_digest",
+            )
+        if source_digest == target_digest:
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_MIGRATION_NOOP", "/mutation/target_pack_digest"
+            )
+        expected_path = (
+            ".codex-loop/sources/CONTROLLER_PACK."
+            f"{target_digest.removeprefix('sha256:')}.md"
+        )
+        matching = [
+            artifact
+            for artifact in request["artifacts"]
+            if artifact["path"] == target_path
+        ]
+        if (
+            target_path != expected_path
+            or len(matching) != 1
+            or len(request["artifacts"]) != 1
+            or matching[0]["digest"] != target_digest
+            or matching[0]["media_type"] != "text/markdown"
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_MIGRATION_ARTIFACT_INVALID", "/artifacts"
+            )
+        history = state.get("controller_pack_history")
+        if history is None:
+            current = state["controller_pack_identity"]
+            history = [
+                {
+                    "revision": 1,
+                    "path": current["path"],
+                    "digest": current["digest"],
+                    "media_type": current["media_type"],
+                    "activated_state_version": 1,
+                    "predecessor_digest": None,
+                    "migration_reason": "LEGACY_BASELINE",
+                }
+            ]
+        revision = len(history) + 1
+        history.append(
+            {
+                "revision": revision,
+                "path": target_path,
+                "digest": target_digest,
+                "media_type": "text/markdown",
+                "activated_state_version": after_version,
+                "predecessor_digest": source_digest,
+                "migration_reason": mutation["migration_reason"],
+            }
+        )
+        state["controller_pack_identity"] = {
+            "path": target_path,
+            "digest": target_digest,
+            "media_type": "text/markdown",
+        }
+        state["controller_pack_history"] = history
+        state["controller_pack_revision"] = revision
+        state["pack_identity_enforced"] = True
+        routed_controller_turn_ids: list[str] = []
+        legacy_routing_turns_backfilled = 0
+        for routing_turn_id, routing_turn in state["routing_turn_ledger"].items():
+            controller_turn_id = routing_turn.get("controller_turn_id")
+            if controller_turn_id is None:
+                controller_turn_id = (
+                    "legacy-turn-"
+                    + hashlib.sha256(routing_turn_id.encode("utf-8")).hexdigest()[:32]
+                )
+                routing_turn["controller_turn_id"] = controller_turn_id
+                legacy_routing_turns_backfilled += 1
+            routed_controller_turn_ids.append(controller_turn_id)
+        state["consumed_controller_turn_ids"] = sorted(
+            routed_controller_turn_ids
+        )
+        state["controller_turn_enforcement"] = True
+        return {
+            "code": "CONTROLLER_PACK_MIGRATED",
+            "next_action_code": "RECONCILE_BEFORE_RESUME",
+            "result": {
+                "source_pack_digest": source_digest,
+                "target_pack_digest": target_digest,
+                "target_pack_path": target_path,
+                "controller_pack_revision": revision,
+                "legacy_routing_turns_backfilled": legacy_routing_turns_backfilled,
+            },
+        }
+
     def _registered_controller(self, state: dict[str, Any], thread_id: str) -> bool:
         record = state["thread_registry"].get(thread_id)
         return bool(
@@ -6166,6 +6664,21 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "CONTROLLER_IDENTITY_MISMATCH", "/mutation/owner_identity"
             )
+        controller_turn_id = mutation.get("controller_turn_id")
+        if state.get("controller_turn_enforcement") is True:
+            if (
+                not isinstance(controller_turn_id, str)
+                or SAFE_ID_RE.fullmatch(controller_turn_id) is None
+            ):
+                raise RuntimeRejection(
+                    "CONTROLLER_TURN_ID_REQUIRED", "/mutation/controller_turn_id"
+                )
+            if controller_turn_id in state.get("consumed_controller_turn_ids", []):
+                raise RuntimeRejection(
+                    "CONTROLLER_TURN_ALREADY_ROUTED",
+                    "/mutation/controller_turn_id",
+                    {"controller_turn_id": controller_turn_id},
+                )
         if state["controller_lease"] is not None:
             current_expiry = _parse_time(
                 state["controller_lease"]["expires_at"], "/controller_lease/expires_at"
@@ -6217,7 +6730,19 @@ class AdaptiveStateRuntime:
             "owner_identity": mutation["owner_identity"],
             "lease_id": lease_id,
             "status": "LEASE_ACQUIRED",
+            **(
+                {"controller_turn_id": controller_turn_id}
+                if controller_turn_id is not None
+                else {}
+            ),
         }
+        if controller_turn_id is not None:
+            state.setdefault("consumed_controller_turn_ids", []).append(
+                controller_turn_id
+            )
+            state["consumed_controller_turn_ids"] = sorted(
+                set(state["consumed_controller_turn_ids"])
+            )
         return {
             "code": "CONTROLLER_LEASE_ACQUIRED",
             "next_action_code": "ROUTE_ONE_TRANSITION",
@@ -6415,6 +6940,21 @@ class AdaptiveStateRuntime:
         self._require_attached_read_evidence(request, evidence, "/mutation/takeover_evidence")
         if not self._registered_controller(state, mutation["new_owner_identity"]):
             raise RuntimeRejection("CONTROLLER_IDENTITY_MISMATCH", "/mutation/new_owner_identity")
+        controller_turn_id = mutation.get("controller_turn_id")
+        if state.get("controller_turn_enforcement") is True:
+            if (
+                not isinstance(controller_turn_id, str)
+                or SAFE_ID_RE.fullmatch(controller_turn_id) is None
+            ):
+                raise RuntimeRejection(
+                    "CONTROLLER_TURN_ID_REQUIRED", "/mutation/controller_turn_id"
+                )
+            if controller_turn_id in state.get("consumed_controller_turn_ids", []):
+                raise RuntimeRejection(
+                    "CONTROLLER_TURN_ALREADY_ROUTED",
+                    "/mutation/controller_turn_id",
+                    {"controller_turn_id": controller_turn_id},
+                )
         expires = _parse_time(mutation["expires_at"], "/mutation/expires_at")
         if expires <= observed:
             raise RuntimeRejection("LEASE_EXPIRY_INVALID", "/mutation/expires_at")
@@ -6465,7 +7005,19 @@ class AdaptiveStateRuntime:
             "owner_identity": mutation["new_owner_identity"],
             "lease_id": new_id,
             "status": "LEASE_ACQUIRED",
+            **(
+                {"controller_turn_id": controller_turn_id}
+                if controller_turn_id is not None
+                else {}
+            ),
         }
+        if controller_turn_id is not None:
+            state.setdefault("consumed_controller_turn_ids", []).append(
+                controller_turn_id
+            )
+            state["consumed_controller_turn_ids"] = sorted(
+                set(state["consumed_controller_turn_ids"])
+            )
         state["controller_lease"] = {
             "claim": new_claim,
             "routing_turn_id": routing_turn_id,
@@ -7230,12 +7782,13 @@ class AdaptiveStateRuntime:
             repair_limit = state["authorization_envelope"]["repair_policy"][
                 "max_repair_attempts_per_goal"
             ]
-            if len(ledger["attempts"]) >= 1 + repair_limit:
+            completed_product_attempts = _completed_product_attempts(ledger)
+            if completed_product_attempts >= 1 + repair_limit:
                 raise RuntimeRejection(
                     "REPAIR_BUDGET_EXHAUSTED",
                     f"/goal_execution_ledger/{goal_id}/attempts",
                     {
-                        "completed_attempts": len(ledger["attempts"]),
+                        "completed_attempts": completed_product_attempts,
                         "max_repair_attempts_per_goal": repair_limit,
                     },
                 )
@@ -7879,6 +8432,27 @@ class AdaptiveStateRuntime:
         for key in ("report_digest", "artifact_digest"):
             if not isinstance(result[key], str) or DIGEST_RE.fullmatch(result[key]) is None:
                 raise RuntimeRejection("DIGEST_INVALID", f"/mutation/result/{key}")
+        execution_started = result.get("execution_started", True)
+        blocker_code = result.get("blocker_code")
+        if type(execution_started) is not bool:
+            raise RuntimeRejection(
+                "WORKER_EXECUTION_CLASSIFICATION_INVALID",
+                "/mutation/result/execution_started",
+            )
+        if not execution_started and (
+            result["status"] != "BLOCKED"
+            or blocker_code not in ZERO_EXECUTION_BLOCKER_CODES
+        ):
+            raise RuntimeRejection(
+                "WORKER_ZERO_EXECUTION_BLOCKER_INVALID",
+                "/mutation/result/blocker_code",
+                {"allowed": sorted(ZERO_EXECUTION_BLOCKER_CODES)},
+            )
+        if execution_started and blocker_code is not None:
+            raise RuntimeRejection(
+                "WORKER_EXECUTION_CLASSIFICATION_INVALID",
+                "/mutation/result/blocker_code",
+            )
         goal_id = record["identity"]["goal_id"]
         worker = {
             "dispatch_id": record["outbox_id"],
@@ -7887,7 +8461,10 @@ class AdaptiveStateRuntime:
             "artifact_digest": result["artifact_digest"],
             "roadmap_version": record["roadmap_version"],
             "evidence_paths": list(record["ack_evidence_paths"]),
+            "execution_started": execution_started,
         }
+        if blocker_code is not None:
+            worker["blocker_code"] = blocker_code
         if result["status"] == "PASS":
             if review_handoff is None:
                 raise RuntimeRejection(
@@ -8249,6 +8826,22 @@ class AdaptiveStateRuntime:
             for record in state["local_verification_ledger"].values()
         )
 
+    def _local_nonpass_exists(
+        self,
+        state: dict[str, Any],
+        goal_id: str,
+        worker_dispatch_id: str,
+        artifact_digest: str,
+    ) -> bool:
+        return any(
+            record.get("goal_id") == goal_id
+            and record.get("worker_dispatch_id") == worker_dispatch_id
+            and record.get("artifact_digest") == artifact_digest
+            and record.get("roadmap_version") == state["roadmap_version"]
+            and record.get("status") in {"FAIL", "BLOCKED"}
+            for record in state["local_verification_ledger"].values()
+        )
+
     def _assert_assurance_ready(
         self,
         state: dict[str, Any],
@@ -8280,9 +8873,19 @@ class AdaptiveStateRuntime:
             allow_exhausted_correction=review_kind
             in {"CODE_REVIEW", "ROADMAP_AUDIT"},
         )
-        scoped_correction = (
+        exhausted_scoped_correction = (
             worker["status"] in {"FAIL", "BLOCKED"}
             and self._scoped_correction_for_exhausted_goal(state, goal_id)
+        )
+        acknowledged_local_correction = (
+            review_kind == "ROADMAP_AUDIT"
+            and self._applied_scoped_correction(state, goal_id)
+            and self._local_nonpass_exists(
+                state, goal_id, worker_dispatch_id, artifact_digest
+            )
+        )
+        scoped_correction = (
+            exhausted_scoped_correction or acknowledged_local_correction
         )
         worker_report_digest = self._identity_value(
             identity,
@@ -8896,7 +9499,10 @@ class AdaptiveStateRuntime:
                 "/mutation/result",
                 {"fields": missing_result},
             )
-        extra_result = sorted(set(result) - required_result)
+        allowed_result = set(required_result)
+        if kind == "DISPATCH":
+            allowed_result.update({"execution_started", "blocker_code"})
+        extra_result = sorted(set(result) - allowed_result)
         if extra_result:
             raise RuntimeRejection(
                 "FORMAL_REPORT_RESULT_FIELD_UNEXPECTED",
@@ -8932,6 +9538,10 @@ class AdaptiveStateRuntime:
                 "source_artifact_digest": result["artifact_digest"],
             }
             allowed_statuses = {"PASS", "FAIL", "BLOCKED"}
+            if "execution_started" in result:
+                expected["execution_started"] = result["execution_started"]
+            if "blocker_code" in result:
+                expected["blocker_code"] = result["blocker_code"]
         elif kind == "LOCAL":
             milestone_id = identity["milestone_id"]
             expected = {
@@ -9632,6 +10242,18 @@ class AdaptiveStateRuntime:
         )
 
     @staticmethod
+    def _applied_scoped_correction(
+        state: Mapping[str, Any], goal_id: str
+    ) -> bool:
+        return any(
+            record.get("steering_type") == "CORRECTION"
+            and record.get("status") == "APPLIED"
+            and record.get("target_goal_id") == goal_id
+            and record.get("applied_state_version") is not None
+            for record in state["steering_ledger"].values()
+        )
+
+    @staticmethod
     def _scoped_correction_for_exhausted_goal(
         state: Mapping[str, Any], goal_id: str
     ) -> bool:
@@ -9641,17 +10263,11 @@ class AdaptiveStateRuntime:
         ]
         if (
             not isinstance(ledger, dict)
-            or len(ledger["attempts"]) < 1 + repair_limit
+            or _completed_product_attempts(ledger) < 1 + repair_limit
             or ledger.get("latest_worker", {}).get("status") == "PASS"
         ):
             return False
-        return any(
-            record.get("steering_type") == "CORRECTION"
-            and record.get("status") == "APPLIED"
-            and record.get("target_goal_id") == goal_id
-            and record.get("applied_state_version") is not None
-            for record in state["steering_ledger"].values()
-        )
+        return AdaptiveStateRuntime._applied_scoped_correction(state, goal_id)
 
     def _roadmap_revision(
         self,
@@ -9764,11 +10380,9 @@ class AdaptiveStateRuntime:
         source_goal_id = mutation["source_goal_id"]
         if any(entry["goal_id"] == source_goal_id for entry in proposed_queue):
             raise RuntimeRejection("COMPLETED_GOAL_REQUEUED", "/mutation/goal_queue")
-        scoped_correction = self._scoped_correction_for_exhausted_goal(
-            state, source_goal_id
-        )
-        source_attempts = len(
-            state["goal_execution_ledger"][source_goal_id]["attempts"]
+        scoped_correction = self._applied_scoped_correction(state, source_goal_id)
+        source_attempts = _completed_product_attempts(
+            state["goal_execution_ledger"][source_goal_id]
         )
         repair_limit = state["authorization_envelope"]["repair_policy"][
             "max_repair_attempts_per_goal"
@@ -10294,7 +10908,7 @@ class AdaptiveStateRuntime:
             "max_repair_attempts_per_goal"
         ]
         completed_attempts = (
-            len(ledger["attempts"]) if isinstance(ledger, dict) else 0
+            _completed_product_attempts(ledger) if isinstance(ledger, dict) else 0
         )
         if (
             mutation["blocker_code"] != "REPAIR_BUDGET_EXHAUSTED"

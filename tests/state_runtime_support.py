@@ -388,6 +388,7 @@ class Harness:
         self.identity_counter = 0
         self.definitions: dict[str, dict[str, Any]] = {}
         self.authorization: dict[str, Any] = {}
+        self.active_pack_digest: str | None = None
 
     def next_id(self, prefix: str) -> str:
         self.identity_counter += 1
@@ -415,6 +416,14 @@ class Harness:
         self.counter += 1
         request_id = request_id or f"request-{self.counter}"
         event_id = event_id or f"event-{self.counter}"
+        normalized_mutation = copy.deepcopy(mutation)
+        if (
+            self.active_pack_digest is not None
+            and normalized_mutation.get("type")
+            in {"ACQUIRE_LEASE", "TAKEOVER_LEASE"}
+            and "controller_turn_id" not in normalized_mutation
+        ):
+            normalized_mutation["controller_turn_id"] = self.next_id("app-turn")
         request = {
             "controller_approved": True,
             "state_request_id": request_id,
@@ -424,8 +433,13 @@ class Harness:
             "thread_id": "controller-1",
             "occurred_at": T0,
             "evidence_paths": evidence_paths or [f"evidence/{event_id}.json"],
-            "mutation": copy.deepcopy(mutation),
+            "mutation": normalized_mutation,
         }
+        if (
+            self.active_pack_digest is not None
+            and normalized_mutation.get("type") != "INITIALIZE"
+        ):
+            request["controller_pack_digest"] = self.active_pack_digest
         if artifacts is not None:
             request["artifacts"] = copy.deepcopy(artifacts)
         return request
@@ -443,6 +457,8 @@ class Harness:
             artifacts=artifacts,
         )
         response = self.runtime.apply(request)
+        if response.get("ok") and mutation.get("type") == "MIGRATE_CONTROLLER_PACK":
+            self.active_pack_digest = mutation["target_pack_digest"]
         return response
 
     def initialize(
@@ -465,6 +481,7 @@ class Harness:
             authorization or authorization_envelope(definitions, milestones)
         )
         pack = controller_pack_artifact()
+        self.active_pack_digest = pack["digest"]
         request = self.make_request(
             {
                 "type": "INITIALIZE",
@@ -512,6 +529,7 @@ class Harness:
                 "owner_identity": "controller-1",
                 "observed_at": observed_at,
                 "expires_at": expires_at,
+                "controller_turn_id": self.next_id("app-turn"),
             }
         )
         if not response["ok"]:
@@ -722,6 +740,9 @@ class Harness:
             "source_artifact_digest": result["artifact_digest"],
         }
         if kind == "DISPATCH":
+            for key in ("execution_started", "blocker_code"):
+                if key in result:
+                    report[key] = result[key]
             report["after_snapshot_sha256"] = result[
                 "artifact_digest"
             ].removeprefix("sha256:")
@@ -823,6 +844,16 @@ class Harness:
                         "result": {
                             "status": result["status"],
                             "artifact_digest": result["artifact_digest"],
+                            **(
+                                {"execution_started": result["execution_started"]}
+                                if "execution_started" in result
+                                else {}
+                            ),
+                            **(
+                                {"blocker_code": result["blocker_code"]}
+                                if "blocker_code" in result
+                                else {}
+                            ),
                         },
                         "report": json.loads(report_content),
                     }

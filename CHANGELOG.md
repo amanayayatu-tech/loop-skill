@@ -5,6 +5,54 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.2.2] - 2026-07-14
+
+### Changed
+
+- Generated Adaptive Packs now use projection-first canonical observation,
+  compact one-in-flight task reads with 30/60/120-second backoff, exact
+  validation-identity deduplication, and bounded child-process/session cleanup.
+  The validator rejects aggressive fixed polling, raw task-output forwarding,
+  shell busy waits, and external retries after stdout loss. This is a
+  non-functional control-resource constraint and changes no state schema,
+  migration, repair limit, or public completion behavior.
+- Clarified that stdin modes need an exposed direct-argv process API with a
+  writable non-PTY pipe. An execution tool that closes stdin at launch is
+  ineligible; temporary-file redirection is not a compliant substitute.
+
+### Fixed
+
+- Extended the direct non-PTY, bounded-frame transport contract to every
+  `adaptive_state_runtime.py` mode and reject pre-runtime stdin helpers,
+  `tty:true`, fixed-byte readers, heredocs, and shell pipelines in generated
+  Adaptive Packs.
+- Added immutable sanitized `STARTED`/`COMPLETED` external-call receipts so a
+  completed Local Verification remains recoverable when deferred execution
+  loses stdout; a lone `STARTED` receipt conservatively consumes one call and
+  forbids an automatic retry.
+- Split Worker history from repair consumption. Deterministic control-plane
+  closures with `execution_started=false` remain auditable without consuming a
+  product repair slot; legacy unclassified attempts retain their old meaning.
+- Added atomic `MIGRATE_CONTROLLER_PACK`, immutable Pack revision history, and
+  post-initialize Pack-digest attestation. A changed Pack cannot route until
+  canonical identity has migrated at a paused safe point. Migration now also
+  backfills deterministic legacy turn identities before enabling the new
+  one-route-per-App-turn invariant.
+- Bound route acquisition and takeover to a real Controller App turn identity;
+  the same turn cannot obtain a second route lease after completion or release.
+- Preserve explicit scoped-correction identity for reviewed Goals even before
+  repair exhaustion, so Roadmap Revision retires rather than falsely completes
+  the superseded Goal while retaining its full attempt history.
+- Permit a scoped-correction Roadmap Audit to replace an old artifact only when
+  the same Worker artifact already has an acknowledged Local `FAIL`/`BLOCKED`
+  result; without that exact evidence the normal Local PASS gate still applies.
+
+### Evidence boundary
+
+The new regression fixture is derived from one stopped real-project incident
+and covers the repository runtime/Pack protocol. It does not claim to repair
+Codex app-server process-group cleanup or prove cross-version App behavior.
+
 ## [3.2.1] - 2026-07-14
 
 ### Changed
@@ -68,6 +116,7 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.1...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.2...HEAD
+[3.2.2]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.2
 [3.2.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.1
 [3.2.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.0

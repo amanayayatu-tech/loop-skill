@@ -27,7 +27,12 @@ SAFE_MILESTONE_ID_RE = re.compile(SAFE_MILESTONE_ID_PATTERN)
 SAFE_ID_RE = SAFE_MILESTONE_ID_RE
 
 ADAPTIVE_TRANSPORT_CONTRACT_MARKERS = (
+    "Universal runtime transport contract",
+    "every `adaptive_state_runtime.py` mode",
     "`tty:false`",
+    "launch the runtime itself first",
+    "Never place a stdin helper, shell wrapper, pipeline, heredoc, `dd`, `stty`, or fixed-byte reader before the runtime process.",
+    "write one compact JSON frame exactly once",
     "`exit_code=0`",
     "no longer returns `session_id`",
     "single `PAYLOAD_MATERIALIZED`",
@@ -35,21 +40,90 @@ ADAPTIVE_TRANSPORT_CONTRACT_MARKERS = (
     "`PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT`",
 )
 
+ADAPTIVE_RESOURCE_CONTRACT_MARKERS = (
+    "Projection-first observation contract",
+    "canonical `LOOP_STATE.md` mtime/size",
+    "projected `STATUS.md` state version",
+    "`STATUS.md` is observation-only and never mutation authority",
+    "read_thread(threadId=..., turnLimit=1, includeOutputs=false)",
+    "one in-flight read per target",
+    "30/60/120-second backoff",
+    "Validation identity dedupe",
+    "Process/session cleanup contract",
+    "writable non-PTY stdin pipe",
+    "temporary-file redirection",
+    "TERM -> bounded wait -> KILL -> waitpid",
+    "lost stdout never authorizes an external retry",
+)
+
 
 def validate_adaptive_pack_transport_contract(pack: str) -> list[str]:
-    """Reject an Adaptive Pack that weakens the non-PTY payload contract."""
+    """Reject an Adaptive Pack that weakens any runtime transport contract."""
 
     errors = [
         f"adaptive_transport_contract:missing:{marker}"
         for marker in ADAPTIVE_TRANSPORT_CONTRACT_MARKERS
         if marker not in pack
     ]
+    errors.extend(
+        f"adaptive_resource_contract:missing:{marker}"
+        for marker in ADAPTIVE_RESOURCE_CONTRACT_MARKERS
+        if marker not in pack
+    )
+    unsafe_patterns = (
+        r"\btty\s*:\s*true\b",
+        r"\bstty\s+-",
+        r"\bdd\s+[^\n]*\bbs\s*=",
+        r"stdin\.buffer\.read\s*\(\s*[1-9]",
+        r"<<\s*['\"]?[A-Za-z_][A-Za-z0-9_]*",
+        r"\|\s*(?:python3?\s+)?[^\n]*adaptive_state_runtime\.py",
+        r"<\s*/(?:private/)?tmp/[^\s]+",
+        r"\bredirect(?:ion)?\b[^\n]{0,80}\bstdin\b[^\n]{0,80}/(?:private/)?tmp/",
+    )
     for line in pack.splitlines():
         lowered = line.lower()
-        if not any(token in lowered for token in ("`dd`", "`stty`", "heredoc")):
+        if not (
+            any(token in lowered for token in ("`dd`", "`stty`", "heredoc"))
+            or any(re.search(pattern, lowered) for pattern in unsafe_patterns)
+        ):
             continue
-        if not any(guard in lowered for guard in ("do not use", "never use", "禁止")):
+        if not any(
+            guard in lowered
+            for guard in (
+                "do not use",
+                "never use",
+                "never place",
+                "禁止",
+                "不得",
+            )
+        ):
             errors.append("adaptive_transport_contract:unsafe_shell_transport")
+            break
+    unsafe_resource_patterns = (
+        r"\bpoll(?:ing)?\s+(?:every|at)\s+[1-9][0-9]*\s*(?:s|sec|secs|second|seconds)\b",
+        r"\bwhile\s+(?:true|:)\s*;?\s*do\b",
+        r"\bread_thread\b[^\n]{0,120}\b(?:forward|paste|relay)\b[^\n]{0,80}\b(?:raw|full|entire)?\s*(?:output|result|transcript)\b",
+        r"\b(?:lost|missing)\s+stdout\b[^\n]{0,100}\bretry\b",
+        r"\bretry\b[^\n]{0,100}\b(?:lost|missing)\s+stdout\b",
+    )
+    for line in pack.splitlines():
+        lowered = line.lower()
+        if not any(re.search(pattern, lowered) for pattern in unsafe_resource_patterns):
+            continue
+        if not any(
+            guard in lowered
+            for guard in (
+                "do not",
+                "never",
+                "forbid",
+                "must not",
+                "reject",
+                "prohibit",
+                "禁止",
+                "不得",
+            )
+        ):
+            errors.append("adaptive_resource_contract:unsafe_resource_loop")
             break
     return errors
 
