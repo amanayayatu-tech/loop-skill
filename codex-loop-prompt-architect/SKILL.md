@@ -292,7 +292,7 @@ Each extracted child prompt is self-contained. Executable Workers receive the
 full retry ladder; Reviewer receives exact-artifact rules. Standard State-Writer
 receives CAS/idempotency protocol. Adaptive State-Writer accepts only
 `STATE_MUTATION`, invokes the installed deterministic runtime, and never hand-writes canonical state/events/journals. Adaptive `INITIALIZE` archives the frozen root-confined Pack by local `source_path` plus attested digest, never inline Pack content, Base64, wrapper decoding, or entity replacement.
-Adaptive Worker/Reviewer/Local reports never cross App transport inline: each target task invokes installed `adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage` before replying and returns only its ASCII-safe `FORMAL_REPORT_STAGED` handle. Controller forwards the helper-produced root-confined `.codex-loop/report-staging/` source path, media type, digest, and ACK-ready result; it never reads REPORT bytes, hand-writes staging, or computes report digests in prose.
+Adaptive Worker/Reviewer/Local reports never cross App transport inline: each target task invokes installed `adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage` before replying and returns only its ASCII-safe `FORMAL_REPORT_STAGED` handle. Controller forwards the helper-produced root-confined `.codex-loop/report-staging/` source path, media type, digest, and ACK-ready result; it never reads REPORT bytes, hand-writes staging, or computes report digests in prose. Runtime stdin is bounded to 30 seconds/4 MB/strict UTF-8 and completes on one full JSON frame without waiting for EOF. Payload materialization must use direct non-PTY (`tty:false`) raw stdin; never use `dd`, `stty`, fixed-byte readers, heredocs, or shell pipelines. Success requires exit 0, no live session, and one `PAYLOAD_MATERIALIZED` response.
 Dispatch verification is semantic after runtime-only CRLF-to-LF and at most one trailing-newline normalization; entity or field changes still fail.
 
 Minimum state includes:
@@ -343,8 +343,12 @@ without changing state. Recovery checks the target thread before resend. A Worke
 returns its existing report for a duplicate dispatch instead of re-executing.
 Recovery pages `read_thread` with cursors back to the registered bootstrap
 boundary; a latest-turn-only search is not proof of absence.
-When the per-Goal repair counter is exhausted, stop
-`REPAIR_BUDGET_EXHAUSTED`; a new task must never reset the counter.
+The default per-Goal repair allowance is five attempts beyond the initial run;
+explicit 0–20 remains valid. At `REPAIR_BUDGET_EXHAUSTED`, dispatch no more
+repairs. Register one stop-or-paused-correction Decision Card and pause the
+heartbeat, or use deterministic fast STOP when cards are disabled. A user STOP
+binds the card and response Steering; other hard blockers retain three natural
+observations. Scoped correction uses a new Goal id and preserves history.
 
 Required canonical audit files:
 

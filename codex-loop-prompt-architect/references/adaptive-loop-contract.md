@@ -101,12 +101,27 @@ conditional dashboard, immutable Pack/report artifacts, `ROADMAP_REVISION`,
 Controller performs a prepared external action only after an applied runtime
 response and returns the observation through a new typed mutation.
 
+Every stdin mode uses one bounded frame reader: 30 seconds of wall-clock time,
+a 4 MB byte ceiling, and strict UTF-8. JSON/state/report modes return as soon as
+one complete top-level object is available, without waiting for EOF; payload
+verification accepts its existing envelope-plus-JSON framing. Closed-pipe EOF
+remains compatible. Timeout, size, and encoding failures return structured
+`INPUT_TRANSPORT_TIMEOUT`, `INPUT_TRANSPORT_TOO_LARGE`, and
+`INPUT_TRANSPORT_UTF8_INVALID` responses with nonzero exit status.
+
 The same runtime is also the only dispatch payload codec. Controller submits one
 strict JSON object with exactly `envelope_type` and `payload` to
 `adaptive_state_runtime.py --payload-materialize`; the payload contains one
 `dispatch_payload_digest` whose value is the literal
-`PAYLOAD_DIGEST_PLACEHOLDER`. Only `PAYLOAD_MATERIALIZED` may be persisted and
-sent. Its `transport_text` is the exact task-message body. A receiver passes the
+`PAYLOAD_DIGEST_PLACEHOLDER`. Invoke the runtime directly with `tty:false`,
+write one compact JSON frame once, and never interpose `dd`, `stty`, a fixed-byte
+reader, heredoc, or shell pipeline. Success requires `exit_code=0`, no remaining
+`session_id`, and stdout containing exactly one `PAYLOAD_MATERIALIZED` object.
+If a session is yielded, poll only that session until completion; never start a
+substitute. At deadline, wait for the bounded runtime to fail closed and map the
+result to `PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT`. Only a successful
+`PAYLOAD_MATERIALIZED` may be persisted and sent. Its `transport_text` is the
+exact task-message body. A receiver passes the
 exact received `codexDelegation.input` unchanged to
 `--root <absolute repo root> --payload-verify` and acts only on
 `PAYLOAD_VERIFIED`. Runtime alone may normalize CRLF to LF and remove at most
@@ -363,9 +378,10 @@ When policy is `required` and `get_goal`, `create_goal`, and `update_goal` are e
    new milestone Goal, then dispatch. A same-milestone sibling returns
    `PREPARE_NEXT_GOAL_OUTBOX` and retains the existing Goal. `FINALIZE_LOOP`
    enforces the same binding.
-8. Use `blocked` only after runtime `STOP_LOOP` validates three distinct
-   evidence artifacts for the last three genuine consecutive Goal turns with
-   one exact blocker code/fingerprint and Controller Goal identity.
+8. Use `blocked` only after runtime `STOP_LOOP` validates its declared basis:
+   three distinct observations for a general blocker, deterministic repair
+   exhaustion when Decision Cards are disabled, or an applied user stop
+   Decision bound to exact response Steering.
    Task read, indexing, message-send, or transport timeouts while a
    PREPARED/SENT outbox reserves the route are recoverable
    `WAITING_ACTIVE`/`WAITING_QUOTA_RECOVERY`, never hard-block observations and
@@ -688,7 +704,16 @@ That union includes Worker FAIL or BLOCKED, code-review repair, Local Verificati
 Roadmap Audit repair, and Final Audit repair; all consume the same per-Goal
 budget.
 The state machine enforces `max_repair_attempts_per_goal` and emits
-`REPAIR_BUDGET_EXHAUSTED` at the limit.
+`REPAIR_BUDGET_EXHAUSTED` at the limit. The generated default is five repairs
+beyond the initial execution; explicit inputs remain bounded to 0–20. Once the
+limit is reached, no additional Worker dispatch is valid. With Decision Cards
+enabled, Controller registers one stable card containing only stop-on-current-
+evidence and remain-paused-for-scoped-correction, then pauses the exact
+heartbeat. Without Decision Cards, the next dedicated Goal turn may use
+`stop_basis=DETERMINISTIC_REPAIR_BUDGET` directly. A scoped correction must be
+recorded as applied Steering and audited through `ROADMAP_REVISION`; it retires
+the exhausted Goal, uses a new Goal id, and preserves the old definition,
+attempt ledger, and repair counter.
 Roadmap revisions replace the canonical Validation Matrix for the revised Goal
 set, discard results whose requirements changed, and recompute the global
 validation gate after retirement status is applied and before routing the next
@@ -717,20 +742,21 @@ transition, the Controller must stop before `FINALIZE_LOOP`. A prepared
 finalization outbox never authorizes Goal recreation or a fabricated
 `{"status":"COMPLETE"}` observation.
 
-An unrecoverable blocker follows a different terminal transaction. On each
-natural Goal turn, Controller archives one strict observation in that turn's
-observation-only `RELEASE_LEASE` transaction containing the
-Goal turn id, observed time, blocker code/fingerprint, exact Controller Goal id,
-`status="HARD_BLOCK"`, `route_action=null`, and
-`release_reason_code="HARD_BLOCK_OBSERVATION_ONLY"`. Runtime accepts
-`STOP_LOOP` only when exactly three distinct artifacts already bind the three
-immediately preceding genuine consecutive completed Goal turns at each
-release's exact state version. None can be attached to, or backfilled by, the
-STOP request. An aggregate blocker report binds those prior turn ids. Fewer,
-repeated, nonconsecutive, action-bearing, late, or mismatched observations are
-pure rejection. Controller submits the eligible `STOP_LOOP` on the next
-dedicated Goal turn and a fresh lease, only after every external outbox is
-closed.
+An unrecoverable blocker follows a different terminal transaction. Every
+`STOP_LOOP` declares one `stop_basis`. `THREE_OBSERVATIONS` preserves the
+general hard-block safeguard: on each natural Goal turn, Controller archives
+one strict observation in that turn's observation-only `RELEASE_LEASE`
+transaction. Runtime accepts this basis only when exactly three distinct
+artifacts already bind the three immediately preceding genuine consecutive
+completed Goal turns at each release's exact state version. None can be
+attached to or backfilled by the STOP request. `DETERMINISTIC_REPAIR_BUDGET`
+requires a runtime-proven exhausted Goal and Decision Cards disabled.
+`USER_DECISION` requires the same exhausted Goal plus one applied
+`STOP_LOOP_CONFIRMED` option, its context digest, and the exact response
+Steering. These deterministic bases do not spend three observation turns and
+cannot authorize another repair. Fewer, repeated, mismatched, or fabricated
+identities are pure rejection. Controller submits STOP on a dedicated Goal
+turn with a fresh lease only after every external outbox is closed.
 Runtime sets `LOOP_BLOCKED`, blocks the active milestone, supersedes future work,
 retires unresolved Goals, and prepares a BLOCKED finalization outbox without any
 PASS claim. On that dedicated STOP turn, only the exact one-use capability

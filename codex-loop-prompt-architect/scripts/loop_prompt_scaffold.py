@@ -73,6 +73,7 @@ from loop_architect.validation import (  # noqa: E402
     adaptive_validation_errors,
     infer_legacy_role_kind,
     normalize_milestones,
+    validate_adaptive_pack_transport_contract,
 )
 
 
@@ -133,7 +134,7 @@ DEFAULTS: dict[str, Any] = {
     "worktree_policy": "one shared integration worktree for sequential writing goals; at most one writing task active; separate writing worktrees require an explicit promotion or merge plan",
     "thread_topology": "lean just-in-time topology: one current execution Worker, one serial State-Writer, and one Reviewer only when its review artifact is accessible",
     "max_child_threads": 4,
-    "max_repair_attempts_per_goal": 3,
+    "max_repair_attempts_per_goal": 5,
     "workspace_setup": "Create or select one Codex Project/Workspace for the repo/root before starting. For a new build, use an empty folder when possible.",
     "human_approval_policy": (
         "Local code, tests, and configuration changes inside the allowed scope are pre-authorized. "
@@ -943,7 +944,7 @@ def adaptive_authorization_envelope(
         "repair_policy": {
             "max_repair_attempts_per_goal": bounded_integer(
                 "max_repair_attempts_per_goal",
-                3,
+                5,
             ),
         },
         "budget_caps": {
@@ -1824,7 +1825,7 @@ def validation_errors(data: dict[str, Any]) -> list[str]:
         "max_idle_wakeups": (1, 1000),
         "active_stale_after_minutes": (5, 10080),
         "max_child_threads": (2, 32),
-        "max_repair_attempts_per_goal": (1, 20),
+        "max_repair_attempts_per_goal": (0, 20),
     }
     adaptive_mode = data.get("coordination_mode") == "adaptive"
     for key, (minimum, maximum) in numeric_rules.items():
@@ -2514,7 +2515,7 @@ Only the mutation types declared by `adaptive-mutation.schema.json` may change c
 | SENT Worker `DISPATCH` with task active under {active_stale_after_minutes} minutes | Read the same task; renew the same-owner lease with bound JSON evidence when TTL requires it; never resend | release the live route or create another Worker |
 | Worker returns FORMAL_REPORT_STAGED handle | Forward only its helper-produced source_path/digest/ACK-ready result in `ACK_OUTBOX`; never read REPORT bytes. If no compatible registered Reviewer exists, use a fresh lease for `THREAD` PREPARED -> create/fork once -> SENT -> ACKED and wait for the real threadId; only then use another fresh lease for CODE_REVIEW `ASSURANCE` | accept raw report through App, inline report bytes, write staging manually, review before Worker ACK, create Reviewer outside THREAD outbox, or reuse the THREAD lease for review |
 | Worker FAIL/BLOCKED report | ACK the exact report; prepare one repair dispatch only while completed attempts remain within initial+{max_repair_attempts_per_goal} | reset budget with a new Worker |
-| Runtime returns `REPAIR_BUDGET_EXHAUSTED` | Stop dispatching that Goal and report the bounded blocker | bypass the runtime cap |
+| Runtime returns `REPAIR_BUDGET_EXHAUSTED` | Stop dispatching immediately. If Decision Cards are enabled, register one stable stop-or-wait-for-scoped-correction card and pause the exact heartbeat; if disabled, use `DETERMINISTIC_REPAIR_BUDGET` on the next dedicated Goal turn | bypass the cap, create another Worker, or spend three empty observation turns |
 | `ASSURANCE` | staged ACK, then zero-artifact `RECORD_REVIEW` from its ACK path | inline/retransmit report bytes |
 | CODE_REVIEW pass and required Local Verification exists | If no compatible registered Local Verifier exists, use a fresh lease for `THREAD` PREPARED -> create/fork once -> SENT -> ACKED; after its real threadId is registered, use another fresh lease for `LOCAL` PREPARED -> SENT -> COMPLETED on the exact artifact, then ROADMAP_AUDIT | skip the JIT THREAD lifecycle, reuse its lease, or reuse stale local evidence |
 | CODE_REVIEW pass and no Local Verification is required | On a fresh lease, dispatch ROADMAP_AUDIT to the already registered Reviewer with the exact Worker and CODE_REVIEW identities | create a Local Verifier or jump directly to the next Goal |
@@ -2527,6 +2528,8 @@ Only the mutation types declared by `adaptive-mutation.schema.json` may change c
 | Same-identity Goal BLOCKED after explicit resume | Fresh Goal-turn lease records pre-BLOCKED + `SAME_GOAL_RESUME` + post-BLOCKED via `RECORD_CONTROLLER_GOAL_RESUME`; require its receipt | claim ACTIVE, create/update, add attempt/milestone, or repeat |
 | Same hard blocker observed in fewer than three genuine consecutive Goal turns | Attach one immutable turn-bound observation to that turn's `RELEASE_LEASE`, wait for its artifact/state-version ACK, and remain nonterminal until a natural Goal continuation | submit STOP_LOOP, backfill observations later, fabricate a turn, or count heartbeat-only wakes |
 | Same hard blocker observed in the last three genuine consecutive Goal turns | Submit `STOP_LOOP` with the three distinct bound observations and aggregate report; only its matching one-use closeout capability may authorize Goal BLOCKED, then pause the heartbeat and `ACK_FINALIZATION` in the same turn | update Goal from wait/timeout, repeat diagnosis, leave heartbeat ACTIVE, or create another loop |
+| User selects stop on the repair-exhaustion Decision Card | Submit `STOP_LOOP` with `stop_basis=USER_DECISION`, the exhausted Goal id, applied card/context, exact Decision-response Steering, and blocker report; do not collect three observations | dispatch another repair or treat an unbound response as authority |
+| User selects wait for scoped correction | Keep the heartbeat paused and dispatch nothing. A later scoped CORRECTION may be audited into ROADMAP_REVISION only with a new Goal id while preserving the exhausted Goal definition, attempts, and repair counter | reuse the Goal id, clear history, or resume the old repair lane |
 | `CORE_FINALIZATION_ACKED` or `FINALIZATION_PENDING_EXTERNAL_SYNC` | Preserve the exact terminal core evidence and finish/reconcile only the authorized external adapter action | claim FINALIZATION_ACKED or release success |
 | `FINALIZATION_ACKED` | Re-read canonical receipt and stop the business heartbeat | continue routing or claim broader validation |
 | Routing turn count reaches {max_wakeups} before terminal state | Stop new routing and report `ROUTING_BUDGET_EXHAUSTED` | invent more wake budget |
@@ -2579,7 +2582,7 @@ def deterministic_transition_table_block(
     )
     worker_repair_rows = (
         f"| Worker FAIL/BLOCKED/NEEDS_REPAIR | Persist the exact Worker dispatch/report/artifact failure or blocker; after ACK authorize one repair from the shared per-Goal ledger, then send one new repair dispatch_id to the same Worker up to {max_repair_attempts_per_goal} attempts | review a failed/blocked artifact, leave WORKER_FAIL or WORKER_BLOCKED unroutable, or create a new phase Worker |\n"
-        f"| Worker FAIL/BLOCKED/NEEDS_REPAIR and repair_count >= {max_repair_attempts_per_goal} | Persist REPAIR_BUDGET_EXHAUSTED and STOP for explicit scope/budget decision | create a fresh Worker to reset the counter |"
+        f"| Worker FAIL/BLOCKED/NEEDS_REPAIR and repair_count >= {max_repair_attempts_per_goal} | Persist REPAIR_BUDGET_EXHAUSTED; dispatch no more repairs; register one stop-or-wait Decision and pause heartbeat, or deterministic-fast-stop when cards are disabled | create a fresh Worker, extend the cap, or spin three observation turns |"
         if adaptive
         else f"| Worker NEEDS_REPAIR | Persist result; after ack, send one repair dispatch_id to same Worker up to {max_repair_attempts_per_goal} attempts | new phase Worker |\n"
         f"| Worker NEEDS_REPAIR and repair_count >= {max_repair_attempts_per_goal} | Persist REPAIR_BUDGET_EXHAUSTED and STOP for explicit scope/budget decision | create a fresh Worker to reset the counter |"
@@ -2655,7 +2658,7 @@ Controller and heartbeat must apply this table idempotently. Never dispatch when
 | PHASE_PERMISSION_CONFLICT | Persist the exact side effect and conflicting permission; continue an independent authorized Goal if one exists, otherwise STOP | widen permission from prose |
 | HARD_BLOCK or a declared structural blocker not otherwise handled, including missing source/connector or path/worktree identity failure | Persist exact evidence and STOP; preserve every completed independent artifact | improvise data, path, identity, or permission |
 | Reviewer REVIEW_NEEDS_REPAIR | Persist findings; after ack, send one repair goal to same Worker while repair_count < {max_repair_attempts_per_goal} | user escalation while budget remains |
-| Reviewer REVIEW_NEEDS_REPAIR and repair_count >= {max_repair_attempts_per_goal} | Persist REPAIR_BUDGET_EXHAUSTED and STOP for explicit extension or scope change | silently continue repairs |
+| Reviewer REVIEW_NEEDS_REPAIR and repair_count >= {max_repair_attempts_per_goal} | Persist REPAIR_BUDGET_EXHAUSTED; no extension or extra repair is valid; route only stop or paused scoped correction | silently continue repairs |
 {review_pass_row}
 {adaptive_assurance_rows}| Reviewer REVIEW_PASS_WITH_BLOCKED_VALIDATION | Retry validation when transient budget remains; otherwise persist limited evidence and STOP/waiver | full PASS |
 {final_closeout_rows}
@@ -3526,7 +3529,7 @@ def _render_controller_pack_base(data: dict[str, Any], mode: str) -> str:
         worktree_policy = "non_git local integration directory only; no Git worktree"
     thread_topology = str(data.get("thread_topology", DEFAULTS["thread_topology"]))
     max_child_threads = int_value(data, "max_child_threads", 4)
-    max_repair_attempts = int_value(data, "max_repair_attempts_per_goal", 3)
+    max_repair_attempts = int_value(data, "max_repair_attempts_per_goal", 5)
     review = str(data.get("review", DEFAULTS["review"]))
     commit_policy = str(data.get("commit_policy", DEFAULTS["commit_policy"]))
     source_promotion_policy = str(data.get("source_promotion_policy", DEFAULTS["source_promotion_policy"]))
@@ -3797,7 +3800,7 @@ Required Report Fields:
     )
     adaptive_materialization_lines = (
         "- Adaptive only: each Goal template is a PAYLOAD_MATERIALIZATION_SPEC strict JSON object. Parse it, replace each whole MATERIALIZE_* value with the correctly typed runtime value (integer, object, string, or null), and reject any remaining token. The claim contains lease_epoch, lease_id, owner_kind, owner_identity equal to the exact registered real Controller threadId, routing_turn_id, and intended_transition. A codex_delegation source_thread_id is parent metadata and is never valid owner identity.\n"
-        "- Keep dispatch_payload_digest equal to the literal PAYLOAD_DIGEST_PLACEHOLDER in that specification. Pass the specification unchanged on stdin to the installed adaptive_state_runtime.py --payload-materialize. Only PAYLOAD_MATERIALIZED is valid: use its payload_digest in PREPARE_OUTBOX and, after the PREPARE ACK, send its transport_text unchanged as the exact codexDelegation.input body. Receiver passes received bytes unchanged to --payload-verify; runtime alone may normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization. Entity substitution or any field/value change still fails. Never manually replace/hash text, preserve a sha256: prefix, add angle brackets, reserialize transport_text, or hash the visible XML/UI wrapper.\n"
+        "- Keep dispatch_payload_digest equal to the literal PAYLOAD_DIGEST_PLACEHOLDER in that specification. Serialize one compact JSON frame, directly invoke the installed adaptive_state_runtime.py --payload-materialize with tty:false, and write the frame once to raw stdin. Do not use dd/stty, fixed-byte readers, heredocs, or an extra shell pipeline; terminal echo is not runtime output. Success requires exit_code=0, no remaining session_id, and stdout containing one PAYLOAD_MATERIALIZED object. Poll only the same yielded session; never start a substitute materialization. If the controller deadline is reached, let the bounded runtime fail closed and report PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT. Use the successful payload_digest in PREPARE_OUTBOX and, after the PREPARE ACK, send transport_text unchanged as the exact codexDelegation.input body. Receiver passes received bytes unchanged to --payload-verify; runtime alone may normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization. Entity substitution or any field/value change still fails. Never manually replace/hash text, preserve a sha256: prefix, add angle brackets, reserialize transport_text, or hash the visible XML/UI wrapper.\n"
         "- Every Adaptive PREPARE_OUTBOX(kind=DISPATCH) record binds dispatch_id + exact payload_digest + target_thread_id + immutable Goal definition digest. Recover only when all four match, and allow only one PREPARED/SENT Worker dispatch.\n"
         if adaptive
         else ""
@@ -3971,7 +3974,12 @@ SEND VIA: Controller to real Worker thread for {first_goal['worker_role']}
 
 
 def render_controller_pack(data: dict[str, Any], mode: str) -> str:
-    return _render_controller_pack_base(data, mode)
+    pack = _render_controller_pack_base(data, mode)
+    if data.get("coordination_mode") == "adaptive":
+        errors = validate_adaptive_pack_transport_contract(pack)
+        if errors:
+            raise ValueError("; ".join(errors))
+    return pack
 
 
 def render_user_guide(data: dict[str, Any], controller_pack_path: str | None) -> str:

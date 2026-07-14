@@ -214,7 +214,7 @@ If thread_creation_outbox is PREPARED without a registered threadId, use list_th
 If automation_outbox is PREPARED but automation id is missing, inspect canonical state and `$CODEX_HOME/automations/*/automation.toml` for the exact deterministic name, Controller target, rrule, and prompt digest. Adopt one exact match instead of creating another. If duplicates exist, record them, keep one canonical id, and pause the extras after State-Writer ACK.
 If that PREPARED recovery surface is inaccessible or identity remains ambiguous, persist AUTOMATION_IDENTITY_UNRESOLVED and stop; never create speculatively.
 
-Keep at most one writing execution Worker. Create no future-stage Worker. Create Reviewer only after a reviewable Worker report is acknowledged and exact local/worktree artifact mapping exists. Dispatch exactly one unlocked Goal through DISPATCH_PREPARED ACK -> send once -> DISPATCH_SENT ACK. Automatically return REVIEW_NEEDS_REPAIR to the same Worker for at most 3 repair attempts per Goal. When the queue is empty, run exact-artifact FINAL_AUDIT for any diff, or FINAL_READ_ONLY_AUDIT only when every Goal is read-only/no-diff and review policy explicitly permits omission.
+Keep at most one writing execution Worker. Create no future-stage Worker. Create Reviewer only after a reviewable Worker report is acknowledged and exact local/worktree artifact mapping exists. Dispatch exactly one unlocked Goal through DISPATCH_PREPARED ACK -> send once -> DISPATCH_SENT ACK. Automatically return REVIEW_NEEDS_REPAIR to the same Worker for at most 5 repair attempts per Goal. When the queue is empty, run exact-artifact FINAL_AUDIT for any diff, or FINAL_READ_ONLY_AUDIT only when every Goal is read-only/no-diff and review policy explicitly permits omission.
 
 Reuse the current integration workspace/worktree and its Reviewer whenever compatible. After a task is durably complete and no repair or same-task continuation remains, record its lifecycle state and archive the old task with set_thread_archived(threadId=..., archived=true); archiving must never precede report/state ACK and never deletes evidence. Keep State-Writer available until final state ACK.
 
@@ -225,7 +225,7 @@ Budget And Automation:
 - declared_automation_intent: Create one Controller heartbeat during startup and route until terminal state
 - max_parallel_execution_workers: 1
 - max_goals_per_round: 1 by default; every outbound message requires a prepared and acknowledged dispatch outbox entry
-- max_repair_attempts_per_goal: 3
+- max_repair_attempts_per_goal: 5
 - heartbeat_interval_minutes: 15
 - max_wakeups: 64
 - max_consecutive_idle_wakeups: 8
@@ -292,8 +292,8 @@ Controller and heartbeat must apply this table idempotently. Never dispatch when
 | Worker READY_FOR_REVIEW or PASS with a diff | Persist Worker report; after ack, create/map exact-artifact Reviewer and send /review | PASS without review |
 | Worker PASS with no diff/read-only result | Persist report; after ack, evaluate queue dependencies directly | force code review or archive early |
 | Completed task will not be reused | After report/review ACK and evidence persistence, record lifecycle then set_thread_archived(threadId=..., archived=true) | archive active/unacknowledged task |
-| Worker NEEDS_REPAIR | Persist result; after ack, send one repair dispatch_id to same Worker up to 3 attempts | new phase Worker |
-| Worker NEEDS_REPAIR and repair_count >= 3 | Persist REPAIR_BUDGET_EXHAUSTED and STOP for explicit scope/budget decision | create a fresh Worker to reset the counter |
+| Worker NEEDS_REPAIR | Persist result; after ack, send one repair dispatch_id to same Worker up to 5 attempts | new phase Worker |
+| Worker NEEDS_REPAIR and repair_count >= 5 | Persist REPAIR_BUDGET_EXHAUSTED and STOP for explicit scope/budget decision | create a fresh Worker to reset the counter |
 | Worker RUNTIME_DEPENDENCY_RETRYING, retry_count < 10 after the initial attempt | Persist retry; after ack, send next bounded retry goal | ask user immediately |
 | VALIDATION_BLOCKED/RUNTIME_DEPENDENCY_BLOCKED with transient evidence and retry_count < 10 | Reclassify to RUNTIME_DEPENDENCY_RETRYING | terminal stop |
 | Runtime retries exhausted or non-transient failure | Persist exact blocker; optionally review static evidence; STOP without PASS | claim complete |
@@ -302,8 +302,8 @@ Controller and heartbeat must apply this table idempotently. Never dispatch when
 | BLOCKED_COST_CAP without a valid measurable cap, or BLOCKED_USAGE_METADATA | Persist missing budget/measurement evidence; STOP before the metered call | infer unlimited authorization |
 | PHASE_PERMISSION_CONFLICT | Persist the exact side effect and conflicting permission; continue an independent authorized Goal if one exists, otherwise STOP | widen permission from prose |
 | HARD_BLOCK or a declared structural blocker not otherwise handled, including missing source/connector or path/worktree identity failure | Persist exact evidence and STOP; preserve every completed independent artifact | improvise data, path, identity, or permission |
-| Reviewer REVIEW_NEEDS_REPAIR | Persist findings; after ack, send one repair goal to same Worker while repair_count < 3 | user escalation while budget remains |
-| Reviewer REVIEW_NEEDS_REPAIR and repair_count >= 3 | Persist REPAIR_BUDGET_EXHAUSTED and STOP for explicit extension or scope change | silently continue repairs |
+| Reviewer REVIEW_NEEDS_REPAIR | Persist findings; after ack, send one repair goal to same Worker while repair_count < 5 | user escalation while budget remains |
+| Reviewer REVIEW_NEEDS_REPAIR and repair_count >= 5 | Persist REPAIR_BUDGET_EXHAUSTED; no extension or extra repair is valid; route only stop or paused scoped correction | silently continue repairs |
 | Reviewer REVIEW_PASS/REVIEW_PASS_WITH_LIMITATION | Persist review; after STATE_WRITE_APPLIED, evaluate exactly one next queued goal and prepare its dispatch outbox | state update and next goal in parallel |
 | Reviewer REVIEW_PASS_WITH_BLOCKED_VALIDATION | Retry validation when transient budget remains; otherwise persist limited evidence and STOP/waiver | full PASS |
 | Queue empty, every Goal read-only/no-diff, review explicitly not required | Controller runs FINAL_READ_ONLY_AUDIT over sources, reports, validation, state/events, evidence, and claim boundary; persist result and wait for ACK | create fake code review |

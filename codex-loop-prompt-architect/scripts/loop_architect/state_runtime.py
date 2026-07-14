@@ -221,6 +221,7 @@ DECISION_EFFECT_CAPABILITY = {
     "CONTINUE": "none",
     "APPLY_ROADMAP_REVISION": "none",
     "REVIEW_SURFACE_ACCEPTED": "none",
+    "STOP_LOOP_CONFIRMED": "none",
 }
 ROADMAP_OPERATION_TYPES = {
     "ADD_MILESTONE",
@@ -3702,24 +3703,73 @@ class AdaptiveStateRuntime:
                 or outbox["controller_goal_target_status"] != "COMPLETE"
                 or any(value is not None for value in blocker_fields)
                 or outbox["blocker_observations"] != []
+                or outbox.get("stop_basis") is not None
+                or outbox.get("blocked_goal_id") is not None
+                or outbox.get("decision_id") is not None
+                or outbox.get("decision_context_digest") is not None
+                or outbox.get("decision_response_steering_id") is not None
             ):
                 raise RuntimeRejection(
                     "FINALIZATION_STATE_INCONSISTENT",
                     "/finalization_outbox",
                     {"reason": "SUCCESS_OUTCOME_MISMATCH"},
                 )
-        elif (
-            outcome != "BLOCKED"
-            or terminal != "LOOP_BLOCKED"
-            or outbox["controller_goal_target_status"] != "BLOCKED"
-            or any(not isinstance(value, str) or not value for value in blocker_fields)
-            or len(outbox["blocker_observations"]) != 3
-        ):
-            raise RuntimeRejection(
-                "FINALIZATION_STATE_INCONSISTENT",
-                "/finalization_outbox",
-                {"reason": "BLOCKED_OUTCOME_MISMATCH"},
+        else:
+            stop_basis = outbox.get("stop_basis")
+            if stop_basis is None and len(outbox["blocker_observations"]) == 3:
+                stop_basis = "THREE_OBSERVATIONS"
+            common_blocked_invalid = (
+                outcome != "BLOCKED"
+                or terminal != "LOOP_BLOCKED"
+                or outbox["controller_goal_target_status"] != "BLOCKED"
+                or any(not isinstance(value, str) or not value for value in blocker_fields)
+                or stop_basis
+                not in {
+                    "THREE_OBSERVATIONS",
+                    "DETERMINISTIC_REPAIR_BUDGET",
+                    "USER_DECISION",
+                }
             )
+            if stop_basis == "THREE_OBSERVATIONS":
+                basis_invalid = (
+                    len(outbox["blocker_observations"]) != 3
+                    or outbox.get("blocked_goal_id") is not None
+                    or outbox.get("decision_id") is not None
+                    or outbox.get("decision_context_digest") is not None
+                    or outbox.get("decision_response_steering_id") is not None
+                )
+            elif stop_basis == "DETERMINISTIC_REPAIR_BUDGET":
+                basis_invalid = (
+                    outbox["blocker_code"] != "REPAIR_BUDGET_EXHAUSTED"
+                    or outbox["blocker_observations"] != []
+                    or not isinstance(outbox.get("blocked_goal_id"), str)
+                    or outbox.get("decision_id") is not None
+                    or outbox.get("decision_context_digest") is not None
+                    or outbox.get("decision_response_steering_id") is not None
+                )
+            elif stop_basis == "USER_DECISION":
+                basis_invalid = (
+                    outbox["blocker_code"] != "REPAIR_BUDGET_EXHAUSTED"
+                    or outbox["blocker_observations"] != []
+                    or any(
+                        not isinstance(outbox.get(field), str)
+                        or not outbox.get(field)
+                        for field in (
+                            "blocked_goal_id",
+                            "decision_id",
+                            "decision_context_digest",
+                            "decision_response_steering_id",
+                        )
+                    )
+                )
+            else:
+                basis_invalid = True
+            if common_blocked_invalid or basis_invalid:
+                raise RuntimeRejection(
+                    "FINALIZATION_STATE_INCONSISTENT",
+                    "/finalization_outbox",
+                    {"reason": "BLOCKED_OUTCOME_MISMATCH"},
+                )
         if outbox["automation_target_status"] != "PAUSED":
             raise RuntimeRejection(
                 "FINALIZATION_STATE_INCONSISTENT",
@@ -3755,6 +3805,13 @@ class AdaptiveStateRuntime:
             "blocker_observations": outbox["blocker_observations"],
             "blocker_report_path": outbox["blocker_report_path"],
             "blocker_report_digest": outbox["blocker_report_digest"],
+            "stop_basis": outbox.get("stop_basis"),
+            "blocked_goal_id": outbox.get("blocked_goal_id"),
+            "decision_id": outbox.get("decision_id"),
+            "decision_context_digest": outbox.get("decision_context_digest"),
+            "decision_response_steering_id": outbox.get(
+                "decision_response_steering_id"
+            ),
         }
         if capability_fields[0] is not None:
             receipt_matches.update(
@@ -8124,12 +8181,27 @@ class AdaptiveStateRuntime:
         goal_id: str,
         dispatch_id: str,
         artifact_digest: str,
+        *,
+        allow_exhausted_correction: bool = False,
     ) -> dict[str, Any]:
         ledger = state["goal_execution_ledger"].get(goal_id)
         worker = ledger.get("latest_worker") if ledger else None
+        status_allowed = bool(
+            isinstance(worker, dict)
+            and (
+                worker["status"] == "PASS"
+                or (
+                    allow_exhausted_correction
+                    and worker["status"] in {"FAIL", "BLOCKED"}
+                    and self._scoped_correction_for_exhausted_goal(
+                        state, goal_id
+                    )
+                )
+            )
+        )
         if (
             worker is None
-            or worker["status"] != "PASS"
+            or not status_allowed
             or worker["dispatch_id"] != dispatch_id
             or worker["artifact_digest"] != artifact_digest
             or worker["roadmap_version"] != state["roadmap_version"]
@@ -8201,7 +8273,16 @@ class AdaptiveStateRuntime:
             identity, "artifact_digest", "/mutation/identity"
         )
         worker = self._latest_worker_exact(
-            state, goal_id, worker_dispatch_id, artifact_digest
+            state,
+            goal_id,
+            worker_dispatch_id,
+            artifact_digest,
+            allow_exhausted_correction=review_kind
+            in {"CODE_REVIEW", "ROADMAP_AUDIT"},
+        )
+        scoped_correction = (
+            worker["status"] in {"FAIL", "BLOCKED"}
+            and self._scoped_correction_for_exhausted_goal(state, goal_id)
         )
         worker_report_digest = self._identity_value(
             identity,
@@ -8226,8 +8307,12 @@ class AdaptiveStateRuntime:
                 artifact_digest,
                 CODE_REVIEW_PASS,
             )
-            if goal_id in state["local_verification_required_goal_ids"] and not self._local_pass_exists(
+            if (
+                not scoped_correction
+                and goal_id in state["local_verification_required_goal_ids"]
+                and not self._local_pass_exists(
                 state, goal_id, worker_dispatch_id, artifact_digest
+                )
             ):
                 raise RuntimeRejection("LOCAL_VERIFICATION_REQUIRED", "/mutation/identity")
         if review_kind == "FINAL_AUDIT":
@@ -9546,6 +9631,28 @@ class AdaptiveStateRuntime:
             proposal["operations"],
         )
 
+    @staticmethod
+    def _scoped_correction_for_exhausted_goal(
+        state: Mapping[str, Any], goal_id: str
+    ) -> bool:
+        ledger = state["goal_execution_ledger"].get(goal_id)
+        repair_limit = state["authorization_envelope"]["repair_policy"][
+            "max_repair_attempts_per_goal"
+        ]
+        if (
+            not isinstance(ledger, dict)
+            or len(ledger["attempts"]) < 1 + repair_limit
+            or ledger.get("latest_worker", {}).get("status") == "PASS"
+        ):
+            return False
+        return any(
+            record.get("steering_type") == "CORRECTION"
+            and record.get("status") == "APPLIED"
+            and record.get("target_goal_id") == goal_id
+            and record.get("applied_state_version") is not None
+            for record in state["steering_ledger"].values()
+        )
+
     def _roadmap_revision(
         self,
         state: dict[str, Any],
@@ -9575,6 +9682,7 @@ class AdaptiveStateRuntime:
             mutation["source_goal_id"],
             mutation["worker_dispatch_id"],
             mutation["artifact_digest"],
+            allow_exhausted_correction=True,
         )
         self._require_review(
             state,
@@ -9656,6 +9764,27 @@ class AdaptiveStateRuntime:
         source_goal_id = mutation["source_goal_id"]
         if any(entry["goal_id"] == source_goal_id for entry in proposed_queue):
             raise RuntimeRejection("COMPLETED_GOAL_REQUEUED", "/mutation/goal_queue")
+        scoped_correction = self._scoped_correction_for_exhausted_goal(
+            state, source_goal_id
+        )
+        source_attempts = len(
+            state["goal_execution_ledger"][source_goal_id]["attempts"]
+        )
+        repair_limit = state["authorization_envelope"]["repair_policy"][
+            "max_repair_attempts_per_goal"
+        ]
+        source_failed_at_limit = (
+            source_attempts >= 1 + repair_limit
+            and state["goal_execution_ledger"][source_goal_id]["latest_worker"][
+                "status"
+            ]
+            != "PASS"
+        )
+        if source_failed_at_limit and not scoped_correction:
+            raise RuntimeRejection(
+                "REPAIR_BUDGET_SCOPED_CORRECTION_REQUIRED",
+                "/mutation/source_goal_id",
+            )
         next_entry = next(
             (entry for entry in proposed_queue if entry["goal_id"] == mutation["next_goal_id"]),
             None,
@@ -9708,7 +9837,9 @@ class AdaptiveStateRuntime:
             state["estimate_history"].append(copy.deepcopy(mutation["estimate"]))
 
         existing_ledger = state["goal_execution_ledger"]
-        existing_ledger[source_goal_id]["status"] = "COMPLETE"
+        existing_ledger[source_goal_id]["status"] = (
+            "RETIRED" if scoped_correction else "COMPLETE"
+        )
         existing_ledger[source_goal_id]["completed_roadmap_version"] = new_version
         queue_by_id = {entry["goal_id"]: entry for entry in proposed_queue}
         milestone_status = {
@@ -9972,6 +10103,11 @@ class AdaptiveStateRuntime:
             "blocker_observations": [],
             "blocker_report_path": None,
             "blocker_report_digest": None,
+            "stop_basis": None,
+            "blocked_goal_id": None,
+            "decision_id": None,
+            "decision_context_digest": None,
+            "decision_response_steering_id": None,
         }
         self._finish_route(state, claim, after_version)
         return {
@@ -10143,6 +10279,123 @@ class AdaptiveStateRuntime:
             )
         return observations
 
+    @staticmethod
+    def _validate_repair_budget_exhaustion(
+        state: dict[str, Any], mutation: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        goal_id = mutation["blocked_goal_id"]
+        ledger = state["goal_execution_ledger"].get(goal_id)
+        definition = state["goal_definition_registry"].get(goal_id)
+        queue_entry = next(
+            (item for item in state["goal_queue"] if item["goal_id"] == goal_id),
+            None,
+        )
+        repair_limit = state["authorization_envelope"]["repair_policy"][
+            "max_repair_attempts_per_goal"
+        ]
+        completed_attempts = (
+            len(ledger["attempts"]) if isinstance(ledger, dict) else 0
+        )
+        if (
+            mutation["blocker_code"] != "REPAIR_BUDGET_EXHAUSTED"
+            or not isinstance(ledger, dict)
+            or not isinstance(definition, dict)
+            or not isinstance(queue_entry, dict)
+            or definition["milestone_id"] != state["active_milestone_id"]
+            or queue_entry["milestone_id"] != state["active_milestone_id"]
+            or queue_entry["status"] in {"COMPLETE", "RETIRED"}
+            or completed_attempts < 1 + repair_limit
+        ):
+            raise RuntimeRejection(
+                "REPAIR_BUDGET_STOP_BASIS_INVALID",
+                "/mutation/blocked_goal_id",
+                {
+                    "completed_attempts": completed_attempts,
+                    "max_repair_attempts_per_goal": repair_limit,
+                },
+            )
+        return {
+            "blocked_goal_id": goal_id,
+            "completed_attempts": completed_attempts,
+            "max_repair_attempts_per_goal": repair_limit,
+        }
+
+    def _validate_user_stop_decision(
+        self, state: dict[str, Any], mutation: Mapping[str, Any]
+    ) -> None:
+        decision = state["pending_decisions"].get(mutation["decision_id"])
+        selected = None
+        if isinstance(decision, dict):
+            selected = next(
+                (
+                    option
+                    for option in decision["options"]
+                    if option["option_id"] == decision.get("selected_option_id")
+                ),
+                None,
+            )
+        steering = state["steering_ledger"].get(
+            mutation["decision_response_steering_id"]
+        )
+        expected_resolution = (
+            f"{mutation['decision_id']}:{selected['option_id']}"
+            if isinstance(selected, dict)
+            else None
+        )
+        if (
+            not isinstance(decision, dict)
+            or decision.get("status") != "APPLIED"
+            or decision.get("decision_context_digest")
+            != mutation["decision_context_digest"]
+            or self._decision_context_digest(state, decision)
+            != mutation["decision_context_digest"]
+            or decision.get("scope", {}).get("goal_id")
+            != mutation["blocked_goal_id"]
+            or not isinstance(selected, dict)
+            or selected["option_effect"] != "STOP_LOOP_CONFIRMED"
+            or not isinstance(steering, dict)
+            or steering.get("steering_type") != "DECISION_RESPONSE"
+            or steering.get("status") != "APPLIED"
+            or steering.get("target_goal_id") != mutation["blocked_goal_id"]
+            or steering.get("resolution") != expected_resolution
+        ):
+            raise RuntimeRejection(
+                "STOP_LOOP_USER_DECISION_INVALID",
+                "/mutation/decision_id",
+            )
+
+    def _validate_stop_basis(
+        self,
+        state: dict[str, Any],
+        mutation: dict[str, Any],
+        request: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        stop_basis = mutation["stop_basis"]
+        if stop_basis == "THREE_OBSERVATIONS":
+            observations = self._validate_blocker_observations(
+                state, mutation, request
+            )
+            return observations, {
+                "observation_turn_ids": [
+                    item["goal_turn_id"] for item in observations
+                ]
+            }
+        exhaustion = self._validate_repair_budget_exhaustion(state, mutation)
+        if stop_basis == "USER_DECISION":
+            self._validate_user_stop_decision(state, mutation)
+            exhaustion.update(
+                {
+                    "decision_id": mutation["decision_id"],
+                    "decision_context_digest": mutation[
+                        "decision_context_digest"
+                    ],
+                    "decision_response_steering_id": mutation[
+                        "decision_response_steering_id"
+                    ],
+                }
+            )
+        return [], exhaustion
+
     def _stop_loop(
         self,
         state: dict[str, Any],
@@ -10194,7 +10447,7 @@ class AdaptiveStateRuntime:
                 "FINALIZATION_AUTOMATION_IDENTITY_MISMATCH",
                 "/mutation/automation_id",
             )
-        observations = self._validate_blocker_observations(
+        observations, basis_report = self._validate_stop_basis(
             state, mutation, request
         )
         blocker_path = mutation["blocker_report_path"]
@@ -10211,9 +10464,8 @@ class AdaptiveStateRuntime:
                 "blocker_code": mutation["blocker_code"],
                 "blocker_fingerprint": mutation["blocker_fingerprint"],
                 "controller_goal_id": mutation["controller_goal_id"],
-                "observation_turn_ids": [
-                    item["goal_turn_id"] for item in observations
-                ],
+                "stop_basis": mutation["stop_basis"],
+                **basis_report,
                 "status": "HARD_BLOCK",
             },
             "/mutation/blocker_report_digest",
@@ -10264,6 +10516,13 @@ class AdaptiveStateRuntime:
             "blocker_observations": observations,
             "blocker_report_path": blocker_path,
             "blocker_report_digest": mutation["blocker_report_digest"],
+            "stop_basis": mutation["stop_basis"],
+            "blocked_goal_id": mutation.get("blocked_goal_id"),
+            "decision_id": mutation.get("decision_id"),
+            "decision_context_digest": mutation.get("decision_context_digest"),
+            "decision_response_steering_id": mutation.get(
+                "decision_response_steering_id"
+            ),
         }
         self._finish_route(state, claim, after_version)
         return {
@@ -10281,6 +10540,8 @@ class AdaptiveStateRuntime:
                 "closeout_capability": closeout_capability,
                 "blocker_code": mutation["blocker_code"],
                 "blocker_fingerprint": mutation["blocker_fingerprint"],
+                "stop_basis": mutation["stop_basis"],
+                "blocked_goal_id": mutation.get("blocked_goal_id"),
                 "blocker_observation_turn_ids": [
                     item["goal_turn_id"] for item in observations
                 ],
@@ -10409,6 +10670,13 @@ class AdaptiveStateRuntime:
             "blocker_observations": copy.deepcopy(outbox["blocker_observations"]),
             "blocker_report_path": outbox["blocker_report_path"],
             "blocker_report_digest": outbox["blocker_report_digest"],
+            "stop_basis": outbox.get("stop_basis"),
+            "blocked_goal_id": outbox.get("blocked_goal_id"),
+            "decision_id": outbox.get("decision_id"),
+            "decision_context_digest": outbox.get("decision_context_digest"),
+            "decision_response_steering_id": outbox.get(
+                "decision_response_steering_id"
+            ),
             "ack_state_version": after_version,
             "evidence_paths": list(evidence_paths),
         }

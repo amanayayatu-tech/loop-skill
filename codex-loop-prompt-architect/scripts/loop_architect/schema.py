@@ -722,7 +722,7 @@ def _build_input_schema() -> dict:
         "max_idle_wakeups": (1, 1000),
         "active_stale_after_minutes": (5, 10080),
         "max_child_threads": (2, 32),
-        "max_repair_attempts_per_goal": (1, 20),
+        "max_repair_attempts_per_goal": (0, 20),
     }
     adaptive_properties = {
         "workers": {

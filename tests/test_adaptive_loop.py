@@ -18,7 +18,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from loop_architect.forecast import dashboard_required, local_verifier_needed
-from loop_architect.validation import minimum_adaptive_routing_turns
+from loop_architect.validation import (
+    minimum_adaptive_routing_turns,
+    validate_adaptive_pack_transport_contract,
+)
 from loop_architect.state_runtime import (
     AdaptiveStateRuntime,
     materialize_dispatch_payload,
@@ -396,6 +399,24 @@ class AdaptiveValidationTests(unittest.TestCase):
         self.assertIn("heartbeat_interval_minutes:must_be_integer", errors)
         self.assertIn("call_cap:must_be_positive", errors)
 
+    def test_repair_budget_defaults_to_five_and_accepts_explicit_zero(self) -> None:
+        payload = adaptive_payload()
+        payload.pop("max_repair_attempts_per_goal", None)
+        goals = scaffold.normalize_goals(payload, scaffold.normalize_workers(payload))
+        self.assertEqual(
+            scaffold.adaptive_authorization_envelope(payload, goals)["repair_policy"][
+                "max_repair_attempts_per_goal"
+            ],
+            5,
+        )
+        payload["max_repair_attempts_per_goal"] = 0
+        self.assertFalse(
+            any(
+                error.startswith("max_repair_attempts_per_goal:")
+                for error in scaffold.validation_errors(payload)
+            )
+        )
+
     def test_public_schema_requires_adaptive_role_kind_and_milestone_id(self) -> None:
         adaptive_then = scaffold.INPUT_SCHEMA["allOf"][0]["then"]
         worker_items = adaptive_then["properties"]["workers"]["items"]["allOf"][1]
@@ -464,6 +485,25 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertIn("PREPARE_OUTBOX(kind=GOAL, action=CREATE)", self.pack)
         self.assertIn("direct-ACK the exact PREPARED GOAL outbox", self.pack)
         self.assertIn("generic DELEGATION outbox", self.pack)
+
+    def test_pack_enforces_non_pty_materialization_completion_contract(self) -> None:
+        self.assertEqual(validate_adaptive_pack_transport_contract(self.pack), [])
+        for marker in (
+            "`tty:false`",
+            "`exit_code=0`",
+            "no longer returns `session_id`",
+            "single `PAYLOAD_MATERIALIZED`",
+            "PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT",
+        ):
+            self.assertIn(marker, self.pack)
+        weakened = self.pack.replace(
+            "Do not use `dd`, `stty`, fixed-byte readers, heredocs, or any extra shell pipeline.",
+            "Use `dd` and `stty` to read a fixed byte count.",
+        )
+        errors = validate_adaptive_pack_transport_contract(weakened)
+        self.assertIn(
+            "adaptive_transport_contract:unsafe_shell_transport", errors
+        )
 
     def test_generated_initial_state_payload_is_accepted_by_runtime(self) -> None:
         workers = scaffold.normalize_workers(self.payload)
@@ -617,7 +657,9 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertIn("If no compatible registered Reviewer exists", self.pack)
         self.assertIn("If no compatible registered Local Verifier exists", self.pack)
         self.assertIn("last three genuine consecutive Goal turns", self.pack)
-        self.assertIn("blocker code, fingerprint, and Controller Goal identity", self.pack)
+        self.assertIn("stop_basis", self.pack)
+        self.assertIn("DETERMINISTIC_REPAIR_BUDGET", self.pack)
+        self.assertIn("STOP_LOOP_CONFIRMED", self.pack)
         self.assertNotIn("keeps the original dispatch claim inside its immutable identity", self.pack)
 
     def test_reviewer_report_repeats_source_identity_at_top_level(self) -> None:
@@ -963,7 +1005,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertEqual(parsed["allowed_write_scope"], ["src/**", "tests/**"])
         self.assertFalse(parsed["secrets_access"])
         self.assertEqual(
-            parsed["repair_policy"]["max_repair_attempts_per_goal"], 3
+            parsed["repair_policy"]["max_repair_attempts_per_goal"], 5
         )
         self.assertTrue(parsed["phase_permissions"]["branch_create"])
         self.assertTrue(parsed["phase_permissions"]["deploy"])

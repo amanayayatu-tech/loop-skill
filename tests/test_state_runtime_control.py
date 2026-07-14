@@ -1464,7 +1464,7 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
             milestones = [milestone("m1", "ACTIVE")]
             authorization = authorization_envelope(definitions, milestones)
             authorization["repair_policy"] = {
-                "max_repair_attempts_per_goal": 2
+                "max_repair_attempts_per_goal": 5
             }
             harness.initialize(
                 definitions=definitions,
@@ -1532,14 +1532,14 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                 self.assertTrue(acked["ok"], acked)
 
             run_worker_attempt(1, "FAIL")
-            run_worker_attempt(2, "BLOCKED")
-            run_worker_attempt(3, "BLOCKED")
+            for index in range(2, 7):
+                run_worker_attempt(index, "BLOCKED")
             claim = harness.acquire()
             before = persisted_snapshot(root)
             exhausted, _ = harness.prepare_outbox(
                 claim,
                 "DISPATCH",
-                "repair-dispatch-4",
+                "repair-dispatch-7",
                 {
                     "goal_id": "g1",
                     "goal_definition_digest": definitions["g1"][

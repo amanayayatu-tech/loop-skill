@@ -349,6 +349,7 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                     "blocker_fingerprint": blocker_fingerprint,
                     "controller_goal_id": "native-goal-1",
                     "observation_turn_ids": observation_turn_ids,
+                    "stop_basis": "THREE_OBSERVATIONS",
                     "status": "HARD_BLOCK",
                 },
                 sort_keys=True,
@@ -365,6 +366,7 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                 "lease_claim": heartbeat_claim,
                 "observed_at": T4,
                 "terminal_status": "LOOP_BLOCKED",
+                "stop_basis": "THREE_OBSERVATIONS",
                 "blocker_code": "PAYLOAD_DIGEST_MISMATCH",
                 "blocker_fingerprint": blocker_fingerprint,
                 "blocker_observations": blocker_observations,
@@ -1931,6 +1933,7 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                             "lease_claim": fake_claim,
                             "observed_at": T4,
                             "terminal_status": "LOOP_BLOCKED",
+                            "stop_basis": "THREE_OBSERVATIONS",
                             "blocker_code": "FUZZ_BLOCKER",
                             "blocker_fingerprint": digest(f"fuzz-blocker-{index}"),
                             "blocker_observations": [

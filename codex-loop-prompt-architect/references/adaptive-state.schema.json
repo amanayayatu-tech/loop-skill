@@ -909,6 +909,24 @@
         },
         "blocker_report_digest": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "stop_basis": {
+          "oneOf": [
+            {"type": "null"},
+            {"enum": ["THREE_OBSERVATIONS", "DETERMINISTIC_REPAIR_BUDGET", "USER_DECISION"]}
+          ]
+        },
+        "blocked_goal_id": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+        },
+        "decision_id": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+        },
+        "decision_context_digest": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "decision_response_steering_id": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
         }
       },
       "allOf": [
@@ -921,7 +939,12 @@
               "blocker_fingerprint": {"type": "null"},
               "blocker_observations": {"maxItems": 0},
               "blocker_report_path": {"type": "null"},
-              "blocker_report_digest": {"type": "null"}
+              "blocker_report_digest": {"type": "null"},
+              "stop_basis": {"type": "null"},
+              "blocked_goal_id": {"type": "null"},
+              "decision_id": {"type": "null"},
+              "decision_context_digest": {"type": "null"},
+              "decision_response_steering_id": {"type": "null"}
             }
           }
         },
@@ -932,11 +955,24 @@
               "controller_goal_target_status": {"const": "BLOCKED"},
               "blocker_code": {"$ref": "#/$defs/safeId"},
               "blocker_fingerprint": {"$ref": "#/$defs/digest"},
-              "blocker_observations": {"minItems": 3, "maxItems": 3},
+              "blocker_observations": {"maxItems": 3},
               "blocker_report_path": {"type": "string", "minLength": 1},
-              "blocker_report_digest": {"$ref": "#/$defs/digest"}
+              "blocker_report_digest": {"$ref": "#/$defs/digest"},
+              "stop_basis": {"enum": ["THREE_OBSERVATIONS", "DETERMINISTIC_REPAIR_BUDGET", "USER_DECISION"]}
             }
           }
+        },
+        {
+          "if": {"required": ["stop_basis"], "properties": {"stop_basis": {"const": "THREE_OBSERVATIONS"}}},
+          "then": {"properties": {"blocker_observations": {"minItems": 3, "maxItems": 3}, "blocked_goal_id": {"type": "null"}, "decision_id": {"type": "null"}, "decision_context_digest": {"type": "null"}, "decision_response_steering_id": {"type": "null"}}}
+        },
+        {
+          "if": {"required": ["stop_basis"], "properties": {"stop_basis": {"const": "DETERMINISTIC_REPAIR_BUDGET"}}},
+          "then": {"properties": {"blocker_code": {"const": "REPAIR_BUDGET_EXHAUSTED"}, "blocker_observations": {"maxItems": 0}, "blocked_goal_id": {"$ref": "#/$defs/safeId"}, "decision_id": {"type": "null"}, "decision_context_digest": {"type": "null"}, "decision_response_steering_id": {"type": "null"}}}
+        },
+        {
+          "if": {"required": ["stop_basis"], "properties": {"stop_basis": {"const": "USER_DECISION"}}},
+          "then": {"properties": {"blocker_code": {"const": "REPAIR_BUDGET_EXHAUSTED"}, "blocker_observations": {"maxItems": 0}, "blocked_goal_id": {"$ref": "#/$defs/safeId"}, "decision_id": {"$ref": "#/$defs/safeId"}, "decision_context_digest": {"$ref": "#/$defs/digest"}, "decision_response_steering_id": {"$ref": "#/$defs/safeId"}}}
         }
       ]
     },
@@ -992,6 +1028,24 @@
         "blocker_report_digest": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
         },
+        "stop_basis": {
+          "oneOf": [
+            {"type": "null"},
+            {"enum": ["THREE_OBSERVATIONS", "DETERMINISTIC_REPAIR_BUDGET", "USER_DECISION"]}
+          ]
+        },
+        "blocked_goal_id": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+        },
+        "decision_id": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+        },
+        "decision_context_digest": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "decision_response_steering_id": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
+        },
         "ack_state_version": {"type": "integer", "minimum": 1},
         "evidence_paths": {"$ref": "#/$defs/stringArray"}
       },
@@ -1005,7 +1059,12 @@
               "blocker_fingerprint": {"type": "null"},
               "blocker_observations": {"maxItems": 0},
               "blocker_report_path": {"type": "null"},
-              "blocker_report_digest": {"type": "null"}
+              "blocker_report_digest": {"type": "null"},
+              "stop_basis": {"type": "null"},
+              "blocked_goal_id": {"type": "null"},
+              "decision_id": {"type": "null"},
+              "decision_context_digest": {"type": "null"},
+              "decision_response_steering_id": {"type": "null"}
             }
           }
         },
@@ -1016,11 +1075,24 @@
               "controller_goal_status": {"const": "BLOCKED"},
               "blocker_code": {"$ref": "#/$defs/safeId"},
               "blocker_fingerprint": {"$ref": "#/$defs/digest"},
-              "blocker_observations": {"minItems": 3, "maxItems": 3},
+              "blocker_observations": {"maxItems": 3},
               "blocker_report_path": {"type": "string", "minLength": 1},
-              "blocker_report_digest": {"$ref": "#/$defs/digest"}
+              "blocker_report_digest": {"$ref": "#/$defs/digest"},
+              "stop_basis": {"enum": ["THREE_OBSERVATIONS", "DETERMINISTIC_REPAIR_BUDGET", "USER_DECISION"]}
             }
           }
+        },
+        {
+          "if": {"required": ["stop_basis"], "properties": {"stop_basis": {"const": "THREE_OBSERVATIONS"}}},
+          "then": {"properties": {"blocker_observations": {"minItems": 3, "maxItems": 3}, "blocked_goal_id": {"type": "null"}, "decision_id": {"type": "null"}, "decision_context_digest": {"type": "null"}, "decision_response_steering_id": {"type": "null"}}}
+        },
+        {
+          "if": {"required": ["stop_basis"], "properties": {"stop_basis": {"const": "DETERMINISTIC_REPAIR_BUDGET"}}},
+          "then": {"properties": {"blocker_code": {"const": "REPAIR_BUDGET_EXHAUSTED"}, "blocker_observations": {"maxItems": 0}, "blocked_goal_id": {"$ref": "#/$defs/safeId"}, "decision_id": {"type": "null"}, "decision_context_digest": {"type": "null"}, "decision_response_steering_id": {"type": "null"}}}
+        },
+        {
+          "if": {"required": ["stop_basis"], "properties": {"stop_basis": {"const": "USER_DECISION"}}},
+          "then": {"properties": {"blocker_code": {"const": "REPAIR_BUDGET_EXHAUSTED"}, "blocker_observations": {"maxItems": 0}, "blocked_goal_id": {"$ref": "#/$defs/safeId"}, "decision_id": {"$ref": "#/$defs/safeId"}, "decision_context_digest": {"$ref": "#/$defs/digest"}, "decision_response_steering_id": {"$ref": "#/$defs/safeId"}}}
         }
       ]
     },
@@ -1466,7 +1538,7 @@
     "decisionOption": {
       "type": "object", "additionalProperties": false,
       "required": ["option_id", "option_effect", "preauthorized_capability"],
-      "properties": {"option_id": {"$ref": "#/$defs/safeId"}, "option_effect": {"enum": ["CREATE_DRAFT_PR", "WAIT", "RETURN_FOR_REPAIR", "CONTINUE", "APPLY_ROADMAP_REVISION", "REVIEW_SURFACE_ACCEPTED"]}, "preauthorized_capability": {"enum": ["none", "pr_create", "thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"]}}
+      "properties": {"option_id": {"$ref": "#/$defs/safeId"}, "option_effect": {"enum": ["CREATE_DRAFT_PR", "WAIT", "RETURN_FOR_REPAIR", "CONTINUE", "APPLY_ROADMAP_REVISION", "REVIEW_SURFACE_ACCEPTED", "STOP_LOOP_CONFIRMED"]}, "preauthorized_capability": {"enum": ["none", "pr_create", "thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"]}}
     },
     "decisionScope": {"type": "object", "additionalProperties": false, "properties": {"goal_id": {"$ref": "#/$defs/safeId"}, "dispatch_id": {"$ref": "#/$defs/safeId"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "artifact_path": {"type": "string", "minLength": 1}, "preview_url": {"type": "string", "pattern": "^https?://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^?]*)?$"}, "repository": {"type": "string", "minLength": 1}, "branch": {"type": "string", "minLength": 1}, "worktree_path": {"type": "string", "minLength": 1}, "review_surface_type": {"type": "string", "minLength": 1}}},
     "decisionRecord": {

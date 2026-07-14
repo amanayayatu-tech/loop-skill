@@ -429,8 +429,8 @@ class HumanControlHelperTests(unittest.TestCase):
             "EVIDENCE_CONFLICT",
         ):
             self.assertIn(token, pack)
-        self.assertLessEqual(len(pack.encode("utf-8")), int(180266 * 1.15))
-        self.assertLessEqual(len(pack.splitlines()), int(2084 * 1.30))
+        self.assertLessEqual(len(pack.encode("utf-8")), int(207257 * 1.02))
+        self.assertLessEqual(len(pack.splitlines()), int(2601 * 1.01))
 
     def test_skill_links_one_layer_v32_reference_and_stays_bounded(self) -> None:
         skill = (ROOT / "codex-loop-prompt-architect" / "SKILL.md").read_text()
