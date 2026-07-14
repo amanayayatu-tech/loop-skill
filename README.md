@@ -32,6 +32,19 @@ Pack 身份变化必须通过暂停安全点上的 `MIGRATE_CONTROLLER_PACK` 原
 历史；未迁移的新 digest 没有路由权限。每个 route lease 还绑定真实
 `controller_turn_id`，同一个 Codex App turn 不能取得第二个 lease。
 
+生成的 Adaptive Pack 还采用 projection-first 观察：先比较 `LOOP_STATE.md` 的
+mtime/size 与 `STATUS.md` 的 projected state version，变化或 mutation 前才读取 canonical；
+`STATUS.md` 始终只是观察面。任务读取固定为单目标、单在途的
+`read_thread(turnLimit=1, includeOutputs=false)`，只保留状态、时间、item 类型与最后一条
+有界消息，并按 30/60/120 秒退避。验证结果按 artifact、命令、环境/工具链和配置身份去重；
+小改只跑窄测试，最终 artifact 才跑一次 full gate。子进程与 session 使用同一 non-PTY
+session、有限等待和 TERM→wait→KILL→waitpid 清理；stdout 丢失时从 durable receipt 恢复，
+不得重试外部调用。这些约束不改变 schema、state、migration、repair 上限或完成语义。
+stdin 模式必须选择能以 direct argv 启动 runtime、并提供可写 non-PTY pipe 的原生进程 API；
+启动即关闭 stdin 的 shell exec 不可用，也不能降级成 `/tmp` 文件重定向。对于已经绑定同一
+Worker artifact 的 Local `FAIL/BLOCKED`，显式 applied scoped correction 只允许审计替代
+Goal，原 Goal 会保留历史并 `RETIRED`；缺少该证据时仍必须 Local PASS。
+
 ### v3.2.1 热修
 
 Adaptive runtime 的所有 stdin 模式现在使用 30 秒、4 MB、严格 UTF-8 的有界 frame

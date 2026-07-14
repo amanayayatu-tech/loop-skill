@@ -512,6 +512,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             "dd bs=1 count=8265 | python3 adaptive_state_runtime.py --root /tmp/x",
             "Use stdin.buffer.read(8265) before starting the runtime.",
             "python3 - <<'PY'\nprint('helper')\nPY",
+            "python3 adaptive_state_runtime.py --root /tmp/x < /tmp/frame.json",
         )
         for unsafe in unsafe_examples:
             with self.subTest(unsafe=unsafe):
@@ -521,6 +522,50 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
                 self.assertIn(
                     "adaptive_transport_contract:unsafe_shell_transport", errors
                 )
+
+    def test_pack_enforces_resource_bounded_observation_contract(self) -> None:
+        self.assertEqual(validate_adaptive_pack_transport_contract(self.pack), [])
+        for marker in (
+            "Projection-first observation contract",
+            "canonical `LOOP_STATE.md` mtime/size",
+            "projected `STATUS.md` state version",
+            "read_thread(threadId=..., turnLimit=1, includeOutputs=false)",
+            "one in-flight read per target",
+            "30/60/120-second backoff",
+            "Validation identity dedupe",
+            "Process/session cleanup contract",
+            "writable non-PTY stdin pipe",
+            "temporary-file redirection",
+            "lost stdout never authorizes an external retry",
+        ):
+            self.assertIn(marker, self.pack)
+
+    def test_pack_validator_rejects_resource_amplification_antipatterns(self) -> None:
+        unsafe_examples = (
+            "Poll every 5 seconds until the task ends.",
+            "while true; do check_status; done",
+            "Use read_thread to forward the raw output transcript to Controller.",
+            "When lost stdout is detected, retry the external call.",
+        )
+        for unsafe in unsafe_examples:
+            with self.subTest(unsafe=unsafe):
+                errors = validate_adaptive_pack_transport_contract(
+                    self.pack + "\n" + unsafe
+                )
+                self.assertIn(
+                    "adaptive_resource_contract:unsafe_resource_loop", errors
+                )
+
+    def test_pack_validator_rejects_missing_resource_contract(self) -> None:
+        weakened = self.pack.replace(
+            "Projection-first observation contract",
+            "Observe state directly",
+            1,
+        )
+        self.assertIn(
+            "adaptive_resource_contract:missing:Projection-first observation contract",
+            validate_adaptive_pack_transport_contract(weakened),
+        )
 
     def test_pack_binds_pack_turn_receipt_and_repair_classification(self) -> None:
         for marker in (

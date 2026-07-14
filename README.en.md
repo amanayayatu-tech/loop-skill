@@ -62,6 +62,26 @@ retain immutable revision history; an unmigrated digest has no routing authority
 Each route lease is also bound to a real `controller_turn_id`, so one Codex App
 turn cannot acquire a second lease.
 
+Generated Adaptive Packs also use projection-first observation: compare the
+`LOOP_STATE.md` mtime/size and projected `STATUS.md` state version, then parse
+canonical state only after a change or before a mutation. `STATUS.md` remains an
+observation surface. Task reads are one-target/one-in-flight
+`read_thread(turnLimit=1, includeOutputs=false)` calls with 30/60/120-second
+backoff, reduced to status, timestamps, item types, and the final bounded
+message. Validation is deduplicated by exact artifact, command,
+environment/toolchain, and config identity; narrow changes get narrow tests and
+the final artifact gets one full gate. Child processes and sessions use the same
+non-PTY session, bounded waits, and TERM-to-wait-to-KILL-to-waitpid cleanup;
+durable receipts recover lost stdout without retrying an external call. These
+constraints change no schema, state, migration, repair cap, or completion
+semantics.
+Stdin modes must select a native process API that launches the runtime by direct
+argv and exposes a writable non-PTY pipe. A shell exec that closes stdin at
+launch is ineligible, and `/tmp` file redirection is not a fallback. An applied
+scoped correction may audit a replacement Goal only after an acknowledged Local
+`FAIL`/`BLOCKED` for that exact Worker artifact; the original history is retained
+and retired, while missing evidence still requires Local PASS.
+
 ### v3.2.1 hotfix
 
 Every Adaptive runtime stdin mode now uses a bounded frame reader: 30 seconds,

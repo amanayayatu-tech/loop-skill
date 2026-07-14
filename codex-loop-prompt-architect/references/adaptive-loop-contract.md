@@ -125,6 +125,42 @@ helper, PTY configurator, fixed-byte reader, heredoc, or shell pipeline first.
 A yielded session may only be polled by its same id; success requires process
 exit, no live session, and one JSON response.
 
+#### Resource-bounded observation and validation
+
+Observation is projection-first. Before reparsing unchanged canonical bytes,
+Controller compares the canonical `LOOP_STATE.md` mtime/size and projected
+`STATUS.md` state version. It parses canonical state after an observed change,
+when an expected artifact remains unresolved, and before every mutation.
+`STATUS.md` is a derived observation surface and never mutation authority.
+
+After a send, the observation order is canonical mtime/version, expected
+artifact, compact projected fields, then a compact State-Writer task read only
+if unresolved. Controller itself is read only for phase completion, a blocker,
+or a Decision. Each target permits one in-flight
+`read_thread(threadId=..., turnLimit=1, includeOutputs=false)` call. Tool results
+are reduced internally to status, timestamps, item types, and the final bounded
+agent message; raw results and long transcripts are not forwarded. Unchanged
+work uses 30/60/120-second backoff, reset only on an observed change. Aggressive
+fixed polling and shell busy waits are invalid.
+
+Validation evidence is reusable only when artifact digest, command,
+environment/toolchain identity, and relevant config/lockfile digest all match.
+Narrow changes run narrow tests. Full fuzz, coverage, and install run once for
+the final artifact; an equivalent full local gate is not duplicated while CI
+is already running for the same commit.
+
+Runtime and external processes retain the direct non-PTY, same-session
+contract. Stdin modes must use an exposed process API that launches direct argv
+and supplies a writable non-PTY stdin pipe; a native child-process spawn meets
+that requirement. A shell execution API that closes stdin before the same-session
+write is ineligible, and temporary-file redirection is not a substitute. A local
+child owned by the current turn is cleaned up with bounded
+TERM, wait, KILL, and waitpid steps, followed by a residual-process check. A
+completed external result whose stdout was lost is recovered from its durable
+receipt; stdout loss never authorizes another external call. These constraints
+change no storage, schema, state, migration, repair-limit, or public completion
+semantics.
+
 The same runtime is also the only dispatch payload codec. Controller submits one
 strict JSON object with exactly `envelope_type` and `payload` to
 `adaptive_state_runtime.py --payload-materialize`; the payload contains one
@@ -555,6 +591,13 @@ digest, full lease claim, and source artifact digest. FAIL returns to the implem
 retest the same verification id. If repair changes the artifact digest, the old
 CODE_REVIEW ACK is stale: review the repaired artifact, then retest. Never send
 credentials or sensitive local evidence to remote Workers.
+An applied scoped correction may bypass the Local PASS prerequisite only for a
+`ROADMAP_AUDIT` that proposes a never-reused replacement Goal, and only when the
+same Goal, Worker dispatch, artifact digest, and roadmap version already have an
+acknowledged Local `FAIL` or `BLOCKED` record. Roadmap Revision then preserves
+the original attempts and marks the source Goal `RETIRED`; it never upgrades the
+old Goal or Local result to PASS. Without that exact non-PASS evidence, the
+ordinary Local PASS gate remains mandatory.
 Before a metered external call or Local Verification, stage one sanitized,
 immutable `STARTED` receipt through `--external-receipt-stage`; stage its bound
 `COMPLETED` receipt before stdout. Lost stdout is recovered from

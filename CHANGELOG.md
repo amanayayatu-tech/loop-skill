@@ -7,6 +7,19 @@ All notable changes to this project are documented here. The project follows
 
 ## [3.2.2] - 2026-07-14
 
+### Changed
+
+- Generated Adaptive Packs now use projection-first canonical observation,
+  compact one-in-flight task reads with 30/60/120-second backoff, exact
+  validation-identity deduplication, and bounded child-process/session cleanup.
+  The validator rejects aggressive fixed polling, raw task-output forwarding,
+  shell busy waits, and external retries after stdout loss. This is a
+  non-functional control-resource constraint and changes no state schema,
+  migration, repair limit, or public completion behavior.
+- Clarified that stdin modes need an exposed direct-argv process API with a
+  writable non-PTY pipe. An execution tool that closes stdin at launch is
+  ineligible; temporary-file redirection is not a compliant substitute.
+
 ### Fixed
 
 - Extended the direct non-PTY, bounded-frame transport contract to every
@@ -30,6 +43,9 @@ All notable changes to this project are documented here. The project follows
 - Preserve explicit scoped-correction identity for reviewed Goals even before
   repair exhaustion, so Roadmap Revision retires rather than falsely completes
   the superseded Goal while retaining its full attempt history.
+- Permit a scoped-correction Roadmap Audit to replace an old artifact only when
+  the same Worker artifact already has an acknowledged Local `FAIL`/`BLOCKED`
+  result; without that exact evidence the normal Local PASS gate still applies.
 
 ### Evidence boundary
 

@@ -8826,6 +8826,22 @@ class AdaptiveStateRuntime:
             for record in state["local_verification_ledger"].values()
         )
 
+    def _local_nonpass_exists(
+        self,
+        state: dict[str, Any],
+        goal_id: str,
+        worker_dispatch_id: str,
+        artifact_digest: str,
+    ) -> bool:
+        return any(
+            record.get("goal_id") == goal_id
+            and record.get("worker_dispatch_id") == worker_dispatch_id
+            and record.get("artifact_digest") == artifact_digest
+            and record.get("roadmap_version") == state["roadmap_version"]
+            and record.get("status") in {"FAIL", "BLOCKED"}
+            for record in state["local_verification_ledger"].values()
+        )
+
     def _assert_assurance_ready(
         self,
         state: dict[str, Any],
@@ -8857,9 +8873,19 @@ class AdaptiveStateRuntime:
             allow_exhausted_correction=review_kind
             in {"CODE_REVIEW", "ROADMAP_AUDIT"},
         )
-        scoped_correction = (
+        exhausted_scoped_correction = (
             worker["status"] in {"FAIL", "BLOCKED"}
             and self._scoped_correction_for_exhausted_goal(state, goal_id)
+        )
+        acknowledged_local_correction = (
+            review_kind == "ROADMAP_AUDIT"
+            and self._applied_scoped_correction(state, goal_id)
+            and self._local_nonpass_exists(
+                state, goal_id, worker_dispatch_id, artifact_digest
+            )
+        )
+        scoped_correction = (
+            exhausted_scoped_correction or acknowledged_local_correction
         )
         worker_report_digest = self._identity_value(
             identity,

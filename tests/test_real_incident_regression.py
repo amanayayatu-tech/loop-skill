@@ -523,3 +523,110 @@ class ScopedCorrectionIdentityTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 state, "G03_SECURITY_RECEIPT_CORRECTION"
             )
         )
+
+    def test_acknowledged_local_blocked_allows_only_scoped_correction_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = Harness(Path(temporary))
+            harness.initialize(local_required_goal_ids=["g1"])
+            worker = harness.worker_pass("g1")
+            code_review = harness.review("CODE_REVIEW", "REVIEW_PASS", worker)
+            harness.register_control_result(
+                "THREAD",
+                "local-verifier-thread-create",
+                "controller-1",
+                {"role_kind": "LOCAL_VERIFIER"},
+                {
+                    "thread_id": "local-verifier-1",
+                    "role_kind": "LOCAL_VERIFIER",
+                    "worktree_path": ".",
+                },
+            )
+            local_claim = harness.acquire()
+            local_id = "local-blocked-real-incident"
+            local_identity = {
+                "goal_id": "g1",
+                "worker_dispatch_id": worker["dispatch_id"],
+                "artifact_digest": worker["artifact_digest"],
+                "verification_id": "verification-real-incident",
+                "code_review_id": code_review,
+            }
+            prepared, payload = harness.prepare_outbox(
+                local_claim,
+                "LOCAL",
+                local_id,
+                local_identity,
+                target_id="local-verifier-1",
+            )
+            self.assertTrue(prepared["ok"], prepared)
+            self.assertTrue(
+                harness.mark_sent(
+                    local_claim,
+                    "LOCAL",
+                    local_id,
+                    payload,
+                    target_id="local-verifier-1",
+                )["ok"]
+            )
+            local_result = {
+                "status": "BLOCKED",
+                "artifact_digest": worker["artifact_digest"],
+            }
+            local_content = harness.formal_report_content(
+                "LOCAL", local_id, local_result
+            )
+            acknowledged = harness.ack_outbox(
+                local_claim,
+                "LOCAL",
+                local_id,
+                payload,
+                target_id="local-verifier-1",
+                result={
+                    **local_result,
+                    "report_digest": digest(local_content),
+                },
+                report_content=local_content,
+            )
+            self.assertTrue(acknowledged["ok"], acknowledged)
+
+            correction = {
+                "type": "RECORD_STEERING",
+                "steering_id": "real-incident-local-blocked-correction",
+                "steering_type": "CORRECTION",
+                "normalized_digest": digest("replace locally blocked g1"),
+                "identity_algorithm": "message-item-v1",
+                "message_item_id": "real-incident-correction-message",
+                "summary": "replace locally blocked g1",
+                "classification_reason": "explicit scoped correction",
+                "target_goal_id": "g1",
+            }
+            self.assertTrue(harness.apply(correction)["ok"])
+            self.assertTrue(
+                harness.apply(
+                    {
+                        "type": "RESOLVE_STEERING",
+                        "steering_id": correction["steering_id"],
+                        "resolution_status": "APPLIED",
+                        "resolution": "audit a new Goal without completing g1",
+                        "next_action_code": "ROADMAP_REVISION",
+                    }
+                )["ok"]
+            )
+            audit_claim = harness.acquire()
+            audit, _ = harness.prepare_outbox(
+                audit_claim,
+                "ASSURANCE",
+                "roadmap-audit-local-blocked-correction",
+                {
+                    "review_kind": "ROADMAP_AUDIT",
+                    "goal_id": "g1",
+                    "worker_dispatch_id": worker["dispatch_id"],
+                    "worker_report_digest": worker["report_digest"],
+                    "artifact_digest": worker["artifact_digest"],
+                    "code_review_id": code_review,
+                },
+                target_id="reviewer-1",
+            )
+            self.assertTrue(audit["ok"], audit)
+            self.assertEqual(
+                audit["operation_status"], "ASSURANCE_OUTBOX_PREPARED"
+            )
