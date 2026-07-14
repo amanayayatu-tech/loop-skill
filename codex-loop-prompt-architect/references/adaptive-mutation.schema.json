@@ -434,7 +434,7 @@
       "required": ["command_digest", "exit_code", "normalized_lines_digest", "failing_test_ids", "adapter", "error_class", "error_location", "changed_files", "diff_digest", "strategy_id", "hypothesis_digest", "raw_log_digest", "previously_passing_tests_regressed"],
       "properties": {"command_digest": {"$ref": "#/$defs/digest"}, "exit_code": {"type": "integer"}, "normalized_lines_digest": {"$ref": "#/$defs/digest"}, "failing_test_ids": {"$ref": "#/$defs/stringArray"}, "adapter": {"const": "generic-v1"}, "error_class": {"const": "UNKNOWN"}, "error_location": {"const": "UNKNOWN"}, "changed_files": {"$ref": "#/$defs/stringArray"}, "diff_digest": {"$ref": "#/$defs/digest"}, "strategy_id": {"$ref": "#/$defs/safeId"}, "hypothesis_digest": {"$ref": "#/$defs/digest"}, "raw_log_digest": {"$ref": "#/$defs/digest"}, "previously_passing_tests_regressed": {"$ref": "#/$defs/stringArray"}}
     },
-    "decisionOption": {"type": "object", "additionalProperties": false, "required": ["option_id", "option_effect", "preauthorized_capability"], "properties": {"option_id": {"$ref": "#/$defs/safeId"}, "option_effect": {"enum": ["CREATE_DRAFT_PR", "WAIT", "RETURN_FOR_REPAIR", "CONTINUE", "APPLY_ROADMAP_REVISION", "REVIEW_SURFACE_ACCEPTED"]}, "preauthorized_capability": {"enum": ["none", "pr_create", "thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"]}}},
+    "decisionOption": {"type": "object", "additionalProperties": false, "required": ["option_id", "option_effect", "preauthorized_capability"], "properties": {"option_id": {"$ref": "#/$defs/safeId"}, "option_effect": {"enum": ["CREATE_DRAFT_PR", "WAIT", "RETURN_FOR_REPAIR", "CONTINUE", "APPLY_ROADMAP_REVISION", "REVIEW_SURFACE_ACCEPTED", "STOP_LOOP_CONFIRMED"]}, "preauthorized_capability": {"enum": ["none", "pr_create", "thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"]}}},
     "decisionScope": {"type": "object", "additionalProperties": false, "properties": {"goal_id": {"$ref": "#/$defs/safeId"}, "dispatch_id": {"$ref": "#/$defs/safeId"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "artifact_path": {"type": "string", "minLength": 1}, "preview_url": {"type": "string", "pattern": "^https?://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^?]*)?$"}, "repository": {"type": "string", "minLength": 1}, "branch": {"type": "string", "minLength": 1}, "worktree_path": {"type": "string", "minLength": 1}, "review_surface_type": {"type": "string", "minLength": 1}}},
     "estimateRevision": {
       "type": "object", "additionalProperties": false,
@@ -1043,9 +1043,9 @@
         "lease_claim",
         "observed_at",
         "terminal_status",
+        "stop_basis",
         "blocker_code",
         "blocker_fingerprint",
-        "blocker_observations",
         "blocker_report_path",
         "blocker_report_digest",
         "finalization_id",
@@ -1057,14 +1057,24 @@
         "lease_claim": {"$ref": "#/$defs/leaseClaim"},
         "observed_at": {"$ref": "#/$defs/timestamp"},
         "terminal_status": {"const": "LOOP_BLOCKED"},
+        "stop_basis": {
+          "enum": [
+            "THREE_OBSERVATIONS",
+            "DETERMINISTIC_REPAIR_BUDGET",
+            "USER_DECISION"
+          ]
+        },
         "blocker_code": {"$ref": "#/$defs/safeId"},
         "blocker_fingerprint": {"$ref": "#/$defs/digest"},
         "blocker_observations": {
           "type": "array",
-          "minItems": 3,
           "maxItems": 3,
           "items": {"$ref": "#/$defs/blockerObservation"}
         },
+        "blocked_goal_id": {"$ref": "#/$defs/safeId"},
+        "decision_id": {"$ref": "#/$defs/safeId"},
+        "decision_context_digest": {"$ref": "#/$defs/digest"},
+        "decision_response_steering_id": {"$ref": "#/$defs/safeId"},
         "blocker_report_path": {
           "type": "string",
           "pattern": "^\\.codex-loop/reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.json$"
@@ -1073,7 +1083,52 @@
         "finalization_id": {"$ref": "#/$defs/safeId"},
         "controller_goal_id": {"$ref": "#/$defs/safeId"},
         "automation_id": {"$ref": "#/$defs/safeId"}
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "stop_basis": {"const": "THREE_OBSERVATIONS"},
+            "blocker_observations": {"minItems": 3, "maxItems": 3}
+          },
+          "required": ["blocker_observations"],
+          "not": {
+            "anyOf": [
+              {"required": ["blocked_goal_id"]},
+              {"required": ["decision_id"]},
+              {"required": ["decision_context_digest"]},
+              {"required": ["decision_response_steering_id"]}
+            ]
+          }
+        },
+        {
+          "properties": {
+            "stop_basis": {"const": "DETERMINISTIC_REPAIR_BUDGET"},
+            "blocker_code": {"const": "REPAIR_BUDGET_EXHAUSTED"}
+          },
+          "required": ["blocked_goal_id"],
+          "not": {
+            "anyOf": [
+              {"required": ["blocker_observations"]},
+              {"required": ["decision_id"]},
+              {"required": ["decision_context_digest"]},
+              {"required": ["decision_response_steering_id"]}
+            ]
+          }
+        },
+        {
+          "properties": {
+            "stop_basis": {"const": "USER_DECISION"},
+            "blocker_code": {"const": "REPAIR_BUDGET_EXHAUSTED"}
+          },
+          "required": [
+            "blocked_goal_id",
+            "decision_id",
+            "decision_context_digest",
+            "decision_response_steering_id"
+          ],
+          "not": {"required": ["blocker_observations"]}
+        }
+      ]
     },
     "ackFinalization": {
       "type": "object",

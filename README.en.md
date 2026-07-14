@@ -42,6 +42,25 @@ The skill creates one self-contained Controller Pack Markdown file plus separate
 Simplified Chinese usage instructions. It never silently authorizes push, merge,
 deploy, destructive operations, external writes, secrets, or paid runtime.
 
+### v3.2.1 hotfix
+
+Every Adaptive runtime stdin mode now uses a bounded frame reader: 30 seconds,
+4 MB, and strict UTF-8. A complete top-level JSON object is processed without
+waiting for the writer to close. Generated Packs require a direct `tty:false`
+invocation, one compact JSON write, same-session polling, and no `dd`, `stty`,
+fixed-byte reader, heredoc, or extra shell pipeline. Materialization is sendable
+only after `exit_code=0`, session termination, and one
+`PAYLOAD_MATERIALIZED` stdout object.
+
+New Packs default to five repairs beyond the initial execution; explicit 0–20
+values remain valid. Exhaustion forbids further dispatch. With Decision Cards,
+the Controller registers one stop-or-remain-paused-for-scoped-correction card
+and pauses the heartbeat; without cards, it may deterministic-fast-stop on the
+next dedicated Goal turn. `STOP_LOOP.stop_basis` separately validates ordinary
+three-observation blockers, deterministic exhaustion, and a user stop Decision
+bound to its response Steering. Frozen authorization values in old Packs are
+not silently rewritten.
+
 ## Readiness outcomes
 
 - `READY_FOR_LOOP`: all applicable gates pass and a real scaffold `--check-only`

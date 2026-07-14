@@ -26,6 +26,33 @@ SAFE_GOAL_ID_RE = re.compile(SAFE_GOAL_ID_PATTERN)
 SAFE_MILESTONE_ID_RE = re.compile(SAFE_MILESTONE_ID_PATTERN)
 SAFE_ID_RE = SAFE_MILESTONE_ID_RE
 
+ADAPTIVE_TRANSPORT_CONTRACT_MARKERS = (
+    "`tty:false`",
+    "`exit_code=0`",
+    "no longer returns `session_id`",
+    "single `PAYLOAD_MATERIALIZED`",
+    "Do not use `dd`, `stty`, fixed-byte readers, heredocs, or any extra shell pipeline.",
+    "`PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT`",
+)
+
+
+def validate_adaptive_pack_transport_contract(pack: str) -> list[str]:
+    """Reject an Adaptive Pack that weakens the non-PTY payload contract."""
+
+    errors = [
+        f"adaptive_transport_contract:missing:{marker}"
+        for marker in ADAPTIVE_TRANSPORT_CONTRACT_MARKERS
+        if marker not in pack
+    ]
+    for line in pack.splitlines():
+        lowered = line.lower()
+        if not any(token in lowered for token in ("`dd`", "`stty`", "heredoc")):
+            continue
+        if not any(guard in lowered for guard in ("do not use", "never use", "禁止")):
+            errors.append("adaptive_transport_contract:unsafe_shell_transport")
+            break
+    return errors
+
 
 def _role_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9㐀-鿿]+", "", str(value).lower())
@@ -194,7 +221,7 @@ def minimum_adaptive_routing_turns(data: dict[str, Any]) -> int | None:
 
     raw_goals = data.get("goals")
     raw_milestones = data.get("milestones")
-    max_repairs = _integer_value(data.get("max_repair_attempts_per_goal", 3))
+    max_repairs = _integer_value(data.get("max_repair_attempts_per_goal", 5))
     if (
         not isinstance(raw_goals, list)
         or not raw_goals

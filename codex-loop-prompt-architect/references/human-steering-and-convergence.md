@@ -87,6 +87,12 @@ id, option id, current context digest, and stable message/turn Steering identity
 Controller may act on its returned option effect. Changed scope, SHA, artifact,
 validation, blocker, or state range returns `DECISION_STALE` with zero side
 effects. A Decision Card cannot mint authority.
+Repair exhaustion is a deterministic special case. Register one stable card
+whose only effects are `STOP_LOOP_CONFIRMED` and `WAIT`, then pause the exact
+heartbeat. STOP binds the applied card, current context digest, and exact
+response Steering into `STOP_LOOP(stop_basis=USER_DECISION)`. WAIT keeps the
+loop paused for a later scoped `CORRECTION` and never authorizes an additional
+repair. The hard cap is not itself a selectable option.
 Additional `FRESH` checks and deterministically `CHANGED_IRRELEVANT` observations
 for the same artifact do not stale an otherwise unchanged card. `RELOAD_SAFE`,
 `SCOPE_CONFLICT`, `HARD_BLOCK`, or any changed scope, artifact, validation,

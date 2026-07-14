@@ -244,7 +244,7 @@
   "loop_state_git_policy": "Keep .codex-loop and local browser evidence out of product commits",
   "thread_topology": "one reusable implementation task, one serial State-Writer, one just-in-time Reviewer reused for code and roadmap audit, and one just-in-time Local Verifier",
   "max_child_threads": 4,
-  "max_repair_attempts_per_goal": 3,
+  "max_repair_attempts_per_goal": 5,
   "runtime_blockers": [
     "First dependency install may require bounded registry retries",
     "Authenticated browser state may be unavailable",

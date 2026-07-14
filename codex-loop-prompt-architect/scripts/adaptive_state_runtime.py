@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import json
+import os
+import select
+import stat
 import sys
+import time
 from typing import Any
 
 from loop_architect.state_runtime import (
@@ -16,6 +20,110 @@ from loop_architect.state_runtime import (
     verify_dispatch_payload_against_state,
 )
 from loop_architect.human_control import build_failure_fingerprint
+
+
+INPUT_TRANSPORT_TIMEOUT_SECONDS = 30.0
+INPUT_TRANSPORT_MAX_BYTES = 4_000_000
+INPUT_TRANSPORT_CHUNK_BYTES = 64 * 1024
+
+
+class InputTransportError(ValueError):
+    """Fail-closed error raised while receiving one bounded stdin frame."""
+
+    def __init__(self, code: str, *, bytes_received: int) -> None:
+        super().__init__(code)
+        self.code = code
+        self.details = {"bytes_received": bytes_received}
+
+
+def _decode_transport(data: bytes, *, final: bool) -> str | None:
+    try:
+        return data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        if not final and exc.reason == "unexpected end of data" and exc.end == len(data):
+            return None
+        raise InputTransportError(
+            "INPUT_TRANSPORT_UTF8_INVALID", bytes_received=len(data)
+        ) from exc
+
+
+def _json_frame_complete(payload: str, *, payload_verify: bool) -> bool:
+    candidate = payload
+    if payload_verify:
+        separator = candidate.find("\n")
+        if separator < 0:
+            return False
+        candidate = candidate[separator + 1 :]
+    stripped = candidate.lstrip()
+    if not stripped:
+        return payload.endswith("\n") and not payload_verify
+    try:
+        _, end = json.JSONDecoder().raw_decode(stripped)
+    except json.JSONDecodeError:
+        return payload.endswith("\n")
+    # A complete top-level JSON value is one frame. Any already-buffered
+    # trailing bytes are returned too so the strict parser can reject them.
+    return end > 0
+
+
+def _read_regular_stdin(fd: int, *, max_bytes: int) -> str:
+    chunks: list[bytes] = []
+    received = 0
+    while True:
+        chunk = os.read(fd, INPUT_TRANSPORT_CHUNK_BYTES)
+        if not chunk:
+            break
+        received += len(chunk)
+        if received > max_bytes:
+            raise InputTransportError(
+                "INPUT_TRANSPORT_TOO_LARGE", bytes_received=received
+            )
+        chunks.append(chunk)
+    decoded = _decode_transport(b"".join(chunks), final=True)
+    assert decoded is not None
+    return decoded
+
+
+def _read_bounded_stdin(
+    mode: str,
+    *,
+    timeout_seconds: float = INPUT_TRANSPORT_TIMEOUT_SECONDS,
+    max_bytes: int = INPUT_TRANSPORT_MAX_BYTES,
+) -> str:
+    """Read one complete request frame without requiring the writer to close stdin."""
+
+    fd = sys.stdin.fileno()
+    if stat.S_ISREG(os.fstat(fd).st_mode):
+        return _read_regular_stdin(fd, max_bytes=max_bytes)
+
+    deadline = time.monotonic() + timeout_seconds
+    data = bytearray()
+    while True:
+        decoded = _decode_transport(bytes(data), final=False)
+        if decoded is not None and _json_frame_complete(
+            decoded, payload_verify=mode == "payload-verify"
+        ):
+            return decoded
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise InputTransportError(
+                "INPUT_TRANSPORT_TIMEOUT", bytes_received=len(data)
+            )
+        readable, _, _ = select.select([fd], [], [], remaining)
+        if not readable:
+            raise InputTransportError(
+                "INPUT_TRANSPORT_TIMEOUT", bytes_received=len(data)
+            )
+        chunk = os.read(fd, INPUT_TRANSPORT_CHUNK_BYTES)
+        if not chunk:
+            decoded = _decode_transport(bytes(data), final=True)
+            assert decoded is not None
+            return decoded
+        data.extend(chunk)
+        if len(data) > max_bytes:
+            raise InputTransportError(
+                "INPUT_TRANSPORT_TOO_LARGE", bytes_received=len(data)
+            )
 
 
 def _response(code: str, path: str = "/", details: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -118,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        payload = "" if mode == "recover" else sys.stdin.read()
+        payload = "" if mode == "recover" else _read_bounded_stdin(mode)
         if mode == "payload-materialize":
             if not payload.strip():
                 response = _response("DISPATCH_MATERIALIZATION_INPUT_INVALID", "/")
@@ -184,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 else:
                     response = runtime.apply(request)
+    except InputTransportError as exc:
+        response = _response(exc.code, "/stdin", exc.details)
     except RuntimeRejection as exc:
         response = _response(exc.code, exc.path, exc.details)
     except InjectedCrash as exc:

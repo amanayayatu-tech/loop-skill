@@ -352,7 +352,7 @@ def authorization_envelope(
             "retry_limit_per_exploration": 0,
             "max_depth": 1,
         },
-        "repair_policy": {"max_repair_attempts_per_goal": 3},
+        "repair_policy": {"max_repair_attempts_per_goal": 5},
         "budget_caps": {"cost_usd": None, "calls": None, "tokens": None},
         "connectors": [],
         "side_effects": copy.deepcopy(top),
