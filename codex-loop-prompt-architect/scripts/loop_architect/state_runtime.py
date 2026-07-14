@@ -156,6 +156,7 @@ PHASE_PERMISSION_FIELDS = (
 MAX_ARTIFACT_CONTENT_SIZE = 4_000_000
 
 ZERO_EXECUTION_BLOCKER_CODES = {
+    "DISPATCH_VALIDATION_MATRIX_MISMATCH",
     "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
     "INPUT_TRANSPORT_TIMEOUT",
     "INPUT_TRANSPORT_TOO_LARGE",
@@ -176,6 +177,7 @@ V2_ONLY_MUTATIONS = {
     "RECORD_CONTEXT_FRESHNESS",
     "RECORD_CONTROLLER_GOAL_RESUME",
     "MIGRATE_CONTROLLER_PACK",
+    "RECONCILE_WORKER_EXECUTION_CLASSIFICATION",
 }
 
 PAUSE_BLOCKED_ROUTING_MUTATIONS = {
@@ -1586,6 +1588,84 @@ class AdaptiveStateRuntime:
             self._ensure_layout()
             return self._read_state_locked(state_validator)
 
+    @staticmethod
+    def _worker_blocker_code_from_report(report: Mapping[str, Any]) -> str | None:
+        if "blocker_code" in report:
+            direct = report["blocker_code"]
+            return direct if direct in ZERO_EXECUTION_BLOCKER_CODES else None
+        risks = report.get("risks_or_blockers")
+        if not isinstance(risks, list):
+            return None
+        candidates = {
+            item.get("code")
+            for item in risks
+            if isinstance(item, dict)
+            and item.get("code") in ZERO_EXECUTION_BLOCKER_CODES
+        }
+        return next(iter(candidates)) if len(candidates) == 1 else None
+
+    @classmethod
+    def _normalize_staged_worker_classification(
+        cls,
+        result: dict[str, Any],
+        report: dict[str, Any],
+    ) -> None:
+        """Bind Worker execution classification even when a target omits it from result."""
+
+        report_has_execution = "execution_started" in report
+        result_has_execution = "execution_started" in result
+        if not report_has_execution and not result_has_execution:
+            return
+        if report_has_execution and result_has_execution:
+            if report["execution_started"] != result["execution_started"]:
+                raise RuntimeRejection(
+                    "WORKER_EXECUTION_CLASSIFICATION_MISMATCH",
+                    "/result/execution_started",
+                )
+        elif report_has_execution:
+            result["execution_started"] = report["execution_started"]
+        else:
+            report["execution_started"] = result["execution_started"]
+
+        execution_started = result["execution_started"]
+        if type(execution_started) is not bool:
+            raise RuntimeRejection(
+                "WORKER_EXECUTION_CLASSIFICATION_INVALID",
+                "/result/execution_started",
+            )
+        result_blocker = result.get("blocker_code")
+        report_blocker = cls._worker_blocker_code_from_report(report)
+        if "blocker_code" in report and report_blocker is None:
+            raise RuntimeRejection(
+                "WORKER_ZERO_EXECUTION_BLOCKER_INVALID",
+                "/report/blocker_code",
+                {"allowed": sorted(ZERO_EXECUTION_BLOCKER_CODES)},
+            )
+        if result_blocker is not None and report_blocker is not None:
+            if result_blocker != report_blocker:
+                raise RuntimeRejection(
+                    "WORKER_EXECUTION_CLASSIFICATION_MISMATCH",
+                    "/result/blocker_code",
+                )
+        blocker_code = result_blocker or report_blocker
+        if not execution_started:
+            if (
+                result.get("status") != "BLOCKED"
+                or blocker_code not in ZERO_EXECUTION_BLOCKER_CODES
+            ):
+                raise RuntimeRejection(
+                    "WORKER_ZERO_EXECUTION_BLOCKER_INVALID",
+                    "/result/blocker_code",
+                    {"allowed": sorted(ZERO_EXECUTION_BLOCKER_CODES)},
+                )
+            result["blocker_code"] = blocker_code
+            report["blocker_code"] = blocker_code
+        elif result_blocker is not None or report.get("blocker_code") is not None:
+            raise RuntimeRejection(
+                "WORKER_EXECUTION_CLASSIFICATION_INVALID",
+                "/result/blocker_code",
+            )
+
     def stage_formal_report(self, request: Any) -> dict[str, Any]:
         """Validate and stage one formal report for an exact canonical SENT outbox."""
 
@@ -1601,8 +1681,8 @@ class AdaptiveStateRuntime:
                 {"required_keys": ["outbox_id", "report", "result"]},
             )
         outbox_id = request["outbox_id"]
-        result_input = request["result"]
-        report = request["report"]
+        result_input = copy.deepcopy(request["result"])
+        report = copy.deepcopy(request["report"])
         if not isinstance(outbox_id, str) or SAFE_ID_RE.fullmatch(outbox_id) is None:
             raise RuntimeRejection("UNSAFE_ID", "/outbox_id")
         allowed_result_keys = {
@@ -1621,6 +1701,7 @@ class AdaptiveStateRuntime:
             )
         if not isinstance(report, dict):
             raise RuntimeRejection("FORMAL_REPORT_NOT_OBJECT", "/report")
+        self._normalize_staged_worker_classification(result_input, report)
         artifact_digest = result_input.get("artifact_digest")
         if (
             not isinstance(artifact_digest, str)
@@ -5186,6 +5267,10 @@ class AdaptiveStateRuntime:
             result = self._migrate_controller_pack(
                 candidate, request, mutation, after_version
             )
+        elif mutation_type == "RECONCILE_WORKER_EXECUTION_CLASSIFICATION":
+            result = self._reconcile_worker_execution_classification(
+                candidate, request, mutation
+            )
         elif mutation_type == "RECORD_STEERING":
             result = self._record_steering(candidate, request, mutation, after_version)
         elif mutation_type == "RESOLVE_STEERING":
@@ -6621,6 +6706,148 @@ class AdaptiveStateRuntime:
                 "target_pack_path": target_path,
                 "controller_pack_revision": revision,
                 "legacy_routing_turns_backfilled": legacy_routing_turns_backfilled,
+            },
+        }
+
+    def _reconcile_worker_execution_classification(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Correct a legacy ACK that dropped a report's zero-execution classification."""
+
+        self._require_controller_actor(state, request)
+        if state["run_control"]["status"] != "PAUSED_AT_SAFE_POINT":
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_REQUIRES_PAUSED_SAFE_POINT",
+                "/run_control/status",
+            )
+        if state["controller_lease"] is not None:
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_ACTIVE_LEASE",
+                "/controller_lease",
+            )
+        active = [
+            record["outbox_id"]
+            for field in OUTBOX_FIELDS.values()
+            for record in state[field].values()
+            if record["status"] in ACTIVE_OUTBOX_STATUSES
+            or (
+                record["outbox_kind"] == "ASSURANCE"
+                and record["status"] == "ACKED"
+            )
+        ]
+        if active:
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_ACTIVE_OUTBOX",
+                "/mutation/type",
+                {"outbox_ids": sorted(active)},
+            )
+
+        goal_id = mutation["goal_id"]
+        ledger = state["goal_execution_ledger"].get(goal_id)
+        if ledger is None:
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_GOAL_MISSING",
+                "/mutation/goal_id",
+            )
+        matches = [
+            attempt
+            for attempt in ledger["attempts"]
+            if attempt.get("dispatch_id") == mutation["dispatch_id"]
+        ]
+        if len(matches) != 1:
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_ATTEMPT_MISMATCH",
+                "/mutation/dispatch_id",
+            )
+        attempt = matches[0]
+        if (
+            attempt.get("status") != "BLOCKED"
+            or attempt.get("execution_started") is not True
+            or attempt.get("report_digest") != mutation["report_digest"]
+        ):
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_STATE_MISMATCH",
+                "/mutation/dispatch_id",
+            )
+        report_path = mutation["report_path"]
+        if report_path not in attempt.get("evidence_paths", []):
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_REPORT_MISMATCH",
+                "/mutation/report_path",
+            )
+        artifact = state["artifact_ledger"].get(report_path)
+        if (
+            artifact is None
+            or artifact.get("digest") != mutation["report_digest"]
+            or artifact.get("media_type") != "application/json"
+        ):
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_REPORT_MISMATCH",
+                "/mutation/report_digest",
+            )
+        target = self.root / report_path
+        self._assert_confined(target, self.control_dir, "/mutation/report_path")
+        self._reject_symlink(target, "/mutation/report_path")
+        try:
+            payload = target.read_bytes()
+        except OSError as exc:
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_REPORT_UNAVAILABLE",
+                "/mutation/report_path",
+            ) from exc
+        if _bytes_digest(payload) != mutation["report_digest"]:
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_REPORT_MISMATCH",
+                "/mutation/report_digest",
+            )
+        try:
+            report = json.loads(payload.decode("utf-8", errors="strict"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_REPORT_INVALID",
+                "/mutation/report_path",
+            ) from exc
+        if not isinstance(report, dict):
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_REPORT_INVALID",
+                "/mutation/report_path",
+            )
+        blocker_code = self._worker_blocker_code_from_report(report)
+        if (
+            report.get("goal_id") != goal_id
+            or report.get("dispatch_id") != mutation["dispatch_id"]
+            or report.get("status") != "BLOCKED"
+            or report.get("execution_started") is not False
+            or report.get("source_artifact_digest") != attempt["artifact_digest"]
+            or blocker_code != mutation["blocker_code"]
+        ):
+            raise RuntimeRejection(
+                "WORKER_CLASSIFICATION_RECONCILIATION_REPORT_MISMATCH",
+                "/mutation/report_path",
+            )
+
+        attempt["execution_started"] = False
+        attempt["blocker_code"] = blocker_code
+        latest = ledger.get("latest_worker")
+        if (
+            isinstance(latest, dict)
+            and latest.get("dispatch_id") == attempt["dispatch_id"]
+        ):
+            latest["execution_started"] = False
+            latest["blocker_code"] = blocker_code
+        return {
+            "code": "WORKER_EXECUTION_CLASSIFICATION_RECONCILED",
+            "next_action_code": "REPAIR_REQUIRED",
+            "result": {
+                "goal_id": goal_id,
+                "dispatch_id": attempt["dispatch_id"],
+                "report_digest": attempt["report_digest"],
+                "execution_started": False,
+                "blocker_code": blocker_code,
+                "attempt_history_preserved": True,
             },
         }
 
