@@ -77,8 +77,13 @@ with `execution_started=false` avoids repair consumption.
 
 Pack changes require atomic `MIGRATE_CONTROLLER_PACK` at a paused safe point and
 retain immutable revision history; an unmigrated digest has no routing authority.
-Each route lease is also bound to a real `controller_turn_id`, so one Codex App
-turn cannot acquire a second lease.
+The Controller invokes `ACQUIRE_LEASE` / `TAKEOVER_LEASE` only through the
+installed `route_state_mutation` MCP tool and omits `controller_turn_id` from
+model arguments. The bridge verifies Codex-injected turn metadata and its direct
+OpenAI-signed app-server parent before injecting the real turn id. A second route
+in the same App turn is rejected without side effects; all other mutations still
+use the existing State-Writer. Release closure still requires a real App
+two-route canary.
 
 Generated Adaptive Packs also use projection-first observation: compare the
 `LOOP_STATE.md` mtime/size and projected `STATUS.md` state version, then parse

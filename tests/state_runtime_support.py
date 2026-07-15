@@ -23,11 +23,15 @@ sys.path.insert(0, str(SCRIPTS))
 
 from loop_architect.state_runtime import (  # noqa: E402
     ARTIFACT_STAGES,
+    OPENAI_CODE_SIGN_IDENTIFIER,
+    OPENAI_CODE_SIGN_TEAM_ID,
     PAYLOAD_DIGEST_PLACEHOLDER,
     PERSISTENT_STAGES,
+    TRUSTED_HOST_BOUNDARY,
     TRUSTED_TURN_SOURCE,
     AdaptiveStateRuntime,
     InjectedCrash,
+    TrustedHostAttestation,
     TrustedTurnMetadata,
     goal_definition_payload_digest,
     materialize_dispatch_payload,
@@ -69,6 +73,16 @@ def trusted_metadata_for_request(
         thread_id=request["thread_id"],
         turn_id=turn_id or mutation["controller_turn_id"],
         source=TRUSTED_TURN_SOURCE,
+        host_attestation=TrustedHostAttestation(
+            boundary=TRUSTED_HOST_BOUNDARY,
+            parent_pid=4242,
+            parent_executable=(
+                "/Applications/ChatGPT.app/Contents/Resources/codex"
+            ),
+            parent_identifier=OPENAI_CODE_SIGN_IDENTIFIER,
+            parent_team_id=OPENAI_CODE_SIGN_TEAM_ID,
+            parent_cdhash="a" * 64,
+        ),
     )
 
 

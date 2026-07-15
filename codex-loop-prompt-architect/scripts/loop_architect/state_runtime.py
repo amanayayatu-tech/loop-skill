@@ -50,7 +50,10 @@ SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 DIGEST_RE = re.compile(r"sha256:[a-f0-9]{64}\Z")
 SHA256_HEX_RE = re.compile(r"[a-f0-9]{64}\Z")
 INTENDED_TRANSITION = "ROUTE_ONE_TRANSITION"
-TRUSTED_TURN_SOURCE = "CODEX_APP_TOOL_BOUNDARY"
+TRUSTED_TURN_SOURCE = "CODEX_MCP_REQUEST_META"
+TRUSTED_HOST_BOUNDARY = "CODEX_SIGNED_APP_SERVER_PARENT"
+OPENAI_CODE_SIGN_IDENTIFIER = "codex"
+OPENAI_CODE_SIGN_TEAM_ID = "2DC432GLL2"
 PAYLOAD_DIGEST_FIELD = "dispatch_payload_digest"
 PAYLOAD_DIGEST_PLACEHOLDER = "PAYLOAD_DIGEST_PLACEHOLDER"
 DISPATCH_ENVELOPE_TYPES = (
@@ -145,16 +148,30 @@ DISPATCH_PAYLOAD_KEYS = {
 
 
 @dataclass(frozen=True)
-class TrustedTurnMetadata:
-    """Carrier reserved for a host-controlled in-process tool boundary.
+class TrustedHostAttestation:
+    """Verified identity of the host process that owns the MCP boundary."""
 
-    The value type is not proof of provenance by itself. No shipped CLI accepts
-    it; release remains blocked until Codex App owns the calling boundary.
+    boundary: str
+    parent_pid: int
+    parent_executable: str
+    parent_identifier: str
+    parent_team_id: str
+    parent_cdhash: str
+
+
+@dataclass(frozen=True)
+class TrustedTurnMetadata:
+    """Carrier reserved for the signed Codex MCP tool boundary.
+
+    The value type is not proof of provenance by itself. The shipped CLI never
+    accepts it; the MCP bridge constructs it only after parent-process and
+    request-metadata attestation.
     """
 
     thread_id: str
     turn_id: str
     source: str
+    host_attestation: TrustedHostAttestation
 
 
 PHASE_PERMISSION_FIELDS = (
@@ -6928,6 +6945,24 @@ class AdaptiveStateRuntime:
         if (
             not isinstance(trusted_turn_metadata, TrustedTurnMetadata)
             or trusted_turn_metadata.source != TRUSTED_TURN_SOURCE
+            or not isinstance(
+                trusted_turn_metadata.host_attestation,
+                TrustedHostAttestation,
+            )
+            or trusted_turn_metadata.host_attestation.boundary
+            != TRUSTED_HOST_BOUNDARY
+            or trusted_turn_metadata.host_attestation.parent_pid <= 1
+            or not os.path.isabs(
+                trusted_turn_metadata.host_attestation.parent_executable
+            )
+            or trusted_turn_metadata.host_attestation.parent_identifier
+            != OPENAI_CODE_SIGN_IDENTIFIER
+            or trusted_turn_metadata.host_attestation.parent_team_id
+            != OPENAI_CODE_SIGN_TEAM_ID
+            or SHA256_HEX_RE.fullmatch(
+                trusted_turn_metadata.host_attestation.parent_cdhash
+            )
+            is None
             or SAFE_ID_RE.fullmatch(trusted_turn_metadata.thread_id) is None
             or SAFE_ID_RE.fullmatch(trusted_turn_metadata.turn_id) is None
         ):

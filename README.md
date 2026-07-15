@@ -43,8 +43,11 @@ receipt。即使 deferred exec 丢失 stdout，Controller 仍可从
 `execution_started=false` 且 blocker code 命中 runtime 白名单时才不消耗 repair。
 
 Pack 身份变化必须通过暂停安全点上的 `MIGRATE_CONTROLLER_PACK` 原子迁移并保留不可变
-历史；未迁移的新 digest 没有路由权限。每个 route lease 还绑定真实
-`controller_turn_id`，同一个 Codex App turn 不能取得第二个 lease。
+历史；未迁移的新 digest 没有路由权限。`ACQUIRE_LEASE` / `TAKEOVER_LEASE` 只能由
+Controller 直接调用安装的 `route_state_mutation` MCP 工具，并在模型参数中省略
+`controller_turn_id`；桥接进程验证 Codex 注入的 turn metadata 与 OpenAI 签名的直接
+app-server 父进程后再注入真实 turn id。同一 App turn 的第二个 route 会零副作用拒绝；其他
+mutation 仍走既有 State-Writer。该能力的发布结论仍要求真实 App 双路由 canary。
 
 生成的 Adaptive Pack 还采用 projection-first 观察：先比较 `LOOP_STATE.md` 的
 mtime/size 与 `STATUS.md` 的 projected state version，变化或 mutation 前才读取 canonical；

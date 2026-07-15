@@ -1,19 +1,20 @@
-# Upstream Codex App controller-turn attestation blocker
+# Codex App controller-turn attestation integration gate
 
 ## Release status
 
-`BLOCKED_BY_APP_ATTESTATION` is a P0 release blocker. The repository runtime now
-fails closed before a route lease or takeover when trusted caller-turn metadata
-is absent. This is mitigation and truthful capability reporting, not closure of
-one-route-per-real-App-turn enforcement.
+Codex app-server already injects trusted turn metadata into every MCP tool call.
+The repository now ships a narrow STDIO MCP bridge that consumes that metadata,
+attests its direct signed app-server parent, and exposes only route lease and
+takeover mutations. P0 remains open until the exact release candidate passes a
+real App two-route canary; synthetic tests alone are not closure.
 
 ## Observed boundary
 
-On 2026-07-15, Codex App MCP request metadata exposed an
-`x-codex-turn-metadata.turn_id` at the trusted tool boundary. A direct shell tool
-child for the same task exposed the thread identity but no caller-turn identity.
-Consequently, the standalone Python runtime cannot distinguish a real App turn
-from a model-generated replacement string.
+On 2026-07-15, the running Codex App and the official Codex source both showed
+that MCP requests receive `x-codex-turn-metadata.turn_id` plus a host-owned
+thread id after model arguments are parsed. A direct shell child does not own
+that boundary. The standalone runtime therefore stays fail-closed; only the
+dedicated bridge may construct trusted runtime metadata.
 
 Copying the MCP value into mutation JSON, argv, a shell environment variable,
 task title, prompt marker, timestamp, or UUID does not solve the problem: all of
@@ -21,10 +22,13 @@ those surfaces remain writable or selectable by the Controller.
 
 ## Repository behavior
 
-- `AdaptiveStateRuntime.apply` accepts trusted metadata only through a separate
-  in-process argument, never from the mutation envelope.
-- `ACQUIRE_LEASE` and `TAKEOVER_LEASE` compare the claimed thread/turn identities
-  with that metadata before consuming the canonical turn ledger.
+- `adaptive_state_mcp.py` exposes only `route_state_mutation` over STDIO MCP.
+- It verifies the direct parent command, strict macOS code signature, identifier
+  `codex`, OpenAI Team ID `2DC432GLL2`, and Codex-owned MCP request metadata.
+- Model arguments omit `controller_turn_id`; the bridge injects the attested id
+  and rejects any conflicting explicit claim.
+- `ACQUIRE_LEASE` and `TAKEOVER_LEASE` compare the attested thread/turn identities
+  before consuming the canonical turn ledger.
 - Missing metadata returns `BLOCKED_BY_APP_ATTESTATION`.
 - Invalid or mismatched metadata is rejected with zero durable side effects.
 - Exact idempotent replay may return the stored result without creating another
@@ -33,27 +37,19 @@ those surfaces remain writable or selectable by the Controller.
   it is intentionally blocked.
 
 Tests may construct the in-process metadata object to verify runtime semantics.
-The Python value type does not authenticate its own provenance. That test
-harness is not App attestation evidence and cannot satisfy the release or
-canary gate; trust exists only when an upstream host-owned process controls the
-call and does not expose the argument to model-directed code.
+The Python value type does not authenticate its own provenance. A shell-launched
+bridge is also rejected because its parent is not the signed app-server. Neither
+synthetic path is App attestation evidence; trust is established only by the
+real MCP process boundary and its release-candidate canary.
 
-## Minimum upstream requirement
+## Remaining App integration gate
 
-Codex App/app-server must pass the already-trusted caller thread and turn
-identities to the state mutation runtime through a channel the model and shell
-command cannot set, replace, or replay. Acceptable shapes include:
-
-1. a dedicated App/MCP state-mutation tool that validates request metadata at
-   the server boundary and invokes the runtime in-process; or
-2. an authenticated, single-use capability bound by the app-server to the exact
-   thread, turn, tool call, and request digest, verified independently of JSON,
-   argv, and ordinary environment variables.
-
-The integration must then prove that one real App turn cannot acquire a second
-route by changing any payload-controlled identity. Until that canary passes,
-release, installation, Controller Pack migration, heartbeat resume, and the
-paused production Loop remain prohibited.
+Installer work must register the bridge as a direct-command local STDIO MCP
+server without a shell wrapper and verify its installed SHA. The real App canary
+must then prove that one real Controller turn cannot acquire a second route by
+changing payload-controlled identities, while a later real turn can route. Until
+that canary passes, release, installation, Controller Pack migration, heartbeat
+resume, and the paused production Loop remain prohibited.
 
 ## Evidence hygiene
 

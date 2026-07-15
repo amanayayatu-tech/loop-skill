@@ -8,6 +8,7 @@ SKILLS_DIR="$CODEX_HOME_DIR/skills"
 SOURCE_DIR="$ROOT_DIR/codex-loop-prompt-architect"
 TARGET_DIR="$SKILLS_DIR/codex-loop-prompt-architect"
 STATE_RUNTIME="$SOURCE_DIR/scripts/adaptive_state_runtime.py"
+STATE_MCP="$SOURCE_DIR/scripts/adaptive_state_mcp.py"
 STATE_SCHEMA="$SOURCE_DIR/references/adaptive-state.schema.json"
 MUTATION_SCHEMA="$SOURCE_DIR/references/adaptive-mutation.schema.json"
 BACKUP_ROOT="$CODEX_HOME_DIR/skill-backups/codex-loop-prompt-architect"
@@ -34,7 +35,7 @@ if [[ ! -f "$SOURCE_DIR/SKILL.md" ]]; then
   exit 1
 fi
 
-for required_file in "$STATE_RUNTIME" "$STATE_SCHEMA" "$MUTATION_SCHEMA"; do
+for required_file in "$STATE_RUNTIME" "$STATE_MCP" "$STATE_SCHEMA" "$MUTATION_SCHEMA"; do
   if [[ ! -f "$required_file" ]]; then
     echo "Missing Adaptive state runtime artifact: $required_file" >&2
     exit 1
@@ -72,6 +73,7 @@ cp -R "$SOURCE_DIR" "$STAGING_DIR"
 chmod +x "$STAGING_DIR/scripts/loop_prompt_scaffold.py"
 chmod +x "$STAGING_DIR/scripts/validate_skill.py"
 chmod +x "$STAGING_DIR/scripts/adaptive_state_runtime.py"
+chmod +x "$STAGING_DIR/scripts/adaptive_state_mcp.py"
 mkdir -p "$RUNTIME_SMOKE_ROOT"
 "$PYTHON_BIN" "$STAGING_DIR/scripts/adaptive_state_runtime.py" \
   --root "$RUNTIME_SMOKE_ROOT" --recover </dev/null >/dev/null

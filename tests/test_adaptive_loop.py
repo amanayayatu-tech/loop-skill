@@ -704,6 +704,8 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertIn("closed tagged REVIEW_DISPATCH", self.pack)
         self.assertIn("Execute only STATE_MUTATION", self.pack)
         self.assertIn("scripts/adaptive_state_runtime.py", self.pack)
+        self.assertIn("route_state_mutation", self.pack)
+        self.assertIn("omit controller_turn_id", self.pack)
         self.assertIn("references/adaptive-mutation.schema.json", self.pack)
         self.assertIn("verify `python3 -c 'import jsonschema'` succeeds", self.pack)
         self.assertIn("never hand-writes canonical state/events/journals", self.pack)

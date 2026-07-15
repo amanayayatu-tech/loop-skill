@@ -10,6 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_trusted_route_bridge_is_shipped_and_installed(self) -> None:
+        bridge = ROOT / "codex-loop-prompt-architect" / "scripts" / "adaptive_state_mcp.py"
+        self.assertTrue(bridge.is_file())
+        installer = (ROOT / "scripts" / "install.sh").read_text()
+        self.assertIn('STATE_MCP="$SOURCE_DIR/scripts/adaptive_state_mcp.py"', installer)
+        self.assertIn('chmod +x "$STAGING_DIR/scripts/adaptive_state_mcp.py"', installer)
+
     def test_version_and_changelog_share_the_formal_release(self) -> None:
         version = (ROOT / "VERSION").read_text().strip()
         self.assertRegex(version, r"^[0-9]+\.[0-9]+\.[0-9]+$")

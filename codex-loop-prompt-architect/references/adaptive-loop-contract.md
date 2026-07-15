@@ -497,18 +497,20 @@ Reusing the same id with another owner does not transfer ownership. A competing
 turn returns `WAITING_CONTROLLER_LEASE` and sends nothing. Expired takeover
 requires trustworthy current time plus structured `read_thread` evidence for
 the exact owner task, increments the epoch, and fences every old action.
-Each acquisition and takeover carries a claimed `controller_turn_id`, but that
-JSON field is not identity evidence. Runtime accepts the route only when the
-host tool boundary separately supplies immutable `CODEX_APP_TOOL_BOUNDARY`
-metadata whose thread and turn identities exactly match the request. It indexes
-the canonical ledger by the attested turn and rejects a second lease from that
-same App turn even after completion or voluntary release. JSON, argv,
-environment variables, task titles, timestamps, and model-generated UUIDs are
-not attestation. Without host metadata, routing returns
-`BLOCKED_BY_APP_ATTESTATION` with zero canonical side effects. The current
-direct CLI has no trusted turn channel and therefore deliberately fails closed;
-the repository does not claim real App one-route enforcement until the App
-integration supplies that channel and passes the real two-route canary.
+Controller sends acquisition and takeover only through the configured
+`route_state_mutation` MCP tool and omits `controller_turn_id` from model
+arguments. The bridge verifies that its direct parent is the OpenAI-signed Codex
+app-server, reads Codex-owned `CODEX_MCP_REQUEST_META` outside tool arguments,
+requires its thread/session identities to match the request, and only then
+injects the real turn id. State-Writer, direct CLI, shell, inline Python, JSON,
+argv, environment variables, task titles, timestamps, and model-generated UUIDs
+are not route-attestation channels. Runtime indexes the canonical ledger by the
+attested turn and rejects a second lease from that same App turn even after
+completion or voluntary release. Missing or invalid host metadata returns
+`BLOCKED_BY_APP_ATTESTATION` with zero canonical side effects. All non-route
+mutations continue through the existing State-Writer. Repository tests prove
+the bridge boundary synthetically; release claims still require the real App
+two-route canary.
 
 Except for initialization, counted routing-turn creation, and lease
 acquisition/takeover itself, every Adaptive

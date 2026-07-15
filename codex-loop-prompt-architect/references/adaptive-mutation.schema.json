@@ -663,7 +663,7 @@
         "expires_at": {"$ref": "#/$defs/timestamp"},
         "controller_turn_id": {
           "$ref": "#/$defs/safeId",
-          "description": "Untrusted request claim; routing additionally requires matching host-injected CODEX_APP_TOOL_BOUNDARY metadata outside this JSON envelope."
+          "description": "Bridge-owned field injected from CODEX_MCP_REQUEST_META. Model-authored route arguments omit it; direct CLI or mismatched claims fail closed."
         },
         "intended_transition": {"const": "ROUTE_ONE_TRANSITION"}
       }
@@ -743,7 +743,7 @@
         "takeover_evidence": {"$ref": "#/$defs/takeoverEvidence"},
         "controller_turn_id": {
           "$ref": "#/$defs/safeId",
-          "description": "Untrusted request claim; routing additionally requires matching host-injected CODEX_APP_TOOL_BOUNDARY metadata outside this JSON envelope."
+          "description": "Bridge-owned field injected from CODEX_MCP_REQUEST_META. Model-authored route arguments omit it; direct CLI or mismatched claims fail closed."
         }
       }
     },
