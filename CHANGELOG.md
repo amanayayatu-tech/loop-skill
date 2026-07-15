@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.2.6] - 2026-07-16
+
+### Fixed
+
+- Bound every generated Adaptive runtime invocation to the dedicated Python
+  executable in the exact installed `codex-loop-state` MCP registration. Packs
+  now fail closed instead of falling back to an ambient `python3` that may lack
+  the shipped runtime dependencies.
+
 ## [3.2.5] - 2026-07-15
 
 ### Fixed
@@ -204,7 +213,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.5...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.6...HEAD
+[3.2.6]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.6
 [3.2.5]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.5
 [3.2.4]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.4
 [3.2.3]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.3

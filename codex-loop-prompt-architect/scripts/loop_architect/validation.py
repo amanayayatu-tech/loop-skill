@@ -38,6 +38,9 @@ ADAPTIVE_TRANSPORT_CONTRACT_MARKERS = (
     "single `PAYLOAD_MATERIALIZED`",
     "Do not use `dd`, `stty`, fixed-byte readers, heredocs, or any extra shell pipeline.",
     "`PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT`",
+    "`RUNTIME_PYTHON`",
+    "`[mcp_servers.codex-loop-state]`",
+    "never fall back to ambient `python3`",
 )
 
 ADAPTIVE_RESOURCE_CONTRACT_MARKERS = (
@@ -128,6 +131,10 @@ def validate_adaptive_pack_transport_contract(pack: str) -> list[str]:
             r"adaptive_state_runtime\.py[^\n]*\|)",
         ),
         ("stdin_redirection", r"<\s*/(?:private/)?tmp/[^\s]+"),
+        (
+            "ambient_python",
+            r"[\[(]\s*['\"]python3?['\"]\s*,\s*runtime_path",
+        ),
         (
             "stdin_redirection",
             r"\bredirect(?:ion)?\b[^\n]{0,80}\bstdin\b[^\n]{0,80}/(?:private/)?tmp/",

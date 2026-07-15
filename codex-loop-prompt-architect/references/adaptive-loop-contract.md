@@ -212,8 +212,12 @@ identity. Neither side manually replaces substrings, preserves
 a `sha256:` prefix, adds angle brackets, reserializes transport, or hashes a UI,
 XML, or `<codex_delegation>` wrapper.
 
-State-Writer must not hand-write canonical state/events/journals. Missing
-runtime, schema, or `jsonschema` yields `STATE_RUNTIME_UNAVAILABLE`; a structured
+State-Writer must not hand-write canonical state/events/journals. It resolves
+the runtime interpreter only from the exact installed
+`[mcp_servers.codex-loop-state]` command/args readback, verifies that the bridge
+and runtime share the installed skill root, and never falls back to ambient
+`python3`. Missing runtime, interpreter identity, schema, or `jsonschema` yields
+`STATE_RUNTIME_UNAVAILABLE`; a structured
 rejection never authorizes a prose fallback. A rejected request leaves state,
 events, journals, outboxes, and external-action count unchanged.
 Normal apply is also forbidden from recovering an earlier incomplete

@@ -52,6 +52,7 @@ jobs:
           tests.test_incident_p0_negative
           tests.test_adaptive_state_mcp
           tests.test_mcp_registration
+          tests.test_runtime_python_binding
           tests.test_release_contract
           tests.test_release_identity
           tests.test_whitespace_range

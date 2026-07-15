@@ -604,6 +604,8 @@ ${CODEX_HOME:-$HOME/.codex}/skills/codex-loop-prompt-architect
 - staging 中的 `__pycache__`/`.pyc` 清理。
 - 原子替换 skill，并备份原 `config.toml`。
 - 以稳定绝对 Python + 安装副本 bridge 原子注册唯一 `codex-loop-state`；精确 readback。
+- 新生成/迁移的 Adaptive Pack 必须从该注册的 `command`/`args` 精确 readback
+  `RUNTIME_PYTHON` 与同一安装根的 runtime，禁止退回 ambient `python3`。
 - 生成 install manifest，校验 bridge SHA、文件清单与 source/install 0 drift。
 - 任一步失败时恢复旧 skill 和原配置字节。
 

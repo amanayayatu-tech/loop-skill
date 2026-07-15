@@ -111,6 +111,12 @@ Worker reports distinguish actual product
 execution from deterministic control-plane rejection. Only an approved blocker
 with `execution_started=false` avoids repair consumption.
 
+Every generated Adaptive runtime invocation resolves `RUNTIME_PYTHON` from the
+exact installed `[mcp_servers.codex-loop-state]` command/args readback and
+requires the bridge and runtime to share the installed skill root. It fails
+closed instead of falling back to an ambient `python3` without the shipped
+dependencies.
+
 Every digest mismatch uses provenance-bearing field pairs: caller assertions use
 `provided_digest/computed_digest`, ledger-versus-disk checks use
 `ledger_digest/computed_file_digest`, canonical-state comparisons use
