@@ -56,6 +56,10 @@ Worker、Reviewer、Local Verifier 的 formal report 使用 `report_text` 交给
 `--report-stage`。runtime 对角色写出的精确 UTF-8 JSON bytes 做 framing/语义校验并计算
 digest 与 byte count，不再按 key order、换行或 Unicode 表达重新序列化；Controller 只转发
 `FORMAL_REPORT_STAGED` handle。可选 `provided_report_digest` 仅是 assertion，不是身份权威。
+新生成或显式迁移的 Pack 还会在同一次 Worker PASS ACK 中，把 Validation Matrix 的全部
+required 维度按 current dispatch/artifact 与已归档 evidence path/digest/media type 原子投影；
+任一遗漏、重复、未知、非 required、旧 artifact 或未归档 evidence 会整体拒绝。
+`RECORD_VALIDATION` 仅保留给旧 Pack 或 Worker ACK 后独立发生的验证。
 
 Pack 身份变化必须通过暂停安全点上的 `MIGRATE_CONTROLLER_PACK` 原子迁移并保留不可变
 历史；未迁移的新 digest 没有路由权限。`ACQUIRE_LEASE` / `TAKEOVER_LEASE` 只能由

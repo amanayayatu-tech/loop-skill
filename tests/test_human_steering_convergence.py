@@ -2255,7 +2255,7 @@ class HumanControlRuntimeTests(unittest.TestCase):
         status = (Path(self.temp.name) / ".codex-loop" / "STATUS.md").read_text()
         self.assertIn("Active Goal: `g2`", status)
 
-    def test_validation_gate_rejects_evidence_for_previous_worker_artifact(self) -> None:
+    def test_worker_ack_replaces_validation_evidence_for_previous_artifact(self) -> None:
         definition = goal("g1", "m1")
         definition["validation_matrix"] = complete_validation_matrix()
         definition["payload_template_digest"] = goal_definition_digest(definition)
@@ -2312,7 +2312,11 @@ class HumanControlRuntimeTests(unittest.TestCase):
             first_worker["artifact_digest"], second_worker["artifact_digest"]
         )
         state = self.harness.runtime.read_state()
-        self.assertEqual(state["validation_gate_status"], "PENDING")
+        self.assertEqual(state["validation_gate_status"], "PASS")
+        evidence = state["validation_evidence_identity"]["g1"]["functional"]
+        self.assertEqual(evidence["artifact_digest"], second_worker["artifact_digest"])
+        self.assertEqual(evidence["worker_dispatch_id"], second_worker["dispatch_id"])
+        self.assertNotEqual(evidence["artifact_digest"], first_worker["artifact_digest"])
         second_delta = context_identity_delta(
             worker_report_digest=second_worker["report_digest"],
             artifact_digest=second_worker["artifact_digest"],
@@ -2334,10 +2338,8 @@ class HumanControlRuntimeTests(unittest.TestCase):
                 }
             )["ok"]
         )
-        with self.assertRaisesRegex(
-            AssertionError, "REQUIRED_VALIDATION_INCOMPLETE"
-        ):
-            self.harness.review("CODE_REVIEW", "REVIEW_PASS", second_worker)
+        review_id = self.harness.review("CODE_REVIEW", "REVIEW_PASS", second_worker)
+        self.assertIsInstance(review_id, str)
 
     def test_explicit_v1_to_v2_migration(self) -> None:
         self.harness.initialize()
@@ -2382,6 +2384,10 @@ class HumanControlRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(response["operation_status"], "SCHEMA_V2_MIGRATED")
         self.assertEqual(runtime.read_state()["schema_version"], 2)
+        self.assertEqual(
+            runtime.read_state()["worker_validation_projection_contract_version"],
+            0,
+        )
         state_bytes = runtime.state_path.read_bytes()
         repeated = self.request(
             {"type": "MIGRATE_V1_TO_V2", "source_state_digest": digest("already-v2")}

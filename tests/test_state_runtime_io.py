@@ -331,9 +331,6 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                         "content": delta_content,
                         "sha256": diff_sha256,
                     },
-                    "validation_results": [
-                        {"command": "test -f artifact/result.md", "exit_code": 0}
-                    ],
                     "evidence_artifacts": [
                         {
                             "path": "artifact/result.md",

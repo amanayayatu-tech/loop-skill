@@ -6,6 +6,108 @@ from state_runtime_support import *  # noqa: F403
 
 
 class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
+    def _prepare_worker_validation_projection(
+        self,
+        root: Path,
+    ) -> tuple[
+        Harness,
+        dict[str, Any],
+        str,
+        str,
+        dict[str, Any],
+        str,
+    ]:
+        required_dimensions = tuple(
+            dimension
+            for dimension in (
+                "functional",
+                "regression",
+                "static_quality",
+                "compatibility",
+                "security",
+                "performance",
+                "change_impact",
+            )
+        )
+        definition = goal("g1", "m1")
+        definition["validation_matrix"] = complete_validation_matrix(
+            required_dimensions=required_dimensions
+        )
+        definition["payload_template_digest"] = goal_definition_digest(definition)
+        harness = Harness(root)
+        initialized, _ = harness.initialize(definitions={"g1": definition})
+        self.assertTrue(initialized["ok"], initialized)
+        harness.ensure_controller_goal()
+        harness.register_control_result(
+            "THREAD",
+            "projection-worker-create",
+            "controller-1",
+            {"role_kind": "WORKER"},
+            {
+                "thread_id": "projection-worker",
+                "role_kind": "WORKER",
+                "worktree_path": ".",
+            },
+        )
+        claim = harness.acquire()
+        dispatch_id = "projection-dispatch"
+        prepared, payload = harness.prepare_outbox(
+            claim,
+            "DISPATCH",
+            dispatch_id,
+            {
+                "goal_id": "g1",
+                "goal_definition_digest": definition["payload_template_digest"],
+            },
+            target_id="projection-worker",
+        )
+        self.assertTrue(prepared["ok"], prepared)
+        sent = harness.mark_sent(
+            claim,
+            "DISPATCH",
+            dispatch_id,
+            payload,
+            target_id="projection-worker",
+        )
+        self.assertTrue(sent["ok"], sent)
+        artifact_digest = digest("projection-current-artifact")
+        result = {"status": "PASS", "artifact_digest": artifact_digest}
+        report_text = harness.formal_report_content(
+            "DISPATCH", dispatch_id, result
+        )
+        return harness, claim, dispatch_id, payload, result, report_text
+
+    @staticmethod
+    def _worker_ack_request(
+        harness: Harness,
+        claim: dict[str, Any],
+        dispatch_id: str,
+        payload: str,
+        result: dict[str, Any],
+        report_text: str,
+    ) -> dict[str, Any]:
+        staged = harness.runtime.stage_formal_report(
+            {
+                "outbox_id": dispatch_id,
+                "result": result,
+                "report_text": report_text,
+            }
+        )
+        return harness.make_request(
+            {
+                "type": "ACK_OUTBOX",
+                "lease_claim": claim,
+                "observed_at": T1,
+                "outbox_kind": "DISPATCH",
+                "outbox_id": dispatch_id,
+                "payload_digest": payload,
+                "target_id": "projection-worker",
+                "ack_evidence_paths": staged["ack_evidence_paths"],
+                "result": staged["result"],
+            },
+            artifacts=[staged["artifact"]],
+        )
+
     def test_record_review_reuses_canonical_acked_report_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -743,6 +845,200 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
             )
             self.assertEqual(persisted_snapshot(root), before)
 
+    def test_worker_ack_projects_seven_current_artifact_validations_and_replays(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, claim, dispatch_id, payload, result, report_text = (
+                self._prepare_worker_validation_projection(root)
+            )
+            request = self._worker_ack_request(
+                harness,
+                claim,
+                dispatch_id,
+                payload,
+                result,
+                report_text,
+            )
+            response = harness.runtime.apply(request)
+            self.assertTrue(response["ok"], response)
+            state = harness.state()
+            self.assertEqual(len(state["validation_results"]["g1"]), 7)
+            self.assertEqual(
+                set(state["validation_results"]["g1"].values()), {"PASS"}
+            )
+            self.assertEqual(state["validation_gate_status"], "PASS")
+            for identity in state["validation_evidence_identity"]["g1"].values():
+                self.assertEqual(identity["worker_dispatch_id"], dispatch_id)
+                self.assertEqual(identity["artifact_digest"], result["artifact_digest"])
+                self.assertEqual(identity["evidence_media_type"], "application/json")
+            before_replay = persisted_snapshot(root)
+            replayed = harness.runtime.apply(request)
+            self.assertTrue(replayed["ok"], replayed)
+            self.assertEqual(replayed["status"], "STATE_WRITE_ALREADY_APPLIED")
+            self.assertEqual(before_replay, persisted_snapshot(root))
+
+    def test_legacy_pack_worker_ack_keeps_independent_validation_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, claim, dispatch_id, payload, result, report_text = (
+                self._prepare_worker_validation_projection(root)
+            )
+            legacy = harness.state()
+            legacy["worker_validation_projection_contract_version"] = 0
+            harness.runtime._write_state_locked(legacy, "legacy-validation-contract")
+            report = json.loads(report_text)
+            report["validation_results"] = [
+                {"command": "legacy validation", "exit_code": 0}
+            ]
+            legacy_report_text = json.dumps(
+                report,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            request = self._worker_ack_request(
+                harness,
+                claim,
+                dispatch_id,
+                payload,
+                result,
+                legacy_report_text,
+            )
+            response = harness.runtime.apply(request)
+            self.assertTrue(response["ok"], response)
+            state = harness.state()
+            self.assertNotIn("g1", state["validation_results"])
+            self.assertNotIn("g1", state["validation_evidence_identity"])
+            self.assertEqual(state["validation_gate_status"], "PENDING")
+
+    def test_worker_validation_projection_rejects_invalid_sets_without_side_effects(
+        self,
+    ) -> None:
+        def mutate_missing(report: dict[str, Any]) -> None:
+            report["validation_results"].pop()
+
+        def mutate_duplicate(report: dict[str, Any]) -> None:
+            report["validation_results"].append(
+                copy.deepcopy(report["validation_results"][0])
+            )
+
+        def mutate_unknown(report: dict[str, Any]) -> None:
+            report["validation_results"][0]["dimension"] = "unknown"
+
+        def mutate_invalid_type(report: dict[str, Any]) -> None:
+            report["validation_results"][0]["dimension"] = ["functional"]
+
+        def mutate_unauthorized(report: dict[str, Any]) -> None:
+            item = copy.deepcopy(report["validation_results"][0])
+            item["dimension"] = "user_experience"
+            report["validation_results"].append(item)
+
+        def mutate_old_artifact(report: dict[str, Any]) -> None:
+            report["validation_results"][0]["artifact_digest"] = digest(
+                "old-artifact"
+            )
+
+        def mutate_missing_evidence(report: dict[str, Any]) -> None:
+            missing = ".codex-loop/reports/missing-validation-evidence.json"
+            report["validation_results"][0]["evidence_path"] = missing
+            report["evidence_artifacts"].append(missing)
+
+        def mutate_evidence_digest(report: dict[str, Any]) -> None:
+            report["validation_results"][0]["evidence_digest"] = digest(
+                "wrong-evidence"
+            )
+
+        def mutate_evidence_media_type(report: dict[str, Any]) -> None:
+            report["validation_results"][0]["evidence_media_type"] = "text/plain"
+
+        scenarios = (
+            ("missing", mutate_missing, "WORKER_VALIDATION_DIMENSION_MISSING"),
+            ("duplicate", mutate_duplicate, "WORKER_VALIDATION_DIMENSION_DUPLICATE"),
+            ("unknown", mutate_unknown, "VALIDATION_DIMENSION_UNKNOWN"),
+            ("invalid-type", mutate_invalid_type, "WORKER_VALIDATION_RESULT_INVALID"),
+            (
+                "unauthorized",
+                mutate_unauthorized,
+                "WORKER_VALIDATION_DIMENSION_UNAUTHORIZED",
+            ),
+            ("old-artifact", mutate_old_artifact, "VALIDATION_ARTIFACT_STALE"),
+            (
+                "missing-evidence",
+                mutate_missing_evidence,
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_UNARCHIVED",
+            ),
+            (
+                "evidence-digest",
+                mutate_evidence_digest,
+                "WORKER_VALIDATION_EVIDENCE_UNARCHIVED",
+            ),
+            (
+                "evidence-media-type",
+                mutate_evidence_media_type,
+                "WORKER_VALIDATION_EVIDENCE_UNARCHIVED",
+            ),
+        )
+        for name, mutate, expected_code in scenarios:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness, _, dispatch_id, _, result, report_text = (
+                    self._prepare_worker_validation_projection(root)
+                )
+                report = json.loads(report_text)
+                mutate(report)
+                invalid_text = json.dumps(
+                    report,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                before = persisted_snapshot(root)
+                with self.assertRaises(
+                    state_runtime_module.RuntimeRejection
+                ) as context:
+                    harness.runtime.stage_formal_report(
+                        {
+                            "outbox_id": dispatch_id,
+                            "result": result,
+                            "report_text": invalid_text,
+                        }
+                    )
+                self.assertEqual(context.exception.code, expected_code)
+                self.assertEqual(before, persisted_snapshot(root))
+
+    def test_worker_ack_candidate_faults_leave_no_partial_projection(self) -> None:
+        for stage in state_runtime_module.WORKER_ACK_CANDIDATE_STAGES:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness, claim, dispatch_id, payload, result, report_text = (
+                    self._prepare_worker_validation_projection(root)
+                )
+                request = self._worker_ack_request(
+                    harness,
+                    claim,
+                    dispatch_id,
+                    payload,
+                    result,
+                    report_text,
+                )
+                before = persisted_snapshot(root)
+                crashing = state_runtime_module.AdaptiveStateRuntime(
+                    root, crash_at=stage
+                )
+                with self.assertRaises(state_runtime_module.InjectedCrash):
+                    crashing.apply(request)
+                self.assertEqual(before, persisted_snapshot(root))
+                recovered = state_runtime_module.AdaptiveStateRuntime(root)
+                response = recovered.apply(request)
+                self.assertTrue(response["ok"], response)
+                state = recovered.read_state()
+                assert state is not None
+                self.assertEqual(state["validation_gate_status"], "PASS")
+                self.assertEqual(state["dispatch_outbox"][dispatch_id]["status"], "COMPLETED")
+                self.assertIsNone(state["controller_lease"])
+
     def test_roadmap_audit_persists_estimate_in_record_review_transaction(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             harness = Harness(temporary)
@@ -1042,10 +1338,10 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
                 "report_digest": digest(repair_report),
             }
             after_repair = harness.state()
-            self.assertEqual(after_repair["validation_gate_status"], "PENDING")
+            self.assertEqual(after_repair["validation_gate_status"], "PASS")
             self.assertTrue(
                 all(
-                    identity["artifact_digest"] == worker_a["artifact_digest"]
+                    identity["artifact_digest"] == artifact_b
                     for identity in after_repair["validation_evidence_identity"][
                         "g1"
                     ].values()

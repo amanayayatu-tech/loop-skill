@@ -760,6 +760,19 @@ report key order, whitespace, CRLF/LF, and Unicode bytes remain unchanged;
 DISPATCH/ASSURANCE/LOCAL `ACK_OUTBOX` results
 contain status, archived report digest, and artifact digest. Each ACK rejects
 unless exactly one evidence-path artifact has that digest and media type.
+
+For a new or explicitly migrated Pack, a Worker `PASS` report carries exactly
+one closed `validation_results` item for every Validation Matrix dimension with
+`required=true`. Each item contains `dimension`, `status=PASS`, the current
+`worker_dispatch_id` and `artifact_digest`, plus `evidence_path`,
+`evidence_digest`, and `evidence_media_type`. The evidence must already exist in
+the immutable artifact ledger and appear in the report evidence set. The Worker
+ACK atomically replaces that Goal's validation results and evidence identities,
+refreshes the gate, completes the outbox, and consumes the route. Missing,
+duplicate, unknown, non-required, stale-artifact, or unarchived evidence rejects
+the complete ACK with no canonical side effect. `RECORD_VALIDATION` remains for
+legacy Pack compatibility and independent validation performed after Worker ACK;
+it is not part of the new Pack's normal Worker PASS route.
 `RECORD_REVIEW` carries zero artifacts and repeats the exact sole canonical ACK
 report path; runtime reopens that immutable artifact through `artifact_ledger`,
 rechecks its bytes/digest/media type, and parses it again without Controller

@@ -93,6 +93,12 @@ UTF-8 JSON framing and semantics, computes the digest and byte count from those
 exact bytes, and does not rewrite key order, line endings, or Unicode spelling.
 The Controller forwards only the `FORMAL_REPORT_STAGED` handle. Optional
 `provided_report_digest` is an assertion, never the identity authority.
+New or explicitly migrated Packs also project every required Validation Matrix
+dimension in the same Worker PASS ACK, binding the current dispatch/artifact to
+already archived evidence path/digest/media type. Any missing, duplicate,
+unknown, non-required, stale-artifact, or unarchived item rejects the whole ACK.
+`RECORD_VALIDATION` remains only for legacy Packs or independent validation
+performed after Worker ACK.
 
 Pack changes require atomic `MIGRATE_CONTROLLER_PACK` at a paused safe point and
 retain immutable revision history; an unmigrated digest has no routing authority.

@@ -354,12 +354,16 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
             self.assertEqual(context.exception.code, "EXTERNAL_RECEIPT_USAGE_INVALID")
             self.assertEqual(before, persisted_snapshot(Path(temporary)))
 
-    @baseline_expected_failure
     def test_worker_ack_projects_current_artifact_validations_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             harness = Harness(root)
-            initialized, _ = harness.initialize()
+            definition = goal("g1", "m1")
+            definition["validation_matrix"] = complete_validation_matrix(
+                required_dimensions=("functional",)
+            )
+            definition["payload_template_digest"] = goal_definition_digest(definition)
+            initialized, _ = harness.initialize(definitions={"g1": definition})
             self.assertTrue(initialized["ok"], initialized)
             harness.ensure_controller_goal()
             harness.register_control_result(
@@ -392,6 +396,10 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
             self.assertTrue(sent["ok"], sent)
             artifact_digest = digest("projection-current-artifact")
             result = {"status": "PASS", "artifact_digest": artifact_digest}
+            evidence_path = harness.state()["dispatch_outbox"][
+                "projection-dispatch"
+            ]["sent_evidence_paths"][0]
+            evidence = harness.state()["artifact_ledger"][evidence_path]
             report_content = harness.formal_report_content(
                 "DISPATCH",
                 "projection-dispatch",
@@ -401,10 +409,14 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                         {
                             "dimension": "functional",
                             "status": "PASS",
+                            "worker_dispatch_id": "projection-dispatch",
                             "artifact_digest": artifact_digest,
-                            "evidence_paths": [],
+                            "evidence_path": evidence_path,
+                            "evidence_digest": evidence["digest"],
+                            "evidence_media_type": evidence["media_type"],
                         }
-                    ]
+                    ],
+                    "evidence_artifacts": [evidence_path],
                 },
             )
             acked = harness.ack_outbox(
@@ -425,6 +437,12 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
             self.assertEqual(
                 state["validation_evidence_identity"]["g1"]["functional"]["artifact_digest"],
                 artifact_digest,
+            )
+            self.assertEqual(
+                state["validation_evidence_identity"]["g1"]["functional"][
+                    "worker_dispatch_id"
+                ],
+                "projection-dispatch",
             )
 
 

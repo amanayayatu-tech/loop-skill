@@ -3136,7 +3136,7 @@ def worker_input_gate(worker: dict[str, Any], adaptive: bool = False) -> str:
                 "- BOOTSTRAP_ONLY: write nothing and reply READY_IDLE_AWAITING_STATE_UPDATE.\n"
                 f"- Execute only {ADAPTIVE_STATE_MUTATION_ENVELOPE} followed by one strict JSON request matching references/adaptive-mutation.schema.json. Pass it unchanged to adaptive_state_runtime.py; never translate it into prose or rewrite LOOP_STATE.md manually.\n"
                 "- INITIALIZE is the only state-creation mutation and returns LOOP_INITIALIZED. It must register the real Controller and State-Writer thread ids and archive the exact Controller Pack through an artifact with `source_path` set to the frozen root-confined local Pack file plus its attested digest; never transport the Pack as inline `content`, Base64, wrapper text, or decoded entities. The installed runtime reads those local bytes directly. Every post-initialize state request includes top-level controller_pack_digest equal to canonical controller_pack_identity.digest. A changed Pack is inert until MIGRATE_CONTROLLER_PACK atomically archives a versioned source, appends immutable history, and activates its digest while PAUSED_AT_SAFE_POINT with no lease or active outbox. ACQUIRE_LEASE atomically creates and counts the routing turn; no separate wake-start mutation exists.\n"
-                "- Accept formal reports only through the target-produced FORMAL_REPORT_STAGED handle from --report-stage exact report_text. Verify its outbox-bound, root-confined `.codex-loop/report-staging/` regular non-symlink read-only source plus runtime byte count/digest, media type, and result; provided_report_digest is assertion-only. Never accept Controller-written/inline REPORT bytes. Worker BLOCKED must bind top-level execution_started and an approved blocker_code; only execution_started=false avoids repair. Legacy classification reconciliation requires PAUSED_AT_SAFE_POINT, no lease/active outbox, and exact archived identity. ASSURANCE RECORD_REVIEW has zero artifacts and reopens that ACK report.\n"
+                "- Accept formal reports only through the target-produced FORMAL_REPORT_STAGED handle from --report-stage exact report_text. Verify its outbox-bound, root-confined `.codex-loop/report-staging/` regular non-symlink read-only source plus runtime byte count/digest, media type, and result; provided_report_digest is assertion-only. Formal report artifacts are never inline; reject Controller-written/inline REPORT bytes. Worker BLOCKED must bind top-level execution_started and an approved blocker_code; only execution_started=false avoids repair. Legacy classification reconciliation requires PAUSED_AT_SAFE_POINT, no lease/active outbox, and exact archived identity. ASSURANCE RECORD_REVIEW has zero artifacts and reopens that ACK report.\n"
                 "- Reject ACQUIRE_LEASE and TAKEOVER_LEASE sent to State-Writer. Controller invokes those two mutations directly through the configured `route_state_mutation` MCP tool and must omit controller_turn_id; the signed bridge injects the host-owned App turn. All other mutations continue through this State-Writer and the standalone CLI remains fail-closed for route creation.\n"
                 "- Metered external calls require one canonical LOCAL `external_call_authorization` and immutable `.codex-loop/external-receipts/` STARTED-before-send/COMPLETED-before-stdout receipts. They bind route/Pack/Goal/lease/turn/target, provider/model, request/call, artifact path/digest, status/exit, and usage. COMPLETED replay recovers without provider retry; STARTED-only returns EXTERNAL_CALL_OUTCOME_UNKNOWN and forbids retry. Unknown tokens stay null/complete=false; receipts exclude prompts, responses, credentials, and secrets.\n"
                 "- Digest errors use provided_digest/computed_digest, ledger/file, state/mutation, or canonical_pack_digest/loaded_pack_digest; include byte metadata and side_effects=NONE, never expected/actual.\n"
@@ -3254,7 +3254,13 @@ def status_report_fields(worker: dict[str, Any], adaptive: bool = False) -> str:
         "changed_files",
         "diff_summary",
         "diff_sha256",
-        "validation_results: command, cwd, started_at, ended_at, exit_code, log_ref",
+        (
+            "validation_results: Worker PASS has one item per required dimension: "
+            "dimension,status=PASS,worker_dispatch_id,artifact_digest,evidence_path,"
+            "evidence_digest,evidence_media_type; other roles use command evidence"
+            if adaptive
+            else "validation_results: command, cwd, started_at, ended_at, exit_code, log_ref"
+        ),
         "evidence_artifacts",
         "observability_update",
         "state_change_request",

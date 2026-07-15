@@ -204,6 +204,10 @@ class PublicDraft202012SchemaTests(unittest.TestCase):
             "review_contract_version",
             state_schema["allOf"][0]["then"]["required"],
         )
+        self.assertIn(
+            "worker_validation_projection_contract_version",
+            state_schema["allOf"][0]["then"]["required"],
+        )
 
     def test_empty_permissions_object_matches_runtime_when_workers_are_explicit(self) -> None:
         payload = json.loads(

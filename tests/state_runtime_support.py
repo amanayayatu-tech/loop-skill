@@ -806,6 +806,31 @@ class Harness:
             ]
             if result["status"] == "PASS":
                 empty_sha256 = hashlib.sha256(b"").hexdigest()
+                required_dimensions = sorted(
+                    dimension
+                    for dimension, rule in state["validation_requirements"]
+                    .get(goal_id, {})
+                    .items()
+                    if rule.get("required") is True
+                )
+                validation_evidence_paths: list[str] = []
+                projected_validations: list[dict[str, Any]] = []
+                if required_dimensions:
+                    evidence_path = record["sent_evidence_paths"][0]
+                    evidence = state["artifact_ledger"][evidence_path]
+                    validation_evidence_paths.append(evidence_path)
+                    projected_validations = [
+                        {
+                            "dimension": dimension,
+                            "status": "PASS",
+                            "worker_dispatch_id": outbox_id,
+                            "artifact_digest": result["artifact_digest"],
+                            "evidence_path": evidence_path,
+                            "evidence_digest": evidence["digest"],
+                            "evidence_media_type": evidence["media_type"],
+                        }
+                        for dimension in required_dimensions
+                    ]
                 report.update(
                     {
                         "worktree_path": str(self.root.resolve()),
@@ -822,8 +847,8 @@ class Harness:
                             "hash_algorithm": "sha256",
                             "sha256": empty_sha256,
                         },
-                        "validation_results": [],
-                        "evidence_artifacts": [],
+                        "validation_results": projected_validations,
+                        "evidence_artifacts": validation_evidence_paths,
                     }
                 )
         elif kind == "LOCAL":

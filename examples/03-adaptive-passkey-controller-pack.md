@@ -1140,7 +1140,7 @@ Human Steering And Convergence:
 - Decision Cards exist only for real gates and bind id, context digest/version range, 2-3 exclusive options, scope, exclusions, and preauthorized capability. RECORD_DECISION_RESPONSE also binds/archives its message Steering identity; changed context is DECISION_STALE and no card creates authority.
 - Optional review_surface is confined user-artifact guidance, not code/deploy evidence; acceptance needs valid DECISION_RESPONSE and feedback is CORRECTION.
 - RECORD_FAILURE uses generic-v1 normalization and immutable history. Threshold 2 matching strategy+diff+changed-files failures may yield THRASHING_DETECTED; different diff/model similarity is POSSIBLE_STRATEGY_REPEAT; exhausted repair authorization is STRATEGY_EXHAUSTED.
-- Each Goal has a Validation Matrix; RECORD_VALIDATION binds archived evidence to the latest artifact, and any missing/failed/stale required dimension blocks full CODE_REVIEW PASS. Reviewer prose cannot override it.
+- New-Pack Worker PASS ACK atomically projects required Validation Matrix items bound to current dispatch/artifact and archived evidence. Invalid sets reject the whole ACK. RECORD_VALIDATION is legacy/post-ACK only; Reviewer prose cannot override the gate.
 - RECORD_CONTEXT_FRESHNESS precedes dispatch/recovery/repair/affected Steering and all assurance, binding closed repo/worktree/branch/base/head, dirty/untracked, source/scope/interface/lockfile/config, Worker/report/artifact/diff/paths and change flags. Replace the Worker payload's bootstrap sentinel with the latest GOAL_DISPATCH context digest. Only FRESH, proven CHANGED_IRRELEVANT, or completed RELOAD_SAFE continues; latest HARD_BLOCK wins.
 - Evidence priority: deterministic gates, static/security, fixtures, reproducible runtime, exact-artifact review, LLM judgment, Builder self-assessment. Conflicting hard evidence is EVIDENCE_CONFLICT.
 
@@ -1335,7 +1335,7 @@ Required Report Fields:
 - changed_files
 - diff_summary
 - diff_sha256
-- validation_results: command, cwd, started_at, ended_at, exit_code, log_ref
+- validation_results: Worker PASS has one item per required dimension: dimension,status=PASS,worker_dispatch_id,artifact_digest,evidence_path,evidence_digest,evidence_media_type; other roles use command evidence
 - evidence_artifacts
 - observability_update
 - state_change_request
@@ -1469,7 +1469,7 @@ Required Report Fields:
 - changed_files
 - diff_summary
 - diff_sha256
-- validation_results: command, cwd, started_at, ended_at, exit_code, log_ref
+- validation_results: Worker PASS has one item per required dimension: dimension,status=PASS,worker_dispatch_id,artifact_digest,evidence_path,evidence_digest,evidence_media_type; other roles use command evidence
 - evidence_artifacts
 - observability_update
 - state_change_request
@@ -1598,7 +1598,7 @@ Required Report Fields:
 - changed_files
 - diff_summary
 - diff_sha256
-- validation_results: command, cwd, started_at, ended_at, exit_code, log_ref
+- validation_results: Worker PASS has one item per required dimension: dimension,status=PASS,worker_dispatch_id,artifact_digest,evidence_path,evidence_digest,evidence_media_type; other roles use command evidence
 - evidence_artifacts
 - observability_update
 - state_change_request
@@ -1647,7 +1647,7 @@ Input Gate:
 - BOOTSTRAP_ONLY: write nothing and reply READY_IDLE_AWAITING_STATE_UPDATE.
 - Execute only STATE_MUTATION followed by one strict JSON request matching references/adaptive-mutation.schema.json. Pass it unchanged to adaptive_state_runtime.py; never translate it into prose or rewrite LOOP_STATE.md manually.
 - INITIALIZE is the only state-creation mutation and returns LOOP_INITIALIZED. It must register the real Controller and State-Writer thread ids and archive the exact Controller Pack through an artifact with `source_path` set to the frozen root-confined local Pack file plus its attested digest; never transport the Pack as inline `content`, Base64, wrapper text, or decoded entities. The installed runtime reads those local bytes directly. Every post-initialize state request includes top-level controller_pack_digest equal to canonical controller_pack_identity.digest. A changed Pack is inert until MIGRATE_CONTROLLER_PACK atomically archives a versioned source, appends immutable history, and activates its digest while PAUSED_AT_SAFE_POINT with no lease or active outbox. ACQUIRE_LEASE atomically creates and counts the routing turn; no separate wake-start mutation exists.
-- Accept formal reports only through the target-produced FORMAL_REPORT_STAGED handle from --report-stage exact report_text. Verify its outbox-bound, root-confined `.codex-loop/report-staging/` regular non-symlink read-only source plus runtime byte count/digest, media type, and result; provided_report_digest is assertion-only. Never accept Controller-written/inline REPORT bytes. Worker BLOCKED must bind top-level execution_started and an approved blocker_code; only execution_started=false avoids repair. Legacy classification reconciliation requires PAUSED_AT_SAFE_POINT, no lease/active outbox, and exact archived identity. ASSURANCE RECORD_REVIEW has zero artifacts and reopens that ACK report.
+- Accept formal reports only through the target-produced FORMAL_REPORT_STAGED handle from --report-stage exact report_text. Verify its outbox-bound, root-confined `.codex-loop/report-staging/` regular non-symlink read-only source plus runtime byte count/digest, media type, and result; provided_report_digest is assertion-only. Formal report artifacts are never inline; reject Controller-written/inline REPORT bytes. Worker BLOCKED must bind top-level execution_started and an approved blocker_code; only execution_started=false avoids repair. Legacy classification reconciliation requires PAUSED_AT_SAFE_POINT, no lease/active outbox, and exact archived identity. ASSURANCE RECORD_REVIEW has zero artifacts and reopens that ACK report.
 - Reject ACQUIRE_LEASE and TAKEOVER_LEASE sent to State-Writer. Controller invokes those two mutations directly through the configured `route_state_mutation` MCP tool and must omit controller_turn_id; the signed bridge injects the host-owned App turn. All other mutations continue through this State-Writer and the standalone CLI remains fail-closed for route creation.
 - Metered external calls require one canonical LOCAL `external_call_authorization` and immutable `.codex-loop/external-receipts/` STARTED-before-send/COMPLETED-before-stdout receipts. They bind route/Pack/Goal/lease/turn/target, provider/model, request/call, artifact path/digest, status/exit, and usage. COMPLETED replay recovers without provider retry; STARTED-only returns EXTERNAL_CALL_OUTCOME_UNKNOWN and forbids retry. Unknown tokens stay null/complete=false; receipts exclude prompts, responses, credentials, and secrets.
 - Digest errors use provided_digest/computed_digest, ledger/file, state/mutation, or canonical_pack_digest/loaded_pack_digest; include byte metadata and side_effects=NONE, never expected/actual.
@@ -1925,7 +1925,7 @@ PAYLOAD_MATERIALIZATION_SPEC
       "changed_files",
       "diff_summary",
       "diff_sha256",
-      "validation_results: command, cwd, started_at, ended_at, exit_code, log_ref",
+      "validation_results: Worker PASS has one item per required dimension: dimension,status=PASS,worker_dispatch_id,artifact_digest,evidence_path,evidence_digest,evidence_media_type; other roles use command evidence",
       "evidence_artifacts",
       "observability_update",
       "state_change_request",
@@ -2099,7 +2099,7 @@ PAYLOAD_MATERIALIZATION_SPEC
       "changed_files",
       "diff_summary",
       "diff_sha256",
-      "validation_results: command, cwd, started_at, ended_at, exit_code, log_ref",
+      "validation_results: Worker PASS has one item per required dimension: dimension,status=PASS,worker_dispatch_id,artifact_digest,evidence_path,evidence_digest,evidence_media_type; other roles use command evidence",
       "evidence_artifacts",
       "observability_update",
       "state_change_request",
@@ -2286,7 +2286,7 @@ PAYLOAD_MATERIALIZATION_SPEC
       "changed_files",
       "diff_summary",
       "diff_sha256",
-      "validation_results: command, cwd, started_at, ended_at, exit_code, log_ref",
+      "validation_results: Worker PASS has one item per required dimension: dimension,status=PASS,worker_dispatch_id,artifact_digest,evidence_path,evidence_digest,evidence_media_type; other roles use command evidence",
       "evidence_artifacts",
       "observability_update",
       "state_change_request",
@@ -2458,7 +2458,7 @@ PAYLOAD_MATERIALIZATION_SPEC
       "changed_files",
       "diff_summary",
       "diff_sha256",
-      "validation_results: command, cwd, started_at, ended_at, exit_code, log_ref",
+      "validation_results: Worker PASS has one item per required dimension: dimension,status=PASS,worker_dispatch_id,artifact_digest,evidence_path,evidence_digest,evidence_media_type; other roles use command evidence",
       "evidence_artifacts",
       "observability_update",
       "state_change_request",

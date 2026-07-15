@@ -388,6 +388,14 @@ EXTERNAL_RECEIPT_STAGES = (
     "EXTERNAL_RECEIPT_REPLACED",
     "EXTERNAL_RECEIPT_DIR_FSYNCED",
 )
+WORKER_ACK_CANDIDATE_STAGES = (
+    "WORKER_ACK_HANDOFF_PROJECTED",
+    "WORKER_ACK_VALIDATION_RESULTS_PROJECTED",
+    "WORKER_ACK_VALIDATION_EVIDENCE_PROJECTED",
+    "WORKER_ACK_VALIDATION_GATE_REFRESHED",
+    "WORKER_ACK_OUTBOX_COMPLETED",
+    "WORKER_ACK_ROUTE_FINISHED",
+)
 STATUS_PROJECTION_STAGES = (
     "STATUS_JOURNAL_TEMP_FSYNCED",
     "STATUS_JOURNAL_REPLACED",
@@ -401,6 +409,7 @@ CRASH_STAGES = (
     + ARTIFACT_STAGES
     + REPORT_STAGE_STAGES
     + EXTERNAL_RECEIPT_STAGES
+    + WORKER_ACK_CANDIDATE_STAGES
     + STATUS_PROJECTION_STAGES
 )
 
@@ -1620,6 +1629,17 @@ class AdaptiveStateRuntime:
                     ),
                 )
                 state_version = state["state_version"] if state is not None else 0
+                if (
+                    state is not None
+                    and state.get("schema_version") == 2
+                    and "worker_validation_projection_contract_version" not in state
+                    and mutation_type
+                    not in {"MIGRATE_V1_TO_V2", "MIGRATE_CONTROLLER_PACK"}
+                ):
+                    raise RuntimeRejection(
+                        "WORKER_VALIDATION_CONTRACT_MIGRATION_REQUIRED",
+                        "/worker_validation_projection_contract_version",
+                    )
                 recovery_ids = self._recovery_required_locked(
                     state_validator,
                     state,
@@ -3812,6 +3832,17 @@ class AdaptiveStateRuntime:
             self._validate_canonical_state(
                 legacy_validation_state, state_validator
             )
+        elif (
+            state.get("schema_version") == 2
+            and "worker_validation_projection_contract_version" not in state
+        ):
+            legacy_validation_state = copy.deepcopy(state)
+            legacy_validation_state[
+                "worker_validation_projection_contract_version"
+            ] = 0
+            self._validate_canonical_state(
+                legacy_validation_state, state_validator
+            )
         else:
             self._validate_canonical_state(state, state_validator)
         if self._render_state(state) != raw:
@@ -5950,6 +5981,7 @@ class AdaptiveStateRuntime:
     def _empty_v2_fields(state_version: int) -> dict[str, Any]:
         return {
             "review_contract_version": 2,
+            "worker_validation_projection_contract_version": 0,
             "controller_goal_resume_receipt": None,
             "human_control_policy": copy.deepcopy(DEFAULT_HUMAN_CONTROL_POLICY),
             "run_control": {
@@ -6062,6 +6094,7 @@ class AdaptiveStateRuntime:
                 )
             review["legacy_revalidation_required"] = True
         state["review_contract_version"] = 2
+        state.setdefault("worker_validation_projection_contract_version", 0)
 
     @staticmethod
     def _require_controller_actor(state: dict[str, Any], request: dict[str, Any]) -> None:
@@ -6753,7 +6786,13 @@ class AdaptiveStateRuntime:
         state["validation_evidence_identity"].setdefault(goal_id, {})[mutation["dimension"]] = {
             "evidence_path": evidence_matches[0]["path"],
             "evidence_digest": mutation["evidence_digest"],
+            "evidence_media_type": evidence_matches[0]["media_type"],
             "artifact_digest": mutation["artifact_digest"],
+            **(
+                {"worker_dispatch_id": latest_worker["dispatch_id"]}
+                if latest_worker is not None
+                else {}
+            ),
             "checked_at": request["occurred_at"],
         }
         self._refresh_validation_gate_status(state)
@@ -7105,6 +7144,7 @@ class AdaptiveStateRuntime:
         return {
             "schema_version": 2,
             "review_contract_version": 2,
+            "worker_validation_projection_contract_version": 1,
             "native_goal_policy": mutation.get("native_goal_policy", "required"),
             "loop_id": mutation["loop_id"],
             "root": str(self.root),
@@ -7351,6 +7391,7 @@ class AdaptiveStateRuntime:
             routed_controller_turn_ids
         )
         state["controller_turn_enforcement"] = True
+        state["worker_validation_projection_contract_version"] = 1
         return {
             "code": "CONTROLLER_PACK_MIGRATED",
             "next_action_code": "RECONCILE_BEFORE_RESUME",
@@ -9277,6 +9318,15 @@ class AdaptiveStateRuntime:
             )
         else:
             review_handoff = None
+        worker_validation_projection = None
+        if kind == "DISPATCH" and result["status"] == "PASS":
+            worker_validation_projection = self._build_worker_validation_projection(
+                state,
+                record,
+                result,
+                report,
+                checked_at=request["occurred_at"],
+            )
         if emulated_goal_create or emulated_goal_update:
             self._require_single_json_evidence_artifact(
                 request,
@@ -9293,10 +9343,16 @@ class AdaptiveStateRuntime:
                 "/mutation/result/report_digest",
             )
             self._record_worker_result(
-                state, record, result, review_handoff=review_handoff
+                state,
+                record,
+                result,
+                review_handoff=review_handoff,
+                validation_projection=worker_validation_projection,
             )
             record["status"] = "COMPLETED"
+            self._inject("WORKER_ACK_OUTBOX_COMPLETED")
             self._finish_route(state, claim, after_version)
+            self._inject("WORKER_ACK_ROUTE_FINISHED")
             next_action = "PREPARE_CODE_REVIEW" if result["status"] == "PASS" else "REPAIR_REQUIRED"
         elif kind == "LOCAL":
             self._require_bound_report_artifact(
@@ -9388,6 +9444,7 @@ class AdaptiveStateRuntime:
         result: dict[str, Any],
         *,
         review_handoff: dict[str, Any] | None,
+        validation_projection: dict[str, Any] | None = None,
     ) -> None:
         required = {"status", "report_digest", "artifact_digest"}
         if not required.issubset(result) or result["status"] not in {"PASS", "FAIL", "BLOCKED"}:
@@ -9452,7 +9509,20 @@ class AdaptiveStateRuntime:
         ledger["attempts"].append(copy.deepcopy(worker))
         ledger["latest_worker"] = worker
         ledger["status"] = "WORKER_PASS" if result["status"] == "PASS" else "REPAIR_REQUIRED"
+        if result["status"] == "PASS":
+            self._inject("WORKER_ACK_HANDOFF_PROJECTED")
+        if validation_projection is not None:
+            state["validation_results"][goal_id] = copy.deepcopy(
+                validation_projection["results"]
+            )
+            self._inject("WORKER_ACK_VALIDATION_RESULTS_PROJECTED")
+            state["validation_evidence_identity"][goal_id] = copy.deepcopy(
+                validation_projection["evidence"]
+            )
+            self._inject("WORKER_ACK_VALIDATION_EVIDENCE_PROJECTED")
         self._refresh_validation_gate_status(state)
+        if validation_projection is not None:
+            self._inject("WORKER_ACK_VALIDATION_GATE_REFRESHED")
 
     def _record_local_result(
         self,
@@ -10575,6 +10645,13 @@ class AdaptiveStateRuntime:
         review_handoff = None
         if kind == "DISPATCH" and result["status"] == "PASS":
             review_handoff = self._validate_worker_review_handoff(state, report)
+            self._build_worker_validation_projection(
+                state,
+                record,
+                result,
+                report,
+                checked_at=None,
+            )
         proposal_required = bool(
             kind == "ASSURANCE"
             and identity["review_kind"] == "ROADMAP_AUDIT"
@@ -10819,6 +10896,153 @@ class AdaptiveStateRuntime:
         }
         handoff["projection_digest"] = canonical_digest(handoff)
         return handoff
+
+    def _build_worker_validation_projection(
+        self,
+        state: dict[str, Any],
+        record: dict[str, Any],
+        result: dict[str, Any],
+        report: dict[str, Any],
+        *,
+        checked_at: str | None,
+    ) -> dict[str, Any] | None:
+        """Validate new-Pack Worker evidence and build one atomic projection."""
+
+        if state.get("worker_validation_projection_contract_version", 0) < 1:
+            return None
+        goal_id = record["identity"]["goal_id"]
+        requirements = state["validation_requirements"].get(goal_id, {})
+        required_dimensions = {
+            dimension
+            for dimension, rule in requirements.items()
+            if rule.get("required") is True
+        }
+        items = report.get("validation_results")
+        if not isinstance(items, list):
+            raise RuntimeRejection(
+                "WORKER_VALIDATION_RESULTS_INVALID",
+                "/artifacts/report/validation_results",
+            )
+        evidence_paths = {
+            item if isinstance(item, str) else item.get("path")
+            for item in report.get("evidence_artifacts", [])
+            if isinstance(item, (str, dict))
+        }
+        expected_item_keys = {
+            "dimension",
+            "status",
+            "worker_dispatch_id",
+            "artifact_digest",
+            "evidence_path",
+            "evidence_digest",
+            "evidence_media_type",
+        }
+        projected_results: dict[str, str] = {}
+        projected_evidence: dict[str, dict[str, Any]] = {}
+        for index, item in enumerate(items):
+            path = f"/artifacts/report/validation_results/{index}"
+            if not isinstance(item, dict) or set(item) != expected_item_keys:
+                raise RuntimeRejection("WORKER_VALIDATION_RESULT_INVALID", path)
+            dimension = item["dimension"]
+            typed_fields = {
+                "dimension": dimension,
+                "status": item["status"],
+                "worker_dispatch_id": item["worker_dispatch_id"],
+                "artifact_digest": item["artifact_digest"],
+                "evidence_path": item["evidence_path"],
+                "evidence_digest": item["evidence_digest"],
+                "evidence_media_type": item["evidence_media_type"],
+            }
+            invalid_field = next(
+                (
+                    field
+                    for field, value in typed_fields.items()
+                    if not isinstance(value, str) or not value
+                ),
+                None,
+            )
+            if invalid_field is not None:
+                raise RuntimeRejection(
+                    "WORKER_VALIDATION_RESULT_INVALID",
+                    f"{path}/{invalid_field}",
+                )
+            for digest_field in (
+                "artifact_digest",
+                "evidence_digest",
+            ):
+                if DIGEST_RE.fullmatch(item[digest_field]) is None:
+                    raise RuntimeRejection(
+                        "WORKER_VALIDATION_RESULT_INVALID",
+                        f"{path}/{digest_field}",
+                    )
+            if dimension not in VALIDATION_DIMENSIONS or dimension not in requirements:
+                raise RuntimeRejection(
+                    "VALIDATION_DIMENSION_UNKNOWN", f"{path}/dimension"
+                )
+            if requirements[dimension].get("required") is not True:
+                raise RuntimeRejection(
+                    "WORKER_VALIDATION_DIMENSION_UNAUTHORIZED",
+                    f"{path}/dimension",
+                )
+            if dimension in projected_results:
+                raise RuntimeRejection(
+                    "WORKER_VALIDATION_DIMENSION_DUPLICATE",
+                    f"{path}/dimension",
+                )
+            if item["status"] != "PASS":
+                raise RuntimeRejection(
+                    "WORKER_VALIDATION_STATUS_CONFLICT", f"{path}/status"
+                )
+            if item["worker_dispatch_id"] != record["outbox_id"]:
+                raise RuntimeRejection(
+                    "WORKER_VALIDATION_DISPATCH_MISMATCH",
+                    f"{path}/worker_dispatch_id",
+                )
+            if item["artifact_digest"] != result["artifact_digest"]:
+                raise RuntimeRejection(
+                    "VALIDATION_ARTIFACT_STALE", f"{path}/artifact_digest"
+                )
+            evidence_path = item["evidence_path"]
+            evidence_digest = item["evidence_digest"]
+            evidence_media_type = item["evidence_media_type"]
+            if evidence_path not in evidence_paths:
+                raise RuntimeRejection(
+                    "WORKER_VALIDATION_EVIDENCE_UNBOUND",
+                    f"{path}/evidence_path",
+                )
+            ledger_record = state["artifact_ledger"].get(evidence_path)
+            if (
+                ledger_record is None
+                or ledger_record.get("digest") != evidence_digest
+                or ledger_record.get("media_type") != evidence_media_type
+            ):
+                raise RuntimeRejection(
+                    "WORKER_VALIDATION_EVIDENCE_UNARCHIVED",
+                    f"{path}/evidence_digest",
+                )
+            projected_results[dimension] = item["status"]
+            evidence_identity = {
+                "evidence_path": evidence_path,
+                "evidence_digest": evidence_digest,
+                "evidence_media_type": evidence_media_type,
+                "artifact_digest": item["artifact_digest"],
+                "worker_dispatch_id": item["worker_dispatch_id"],
+            }
+            if checked_at is not None:
+                evidence_identity["checked_at"] = checked_at
+            projected_evidence[dimension] = evidence_identity
+
+        missing = sorted(required_dimensions - set(projected_results))
+        if missing:
+            raise RuntimeRejection(
+                "WORKER_VALIDATION_DIMENSION_MISSING",
+                "/artifacts/report/validation_results",
+                {"dimensions": missing},
+            )
+        return {
+            "results": projected_results,
+            "evidence": projected_evidence,
+        }
 
     def _validate_complete_diff_reference(
         self,
@@ -12305,6 +12529,7 @@ __all__ = [
     "REPORT_STAGE_STAGES",
     "STATUS_PROJECTION_STAGES",
     "RuntimeRejection",
+    "WORKER_ACK_CANDIDATE_STAGES",
     "goal_definition_payload_digest",
     "materialize_dispatch_payload",
     "process_request",

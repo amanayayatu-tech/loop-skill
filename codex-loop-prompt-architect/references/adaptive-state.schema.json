@@ -15,7 +15,8 @@
           "validation_requirements", "validation_results",
           "validation_evidence_identity", "validation_gate_status",
           "status_projection_target", "human_control_policy",
-          "review_contract_version"
+          "review_contract_version",
+          "worker_validation_projection_contract_version"
         ],
         "properties": {
           "estimate_history": {
@@ -90,6 +91,7 @@
   "properties": {
     "schema_version": {"enum": [1, 2]},
     "review_contract_version": {"const": 2},
+    "worker_validation_projection_contract_version": {"type": "integer", "enum": [0, 1]},
     "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
     "v1_migration_source_digest": {"$ref": "#/$defs/digest"},
     "loop_id": {"$ref": "#/$defs/safeId"},
@@ -1665,7 +1667,7 @@
     "validationRequirementMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/validationDimensionMap"}}, "additionalProperties": false},
     "validationResultDimensions": {"type": "object", "propertyNames": {"enum": ["functional", "regression", "static_quality", "compatibility", "security", "performance", "user_experience", "change_impact"]}, "additionalProperties": {"enum": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"]}},
     "validationResultMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/validationResultDimensions"}}, "additionalProperties": false},
-    "validationEvidence": {"type": "object", "additionalProperties": false, "required": ["evidence_path", "evidence_digest", "artifact_digest", "checked_at"], "properties": {"evidence_path": {"type": "string", "minLength": 1}, "evidence_digest": {"$ref": "#/$defs/digest"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "checked_at": {"$ref": "#/$defs/timestamp"}}},
+    "validationEvidence": {"type": "object", "additionalProperties": false, "required": ["evidence_path", "evidence_digest", "artifact_digest", "checked_at"], "properties": {"evidence_path": {"type": "string", "minLength": 1}, "evidence_digest": {"$ref": "#/$defs/digest"}, "evidence_media_type": {"type": "string", "minLength": 1}, "artifact_digest": {"$ref": "#/$defs/digest"}, "worker_dispatch_id": {"$ref": "#/$defs/safeId"}, "checked_at": {"$ref": "#/$defs/timestamp"}}},
     "validationEvidenceDimensions": {"type": "object", "propertyNames": {"enum": ["functional", "regression", "static_quality", "compatibility", "security", "performance", "user_experience", "change_impact"]}, "additionalProperties": {"$ref": "#/$defs/validationEvidence"}},
     "validationEvidenceMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/validationEvidenceDimensions"}}, "additionalProperties": false},
     "statusProjectionTarget": {"type": "object", "additionalProperties": false, "required": ["path", "target_state_version", "target_digest", "render_contract_version"], "properties": {"path": {"const": ".codex-loop/STATUS.md"}, "target_state_version": {"type": "integer", "minimum": 1}, "target_digest": {"$ref": "#/$defs/digest"}, "render_contract_version": {"enum": ["status-v1", "status-v2"]}}},

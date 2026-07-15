@@ -129,6 +129,7 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             }
             extra_fields = None
             if not execution_started:
+                result["blocker_code"] = fixture["blocker_code"]
                 extra_fields = fixture["report_shape"]
             report_content = harness.formal_report_content(
                 "DISPATCH", dispatch_id, result, extra_fields=extra_fields
@@ -137,7 +138,7 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 {
                     "outbox_id": dispatch_id,
                     "result": result,
-                    "report": json.loads(report_content),
+                    "report_text": report_content,
                 }
             )
             acked = harness.ack_outbox(
@@ -1362,6 +1363,9 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
             self.assertEqual(state["controller_pack_identity"]["digest"], target_digest)
             self.assertEqual(state["controller_pack_revision"], 2)
             self.assertEqual(
+                state["worker_validation_projection_contract_version"], 1
+            )
+            self.assertEqual(
                 [item["digest"] for item in state["controller_pack_history"]],
                 [old_digest, target_digest],
             )
@@ -1393,12 +1397,31 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
             legacy.pop("pack_identity_enforced")
             legacy.pop("controller_turn_enforcement")
             legacy.pop("consumed_controller_turn_ids")
+            legacy.pop("worker_validation_projection_contract_version")
             for routing_turn in legacy["routing_turn_ledger"].values():
                 routing_turn.pop("controller_turn_id")
             harness.runtime._write_state_locked(legacy, "legacy-pack-fixture")
             self.assertNotIn(
                 "consumed_controller_turn_ids", harness.runtime.read_state()
             )
+            before_unmigrated_write = persisted_snapshot(root)
+            blocked_write = harness.apply(
+                {
+                    "type": "RECORD_STEERING",
+                    "steering_id": "legacy-contract-write",
+                    "steering_type": "STATUS_QUERY",
+                    "normalized_digest": digest("legacy contract write"),
+                    "identity_algorithm": "message-item-v1",
+                    "message_item_id": "legacy-contract-write-message",
+                    "summary": "must migrate contract before writing",
+                    "classification_reason": "projection contract missing",
+                }
+            )
+            self.assertEqual(
+                blocked_write["status"],
+                "WORKER_VALIDATION_CONTRACT_MIGRATION_REQUIRED",
+            )
+            self.assertEqual(before_unmigrated_write, persisted_snapshot(root))
 
             content = "# Controller Pack\n\nlegacy route migration regression\n"
             target_digest = digest(content)
@@ -1433,6 +1456,9 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
                 for item in state["routing_turn_ledger"].values()
             )
             self.assertEqual(state["consumed_controller_turn_ids"], routed_ids)
+            self.assertEqual(
+                state["worker_validation_projection_contract_version"], 1
+            )
             self.assertTrue(
                 all(item.startswith("legacy-turn-") for item in routed_ids)
             )
