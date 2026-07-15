@@ -48,11 +48,15 @@ class McpHarness:
             raise AssertionError(response)
 
     @staticmethod
-    def metadata(*, turn_id: str = "real-app-turn-1") -> dict[str, object]:
+    def metadata(
+        *,
+        turn_id: str = "real-app-turn-1",
+        session_id: str = "controller-1",
+    ) -> dict[str, object]:
         return {
             "threadId": "controller-1",
             "x-codex-turn-metadata": {
-                "session_id": "controller-1",
+                "session_id": session_id,
                 "thread_id": "controller-1",
                 "turn_id": turn_id,
             },
@@ -193,7 +197,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             self.assertEqual(before, persisted_snapshot(Path(temporary)))  # noqa: F405
 
-    def test_thread_session_mismatch_is_rejected_without_state_change(self) -> None:
+    def test_outer_thread_mismatch_is_rejected_without_state_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             harness = McpHarness(Path(temporary))
             meta = harness.metadata()
@@ -202,6 +206,43 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             response = harness.call(harness.route_request("thread"), meta=meta)
             self.assertEqual(response["status"], "APP_TURN_ATTESTATION_INVALID")
             self.assertEqual(before, persisted_snapshot(Path(temporary)))  # noqa: F405
+
+    def test_fork_session_identity_may_differ_from_thread_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = McpHarness(Path(temporary))
+            meta = harness.metadata(
+                turn_id="forked-app-turn",
+                session_id="root-session-tree",
+            )
+            response = harness.call(harness.route_request("fork"), meta=meta)
+            self.assertTrue(response["ok"], response)
+            self.assertIn(
+                "forked-app-turn",
+                harness.state.state()["consumed_controller_turn_ids"],
+            )
+
+    def test_missing_or_malformed_host_turn_fields_are_zero_effect(self) -> None:
+        scenarios = {
+            "missing-session": ("session_id", None),
+            "missing-turn": ("turn_id", None),
+            "non-string-thread": ("thread_id", ["controller-1"]),
+            "empty-session": ("session_id", ""),
+        }
+        for name, (field, replacement) in scenarios.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = McpHarness(root)
+                meta = harness.metadata()
+                turn_meta = meta["x-codex-turn-metadata"]
+                assert isinstance(turn_meta, dict)
+                if replacement is None:
+                    turn_meta.pop(field)
+                else:
+                    turn_meta[field] = replacement
+                before = persisted_snapshot(root)  # noqa: F405
+                response = harness.call(harness.route_request(name), meta=meta)
+                self.assertEqual(response["status"], "APP_TURN_ATTESTATION_INVALID")
+                self.assertEqual(before, persisted_snapshot(root))  # noqa: F405
 
     def test_non_route_mutation_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

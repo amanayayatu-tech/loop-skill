@@ -347,7 +347,10 @@ def _extract_turn_metadata(
         or not isinstance(session_id, str)
         or not isinstance(turn_id, str)
         or not isinstance(outer_thread_id, str)
-        or thread_id != session_id
+        or not thread_id
+        or not session_id
+        or not turn_id
+        or not outer_thread_id
         or thread_id != outer_thread_id
     ):
         raise McpBridgeError(
@@ -355,6 +358,7 @@ def _extract_turn_metadata(
             f"/params/_meta/{MCP_TURN_META_KEY}",
         )
     return TrustedTurnMetadata(
+        session_id=session_id,
         thread_id=thread_id,
         turn_id=turn_id,
         source=TRUSTED_TURN_SOURCE,

@@ -209,6 +209,7 @@ class TrustedTurnMetadata:
     request-metadata attestation.
     """
 
+    session_id: str
     thread_id: str
     turn_id: str
     source: str
@@ -7606,6 +7607,7 @@ class AdaptiveStateRuntime:
                 trusted_turn_metadata.host_attestation.parent_cdhash
             )
             is None
+            or SAFE_ID_RE.fullmatch(trusted_turn_metadata.session_id) is None
             or SAFE_ID_RE.fullmatch(trusted_turn_metadata.thread_id) is None
             or SAFE_ID_RE.fullmatch(trusted_turn_metadata.turn_id) is None
         ):

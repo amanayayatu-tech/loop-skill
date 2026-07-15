@@ -502,8 +502,10 @@ Controller sends acquisition and takeover only through the configured
 `route_state_mutation` MCP tool and omits `controller_turn_id` from model
 arguments. The bridge verifies that its direct parent is the OpenAI-signed Codex
 app-server, reads Codex-owned `CODEX_MCP_REQUEST_META` outside tool arguments,
-requires its thread/session identities to match the request, and only then
-injects the real turn id. State-Writer, direct CLI, shell, inline Python, JSON,
+requires metadata `thread_id` to equal outer request `threadId`, and only then
+injects the real `turn_id`. Metadata `session_id` is required as the trusted
+session-tree identity but may legitimately differ from `thread_id` after a fork
+or resume; it never substitutes for `turn_id`. State-Writer, direct CLI, shell, inline Python, JSON,
 argv, environment variables, task titles, timestamps, and model-generated UUIDs
 are not route-attestation channels. Runtime indexes the canonical ledger by the
 attested turn and rejects a second lease from that same App turn even after

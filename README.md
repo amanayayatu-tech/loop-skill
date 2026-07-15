@@ -65,7 +65,9 @@ Pack 身份变化必须通过暂停安全点上的 `MIGRATE_CONTROLLER_PACK` 原
 历史；未迁移的新 digest 没有路由权限。`ACQUIRE_LEASE` / `TAKEOVER_LEASE` 只能由
 Controller 直接调用安装的 `route_state_mutation` MCP 工具，并在模型参数中省略
 `controller_turn_id`；桥接进程验证 Codex 注入的 turn metadata 与 OpenAI 签名的直接
-app-server 父进程后再注入真实 turn id。同一 App turn 的第二个 route 会零副作用拒绝；其他
+app-server 父进程，要求 metadata `thread_id` 等于外层 request `threadId` 后再注入真实
+`turn_id`。`session_id` 是必需的可信 session-tree identity，但 fork/resume 时允许与
+`thread_id` 不同，且不能替代 `turn_id`。同一 App turn 的第二个 route 会零副作用拒绝；其他
 mutation 仍走既有 State-Writer。该能力的发布结论仍要求真实 App 双路由 canary。
 
 生成的 Adaptive Pack 还采用 projection-first 观察：先比较 `LOOP_STATE.md` 的

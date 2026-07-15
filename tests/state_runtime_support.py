@@ -70,6 +70,7 @@ def trusted_metadata_for_request(
 ) -> TrustedTurnMetadata:
     mutation = request["mutation"]
     return TrustedTurnMetadata(
+        session_id=request["thread_id"],
         thread_id=request["thread_id"],
         turn_id=turn_id or mutation["controller_turn_id"],
         source=TRUSTED_TURN_SOURCE,

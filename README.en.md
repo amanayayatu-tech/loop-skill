@@ -105,7 +105,10 @@ retain immutable revision history; an unmigrated digest has no routing authority
 The Controller invokes `ACQUIRE_LEASE` / `TAKEOVER_LEASE` only through the
 installed `route_state_mutation` MCP tool and omits `controller_turn_id` from
 model arguments. The bridge verifies Codex-injected turn metadata and its direct
-OpenAI-signed app-server parent before injecting the real turn id. A second route
+OpenAI-signed app-server parent, requires metadata `thread_id` to equal outer
+request `threadId`, and injects the real `turn_id`. Required `session_id` is the
+trusted session-tree identity; it may differ after fork/resume and never replaces
+`turn_id`. A second route
 in the same App turn is rejected without side effects; all other mutations still
 use the existing State-Writer. Release closure still requires a real App
 two-route canary.
