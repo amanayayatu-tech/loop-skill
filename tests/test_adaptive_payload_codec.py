@@ -167,8 +167,22 @@ class AdaptivePayloadCodecTests(unittest.TestCase):
         old_digest = "sha256:" + hashlib.sha256(old_canonical.encode("utf-8")).hexdigest()
         self.assertNotEqual(old_digest, declared)
         malformed = transport.replace(declared, old_digest)
-        with self.assertRaisesRegex(RuntimeRejection, "DISPATCH_PAYLOAD_DIGEST_MISMATCH"):
+        with self.assertRaisesRegex(
+            RuntimeRejection,
+            "DISPATCH_PAYLOAD_DIGEST_MISMATCH",
+        ) as context:
             verify_dispatch_payload(malformed)
+        self.assertEqual(
+            context.exception.details,
+            {
+                "provided_digest": old_digest,
+                "computed_digest": declared,
+                "algorithm": "sha256",
+                "encoding": "UTF-8",
+                "byte_length": result["canonical_byte_count"],
+                "side_effects": "NONE",
+            },
+        )
 
     def test_limited_line_ending_normalization_and_duplicate_key_rejection(self) -> None:
         result = materialize_dispatch_payload(self.specification())

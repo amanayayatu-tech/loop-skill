@@ -309,6 +309,8 @@ def validate(skill_dir: Path) -> list[str]:
             "omit controller_turn_id",
             "external_call_authorization",
             "EXTERNAL_CALL_OUTCOME_UNKNOWN",
+            "provided_digest/computed_digest",
+            "canonical_pack_digest/loaded_pack_digest",
             "--payload-materialize",
             "Universal runtime transport contract",
             "every `adaptive_state_runtime.py` mode",

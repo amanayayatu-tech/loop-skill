@@ -628,6 +628,16 @@ remain null with `complete=false`. Receipts contain no prompt, response, key,
 Authorization value, or secret. Pre-contract historical receipts remain
 immutable legacy/unverified audit evidence and cannot prove PASS, exact usage,
 or retry permission.
+
+Digest mismatch errors have a closed provenance contract and never use the
+ambiguous `expected` / `actual` pair. Caller assertions use
+`provided_digest` / `computed_digest`; artifact-ledger readback uses
+`ledger_digest` / `computed_file_digest`; canonical-state comparisons use
+`state_digest` / `mutation_digest`; and Pack comparisons use
+`canonical_pack_digest` / `loaded_pack_digest`. Every such error also contains
+`algorithm=sha256`, `encoding=UTF-8`, the exact `byte_length` hashed, and
+`side_effects=NONE`. Callers must interpret those named sources literally and
+must not reverse them based on error-code wording.
 `REVIEW_NEEDS_REPAIR`, Local Verification FAIL,
 `ROADMAP_AUDIT_NEEDS_REPAIR`, and `FINAL_REVIEW_NEEDS_REPAIR` share one closed
 repair-source union and the same per-Goal repair budget.

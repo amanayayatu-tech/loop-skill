@@ -437,6 +437,88 @@ def _bytes_digest(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def _digest_mismatch_details(
+    *,
+    left_field: str,
+    left_digest: Any,
+    right_field: str,
+    right_digest: Any,
+    byte_length: int,
+) -> dict[str, Any]:
+    allowed_pairs = {
+        ("provided_digest", "computed_digest"),
+        ("ledger_digest", "computed_file_digest"),
+        ("state_digest", "mutation_digest"),
+        ("canonical_pack_digest", "loaded_pack_digest"),
+    }
+    if (left_field, right_field) not in allowed_pairs:
+        raise ValueError("unsupported digest comparison provenance")
+    return {
+        left_field: left_digest,
+        right_field: right_digest,
+        "algorithm": "sha256",
+        "encoding": "UTF-8",
+        "byte_length": byte_length,
+        "side_effects": "NONE",
+    }
+
+
+def _provided_computed_digest_details(
+    provided_digest: Any,
+    computed_digest: Any,
+    payload: bytes,
+) -> dict[str, Any]:
+    return _digest_mismatch_details(
+        left_field="provided_digest",
+        left_digest=provided_digest,
+        right_field="computed_digest",
+        right_digest=computed_digest,
+        byte_length=len(payload),
+    )
+
+
+def _ledger_file_digest_details(
+    ledger_digest: Any,
+    computed_file_digest: Any,
+    payload: bytes,
+) -> dict[str, Any]:
+    return _digest_mismatch_details(
+        left_field="ledger_digest",
+        left_digest=ledger_digest,
+        right_field="computed_file_digest",
+        right_digest=computed_file_digest,
+        byte_length=len(payload),
+    )
+
+
+def _state_mutation_digest_details(
+    state_digest: Any,
+    mutation_digest: Any,
+    payload: bytes,
+) -> dict[str, Any]:
+    return _digest_mismatch_details(
+        left_field="state_digest",
+        left_digest=state_digest,
+        right_field="mutation_digest",
+        right_digest=mutation_digest,
+        byte_length=len(payload),
+    )
+
+
+def _canonical_loaded_pack_digest_details(
+    canonical_pack_digest: Any,
+    loaded_pack_digest: Any,
+    payload: bytes,
+) -> dict[str, Any]:
+    return _digest_mismatch_details(
+        left_field="canonical_pack_digest",
+        left_digest=canonical_pack_digest,
+        right_field="loaded_pack_digest",
+        right_digest=loaded_pack_digest,
+        byte_length=len(payload),
+    )
+
+
 def _closeout_capability(
     *,
     loop_id: str,
@@ -466,7 +548,7 @@ def _closeout_capability(
     )
 
 
-def _goal_definition_digest(definition: Mapping[str, Any]) -> str:
+def _goal_definition_payload_bytes(definition: Mapping[str, Any]) -> bytes:
     payload = {
         key: copy.deepcopy(value)
         for key, value in definition.items()
@@ -484,7 +566,11 @@ def _goal_definition_digest(definition: Mapping[str, Any]) -> str:
         raise RuntimeRejection(
             "GOAL_DEFINITION_JSON_INVALID", "/goal_definition_registry"
         ) from exc
-    return f"sha256:{hashlib.sha256(serialized).hexdigest()}"
+    return serialized
+
+
+def _goal_definition_digest(definition: Mapping[str, Any]) -> str:
+    return _bytes_digest(_goal_definition_payload_bytes(definition))
 
 
 def goal_definition_payload_digest(definition: Mapping[str, Any]) -> str:
@@ -1046,12 +1132,17 @@ def verify_dispatch_payload(transport_text: Any) -> dict[str, Any]:
     canonical_payload = copy.deepcopy(payload)
     canonical_payload[PAYLOAD_DIGEST_FIELD] = PAYLOAD_DIGEST_PLACEHOLDER
     canonical_text = _dispatch_payload_text(envelope_type, canonical_payload)
-    expected_digest = _bytes_digest(canonical_text.encode("utf-8"))
+    canonical_bytes = canonical_text.encode("utf-8")
+    expected_digest = _bytes_digest(canonical_bytes)
     if actual_digest != expected_digest:
         raise RuntimeRejection(
             "DISPATCH_PAYLOAD_DIGEST_MISMATCH",
             f"/payload/{PAYLOAD_DIGEST_FIELD}",
-            {"expected": expected_digest, "actual": actual_digest},
+            _provided_computed_digest_details(
+                actual_digest,
+                expected_digest,
+                canonical_bytes,
+            ),
         )
     return {
         "ok": True,
@@ -1540,10 +1631,11 @@ class AdaptiveStateRuntime:
                     raise RuntimeRejection(
                         "CONTROLLER_PACK_MIGRATION_REQUIRED",
                         "/controller_pack_digest",
-                        {
-                            "expected": state["controller_pack_identity"]["digest"],
-                            "actual": normalized.get("controller_pack_digest"),
-                        },
+                        _canonical_loaded_pack_digest_details(
+                            state["controller_pack_identity"]["digest"],
+                            normalized.get("controller_pack_digest"),
+                            self._controller_pack_bytes_locked(state),
+                        ),
                     )
                 if (
                     state is not None
@@ -1574,14 +1666,22 @@ class AdaptiveStateRuntime:
                 supplied_projection = normalized["mutation"].get(
                     "projection_digest"
                 )
+                projection_payload = self._roadmap_digest_payload(next_state)
+                projection_bytes = _canonical_json(projection_payload).encode("utf-8")
+                computed_projection_digest = _bytes_digest(projection_bytes)
                 if (
                     supplied_projection is not None
                     and supplied_projection
-                    != _digest(self._roadmap_digest_payload(next_state))
+                    != computed_projection_digest
                 ):
                     raise RuntimeRejection(
                         "PROJECTION_DIGEST_MISMATCH",
                         "/mutation/projection_digest",
+                        _state_mutation_digest_details(
+                            computed_projection_digest,
+                            supplied_projection,
+                            projection_bytes,
+                        ),
                     )
                 self._record_idempotency(
                     next_state,
@@ -2373,7 +2473,11 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "ARTIFACT_DIGEST_MISMATCH",
                 json_path,
-                {"expected": actual_digest, "actual": expected_digest},
+                _provided_computed_digest_details(
+                    expected_digest,
+                    actual_digest,
+                    payload,
+                ),
             )
 
     def _load_validators(self) -> tuple[Any, Any]:
@@ -2800,7 +2904,11 @@ class AdaptiveStateRuntime:
                 raise RuntimeRejection(
                     "ARTIFACT_DIGEST_MISMATCH",
                     f"/artifacts/{index}/digest",
-                    {"expected": actual_digest, "actual": artifact["digest"]},
+                    _provided_computed_digest_details(
+                        artifact["digest"],
+                        actual_digest,
+                        payload,
+                    ),
                 )
             normalized.append(normalized_artifact)
         return sorted(normalized, key=lambda item: item["path"])
@@ -3446,6 +3554,23 @@ class AdaptiveStateRuntime:
         self._assert_confined(target, self.control_dir, "/artifacts/path")
         return target
 
+    def _controller_pack_bytes_locked(self, state: dict[str, Any]) -> bytes:
+        target = self._artifact_target(state["controller_pack_identity"]["path"])
+        try:
+            metadata = target.lstat()
+            payload = target.read_bytes()
+        except OSError as exc:
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_ARTIFACT_UNAVAILABLE",
+                "/controller_pack_identity/path",
+            ) from exc
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_ARTIFACT_UNAVAILABLE",
+                "/controller_pack_identity/path",
+            )
+        return payload
+
     def _validate_artifact_targets_locked(
         self, artifacts: list[dict[str, Any]]
     ) -> None:
@@ -3755,15 +3880,17 @@ class AdaptiveStateRuntime:
                     f"/goal_definition_registry/{goal_id}/depends_on",
                 )
             dependencies[goal_id] = definition["depends_on"]
-            expected_digest = _goal_definition_digest(definition)
+            definition_bytes = _goal_definition_payload_bytes(definition)
+            expected_digest = _bytes_digest(definition_bytes)
             if definition["payload_template_digest"] != expected_digest:
                 raise RuntimeRejection(
                     "GOAL_DEFINITION_DIGEST_MISMATCH",
                     f"/goal_definition_registry/{goal_id}/payload_template_digest",
-                    {
-                        "expected": expected_digest,
-                        "actual": definition["payload_template_digest"],
-                    },
+                    _provided_computed_digest_details(
+                        definition["payload_template_digest"],
+                        expected_digest,
+                        definition_bytes,
+                    ),
                 )
             for index, scope in enumerate(definition["allowed_write_scope"]):
                 self._validate_scope(
@@ -5681,12 +5808,17 @@ class AdaptiveStateRuntime:
                     "code": "SCHEMA_V2_ALREADY_APPLIED",
                     "next_action_code": "READ_STATE",
                 }
-            if mutation["source_state_digest"] != _bytes_digest(
-                self._render_state(state)
-            ):
+            state_bytes = self._render_state(state)
+            state_digest = _bytes_digest(state_bytes)
+            if mutation["source_state_digest"] != state_digest:
                 raise RuntimeRejection(
                     "MIGRATION_SOURCE_DIGEST_MISMATCH",
                     "/mutation/source_state_digest",
+                    _state_mutation_digest_details(
+                        state_digest,
+                        mutation["source_state_digest"],
+                        state_bytes,
+                    ),
                 )
             self._upgrade_review_contract(state, force=True)
             return {
@@ -5695,8 +5827,18 @@ class AdaptiveStateRuntime:
             }
         if state["schema_version"] != 1:
             raise RuntimeRejection("SCHEMA_VERSION_UNSUPPORTED", "/schema_version")
-        if mutation["source_state_digest"] != _bytes_digest(self._render_state(state)):
-            raise RuntimeRejection("MIGRATION_SOURCE_DIGEST_MISMATCH", "/mutation/source_state_digest")
+        state_bytes = self._render_state(state)
+        state_digest = _bytes_digest(state_bytes)
+        if mutation["source_state_digest"] != state_digest:
+            raise RuntimeRejection(
+                "MIGRATION_SOURCE_DIGEST_MISMATCH",
+                "/mutation/source_state_digest",
+                _state_mutation_digest_details(
+                    state_digest,
+                    mutation["source_state_digest"],
+                    state_bytes,
+                ),
+            )
         state["schema_version"] = 2
         state.update(self._empty_v2_fields(after_version))
         self._upgrade_review_contract(state, force=True)
@@ -6028,12 +6170,20 @@ class AdaptiveStateRuntime:
                 "DECISION_STATE_RANGE_INVALID",
                 "/mutation/valid_through_state_version",
             )
-        expected_context = self._decision_context_digest(state, mutation)
+        decision_context_payload = self._decision_context_payload(state, mutation)
+        decision_context_bytes = _canonical_json(decision_context_payload).encode(
+            "utf-8"
+        )
+        expected_context = _bytes_digest(decision_context_bytes)
         if mutation["decision_context_digest"] != expected_context:
             raise RuntimeRejection(
                 "DECISION_CONTEXT_DIGEST_MISMATCH",
                 "/mutation/decision_context_digest",
-                {"expected": expected_context},
+                _state_mutation_digest_details(
+                    expected_context,
+                    mutation["decision_context_digest"],
+                    decision_context_bytes,
+                ),
             )
         option_ids = [option["option_id"] for option in mutation["options"]]
         if len(option_ids) != len(set(option_ids)):
@@ -6175,9 +6325,9 @@ class AdaptiveStateRuntime:
         )
 
     @staticmethod
-    def _decision_context_digest(
+    def _decision_context_payload(
         state: dict[str, Any], decision: Mapping[str, Any]
-    ) -> str:
+    ) -> dict[str, Any]:
         scope = decision["scope"]
         goal_id = scope.get("goal_id")
         dispatch_id = scope.get("dispatch_id")
@@ -6206,42 +6356,46 @@ class AdaptiveStateRuntime:
             and record.get("classification")
             not in {"FRESH", "CHANGED_IRRELEVANT"}
         ]
-        return canonical_digest(
-            {
-                "roadmap_version": state["roadmap_version"],
-                "active_milestone_id": state["active_milestone_id"],
-                "terminal_status": state["terminal_status"],
-                "scope": scope,
-                "options": decision["options"],
-                "exclusions": decision["exclusions"],
-                "authorization_envelope": state["authorization_envelope"],
-                "goal_definition": (
-                    state["goal_definition_registry"].get(goal_id)
-                    if goal_id is not None
-                    else None
-                ),
-                "validation_requirements": (
-                    state["validation_requirements"].get(goal_id, {})
-                    if goal_id is not None
-                    else state["validation_requirements"]
-                ),
-                "validation_results": (
-                    state["validation_results"].get(goal_id, {})
-                    if goal_id is not None
-                    else state["validation_results"]
-                ),
-                "validation_evidence_identity": state[
-                    "validation_evidence_identity"
-                ],
-                "worker_artifacts": worker_artifacts,
-                "failure_history": (
-                    state["failure_history"].get(goal_id, [])
-                    if goal_id is not None
-                    else state["failure_history"]
-                ),
-                "context_freshness": relevant_freshness,
-            }
-        )
+        return {
+            "roadmap_version": state["roadmap_version"],
+            "active_milestone_id": state["active_milestone_id"],
+            "terminal_status": state["terminal_status"],
+            "scope": scope,
+            "options": decision["options"],
+            "exclusions": decision["exclusions"],
+            "authorization_envelope": state["authorization_envelope"],
+            "goal_definition": (
+                state["goal_definition_registry"].get(goal_id)
+                if goal_id is not None
+                else None
+            ),
+            "validation_requirements": (
+                state["validation_requirements"].get(goal_id, {})
+                if goal_id is not None
+                else state["validation_requirements"]
+            ),
+            "validation_results": (
+                state["validation_results"].get(goal_id, {})
+                if goal_id is not None
+                else state["validation_results"]
+            ),
+            "validation_evidence_identity": state[
+                "validation_evidence_identity"
+            ],
+            "worker_artifacts": worker_artifacts,
+            "failure_history": (
+                state["failure_history"].get(goal_id, [])
+                if goal_id is not None
+                else state["failure_history"]
+            ),
+            "context_freshness": relevant_freshness,
+        }
+
+    @classmethod
+    def _decision_context_digest(
+        cls, state: dict[str, Any], decision: Mapping[str, Any]
+    ) -> str:
+        return canonical_digest(cls._decision_context_payload(state, decision))
 
     def _record_decision_response(
         self,
@@ -6507,10 +6661,15 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("GOAL_NOT_FOUND", "/mutation/goal_id")
         expected_identity_digest = canonical_digest(delta)
         if mutation["observed_identity_digest"] != expected_identity_digest:
+            delta_bytes = _canonical_json(delta).encode("utf-8")
             raise RuntimeRejection(
                 "CONTEXT_IDENTITY_DIGEST_MISMATCH",
                 "/mutation/observed_identity_digest",
-                {"expected": expected_identity_digest},
+                _provided_computed_digest_details(
+                    mutation["observed_identity_digest"],
+                    expected_identity_digest,
+                    delta_bytes,
+                ),
             )
         if mutation["checkpoint"] in {
             "REPAIR",
@@ -6685,13 +6844,21 @@ class AdaptiveStateRuntime:
                 "/artifacts",
             )
         pack_artifact = pack_artifacts[0]
-        if (
-            pack_artifact["digest"] != mutation["controller_pack_digest"]
-            or pack_artifact["media_type"] != "text/markdown"
-        ):
+        pack_bytes = pack_artifact["content"].encode("utf-8")
+        if pack_artifact["digest"] != mutation["controller_pack_digest"]:
             raise RuntimeRejection(
                 "CONTROLLER_PACK_IDENTITY_MISMATCH",
                 "/mutation/controller_pack_digest",
+                _canonical_loaded_pack_digest_details(
+                    mutation["controller_pack_digest"],
+                    pack_artifact["digest"],
+                    pack_bytes,
+                ),
+            )
+        if pack_artifact["media_type"] != "text/markdown":
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_IDENTITY_MISMATCH",
+                "/artifacts/0/media_type",
             )
         roadmap_version = 1
         definitions = copy.deepcopy(mutation["goal_definition_registry"])
@@ -6919,6 +7086,11 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "CONTROLLER_PACK_SOURCE_MISMATCH",
                 "/mutation/source_pack_digest",
+                _canonical_loaded_pack_digest_details(
+                    state["controller_pack_identity"]["digest"],
+                    source_digest,
+                    self._controller_pack_bytes_locked(state),
+                ),
             )
         if source_digest == target_digest:
             raise RuntimeRejection(
@@ -7741,8 +7913,18 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "OBSERVATION_ARTIFACT_INVALID", json_path
             ) from exc
-        if _bytes_digest(content.encode("utf-8")) != digest:
-            raise RuntimeRejection("ARTIFACT_DIGEST_MISMATCH", json_path)
+        artifact_bytes = content.encode("utf-8")
+        computed_file_digest = _bytes_digest(artifact_bytes)
+        if computed_file_digest != digest:
+            raise RuntimeRejection(
+                "ARTIFACT_DIGEST_MISMATCH",
+                json_path,
+                _ledger_file_digest_details(
+                    digest,
+                    computed_file_digest,
+                    artifact_bytes,
+                ),
+            )
         observed = _strict_json_loads(
             content,
             code="OBSERVATION_ARTIFACT_INVALID",
@@ -9905,7 +10087,11 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "ARTIFACT_DIGEST_MISMATCH",
                 path,
-                {"expected": report_digest, "actual": actual_digest},
+                _provided_computed_digest_details(
+                    report_digest,
+                    actual_digest,
+                    payload,
+                ),
             )
         report = _strict_json_loads(
             content,
@@ -9995,8 +10181,18 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("ROADMAP_PROPOSAL_INVALID", path)
         if not isinstance(proposal_digest, str) or DIGEST_RE.fullmatch(proposal_digest) is None:
             raise RuntimeRejection("DIGEST_INVALID", f"{path}_digest")
-        if _digest(proposal) != proposal_digest:
-            raise RuntimeRejection("ROADMAP_PROPOSAL_DIGEST_MISMATCH", f"{path}_digest")
+        proposal_bytes = _canonical_json(proposal).encode("utf-8")
+        computed_digest = _bytes_digest(proposal_bytes)
+        if computed_digest != proposal_digest:
+            raise RuntimeRejection(
+                "ROADMAP_PROPOSAL_DIGEST_MISMATCH",
+                f"{path}_digest",
+                _provided_computed_digest_details(
+                    proposal_digest,
+                    computed_digest,
+                    proposal_bytes,
+                ),
+            )
         for key in (
             "proposal_id",
             "roadmap_audit_dispatch_id",

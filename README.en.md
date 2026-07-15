@@ -79,6 +79,14 @@ Worker reports distinguish actual product
 execution from deterministic control-plane rejection. Only an approved blocker
 with `execution_started=false` avoids repair consumption.
 
+Every digest mismatch uses provenance-bearing field pairs: caller assertions use
+`provided_digest/computed_digest`, ledger-versus-disk checks use
+`ledger_digest/computed_file_digest`, canonical-state comparisons use
+`state_digest/mutation_digest`, and Pack comparisons use
+`canonical_pack_digest/loaded_pack_digest`. Responses also name SHA-256, UTF-8,
+the hashed byte length, and `side_effects=NONE`; digest errors never use the
+ambiguous `expected/actual` pair.
+
 Pack changes require atomic `MIGRATE_CONTROLLER_PACK` at a paused safe point and
 retain immutable revision history; an unmigrated digest has no routing authority.
 The Controller invokes `ACQUIRE_LEASE` / `TAKEOVER_LEASE` only through the
