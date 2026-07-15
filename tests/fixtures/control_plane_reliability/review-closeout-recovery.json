@@ -1,0 +1,192 @@
+{
+  "assurance_outbox": {
+    "lease_id": "fixture-review-lease",
+    "outbox_id": "fixture-review-outbox",
+    "status": "ACKED"
+  },
+  "external_usage": {
+    "complete": false,
+    "total_tokens": null
+  },
+  "fixture_kind": "REVIEW_CLOSEOUT_RECOVERY",
+  "freshness": {
+    "classification": "STALE"
+  },
+  "history": [
+    {
+      "event_id": "history-01",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 1
+    },
+    {
+      "event_id": "history-02",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 2
+    },
+    {
+      "event_id": "history-03",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 3
+    },
+    {
+      "event_id": "history-04",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 4
+    },
+    {
+      "event_id": "history-05",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 5
+    },
+    {
+      "event_id": "history-06",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 6
+    },
+    {
+      "event_id": "history-07",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 7
+    },
+    {
+      "event_id": "history-08",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 8
+    },
+    {
+      "event_id": "history-09",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 9
+    },
+    {
+      "event_id": "history-10",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 10
+    },
+    {
+      "event_id": "history-11",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 11
+    },
+    {
+      "event_id": "history-12",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 12
+    },
+    {
+      "event_id": "history-13",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 13
+    },
+    {
+      "event_id": "history-14",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 14
+    },
+    {
+      "event_id": "history-15",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 15
+    },
+    {
+      "event_id": "history-16",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 16
+    },
+    {
+      "event_id": "history-17",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 17
+    },
+    {
+      "event_id": "history-18",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 18
+    },
+    {
+      "event_id": "history-19",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 19
+    },
+    {
+      "event_id": "history-20",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 20
+    },
+    {
+      "event_id": "history-21",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 21
+    },
+    {
+      "event_id": "history-22",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 22
+    },
+    {
+      "event_id": "history-23",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 23
+    },
+    {
+      "event_id": "history-24",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 24
+    },
+    {
+      "event_id": "history-25",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 25
+    },
+    {
+      "event_id": "history-26",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 26
+    },
+    {
+      "event_id": "history-27",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 27
+    },
+    {
+      "event_id": "history-28",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 28
+    },
+    {
+      "event_id": "history-29",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 29
+    },
+    {
+      "event_id": "history-30",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 30
+    },
+    {
+      "event_id": "history-31",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 31
+    },
+    {
+      "event_id": "history-32",
+      "event_type": "SYNTHETIC_HISTORY",
+      "state_version": 32
+    }
+  ],
+  "pack": {
+    "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "path": ".codex-loop/sources/CONTROLLER_PACK.fixture.md"
+  },
+  "repo_root": "fixture/项目",
+  "schema_version": 1,
+  "validation_projection": {
+    "artifact_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "classification": "STALE_OLD_ARTIFACT"
+  },
+  "worker": {
+    "artifact_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "dispatch_id": "fixture-worker-dispatch",
+    "report_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  }
+}

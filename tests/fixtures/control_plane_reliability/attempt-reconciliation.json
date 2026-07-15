@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "classification": "PRODUCT_EXECUTION",
+      "counts_as_repair": false,
+      "dispatch_id": "initial-product",
+      "execution_started": true
+    },
+    {
+      "blocker_code": "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+      "classification": "CONTROL_PLANE_REJECTION",
+      "counts_as_repair": false,
+      "dispatch_id": "freshness-rejection",
+      "execution_started": false
+    },
+    {
+      "blocker_code": "INPUT_TRANSPORT_TIMEOUT",
+      "classification": "CONTROL_PLANE_REJECTION",
+      "counts_as_repair": false,
+      "dispatch_id": "transport-rejection",
+      "execution_started": false
+    },
+    {
+      "classification": "PRODUCT_EXECUTION",
+      "counts_as_repair": true,
+      "dispatch_id": "repair-1",
+      "execution_started": true
+    },
+    {
+      "classification": "PRODUCT_EXECUTION",
+      "counts_as_repair": true,
+      "dispatch_id": "repair-2",
+      "execution_started": true
+    }
+  ],
+  "expected": {
+    "product_attempts": 3,
+    "repairs_consumed": 2
+  },
+  "fixture_kind": "ATTEMPT_RECONCILIATION",
+  "goal_id": "fixture-goal",
+  "loop_id": "fixture-loop",
+  "schema_version": 1
+}

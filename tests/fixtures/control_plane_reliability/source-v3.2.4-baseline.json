@@ -1,0 +1,114 @@
+{
+  "file_count": 20,
+  "files": [
+    {
+      "path": "SKILL.md",
+      "sha256": "12d67d57f8f83644a23ad8ee12657d4592c7db85793110cba5aac31b59a4f668",
+      "size_bytes": 26260
+    },
+    {
+      "path": "agents/openai.yaml",
+      "sha256": "645068627d0dc65a5fb880b945d524a25fd0285e22d12c955464e8306c393481",
+      "size_bytes": 359
+    },
+    {
+      "path": "references/adaptive-loop-contract.md",
+      "sha256": "d201fcb0afb196e0004cd00b4990b5c0d9c611c170fec1d9c67976117afbc74f",
+      "size_bytes": 53415
+    },
+    {
+      "path": "references/adaptive-mutation.schema.json",
+      "sha256": "7410ce7c79dfc0f73fc8e0dcbc5bdf8dbb93159e609eccfe7d77f4032d108f6e",
+      "size_bytes": 55329
+    },
+    {
+      "path": "references/adaptive-state.schema.json",
+      "sha256": "6f04ea2ad274aeb1bf4dda47c5e4649c98638a33aa276d93b1da05b96d8c7b9d",
+      "size_bytes": 75418
+    },
+    {
+      "path": "references/human-steering-and-convergence.md",
+      "sha256": "3b464bfbdceab4db5ba13057b5c95bc6b3af4e7eee1c9834be1b68cc0407786a",
+      "size_bytes": 11292
+    },
+    {
+      "path": "references/loop-contract.md",
+      "sha256": "cadc10cf7fac69428bc9e3f0368344e3babea4d13c7e49f51d11fa3153d98194",
+      "size_bytes": 26308
+    },
+    {
+      "path": "references/loop-intake-gate.md",
+      "sha256": "f3b3d1b79a24342f62a72f35a8934e84da2aa36e55b659963d223932ac88c7fe",
+      "size_bytes": 15304
+    },
+    {
+      "path": "scripts/adaptive_state_runtime.py",
+      "sha256": "a390c02c9ff295dcc2ec464474ff34847000e2d59dc868a07f5e82c430cb6412",
+      "size_bytes": 11707
+    },
+    {
+      "path": "scripts/loop_architect/__init__.py",
+      "sha256": "83101c8aa6efb6836913791206455942f936e07615f86ed90f7619c1b286ff39",
+      "size_bytes": 167
+    },
+    {
+      "path": "scripts/loop_architect/adaptive_renderer.py",
+      "sha256": "60b9529a9610d9d9854d3cac29c4eb38d352f6b8beb362561e225905566fadbd",
+      "size_bytes": 60657
+    },
+    {
+      "path": "scripts/loop_architect/forecast.py",
+      "sha256": "3fd4d9a1c10af19312d4ba4dd3468fc9899d0c96bb35f7ee01e918c6ea83e2ab",
+      "size_bytes": 2652
+    },
+    {
+      "path": "scripts/loop_architect/human_control.py",
+      "sha256": "951bea8ec25504b74957258a45a902a6344e3275d919d512a12646ad7f9fb77f",
+      "size_bytes": 13708
+    },
+    {
+      "path": "scripts/loop_architect/protocol_model.py",
+      "sha256": "9700598a70b5039b875ea0de5a9ebdcea73e6a7859d22564a2aa2ed1df998cd3",
+      "size_bytes": 6735
+    },
+    {
+      "path": "scripts/loop_architect/schema.py",
+      "sha256": "f1da2765c5a4c8df0c05e59bf651dad164897a043deb2cdbcfb25e0dd6c13ab2",
+      "size_bytes": 30317
+    },
+    {
+      "path": "scripts/loop_architect/standard_renderer.py",
+      "sha256": "42bb023bd5ba6bfdab092aae4740f653ac50d63a090e59ec2bc8c04cbccb529f",
+      "size_bytes": 19117
+    },
+    {
+      "path": "scripts/loop_architect/state_runtime.py",
+      "sha256": "c713269603f04ff487d7112446f93571de9dd7827acfe6cb824a671daeaeca4d",
+      "size_bytes": 489993
+    },
+    {
+      "path": "scripts/loop_architect/validation.py",
+      "sha256": "b038ee241617e67bbfa92fc96575eae7c41c4b9512c15c238a781759b148389c",
+      "size_bytes": 25373
+    },
+    {
+      "path": "scripts/loop_prompt_scaffold.py",
+      "sha256": "343bce80efc649e4eaae6b2cbd88c76746d03f6451aee2e12f0c62e8c675527d",
+      "size_bytes": 255549
+    },
+    {
+      "path": "scripts/validate_skill.py",
+      "sha256": "436ddf7d4300a8a984320600460b9dd0b9731f16866150090a5c868e83df6722",
+      "size_bytes": 16749
+    }
+  ],
+  "fixture_kind": "SOURCE_INSTALL_BASELINE",
+  "installer_contract_version": 1,
+  "manifest_sha256": "34834831f4124405df91771049b31edf21e2efda9b7c7046b8a51df3a375f3fc",
+  "package_root": "codex-loop-prompt-architect",
+  "package_version": "3.2.4",
+  "remediation_plan_sha256": "eae91502e3c3634eff45616f01bbce414df6c173ac7a84acd14a73b0d895354e",
+  "schema_version": 1,
+  "source_commit": "f83e5f0ba590792ac00afb463b8628afaf7ca8c1",
+  "source_tree": "499be9b3699c8956f980b111dbec970e9eb0cd2c"
+}

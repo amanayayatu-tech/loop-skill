@@ -1,0 +1,24 @@
+{
+  "active_lease": null,
+  "automation": {
+    "live_status": "PAUSED",
+    "prompt_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "prompt_pack_path": ".codex-loop/sources/CONTROLLER_PACK.md"
+  },
+  "automation_id": "fixture-heartbeat",
+  "canonical": {
+    "pack_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    "pack_path": ".codex-loop/sources/CONTROLLER_PACK.versioned.md",
+    "run_control": "PAUSED_AT_SAFE_POINT"
+  },
+  "fixture_kind": "PACK_HEARTBEAT_SPLIT",
+  "identities": {
+    "controller": "fixture-controller",
+    "local_verifier": "fixture-local-verifier",
+    "reviewer": "fixture-reviewer",
+    "state_writer": "fixture-state-writer",
+    "worker": "fixture-worker"
+  },
+  "route_reserving_outboxes": [],
+  "schema_version": 1
+}
