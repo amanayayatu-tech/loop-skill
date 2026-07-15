@@ -5,6 +5,10 @@
 [![Test](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/test.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
 
+The test badge is a GitHub compatibility mirror. Authoritative release evidence
+is the root-owned self-hosted `loop-ci` attestation plus a real Codex App canary
+receipt for the same exact commit.
+
 `codex-loop-prompt-architect` is a skill for the Codex macOS App. It quality-gates
 rough ideas and PRDs, then turns only `READY_FOR_LOOP` requirements into a
 validated Standard or Adaptive Controller Pack. It designs the loop; it does not
@@ -41,6 +45,32 @@ first; if information is missing, ask me before generating the Pack: ...
 The skill creates one self-contained Controller Pack Markdown file plus separate
 Simplified Chinese usage instructions. It never silently authorizes push, merge,
 deploy, destructive operations, external writes, secrets, or paid runtime.
+
+### v3.2.5 control-plane reliability closure
+
+This release makes the declared safety protocol enforceable. Every stdin mode
+uses one bounded semantic reader. Route acquisition trusts only real MCP
+`params._meta`, the App `turn_id`, and an OpenAI-signed direct app-server parent.
+Durable external receipts bind route/provider/request/call order, usage, result
+semantics, and artifact bytes; lost stdout recovers COMPLETED without another
+send. Worker required-validation projection, `RECORD_REVIEW` closeout, Pack
+migration, and same-heartbeat reconciliation are atomic and replay-safe.
+
+`scripts/install.sh` now atomically registers `codex-loop-state` with an absolute
+Python executable and the installed `adaptive_state_mcp.py`. It preserves prior
+`config.toml` bytes, rejects a conflicting identity or extra env/cwd/disabled
+execution semantics, rolls back skill/config on failure, and writes a
+schema-validated manifest proving registration readback and zero source/install
+drift.
+
+Release evidence stays layered: local checks, authoritative exact-SHA server
+attestation, a real canary on the current App build, then merge/main/tag/Release.
+Any App version/build/bundle, app-server signature/CDHash, MCP protocol/config/
+requestMeta shape, or installation identity change invalidates the old receipt.
+PASS covers same-turn pre-side-effect rejection, next-turn success, partial-frame
+cleanup, lost-stdout recovery, Pack/same-heartbeat migration, and canonical
+`FINALIZATION_ACKED`. The repository does not claim to fix upstream app-server
+process reaping.
 
 ### v3.2.4 canonical schema hotfix
 
@@ -235,8 +265,10 @@ bash -n scripts/install.sh
 Full release fuzz gate:
 
 ```bash
-ADAPTIVE_FUZZ_CASES=5000 ADAPTIVE_STATE_FUZZ_CASES=5000 \
-  python3 -W error -m unittest discover -s tests -q
+ADAPTIVE_FUZZ_CASES=5000 python3 -W error -m unittest \
+  tests.test_adaptive_fuzz.AdaptiveMalformedInputFuzzTests.test_malformed_nested_values_never_crash_validation_or_render -v
+ADAPTIVE_STATE_FUZZ_CASES=5000 python3 -W error -m unittest \
+  tests.test_adaptive_state_runtime.AdaptiveStateRuntimeTests.test_malformed_and_random_sequences_never_mutate_or_corrupt -v
 ```
 
 Coverage baseline:
@@ -245,6 +277,17 @@ Coverage baseline:
 coverage run -m unittest discover -s tests
 coverage report
 ```
+
+Coverage includes every shipped Python entrypoint and enforces branch coverage
+of at least 80%. The full deterministic suite produces coverage data once; the
+two 5000-case fuzz lanes do not repeat that suite.
+
+An isolated install also registers `codex-loop-state`, checks exact command/args
+readback, writes a schema-validated install manifest, and proves zero
+source/install drift. GitHub Actions checks compatibility only. Authoritative
+release acceptance requires the self-hosted exact-SHA attestation, then a real
+same-SHA/current-App receipt, followed by the merge/main attestation. See the
+[release process](docs/RELEASING.md).
 
 ## Documentation map
 

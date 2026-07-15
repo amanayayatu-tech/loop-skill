@@ -101,6 +101,10 @@ class AppCanaryReceiptTests(unittest.TestCase):
             SCHEMA,
             expected_commit="a" * 40,
             expected_manifest_digest="c" * 64,
+            expected_pack_digest="sha256:" + "b" * 64,
+            expected_compatibility_identity_digest=self.receipt[
+                "compatibility_identity_digest"
+            ],
             expected_app_version="1.2.3",
             expected_app_build="456",
             expected_bundle_identifier="com.openai.chat",
@@ -110,6 +114,12 @@ class AppCanaryReceiptTests(unittest.TestCase):
     def test_app_or_metadata_change_invalidates_old_receipt(self) -> None:
         with self.assertRaisesRegex(validator.CanaryReceiptError, "CANARY_APP_BUILD_MISMATCH"):
             validator.validate_receipt(self.path, SCHEMA, expected_app_build="457")
+        with self.assertRaisesRegex(validator.CanaryReceiptError, "CANARY_CURRENT_APP_IDENTITY_MISMATCH"):
+            validator.validate_receipt(
+                self.path,
+                SCHEMA,
+                expected_compatibility_identity_digest="f" * 64,
+            )
         self.receipt["mcp"]["protocol_version"] = "changed"
         self.path.write_text(json.dumps(self.receipt), encoding="utf-8")
         with self.assertRaisesRegex(validator.CanaryReceiptError, "CANARY_COMPATIBILITY_IDENTITY_MISMATCH"):

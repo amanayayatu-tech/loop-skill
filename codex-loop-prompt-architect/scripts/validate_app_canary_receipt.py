@@ -82,6 +82,8 @@ def validate_receipt(
     *,
     expected_commit: str | None = None,
     expected_manifest_digest: str | None = None,
+    expected_pack_digest: str | None = None,
+    expected_compatibility_identity_digest: str | None = None,
     expected_app_version: str | None = None,
     expected_app_build: str | None = None,
     expected_bundle_identifier: str | None = None,
@@ -107,6 +109,14 @@ def validate_receipt(
         raise CanaryReceiptError("CANARY_REPO_COMMIT_MISMATCH")
     if expected_manifest_digest is not None and receipt["installed_manifest_digest"] != expected_manifest_digest:
         raise CanaryReceiptError("CANARY_INSTALL_MANIFEST_MISMATCH")
+    if expected_pack_digest is not None and receipt["pack_digest"] != expected_pack_digest:
+        raise CanaryReceiptError("CANARY_PACK_DIGEST_MISMATCH")
+    if (
+        expected_compatibility_identity_digest is not None
+        and receipt["compatibility_identity_digest"]
+        != expected_compatibility_identity_digest
+    ):
+        raise CanaryReceiptError("CANARY_CURRENT_APP_IDENTITY_MISMATCH")
     app = receipt["app"]
     for actual, expected, code in (
         (app["version"], expected_app_version, "CANARY_APP_VERSION_MISMATCH"),
@@ -129,6 +139,8 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--schema", required=True, type=Path)
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-manifest-digest")
+    parser.add_argument("--expected-pack-digest")
+    parser.add_argument("--expected-compatibility-identity-digest")
     parser.add_argument("--expected-app-version")
     parser.add_argument("--expected-app-build")
     parser.add_argument("--expected-bundle-identifier")
@@ -143,6 +155,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.schema,
             expected_commit=args.expected_commit,
             expected_manifest_digest=args.expected_manifest_digest,
+            expected_pack_digest=args.expected_pack_digest,
+            expected_compatibility_identity_digest=args.expected_compatibility_identity_digest,
             expected_app_version=args.expected_app_version,
             expected_app_build=args.expected_app_build,
             expected_bundle_identifier=args.expected_bundle_identifier,

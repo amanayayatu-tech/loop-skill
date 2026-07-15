@@ -30,7 +30,9 @@ is sufficient.
 
 ## Repository boundary
 
-loop-skill v3.2.1 bounds its own stdin reader and removes fixed-byte/pipeline
-instructions from newly generated Packs. That reduces the trigger and makes the
-runtime fail closed. It does not change Codex app-server cancellation, process
-groups, child reaping, or automation control-plane architecture.
+loop-skill v3.2.1 introduced the bounded stdin reader and removed fixed-byte/
+pipeline instructions from newly generated Packs. v3.2.5 applies the bounded
+semantic contract across shipped entrypoints and binds the real App canary to
+the exact build and installed copy. Those measures reduce the trigger and fail
+closed; they do not change Codex app-server cancellation, process groups, child
+reaping, or automation control-plane architecture.

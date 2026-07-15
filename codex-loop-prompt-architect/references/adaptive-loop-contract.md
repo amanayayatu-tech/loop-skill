@@ -517,9 +517,10 @@ the exact owner task, increments the epoch, and fences every old action.
 Controller sends acquisition and takeover only through the configured
 `route_state_mutation` MCP tool and omits `controller_turn_id` from model
 arguments. The bridge verifies that its direct parent is the OpenAI-signed Codex
-app-server, reads Codex-owned `CODEX_MCP_REQUEST_META` outside tool arguments,
-requires metadata `thread_id` to equal outer request `threadId`, and only then
-injects the real `turn_id`. Metadata `session_id` is required as the trusted
+app-server, reads Codex-owned top-level MCP `params._meta` outside tool
+arguments, parses `x-codex-turn-metadata`, requires metadata `thread_id` to
+equal outer request `threadId`, and only then injects the real `turn_id`.
+Metadata `session_id` is required as the trusted
 session-tree identity but may legitimately differ from `thread_id` after a fork
 or resume; it never substitutes for `turn_id`. State-Writer, direct CLI, shell, inline Python, JSON,
 argv, environment variables, task titles, timestamps, and model-generated UUIDs
@@ -530,6 +531,27 @@ completion or voluntary release. Missing or invalid host metadata returns
 mutations continue through the existing State-Writer. Repository tests prove
 the bridge boundary synthetically; release claims still require the real App
 two-route canary.
+
+Installation atomically registers exactly one `codex-loop-state` stdio server.
+Its command is a stable absolute Python executable and its sole argument is the
+installed `adaptive_state_mcp.py`; shell wrappers, source-worktree paths,
+temporary paths, env/cwd overrides, disabled registrations, duplicates, and
+identity conflicts fail closed. The installer preserves the previous TOML
+bytes, restores config and the prior skill after interruption/failure, and
+emits a schema-validated manifest binding the installed bridge SHA, config
+readback, exact repo identity when the source is clean, and zero source/install
+drift. A dirty source is `UNVERIFIED_SOURCE`, never the current HEAD by proxy.
+
+Release acceptance requires a root-owned self-hosted exact-SHA attestation and
+then a real Codex App receipt for that same SHA and installed-manifest digest.
+The receipt binds App version/build/bundle, app-server executable/signature/
+CDHash, MCP protocol/config/requestMeta shape, registration identity, same-turn
+second-route rejection before side effects, next-turn success, partial-frame
+cleanup, lost-stdout no-retry recovery, Pack/same-heartbeat reconciliation, and
+canonical `FINALIZATION_ACKED`. Any compatibility identity change invalidates
+the old receipt. GitHub Actions and synthetic tests are compatibility evidence,
+not this release gate; the repository does not claim to repair app-server
+process reaping upstream.
 
 Except for initialization, counted routing-turn creation, and lease
 acquisition/takeover itself, every Adaptive

@@ -743,7 +743,7 @@
         "expires_at": {"$ref": "#/$defs/timestamp"},
         "controller_turn_id": {
           "$ref": "#/$defs/safeId",
-          "description": "Bridge-owned field injected from CODEX_MCP_REQUEST_META. Model-authored route arguments omit it; direct CLI or mismatched claims fail closed."
+          "description": "Bridge-owned field injected from Codex MCP params._meta x-codex-turn-metadata. Model-authored route arguments omit it; direct CLI or mismatched claims fail closed."
         },
         "intended_transition": {"const": "ROUTE_ONE_TRANSITION"}
       }
@@ -823,7 +823,7 @@
         "takeover_evidence": {"$ref": "#/$defs/takeoverEvidence"},
         "controller_turn_id": {
           "$ref": "#/$defs/safeId",
-          "description": "Bridge-owned field injected from CODEX_MCP_REQUEST_META. Model-authored route arguments omit it; direct CLI or mismatched claims fail closed."
+          "description": "Bridge-owned field injected from Codex MCP params._meta x-codex-turn-metadata. Model-authored route arguments omit it; direct CLI or mismatched claims fail closed."
         }
       }
     },

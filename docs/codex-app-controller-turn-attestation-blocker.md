@@ -27,8 +27,9 @@ those surfaces remain writable or selectable by the Controller.
   `codex`, OpenAI Team ID `2DC432GLL2`, and Codex-owned MCP request metadata.
 - Model arguments omit `controller_turn_id`; the bridge injects the attested id
   and rejects any conflicting explicit claim.
-- `ACQUIRE_LEASE` and `TAKEOVER_LEASE` compare the attested thread/turn identities
-  before consuming the canonical turn ledger.
+- `ACQUIRE_LEASE` and `TAKEOVER_LEASE` require metadata thread id to equal the
+  outer request `threadId`; session id remains required but may differ after
+  fork/resume. The independent turn id owns the canonical one-route ledger.
 - Missing metadata returns `BLOCKED_BY_APP_ATTESTATION`.
 - Invalid or mismatched metadata is rejected with zero durable side effects.
 - Exact idempotent replay may return the stored result without creating another
@@ -42,14 +43,17 @@ bridge is also rejected because its parent is not the signed app-server. Neither
 synthetic path is App attestation evidence; trust is established only by the
 real MCP process boundary and its release-candidate canary.
 
-## Remaining App integration gate
+## Remaining real App gate
 
-Installer work must register the bridge as a direct-command local STDIO MCP
-server without a shell wrapper and verify its installed SHA. The real App canary
-must then prove that one real Controller turn cannot acquire a second route by
-changing payload-controlled identities, while a later real turn can route. Until
-that canary passes, release, installation, Controller Pack migration, heartbeat
-resume, and the paused production Loop remain prohibited.
+The repository installer now atomically registers the bridge as the direct-command
+`codex-loop-state` STDIO server, rejects wrappers/extra execution semantics,
+verifies exact command/args and installed SHA, and writes a zero-drift manifest.
+That implementation and its isolated tests are not proof that the current App
+has refreshed and launched it. The exact release candidate still needs a real
+App canary proving that one Controller turn cannot acquire a second route while
+a later real turn can route. Until the same-SHA receipt and server release gate
+pass, real installation, Controller Pack migration, heartbeat resume, and the
+paused production Loop remain prohibited.
 
 ## Evidence hygiene
 

@@ -91,7 +91,10 @@ it with `validate_app_canary_receipt.py`. A PASS receipt binds:
 
 App version/build, bundle id, executable/signature/CDHash, MCP protocol/config
 schema, requestMeta shape, or registration identity changes invalidate the old
-compatibility digest. The next release must obtain a new real receipt. Receipts
+compatibility digest. The release gate passes the currently observed
+compatibility digest, exact Pack digest, repo commit and install-manifest digest
+as validator expectations; a self-consistent old receipt is insufficient. The
+next release must obtain a new real receipt. Receipts
 must not contain prompts, raw responses, Authorization, API keys, raw
 session/thread/turn ids, secrets or canonical user content.
 

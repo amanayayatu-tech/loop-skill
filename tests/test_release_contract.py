@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 class ReleaseContractTests(unittest.TestCase):
     def test_skill_validator_runs_as_a_covered_library_entrypoint(self) -> None:
         path = ROOT / "codex-loop-prompt-architect/scripts/validate_skill.py"
+        scripts_dir = str(path.parent)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
         spec = importlib.util.spec_from_file_location("validate_skill_release_contract", path)
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
@@ -38,6 +42,20 @@ class ReleaseContractTests(unittest.TestCase):
             "scripts/validate_app_canary_receipt.py",
         ):
             self.assertTrue((ROOT / "codex-loop-prompt-architect" / relative).is_file())
+        canary_validator = (
+            ROOT
+            / "codex-loop-prompt-architect/scripts/validate_app_canary_receipt.py"
+        ).read_text(encoding="utf-8")
+        for option in (
+            "--expected-commit",
+            "--expected-manifest-digest",
+            "--expected-pack-digest",
+            "--expected-compatibility-identity-digest",
+            "--expected-app-version",
+            "--expected-app-build",
+            "--expected-bundle-identifier",
+        ):
+            self.assertIn(option, canary_validator)
 
     def test_version_and_changelog_share_the_formal_release(self) -> None:
         version = (ROOT / "VERSION").read_text().strip()
