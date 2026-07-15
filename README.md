@@ -90,7 +90,10 @@ freshness、validation gate、assurance ledger、Goal、outbox completion 与 le
 同 review/report/artifact 的新 request-id 重放直接返回既有 closeout receipt，不新增 event。
 
 Pack 身份变化先在暂停安全点通过 `PREPARE_CONTROLLER_PACK_MIGRATION` 持久化 old/new
-Pack、五角色摘要和同一 heartbeat 的 PAUSED readback，再更新该 heartbeat 并以第二次
+Pack、五角色摘要、同一 heartbeat 的 PAUSED readback，以及由 runtime 从 root-confined
+canonical prompt source 精确字节计算出的 path/digest；调用方不得自报 prompt digest。
+迁移不改写历史 ACKED automation outbox，rollback 精确恢复 PREPARE 保存的 routing gate。
+再更新该 heartbeat 并以第二次
 PAUSED readback提交 `MIGRATE_CONTROLLER_PACK`；不一致时保持暂停，只能收敛目标或在旧
 prompt 读回后显式 rollback，禁止创建替代 heartbeat。STATUS v3 只使用受证据绑定的 live
 readback，未观察显示 `UNKNOWN_NOT_OBSERVED`；迁移后 resume 要求 PAUSED readback，路由还要

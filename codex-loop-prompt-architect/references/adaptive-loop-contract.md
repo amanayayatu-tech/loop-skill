@@ -86,15 +86,21 @@ Every post-initialize request attests the active `controller_pack_digest`.
 Different Pack bytes use a journaled `PREPARE_CONTROLLER_PACK_MIGRATION` then
 `MIGRATE_CONTROLLER_PACK` protocol. Prepare requires `PAUSED_AT_SAFE_POINT`, no
 lease or route-reserving PREPARED/SENT/ACKED outbox, all five role identities,
-and an exact PAUSED readback of the registered heartbeat. It records the old
-and target Pack, old and target prompt digest, role-registry digest, and the same
-automation id before any external update. Commit accepts only a second PAUSED
+and an exact PAUSED readback of the registered heartbeat. The target prompt is
+a root-confined regular source file archived at the runtime-derived
+`HEARTBEAT_PROMPT.<target-pack-sha>.txt` path; the runtime computes its digest
+from strict UTF-8, LF-only bytes with no trailing newline. A caller-supplied
+prompt digest is forbidden. Prepare records both Pack identities, the prompt
+path/digest contract, source routing-gate value, role-registry digest, and the
+same automation id before any external update. Commit accepts only a second PAUSED
 readback of that same automation id, target Controller, schedule, and target
 prompt digest; it then archives the digest-versioned Pack, appends immutable
 predecessor history, and records a completion receipt. A mismatch stays paused
 and must either converge to the target or use
 `ROLLBACK_CONTROLLER_PACK_MIGRATION` after readback proves the old prompt was
-restored. No replacement heartbeat is allowed.
+restored. Migration never rewrites the historical ACKED automation outbox;
+rollback restores the journaled source routing-gate value exactly. No
+replacement heartbeat is allowed.
 
 `RECORD_HEARTBEAT_OBSERVATION` binds exact readback JSON into canonical state.
 STATUS v3 uses only this live observation; absence is

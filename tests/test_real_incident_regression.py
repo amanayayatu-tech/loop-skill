@@ -1342,7 +1342,7 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
             self._pause_at_safe_point(harness)
             prepared = harness.prepare_pack_migration(
                 content=content,
-                target_prompt_digest=digest("dynamic canonical Pack heartbeat"),
+                target_prompt="dynamic canonical Pack heartbeat",
                 migration_id="real-incident-pack-migration",
                 reason="real incident transport and receipt remediation",
             )
@@ -1425,7 +1425,7 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
             target_digest = digest(content)
             prepared = harness.prepare_pack_migration(
                 content=content,
-                target_prompt_digest=digest("legacy migration heartbeat prompt"),
+                target_prompt="legacy migration heartbeat prompt",
                 migration_id="legacy-route-pack-migration",
                 reason="backfill legacy routing turn identities",
             )

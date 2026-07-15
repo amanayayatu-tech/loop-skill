@@ -1622,20 +1622,36 @@ class Harness:
         self,
         *,
         content: str,
-        target_prompt_digest: str,
+        target_prompt: str,
         migration_id: str = "pack-migration-1",
         reason: str = "test control-plane reconciliation",
         apply_request: bool = True,
     ) -> dict[str, Any]:
         heartbeat = self.ensure_heartbeat()
-        source_digest = self.state()["controller_pack_identity"]["digest"]
+        current_state = self.state()
+        source_digest = current_state["controller_pack_identity"]["digest"]
         target_digest = digest(content)
         target_path = (
             ".codex-loop/sources/CONTROLLER_PACK."
             f"{target_digest.removeprefix('sha256:')}.md"
         )
+        prompt_path = (
+            ".codex-loop/sources/HEARTBEAT_PROMPT."
+            f"{target_digest.removeprefix('sha256:')}.txt"
+        )
+        prompt_source = self.root / f"{migration_id}.heartbeat-prompt.txt"
+        prompt_source.write_bytes(target_prompt.encode("utf-8"))
+        target_prompt_identity = {
+            "path": prompt_path,
+            "digest": digest(target_prompt),
+            "media_type": "text/plain",
+            "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+        }
         observation, artifact = self.heartbeat_observation_artifact(
-            prompt_digest=heartbeat["identity"]["prompt_digest"],
+            prompt_digest=(
+                current_state.get("heartbeat_prompt_identity")
+                or heartbeat["identity"]
+            )["prompt_digest"],
             status="PAUSED",
             stem=f"{migration_id}-prepare",
         )
@@ -1645,7 +1661,6 @@ class Harness:
             "source_pack_digest": source_digest,
             "target_pack_digest": target_digest,
             "target_pack_path": target_path,
-            "target_prompt_digest": target_prompt_digest,
             "migration_reason": reason,
             "heartbeat_observation": observation,
             "automation_observation_path": artifact["path"],
@@ -1654,13 +1669,22 @@ class Harness:
         request = self.make_request(
             mutation,
             evidence_paths=[artifact["path"]],
-            artifacts=[artifact],
+            artifacts=[
+                artifact,
+                {
+                    "path": prompt_path,
+                    "source_path": str(prompt_source),
+                    "digest": target_prompt_identity["digest"],
+                    "media_type": "text/plain",
+                },
+            ],
         )
         response = self.runtime.apply(request) if apply_request else None
         return {
             "response": response,
             "mutation": mutation,
             "content": content,
+            "target_prompt_identity": target_prompt_identity,
             "request": request,
         }
 
@@ -1670,7 +1694,7 @@ class Harness:
     ) -> dict[str, Any]:
         plan = prepared["mutation"]
         observation, observation_artifact = self.heartbeat_observation_artifact(
-            prompt_digest=plan["target_prompt_digest"],
+            prompt_digest=prepared["target_prompt_identity"]["digest"],
             status="PAUSED",
             stem=f"{plan['migration_id']}-commit",
         )

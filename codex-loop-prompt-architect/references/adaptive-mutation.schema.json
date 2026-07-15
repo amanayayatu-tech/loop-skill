@@ -100,7 +100,7 @@
       "properties": {
         "path": {
           "type": "string",
-          "pattern": "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/CONTROLLER_PACK(?:\\.[a-f0-9]{64})?\\.md)$"
+          "pattern": "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/(CONTROLLER_PACK(?:\\.[a-f0-9]{64})?\\.md|HEARTBEAT_PROMPT\\.[a-f0-9]{64}\\.txt))$"
         },
         "content": {"type": "string", "maxLength": 4000000},
         "source_path": {
@@ -475,14 +475,13 @@
     "prepareControllerPackMigration": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "migration_id", "source_pack_digest", "target_pack_digest", "target_pack_path", "target_prompt_digest", "migration_reason", "heartbeat_observation", "automation_observation_path", "automation_observation_digest"],
+      "required": ["type", "migration_id", "source_pack_digest", "target_pack_digest", "target_pack_path", "migration_reason", "heartbeat_observation", "automation_observation_path", "automation_observation_digest"],
       "properties": {
         "type": {"const": "PREPARE_CONTROLLER_PACK_MIGRATION"},
         "migration_id": {"$ref": "#/$defs/safeId"},
         "source_pack_digest": {"$ref": "#/$defs/digest"},
         "target_pack_digest": {"$ref": "#/$defs/digest"},
         "target_pack_path": {"type": "string", "pattern": "^\\.codex-loop/sources/CONTROLLER_PACK\\.[a-f0-9]{64}\\.md$"},
-        "target_prompt_digest": {"$ref": "#/$defs/digest"},
         "migration_reason": {"$ref": "#/$defs/boundedText"},
         "heartbeat_observation": {"$ref": "#/$defs/heartbeatObservation"},
         "automation_observation_path": {"type": "string", "minLength": 1},

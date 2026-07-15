@@ -137,7 +137,11 @@ transaction. A new request-id replay of the same review/report/artifact returns
 the existing closeout receipt without another event.
 
 Pack changes first persist old/new Pack, the five-role digest, and a PAUSED
-readback of the same heartbeat with `PREPARE_CONTROLLER_PACK_MIGRATION`. After
+readback of the same heartbeat with `PREPARE_CONTROLLER_PACK_MIGRATION`. The
+runtime derives the canonical prompt path and digest from exact bytes in a
+root-confined source; callers cannot attest an arbitrary prompt digest.
+Migration never rewrites the historical ACKED automation outbox, and rollback
+restores the routing-gate value journaled at PREPARE. After
 updating that heartbeat in place, `MIGRATE_CONTROLLER_PACK` requires a second
 PAUSED readback of the same id, target, schedule, and target prompt digest.
 Mismatch stays paused and can only converge or explicitly roll back after the

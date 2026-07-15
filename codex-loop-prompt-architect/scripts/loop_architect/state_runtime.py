@@ -2960,6 +2960,20 @@ class AdaptiveStateRuntime:
     ) -> None:
         """Require helper-staged formal reports before they cross App transport."""
 
+        if mutation.get("type") == "PREPARE_CONTROLLER_PACK_MIGRATION":
+            for index, artifact in enumerate(artifacts):
+                if (
+                    re.fullmatch(
+                        r"\.codex-loop/sources/HEARTBEAT_PROMPT\.[a-f0-9]{64}\.txt",
+                        artifact.get("path", ""),
+                    )
+                    and "content" in artifact
+                ):
+                    raise RuntimeRejection(
+                        "PACK_MIGRATION_PROMPT_INLINE_TRANSPORT_FORBIDDEN",
+                        f"/artifacts/{index}/content",
+                    )
+
         if mutation.get("type") == "RECORD_REVIEW":
             for index, artifact in enumerate(artifacts):
                 if (
@@ -3012,9 +3026,23 @@ class AdaptiveStateRuntime:
                     relative,
                 )
             )
+            versioned_heartbeat_prompt = bool(
+                re.fullmatch(
+                    r"\.codex-loop/sources/HEARTBEAT_PROMPT\.[a-f0-9]{64}\.txt",
+                    relative,
+                )
+            )
             allowed = (
                 relative == ".codex-loop/sources/CONTROLLER_PACK.md"
                 or versioned_pack
+                or (
+                    versioned_heartbeat_prompt
+                    and (
+                        mutation is None
+                        or mutation.get("type")
+                        == "PREPARE_CONTROLLER_PACK_MIGRATION"
+                    )
+                )
                 or (
                     target.parent == self.reports_dir
                     and target.suffix in {".md", ".json", ".txt"}
@@ -3054,6 +3082,15 @@ class AdaptiveStateRuntime:
                     and not self._path_is_within(source, self.control_dir)
                     and source.is_file()
                 )
+                heartbeat_prompt_source = bool(
+                    versioned_heartbeat_prompt
+                    and mutation is not None
+                    and mutation.get("type")
+                    == "PREPARE_CONTROLLER_PACK_MIGRATION"
+                    and artifact["media_type"] == "text/plain"
+                    and not self._path_is_within(source, self.control_dir)
+                    and source.is_file()
+                )
                 staged_report_source = bool(
                     target.parent == self.reports_dir
                     and target.suffix == ".json"
@@ -3090,7 +3127,7 @@ class AdaptiveStateRuntime:
                     staged_report_payload = self._require_staged_report_file(
                         source, artifact["digest"], source_json_path
                     )
-                elif not controller_pack_source:
+                elif not (controller_pack_source or heartbeat_prompt_source):
                     raise RuntimeRejection(
                         "ARTIFACT_SOURCE_PATH_NOT_ALLOWED",
                         source_json_path,
@@ -4138,6 +4175,87 @@ class AdaptiveStateRuntime:
             "prompt_normalization": identity["prompt_normalization"],
         }
 
+    @staticmethod
+    def _heartbeat_identity_stable_fields(identity: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: identity[key]
+            for key in (
+                "automation_id",
+                "automation_name",
+                "kind",
+                "target_thread_id",
+                "rrule",
+                "prompt_normalization",
+            )
+        }
+
+    @staticmethod
+    def _target_heartbeat_prompt_path(target_pack_digest: str) -> str:
+        return (
+            ".codex-loop/sources/HEARTBEAT_PROMPT."
+            f"{target_pack_digest.removeprefix('sha256:')}.txt"
+        )
+
+    def _derive_target_heartbeat_prompt_identity(
+        self,
+        request: dict[str, Any],
+        target_pack_digest: str,
+    ) -> dict[str, Any]:
+        expected_path = self._target_heartbeat_prompt_path(target_pack_digest)
+        prompt_artifacts = [
+            artifact
+            for artifact in request["artifacts"]
+            if re.fullmatch(
+                r"\.codex-loop/sources/HEARTBEAT_PROMPT\.[a-f0-9]{64}\.txt",
+                artifact["path"],
+            )
+        ]
+        matching = [
+            artifact
+            for artifact in prompt_artifacts
+            if artifact["path"] == expected_path
+        ]
+        if len(prompt_artifacts) != 1 or len(matching) != 1:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_PROMPT_ARTIFACT_INVALID",
+                "/artifacts",
+                {"expected_path": expected_path},
+            )
+        artifact = matching[0]
+        content = artifact.get("content")
+        if (
+            artifact["media_type"] != "text/plain"
+            or not isinstance(content, str)
+            or not content
+            or "\r" in content
+            or content.endswith("\n")
+        ):
+            raise RuntimeRejection(
+                "PACK_MIGRATION_PROMPT_ARTIFACT_INVALID",
+                "/artifacts",
+                {
+                    "expected_path": expected_path,
+                    "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+                },
+            )
+        computed_digest = _bytes_digest(content.encode("utf-8"))
+        if artifact["digest"] != computed_digest:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_PROMPT_ARTIFACT_INVALID",
+                "/artifacts",
+                _provided_computed_digest_details(
+                    artifact["digest"],
+                    computed_digest,
+                    content.encode("utf-8"),
+                ),
+            )
+        return {
+            "path": expected_path,
+            "digest": computed_digest,
+            "media_type": "text/plain",
+            "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+        }
+
     def _validate_controller_pack_migration_state(
         self, state: dict[str, Any]
     ) -> None:
@@ -4158,6 +4276,8 @@ class AdaptiveStateRuntime:
                 != state["controller_pack_identity"]
                 or migration["role_registry_digest"]
                 != self._role_registry_identity_digest(state)
+                or migration["source_heartbeat_routing_gate_enforced"]
+                != state["heartbeat_routing_gate_enforced"]
                 or migration["migration_id"]
                 in {item["migration_id"] for item in receipts}
             ):
@@ -4169,7 +4289,55 @@ class AdaptiveStateRuntime:
         observation = state.get("heartbeat_live_observation")
         if prompt_identity is not None:
             record = self._registered_heartbeat_record(state)
-            if self._heartbeat_identity_from_record(record) != prompt_identity:
+            historical_identity = self._heartbeat_identity_from_record(record)
+            if self._heartbeat_identity_stable_fields(
+                historical_identity
+            ) != self._heartbeat_identity_stable_fields(prompt_identity):
+                raise RuntimeRejection(
+                    "HEARTBEAT_PROMPT_IDENTITY_INVALID",
+                    "/heartbeat_prompt_identity",
+                )
+        prompt_contracts = [
+            item
+            for item in [migration, *receipts]
+            if isinstance(item, dict)
+        ]
+        for index, item in enumerate(prompt_contracts):
+            target_prompt_identity = item["target_prompt_identity"]
+            artifact = state["artifact_ledger"].get(
+                target_prompt_identity["path"]
+            )
+            if (
+                artifact is None
+                or target_prompt_identity["path"]
+                != self._target_heartbeat_prompt_path(
+                    item["target_pack_identity"]["digest"]
+                )
+                or artifact["digest"] != target_prompt_identity["digest"]
+                or artifact["media_type"]
+                != target_prompt_identity["media_type"]
+            ):
+                raise RuntimeRejection(
+                    "PACK_MIGRATION_PROMPT_IDENTITY_INVALID",
+                    f"/controller_pack_migration_prompt_contracts/{index}",
+                )
+        if migration is not None and prompt_identity != migration[
+            "source_heartbeat_identity"
+        ]:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_STATE_INVALID",
+                "/heartbeat_prompt_identity",
+            )
+        if migration is None and receipts and prompt_identity is not None:
+            latest = receipts[-1]
+            expected_prompt_identity = copy.deepcopy(
+                latest["source_heartbeat_identity"]
+            )
+            if latest["outcome"] == "COMPLETED":
+                expected_prompt_identity["prompt_digest"] = latest[
+                    "target_prompt_identity"
+                ]["digest"]
+            if prompt_identity != expected_prompt_identity:
                 raise RuntimeRejection(
                     "HEARTBEAT_PROMPT_IDENTITY_INVALID",
                     "/heartbeat_prompt_identity",
@@ -7496,7 +7664,7 @@ class AdaptiveStateRuntime:
             "schema_version": 2,
             "review_contract_version": 2,
             "worker_validation_projection_contract_version": 1,
-            "controller_pack_migration_contract_version": 1,
+            "controller_pack_migration_contract_version": 2,
             "native_goal_policy": mutation.get("native_goal_policy", "required"),
             "loop_id": mutation["loop_id"],
             "root": str(self.root),
@@ -7757,6 +7925,10 @@ class AdaptiveStateRuntime:
         after_version: int,
     ) -> dict[str, Any]:
         self._require_pack_migration_safe_point(state, request)
+        target_prompt_identity = self._derive_target_heartbeat_prompt_identity(
+            request,
+            mutation["target_pack_digest"],
+        )
         pending = state.get("controller_pack_migration")
         if pending is not None:
             exact = (
@@ -7767,8 +7939,8 @@ class AdaptiveStateRuntime:
                 == mutation["target_pack_digest"]
                 and pending["target_pack_identity"]["path"]
                 == mutation["target_pack_path"]
-                and pending["target_prompt_digest"]
-                == mutation["target_prompt_digest"]
+                and pending["target_prompt_identity"]
+                == target_prompt_identity
                 and pending["migration_reason"] == mutation["migration_reason"]
             )
             if exact:
@@ -7821,7 +7993,18 @@ class AdaptiveStateRuntime:
                 "/mutation/target_pack_path",
             )
         record = self._registered_heartbeat_record(state)
-        source_heartbeat_identity = self._heartbeat_identity_from_record(record)
+        historical_heartbeat_identity = self._heartbeat_identity_from_record(record)
+        source_heartbeat_identity = copy.deepcopy(
+            state.get("heartbeat_prompt_identity")
+            or historical_heartbeat_identity
+        )
+        if self._heartbeat_identity_stable_fields(
+            source_heartbeat_identity
+        ) != self._heartbeat_identity_stable_fields(historical_heartbeat_identity):
+            raise RuntimeRejection(
+                "PACK_MIGRATION_HEARTBEAT_IDENTITY_MISSING",
+                "/heartbeat_prompt_identity",
+            )
         observation = self._require_heartbeat_observation(
             state,
             request,
@@ -7829,13 +8012,18 @@ class AdaptiveStateRuntime:
             source_heartbeat_identity,
             required_status="PAUSED",
         )
-        state["controller_pack_migration_contract_version"] = 1
+        source_heartbeat_routing_gate_enforced = state.get(
+            "heartbeat_routing_gate_enforced", False
+        )
+        state["controller_pack_migration_contract_version"] = 2
         state.setdefault("worker_validation_projection_contract_version", 0)
         state.setdefault("controller_pack_migration_history", [])
         state["heartbeat_prompt_identity"] = copy.deepcopy(
             source_heartbeat_identity
         )
-        record["result"] = {**record["result"], "status": "PAUSED"}
+        state["heartbeat_routing_gate_enforced"] = (
+            source_heartbeat_routing_gate_enforced
+        )
         self._project_heartbeat_observation(
             state,
             observation,
@@ -7853,8 +8041,11 @@ class AdaptiveStateRuntime:
                 "media_type": "text/markdown",
             },
             "source_heartbeat_identity": source_heartbeat_identity,
-            "target_prompt_digest": mutation["target_prompt_digest"],
+            "target_prompt_identity": target_prompt_identity,
             "automation_id": source_heartbeat_identity["automation_id"],
+            "source_heartbeat_routing_gate_enforced": (
+                source_heartbeat_routing_gate_enforced
+            ),
             "role_registry_digest": self._role_registry_identity_digest(state),
             "migration_reason": mutation["migration_reason"],
             "prepared_state_version": after_version,
@@ -7870,7 +8061,7 @@ class AdaptiveStateRuntime:
             "result": {
                 "migration_id": mutation["migration_id"],
                 "automation_id": source_heartbeat_identity["automation_id"],
-                "target_prompt_digest": mutation["target_prompt_digest"],
+                "target_prompt_identity": target_prompt_identity,
             },
         }
 
@@ -7924,7 +8115,7 @@ class AdaptiveStateRuntime:
         )
         target_heartbeat_identity = {
             **prepared["source_heartbeat_identity"],
-            "prompt_digest": prepared["target_prompt_digest"],
+            "prompt_digest": prepared["target_prompt_identity"]["digest"],
         }
         observation = self._require_heartbeat_observation(
             state,
@@ -7983,16 +8174,6 @@ class AdaptiveStateRuntime:
         state["controller_pack_history"] = history
         state["controller_pack_revision"] = revision
         state["pack_identity_enforced"] = True
-        heartbeat_record = self._registered_heartbeat_record(state)
-        heartbeat_record["identity"] = {
-            **heartbeat_record["identity"],
-            "prompt_digest": prepared["target_prompt_digest"],
-        }
-        heartbeat_record["result"] = {
-            **heartbeat_record["result"],
-            "prompt_digest": prepared["target_prompt_digest"],
-            "status": "PAUSED",
-        }
         state["heartbeat_prompt_identity"] = target_heartbeat_identity
         self._project_heartbeat_observation(
             state,
@@ -8029,8 +8210,9 @@ class AdaptiveStateRuntime:
                         "source_pack_identity",
                         "target_pack_identity",
                         "source_heartbeat_identity",
-                        "target_prompt_digest",
+                        "target_prompt_identity",
                         "automation_id",
+                        "source_heartbeat_routing_gate_enforced",
                         "role_registry_digest",
                         "migration_reason",
                         "prepared_state_version",
@@ -8089,14 +8271,6 @@ class AdaptiveStateRuntime:
             prepared["source_heartbeat_identity"],
             required_status="PAUSED",
         )
-        record = self._registered_heartbeat_record(state)
-        record["identity"] = {
-            **record["identity"],
-            "prompt_digest": prepared["source_heartbeat_identity"][
-                "prompt_digest"
-            ],
-        }
-        record["result"] = {**record["result"], "status": "PAUSED"}
         state["heartbeat_prompt_identity"] = copy.deepcopy(
             prepared["source_heartbeat_identity"]
         )
@@ -8116,8 +8290,9 @@ class AdaptiveStateRuntime:
                         "source_pack_identity",
                         "target_pack_identity",
                         "source_heartbeat_identity",
-                        "target_prompt_digest",
+                        "target_prompt_identity",
                         "automation_id",
+                        "source_heartbeat_routing_gate_enforced",
                         "role_registry_digest",
                         "migration_reason",
                         "prepared_state_version",
@@ -8135,7 +8310,9 @@ class AdaptiveStateRuntime:
             }
         )
         state["controller_pack_migration"] = None
-        state["heartbeat_routing_gate_enforced"] = False
+        state["heartbeat_routing_gate_enforced"] = prepared[
+            "source_heartbeat_routing_gate_enforced"
+        ]
         self._inject("PACK_MIGRATION_COMPLETED_PROJECTED")
         return {
             "code": "CONTROLLER_PACK_MIGRATION_ROLLED_BACK",

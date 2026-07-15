@@ -59,9 +59,7 @@ class ControllerPackMigrationReconciliationTests(AdaptiveStateRuntimeTestCase): 
         )
         prepared = harness.prepare_pack_migration(
             content="# Controller Pack\n\nreconciled migration fixture\n",
-            target_prompt_digest=digest(
-                "resolve controller_pack_identity.path from canonical state"
-            ),
+            target_prompt="resolve controller_pack_identity.path from canonical state",
             migration_id="migration-reconciliation-1",
         )
         self.assertTrue(prepared["response"]["ok"], prepared["response"])
@@ -74,7 +72,7 @@ class ControllerPackMigrationReconciliationTests(AdaptiveStateRuntimeTestCase): 
     ) -> dict[str, Any]:
         plan = prepared["mutation"]
         observation, observation_artifact = harness.heartbeat_observation_artifact(
-            prompt_digest=plan["target_prompt_digest"],
+            prompt_digest=prepared["target_prompt_identity"]["digest"],
             status="PAUSED",
             stem=f"{plan['migration_id']}-fault-commit",
             observed_at=T2,
@@ -127,6 +125,130 @@ class ControllerPackMigrationReconciliationTests(AdaptiveStateRuntimeTestCase): 
             )
             self.assertTrue(state["heartbeat_routing_gate_enforced"])
 
+    def test_prepare_derives_prompt_identity_from_canonical_source_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            harness.ensure_all_roles()
+            harness.ensure_heartbeat()
+            self._pause(harness)
+            prompt = "resolve the active Pack from canonical controller_pack_identity.path"
+            prepared = harness.prepare_pack_migration(
+                content="# Controller Pack\n\ncanonical prompt source fixture\n",
+                target_prompt=prompt,
+                migration_id="canonical-prompt-source",
+                apply_request=False,
+            )
+
+            wrong_path_request = copy.deepcopy(prepared["request"])
+            prompt_artifact = next(
+                artifact
+                for artifact in wrong_path_request["artifacts"]
+                if artifact["media_type"] == "text/plain"
+            )
+            prompt_artifact["path"] = (
+                ".codex-loop/sources/HEARTBEAT_PROMPT."
+                f"{digest(prompt).removeprefix('sha256:')}.txt"
+            )
+            before = persisted_snapshot(root)
+            wrong_path = harness.runtime.apply(wrong_path_request)
+            self.assertEqual(
+                wrong_path["status"], "PACK_MIGRATION_PROMPT_ARTIFACT_INVALID"
+            )
+            self.assertEqual(persisted_snapshot(root), before)
+
+            caller_digest_request = copy.deepcopy(prepared["request"])
+            caller_digest_request["mutation"]["target_prompt_digest"] = digest(
+                "caller-selected identity"
+            )
+            rejected = harness.runtime.apply(caller_digest_request)
+            self.assertEqual(rejected["status"], "REQUEST_SCHEMA_INVALID")
+            self.assertEqual(persisted_snapshot(root), before)
+
+            accepted = harness.runtime.apply(copy.deepcopy(prepared["request"]))
+            self.assertTrue(accepted["ok"], accepted)
+            identity = harness.state()["controller_pack_migration"][
+                "target_prompt_identity"
+            ]
+            self.assertEqual(identity, prepared["target_prompt_identity"])
+            self.assertEqual(identity["digest"], digest(prompt))
+            self.assertEqual(
+                (root / identity["path"]).read_bytes(), prompt.encode("utf-8")
+            )
+
+    def test_migration_does_not_rewrite_historical_acked_automation_outbox(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            harness.ensure_all_roles()
+            harness.ensure_heartbeat()
+            self._pause(harness)
+            historical_outbox = copy.deepcopy(harness.state()["automation_outbox"])
+            prepared = harness.prepare_pack_migration(
+                content="# Controller Pack\n\nimmutable outbox fixture\n",
+                target_prompt="canonical dynamic Pack heartbeat",
+                migration_id="immutable-automation-outbox",
+            )
+            self.assertTrue(prepared["response"]["ok"], prepared["response"])
+            self.assertEqual(harness.state()["automation_outbox"], historical_outbox)
+            migrated = harness.commit_pack_migration(prepared)
+            self.assertTrue(migrated["ok"], migrated)
+            self.assertEqual(harness.state()["automation_outbox"], historical_outbox)
+
+    def test_rollback_restores_prepared_source_heartbeat_routing_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, first, _ = self._prepared_fixture(root)
+            first_migration = harness.commit_pack_migration(first)
+            self.assertTrue(first_migration["ok"], first_migration)
+            self.assertTrue(harness.state()["heartbeat_routing_gate_enforced"])
+
+            second = harness.prepare_pack_migration(
+                content="# Controller Pack\n\nsecond migration rollback fixture\n",
+                target_prompt="second canonical dynamic Pack heartbeat",
+                migration_id="restore-true-routing-gate",
+            )
+            self.assertTrue(second["response"]["ok"], second["response"])
+            prepared_state = harness.state()
+            self.assertTrue(
+                prepared_state["controller_pack_migration"][
+                    "source_heartbeat_routing_gate_enforced"
+                ]
+            )
+            source_identity = prepared_state["controller_pack_migration"][
+                "source_heartbeat_identity"
+            ]
+            observation, artifact = harness.heartbeat_observation_artifact(
+                prompt_digest=source_identity["prompt_digest"],
+                status="PAUSED",
+                stem="restore-true-routing-gate-rollback",
+                observed_at=T2,
+            )
+            rolled_back = harness.apply(
+                {
+                    "type": "ROLLBACK_CONTROLLER_PACK_MIGRATION",
+                    "migration_id": second["mutation"]["migration_id"],
+                    "heartbeat_observation": observation,
+                    "automation_observation_path": artifact["path"],
+                    "automation_observation_digest": artifact["digest"],
+                    "rollback_reason": "verify exact source gate restoration",
+                },
+                evidence_paths=[artifact["path"]],
+                artifacts=[artifact],
+            )
+            self.assertTrue(rolled_back["ok"], rolled_back)
+            state = harness.state()
+            self.assertTrue(state["heartbeat_routing_gate_enforced"])
+            self.assertTrue(
+                state["controller_pack_migration_history"][-1][
+                    "source_heartbeat_routing_gate_enforced"
+                ]
+            )
+
     def test_prepare_requires_all_five_existing_role_identities(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             harness = Harness(Path(temporary))
@@ -137,7 +259,7 @@ class ControllerPackMigrationReconciliationTests(AdaptiveStateRuntimeTestCase): 
             before = persisted_snapshot(Path(temporary))
             prepared = harness.prepare_pack_migration(
                 content="# Controller Pack\n\nmissing roles\n",
-                target_prompt_digest=digest("missing-role target prompt"),
+                target_prompt="missing-role target prompt",
                 migration_id="missing-role-migration",
             )
             self.assertEqual(
@@ -248,7 +370,7 @@ class ControllerPackMigrationReconciliationTests(AdaptiveStateRuntimeTestCase): 
             self._pause(harness)
             prepared = harness.prepare_pack_migration(
                 content="# Controller Pack\n\nprepare crash fixture\n",
-                target_prompt_digest=digest("prepare crash target prompt"),
+                target_prompt="prepare crash target prompt",
                 migration_id="prepare-crash-migration",
                 apply_request=False,
             )

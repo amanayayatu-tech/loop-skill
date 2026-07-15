@@ -92,7 +92,7 @@
     "schema_version": {"enum": [1, 2]},
     "review_contract_version": {"const": 2},
     "worker_validation_projection_contract_version": {"type": "integer", "enum": [0, 1]},
-    "controller_pack_migration_contract_version": {"const": 1},
+    "controller_pack_migration_contract_version": {"const": 2},
     "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
     "v1_migration_source_digest": {"$ref": "#/$defs/digest"},
     "loop_id": {"$ref": "#/$defs/safeId"},
@@ -833,6 +833,20 @@
         "prompt_normalization": {"const": "LF_NORMALIZED_NO_TRAILING_NEWLINE"}
       }
     },
+    "heartbeatPromptArtifactIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest", "media_type", "prompt_normalization"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^\\.codex-loop/sources/HEARTBEAT_PROMPT\\.[a-f0-9]{64}\\.txt$"
+        },
+        "digest": {"$ref": "#/$defs/digest"},
+        "media_type": {"const": "text/plain"},
+        "prompt_normalization": {"const": "LF_NORMALIZED_NO_TRAILING_NEWLINE"}
+      }
+    },
     "heartbeatLiveObservation": {
       "type": "object",
       "additionalProperties": false,
@@ -855,15 +869,16 @@
     "controllerPackMigration": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["migration_id", "status", "source_pack_identity", "target_pack_identity", "source_heartbeat_identity", "target_prompt_digest", "automation_id", "role_registry_digest", "migration_reason", "prepared_state_version", "prepare_observation_path", "prepare_observation_digest"],
+      "required": ["migration_id", "status", "source_pack_identity", "target_pack_identity", "source_heartbeat_identity", "target_prompt_identity", "automation_id", "source_heartbeat_routing_gate_enforced", "role_registry_digest", "migration_reason", "prepared_state_version", "prepare_observation_path", "prepare_observation_digest"],
       "properties": {
         "migration_id": {"$ref": "#/$defs/safeId"},
         "status": {"const": "PREPARED"},
         "source_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
         "target_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
         "source_heartbeat_identity": {"$ref": "#/$defs/heartbeatPromptIdentity"},
-        "target_prompt_digest": {"$ref": "#/$defs/digest"},
+        "target_prompt_identity": {"$ref": "#/$defs/heartbeatPromptArtifactIdentity"},
         "automation_id": {"$ref": "#/$defs/safeId"},
+        "source_heartbeat_routing_gate_enforced": {"type": "boolean"},
         "role_registry_digest": {"$ref": "#/$defs/digest"},
         "migration_reason": {"type": "string", "minLength": 1, "maxLength": 1024},
         "prepared_state_version": {"type": "integer", "minimum": 1},
@@ -874,15 +889,16 @@
     "controllerPackMigrationReceipt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["migration_id", "outcome", "source_pack_identity", "target_pack_identity", "source_heartbeat_identity", "target_prompt_digest", "automation_id", "role_registry_digest", "migration_reason", "prepared_state_version", "completed_state_version", "prepare_observation_path", "prepare_observation_digest", "final_observation_path", "final_observation_digest", "outcome_reason"],
+      "required": ["migration_id", "outcome", "source_pack_identity", "target_pack_identity", "source_heartbeat_identity", "target_prompt_identity", "automation_id", "source_heartbeat_routing_gate_enforced", "role_registry_digest", "migration_reason", "prepared_state_version", "completed_state_version", "prepare_observation_path", "prepare_observation_digest", "final_observation_path", "final_observation_digest", "outcome_reason"],
       "properties": {
         "migration_id": {"$ref": "#/$defs/safeId"},
         "outcome": {"enum": ["COMPLETED", "ROLLED_BACK"]},
         "source_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
         "target_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
         "source_heartbeat_identity": {"$ref": "#/$defs/heartbeatPromptIdentity"},
-        "target_prompt_digest": {"$ref": "#/$defs/digest"},
+        "target_prompt_identity": {"$ref": "#/$defs/heartbeatPromptArtifactIdentity"},
         "automation_id": {"$ref": "#/$defs/safeId"},
+        "source_heartbeat_routing_gate_enforced": {"type": "boolean"},
         "role_registry_digest": {"$ref": "#/$defs/digest"},
         "migration_reason": {"type": "string", "minLength": 1, "maxLength": 1024},
         "prepared_state_version": {"type": "integer", "minimum": 1},
@@ -986,7 +1002,7 @@
     "artifactRecordMap": {
       "type": "object",
       "patternProperties": {
-        "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/CONTROLLER_PACK(?:\\.[a-f0-9]{64})?\\.md)$": {"$ref": "#/$defs/artifactRecord"}
+        "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/(CONTROLLER_PACK(?:\\.[a-f0-9]{64})?\\.md|HEARTBEAT_PROMPT\\.[a-f0-9]{64}\\.txt))$": {"$ref": "#/$defs/artifactRecord"}
       },
       "additionalProperties": false
     },
