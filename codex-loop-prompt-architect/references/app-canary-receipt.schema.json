@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-loop/app-canary-receipt.schema.json",
+  "title": "Codex Loop Real App Canary Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_layer",
+    "status",
+    "started_at",
+    "finished_at",
+    "timezone",
+    "repo_commit",
+    "pack_digest",
+    "installed_manifest_digest",
+    "app",
+    "app_server",
+    "mcp",
+    "checks",
+    "error_classification",
+    "contains_sensitive_content",
+    "compatibility_identity_digest",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "app-canary-receipt-v1"},
+    "evidence_layer": {"const": "mac-app-smoke"},
+    "status": {"enum": ["PASS", "BLOCKED", "FAIL"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "timezone": {"const": "Asia/Shanghai"},
+    "repo_commit": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "pack_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "installed_manifest_digest": {"$ref": "#/$defs/digest"},
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "build", "bundle_identifier"],
+      "properties": {
+        "version": {"type": "string", "minLength": 1},
+        "build": {"type": "string", "minLength": 1},
+        "bundle_identifier": {"type": "string", "minLength": 1}
+      }
+    },
+    "app_server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable_path", "codesign_verified", "identifier", "team_identifier", "cdhash"],
+      "properties": {
+        "executable_path": {"type": "string", "pattern": "^/"},
+        "codesign_verified": {"const": true},
+        "identifier": {"const": "codex"},
+        "team_identifier": {"const": "2DC432GLL2"},
+        "cdhash": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"}
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "config_schema_version", "request_meta_shape", "identity_relations", "registration"],
+      "properties": {
+        "protocol_version": {"type": "string", "minLength": 1},
+        "config_schema_version": {"const": "codex-cli-mcp-stdio-v1"},
+        "request_meta_shape": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outer_keys", "turn_metadata_keys"],
+          "properties": {
+            "outer_keys": {
+              "type": "array",
+              "uniqueItems": true,
+              "contains": {"const": "threadId"},
+              "items": {"type": "string"}
+            },
+            "turn_metadata_keys": {
+              "type": "array",
+              "uniqueItems": true,
+              "allOf": [
+                {"contains": {"const": "session_id"}},
+                {"contains": {"const": "thread_id"}},
+                {"contains": {"const": "turn_id"}}
+              ],
+              "items": {"type": "string"}
+            }
+          }
+        },
+        "identity_relations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["session_equals_thread", "thread_equals_outer", "turn_is_independent", "next_turn_id_changed"],
+          "properties": {
+            "session_equals_thread": {"type": "boolean"},
+            "thread_equals_outer": {"const": true},
+            "turn_is_independent": {"const": true},
+            "next_turn_id_changed": {"const": true}
+          }
+        },
+        "registration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "server_name",
+            "python_executable",
+            "installed_script_path",
+            "installed_script_sha256",
+            "config_readback",
+            "source_install_drift",
+            "app_refresh_or_restart"
+          ],
+          "properties": {
+            "server_name": {"const": "codex-loop-state"},
+            "python_executable": {"type": "string", "pattern": "^/"},
+            "installed_script_path": {"type": "string", "pattern": "^/"},
+            "installed_script_sha256": {"$ref": "#/$defs/digest"},
+            "config_readback": {"const": true},
+            "source_install_drift": {"type": "array", "maxItems": 0},
+            "app_refresh_or_restart": {"enum": ["REFRESH", "RESTART"]}
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mcp_startup_ready",
+        "route_tool_visible",
+        "signed_direct_parent",
+        "metadata_parser_negative_cases",
+        "first_route_succeeded",
+        "same_turn_second_route_rejected_before_side_effect",
+        "same_turn_second_route_zero_effect",
+        "next_turn_route_succeeded",
+        "partial_frame_process_cleanup",
+        "control_plane_responsive_after_partial_frame",
+        "lost_stdout_recovered_without_second_send",
+        "pack_migration_same_heartbeat_reconciled",
+        "finalization_acked"
+      ],
+      "properties": {
+        "mcp_startup_ready": {"type": "boolean"},
+        "route_tool_visible": {"type": "boolean"},
+        "signed_direct_parent": {"type": "boolean"},
+        "metadata_parser_negative_cases": {"type": "boolean"},
+        "first_route_succeeded": {"type": "boolean"},
+        "same_turn_second_route_rejected_before_side_effect": {"type": "boolean"},
+        "same_turn_second_route_zero_effect": {"type": "boolean"},
+        "next_turn_route_succeeded": {"type": "boolean"},
+        "partial_frame_process_cleanup": {"type": "boolean"},
+        "control_plane_responsive_after_partial_frame": {"type": "boolean"},
+        "lost_stdout_recovered_without_second_send": {"type": "boolean"},
+        "pack_migration_same_heartbeat_reconciled": {"type": "boolean"},
+        "finalization_acked": {"type": "boolean"}
+      }
+    },
+    "error_classification": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "enum": [
+            "MCP_REGISTRATION_INVALID",
+            "MCP_REFRESH_REQUIRED",
+            "BLOCKED_BY_APP_ATTESTATION",
+            "APP_PARENT_ATTESTATION_INVALID",
+            "APP_PARENT_CODE_SIGNATURE_INVALID",
+            "APP_TURN_ATTESTATION_INVALID",
+            "CONTROLLER_TURN_ALREADY_ROUTED",
+            "APP_UPSTREAM_COMPATIBILITY_BLOCKER",
+            "CANARY_ASSERTION_FAILED"
+          ]
+        }
+      ]
+    },
+    "contains_sensitive_content": {"const": false},
+    "compatibility_identity_digest": {"$ref": "#/$defs/digest"},
+    "receipt_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

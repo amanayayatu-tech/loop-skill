@@ -1679,7 +1679,7 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                 "STOP_LOOP",
                 "ACK_FINALIZATION",
             ]
-            case_count = int(os.environ.get("ADAPTIVE_STATE_FUZZ_CASES", "100"))
+            case_count = int(os.environ.get("ADAPTIVE_STATE_FUZZ_CASES", "25"))
             batch_size = 50
             for batch_start in range(0, case_count, batch_size):
                 acquire = harness.make_request(

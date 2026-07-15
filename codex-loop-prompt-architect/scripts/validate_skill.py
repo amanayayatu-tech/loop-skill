@@ -41,8 +41,13 @@ def validate(skill_dir: Path) -> list[str]:
         skill_dir / "references" / "adaptive-loop-contract.md",
         skill_dir / "references" / "adaptive-state.schema.json",
         skill_dir / "references" / "adaptive-mutation.schema.json",
+        skill_dir / "references" / "install-manifest.schema.json",
+        skill_dir / "references" / "app-canary-receipt.schema.json",
         skill_dir / "scripts" / "adaptive_state_runtime.py",
         skill_dir / "scripts" / "adaptive_state_mcp.py",
+        skill_dir / "scripts" / "configure_mcp.py",
+        skill_dir / "scripts" / "verify_installation.py",
+        skill_dir / "scripts" / "validate_app_canary_receipt.py",
         skill_dir / "scripts" / "loop_prompt_scaffold.py",
         skill_dir / "scripts" / "validate_skill.py",
         skill_dir / "scripts" / "loop_architect" / "schema.py",
@@ -106,7 +111,12 @@ def validate(skill_dir: Path) -> list[str]:
     except ImportError:
         errors.append("missing runtime dependency: jsonschema")
     else:
-        for schema_name in ("adaptive-state.schema.json", "adaptive-mutation.schema.json"):
+        for schema_name in (
+            "adaptive-state.schema.json",
+            "adaptive-mutation.schema.json",
+            "install-manifest.schema.json",
+            "app-canary-receipt.schema.json",
+        ):
             schema_path = skill_dir / "references" / schema_name
             try:
                 runtime_schema = json.loads(schema_path.read_text(encoding="utf-8"))

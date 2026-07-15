@@ -1,6 +1,6 @@
 [tool.coverage.run]
 branch = true
-source = ["codex-loop-prompt-architect/scripts/loop_architect"]
+source = ["codex-loop-prompt-architect/scripts", "scripts"]
 
 [tool.coverage.report]
 fail_under = 80

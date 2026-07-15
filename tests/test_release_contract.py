@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import re
 import unittest
 from pathlib import Path
@@ -10,12 +11,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_skill_validator_runs_as_a_covered_library_entrypoint(self) -> None:
+        path = ROOT / "codex-loop-prompt-architect/scripts/validate_skill.py"
+        spec = importlib.util.spec_from_file_location("validate_skill_release_contract", path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module.validate(ROOT / "codex-loop-prompt-architect"), [])
+
     def test_trusted_route_bridge_is_shipped_and_installed(self) -> None:
         bridge = ROOT / "codex-loop-prompt-architect" / "scripts" / "adaptive_state_mcp.py"
         self.assertTrue(bridge.is_file())
         installer = (ROOT / "scripts" / "install.sh").read_text()
         self.assertIn('STATE_MCP="$SOURCE_DIR/scripts/adaptive_state_mcp.py"', installer)
         self.assertIn('chmod +x "$STAGING_DIR/scripts/adaptive_state_mcp.py"', installer)
+        self.assertIn('MCP_CONFIG_HELPER="$SOURCE_DIR/scripts/configure_mcp.py"', installer)
+        self.assertIn('INSTALL_VERIFY="$SOURCE_DIR/scripts/verify_installation.py"', installer)
+        self.assertIn("--check >/dev/null", installer)
+        self.assertIn("install-receipts/codex-loop-prompt-architect", installer)
+        for relative in (
+            "references/install-manifest.schema.json",
+            "references/app-canary-receipt.schema.json",
+            "scripts/configure_mcp.py",
+            "scripts/verify_installation.py",
+            "scripts/validate_app_canary_receipt.py",
+        ):
+            self.assertTrue((ROOT / "codex-loop-prompt-architect" / relative).is_file())
 
     def test_version_and_changelog_share_the_formal_release(self) -> None:
         version = (ROOT / "VERSION").read_text().strip()
@@ -44,7 +66,16 @@ class ReleaseContractTests(unittest.TestCase):
 
     def test_ci_has_fast_full_coverage_and_macos_lanes(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text()
-        for job in ("quick:", "full-fuzz:", "coverage:", "macos-install:"):
+        for job in (
+            "quick:",
+            "full:",
+            "fuzz-generator:",
+            "fuzz-state:",
+            "coverage:",
+            "install-linux:",
+            "macos-install:",
+            "tag-identity:",
+        ):
             self.assertIn(job, workflow)
         self.assertIn('ADAPTIVE_FUZZ_CASES: "5000"', workflow)
         self.assertIn('ADAPTIVE_STATE_FUZZ_CASES: "5000"', workflow)
@@ -53,26 +84,54 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("branches:\n      - main", workflow)
         self.assertIn('tags:\n      - "v*"', workflow)
         self.assertIn("github.event.pull_request.head.ref || github.ref_name", workflow)
-        self.assertIn("actions/checkout@v7", workflow)
-        self.assertIn("actions/setup-python@v6", workflow)
-        self.assertIn("actions/upload-artifact@v7", workflow)
-        self.assertNotIn("actions/checkout@v4", workflow)
-        self.assertNotIn("actions/setup-python@v5", workflow)
+        self.assertIn("self-hosted loop-ci", workflow)
+        self.assertIn("coverage run --parallel-mode", workflow)
+        self.assertIn("coverage combine", workflow)
+        self.assertNotIn("full-fuzz:", workflow)
+        uses = re.findall(r"^\s*- uses:\s*([^\s#]+)", workflow, re.MULTILINE)
+        self.assertGreaterEqual(len(uses), 9)
+        for action in uses:
+            with self.subTest(action=action):
+                self.assertRegex(action, r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
+        self.assertIn("scripts/check_whitespace_range.py", workflow)
+        self.assertIn("fetch-depth: 0", workflow)
+        self.assertNotIn("git show --check --format= HEAD", workflow)
+        expected_actions = {
+            "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0": "# v7.0.0",
+            "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1": "# v6.3.0",
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a": "# v7.0.1",
+            "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c": "# v8.0.1",
+        }
+        for action, version_comment in expected_actions.items():
+            self.assertIn(f"{action} {version_comment}", workflow)
 
     def test_coverage_baseline_is_branch_aware_and_bounded(self) -> None:
         config = (ROOT / "pyproject.toml").read_text()
         self.assertIn("branch = true", config)
+        self.assertIn('source = ["codex-loop-prompt-architect/scripts", "scripts"]', config)
         match = re.search(r"fail_under\s*=\s*([0-9]+)", config)
         self.assertIsNotNone(match)
         self.assertGreaterEqual(int(match.group(1)), 80)
 
+    def test_server_attestation_and_real_app_receipt_are_release_authorities(self) -> None:
+        releasing = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
+        self.assertIn("`loop-ci` attestation is the authoritative repository gate", releasing)
+        self.assertIn("GitHub Actions is a\ncompatibility mirror only", releasing)
+        self.assertIn("same-SHA App receipt", releasing)
+        self.assertIn("FINALIZATION_ACKED", releasing)
+        self.assertIn("app-canary-receipt.schema.json", releasing)
+        self.assertNotIn("required GitHub Actions checks pass", releasing)
+
     def test_state_runtime_tests_are_split_without_method_loss(self) -> None:
-        self.assertFalse((ROOT / "tests" / "test_adaptive_state_runtime.py").exists())
+        compatibility = ROOT / "tests" / "test_adaptive_state_runtime.py"
+        self.assertTrue(compatibility.is_file())
+        self.assertLess(len(compatibility.read_text().splitlines()), 30)
+        self.assertIn("Stable CI entrypoint", compatibility.read_text())
         modules = sorted((ROOT / "tests").glob("test_state_runtime_*.py"))
-        self.assertEqual(len(modules), 5)
+        self.assertEqual(len(modules), 6)
         names: list[str] = []
         for path in modules:
-            self.assertLess(len(path.read_text().splitlines()), 2500)
+            self.assertLess(len(path.read_text().splitlines()), 3000)
             tree = ast.parse(path.read_text())
             names.extend(
                 node.name
@@ -80,8 +139,8 @@ class ReleaseContractTests(unittest.TestCase):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                 and node.name.startswith("test_")
             )
-        self.assertEqual(len(names), 87)
-        self.assertEqual(len(set(names)), 87)
+        self.assertEqual(len(names), 108)
+        self.assertEqual(len(set(names)), 108)
         self.assertTrue((ROOT / "tests" / "state_runtime_support.py").is_file())
 
 

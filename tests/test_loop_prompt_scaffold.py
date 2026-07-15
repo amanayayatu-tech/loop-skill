@@ -1293,7 +1293,11 @@ class CliTests(unittest.TestCase):
             result = subprocess.run(
                 ["bash", str(INSTALLER)],
                 cwd=ROOT,
-                env={**os.environ, "CODEX_HOME": str(codex_home)},
+                env={
+                    **os.environ,
+                    "CODEX_HOME": str(codex_home),
+                    "PYTHON": sys.executable,
+                },
                 text=True,
                 capture_output=True,
                 check=False,
@@ -1329,6 +1333,7 @@ class CliTests(unittest.TestCase):
                 env={
                     **os.environ,
                     "CODEX_HOME": str(codex_home),
+                    "PYTHON": sys.executable,
                     "PATH": f"{fake_bin}:{os.environ['PATH']}",
                 },
                 text=True,

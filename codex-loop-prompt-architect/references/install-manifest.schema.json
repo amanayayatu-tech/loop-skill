@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-loop/install-manifest.schema.json",
+  "title": "Codex Loop Skill Install Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "skill_name",
+    "skill_version",
+    "repo_commit",
+    "created_at",
+    "source_manifest_digest",
+    "installed_manifest_digest",
+    "source_install_drift",
+    "files",
+    "mcp_registration",
+    "manifest_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "install-manifest-v1"},
+    "skill_name": {"const": "codex-loop-prompt-architect"},
+    "skill_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "repo_commit": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+        {"const": "UNVERIFIED_SOURCE"}
+      ]
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "source_manifest_digest": {"$ref": "#/$defs/digest"},
+    "installed_manifest_digest": {"$ref": "#/$defs/digest"},
+    "source_install_drift": {"type": "array", "maxItems": 0},
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "executable"],
+        "properties": {
+          "path": {"type": "string", "pattern": "^[^/].*$"},
+          "sha256": {"$ref": "#/$defs/digest"},
+          "executable": {"type": "boolean"}
+        }
+      }
+    },
+    "mcp_registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "server_name",
+        "command",
+        "args",
+        "installed_script_path",
+        "installed_script_sha256",
+        "config_path",
+        "config_sha256",
+        "config_readback"
+      ],
+      "properties": {
+        "server_name": {"const": "codex-loop-state"},
+        "command": {"type": "string", "pattern": "^/"},
+        "args": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {"type": "string", "pattern": "^/"}
+        },
+        "installed_script_path": {"type": "string", "pattern": "^/"},
+        "installed_script_sha256": {"$ref": "#/$defs/digest"},
+        "config_path": {"type": "string", "pattern": "^/"},
+        "config_sha256": {"$ref": "#/$defs/digest"},
+        "config_readback": {"const": true}
+      }
+    },
+    "manifest_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
