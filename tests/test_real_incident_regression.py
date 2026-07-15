@@ -1335,29 +1335,19 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
             self.assertEqual(denied["status"], "CONTROLLER_PACK_MIGRATION_REQUIRED")
             self.assertEqual(before, persisted_snapshot(root))
 
-            self._pause_at_safe_point(harness)
             content = "# Controller Pack\n\nreal incident protocol revision\n"
             target_digest = digest(content)
-            target_path = (
-                ".codex-loop/sources/CONTROLLER_PACK."
-                f"{target_digest.removeprefix('sha256:')}.md"
+            harness.ensure_all_roles()
+            harness.ensure_heartbeat()
+            self._pause_at_safe_point(harness)
+            prepared = harness.prepare_pack_migration(
+                content=content,
+                target_prompt_digest=digest("dynamic canonical Pack heartbeat"),
+                migration_id="real-incident-pack-migration",
+                reason="real incident transport and receipt remediation",
             )
-            artifact = {
-                "path": target_path,
-                "content": content,
-                "digest": target_digest,
-                "media_type": "text/markdown",
-            }
-            migrated = harness.apply(
-                {
-                    "type": "MIGRATE_CONTROLLER_PACK",
-                    "source_pack_digest": old_digest,
-                    "target_pack_digest": target_digest,
-                    "target_pack_path": target_path,
-                    "migration_reason": "real incident transport and receipt remediation",
-                },
-                artifacts=[artifact],
-            )
+            self.assertTrue(prepared["response"]["ok"], prepared["response"])
+            migrated = harness.commit_pack_migration(prepared)
             self.assertTrue(migrated["ok"], migrated)
             state = harness.state()
             self.assertEqual(state["controller_pack_identity"]["digest"], target_digest)
@@ -1376,7 +1366,8 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
             harness = Harness(root)
             initialized, _ = harness.initialize()
             self.assertTrue(initialized["ok"], initialized)
-            old_digest = harness.state()["controller_pack_identity"]["digest"]
+            harness.ensure_all_roles()
+            harness.ensure_heartbeat()
 
             for _ in range(2):
                 claim = harness.acquire()
@@ -1389,6 +1380,7 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
                     }
                 )
                 self.assertTrue(released["ok"], released)
+            expected_backfilled = len(harness.state()["routing_turn_ledger"])
             self._pause_at_safe_point(harness)
 
             legacy = harness.state()
@@ -1398,6 +1390,12 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
             legacy.pop("controller_turn_enforcement")
             legacy.pop("consumed_controller_turn_ids")
             legacy.pop("worker_validation_projection_contract_version")
+            legacy.pop("controller_pack_migration_contract_version")
+            legacy.pop("controller_pack_migration")
+            legacy.pop("controller_pack_migration_history")
+            legacy.pop("heartbeat_prompt_identity")
+            legacy.pop("heartbeat_live_observation")
+            legacy.pop("heartbeat_routing_gate_enforced")
             for routing_turn in legacy["routing_turn_ledger"].values():
                 routing_turn.pop("controller_turn_id")
             harness.runtime._write_state_locked(legacy, "legacy-pack-fixture")
@@ -1425,30 +1423,18 @@ class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F40
 
             content = "# Controller Pack\n\nlegacy route migration regression\n"
             target_digest = digest(content)
-            target_path = (
-                ".codex-loop/sources/CONTROLLER_PACK."
-                f"{target_digest.removeprefix('sha256:')}.md"
+            prepared = harness.prepare_pack_migration(
+                content=content,
+                target_prompt_digest=digest("legacy migration heartbeat prompt"),
+                migration_id="legacy-route-pack-migration",
+                reason="backfill legacy routing turn identities",
             )
-            migrated = harness.apply(
-                {
-                    "type": "MIGRATE_CONTROLLER_PACK",
-                    "source_pack_digest": old_digest,
-                    "target_pack_digest": target_digest,
-                    "target_pack_path": target_path,
-                    "migration_reason": "backfill legacy routing turn identities",
-                },
-                artifacts=[
-                    {
-                        "path": target_path,
-                        "content": content,
-                        "digest": target_digest,
-                        "media_type": "text/markdown",
-                    }
-                ],
-            )
+            self.assertTrue(prepared["response"]["ok"], prepared["response"])
+            migrated = harness.commit_pack_migration(prepared)
             self.assertTrue(migrated["ok"], migrated)
             self.assertEqual(
-                migrated["result"]["legacy_routing_turns_backfilled"], 2
+                migrated["result"]["legacy_routing_turns_backfilled"],
+                expected_backfilled,
             )
             state = harness.state()
             routed_ids = sorted(

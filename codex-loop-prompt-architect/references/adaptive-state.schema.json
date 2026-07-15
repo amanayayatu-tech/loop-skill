@@ -92,6 +92,7 @@
     "schema_version": {"enum": [1, 2]},
     "review_contract_version": {"const": 2},
     "worker_validation_projection_contract_version": {"type": "integer", "enum": [0, 1]},
+    "controller_pack_migration_contract_version": {"const": 1},
     "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
     "v1_migration_source_digest": {"$ref": "#/$defs/digest"},
     "loop_id": {"$ref": "#/$defs/safeId"},
@@ -102,6 +103,20 @@
       "items": {"$ref": "#/$defs/controllerPackRevision"}
     },
     "controller_pack_revision": {"type": "integer", "minimum": 1},
+    "controller_pack_migration": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/controllerPackMigration"}]
+    },
+    "controller_pack_migration_history": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/controllerPackMigrationReceipt"}
+    },
+    "heartbeat_prompt_identity": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/heartbeatPromptIdentity"}]
+    },
+    "heartbeat_live_observation": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/heartbeatLiveObservation"}]
+    },
+    "heartbeat_routing_gate_enforced": {"type": "boolean"},
     "pack_identity_enforced": {"type": "boolean"},
     "controller_turn_enforcement": {"type": "boolean"},
     "consumed_controller_turn_ids": {
@@ -802,6 +817,81 @@
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
         },
         "migration_reason": {"type": "string", "minLength": 1, "maxLength": 1024}
+      }
+    },
+    "heartbeatPromptIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["automation_id", "automation_name", "kind", "target_thread_id", "rrule", "prompt_digest", "prompt_normalization"],
+      "properties": {
+        "automation_id": {"$ref": "#/$defs/safeId"},
+        "automation_name": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "kind": {"const": "HEARTBEAT"},
+        "target_thread_id": {"$ref": "#/$defs/safeId"},
+        "rrule": {"type": "string", "pattern": "^FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}$"},
+        "prompt_digest": {"$ref": "#/$defs/digest"},
+        "prompt_normalization": {"const": "LF_NORMALIZED_NO_TRAILING_NEWLINE"}
+      }
+    },
+    "heartbeatLiveObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["automation_id", "status", "automation_name", "kind", "target_thread_id", "rrule", "prompt_digest", "prompt_normalization", "observed_at", "observation_path", "observation_digest", "recorded_state_version"],
+      "properties": {
+        "automation_id": {"$ref": "#/$defs/safeId"},
+        "status": {"enum": ["ACTIVE", "PAUSED"]},
+        "automation_name": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "kind": {"const": "HEARTBEAT"},
+        "target_thread_id": {"$ref": "#/$defs/safeId"},
+        "rrule": {"type": "string", "pattern": "^FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}$"},
+        "prompt_digest": {"$ref": "#/$defs/digest"},
+        "prompt_normalization": {"const": "LF_NORMALIZED_NO_TRAILING_NEWLINE"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "observation_path": {"type": "string", "minLength": 1},
+        "observation_digest": {"$ref": "#/$defs/digest"},
+        "recorded_state_version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "controllerPackMigration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["migration_id", "status", "source_pack_identity", "target_pack_identity", "source_heartbeat_identity", "target_prompt_digest", "automation_id", "role_registry_digest", "migration_reason", "prepared_state_version", "prepare_observation_path", "prepare_observation_digest"],
+      "properties": {
+        "migration_id": {"$ref": "#/$defs/safeId"},
+        "status": {"const": "PREPARED"},
+        "source_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
+        "target_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
+        "source_heartbeat_identity": {"$ref": "#/$defs/heartbeatPromptIdentity"},
+        "target_prompt_digest": {"$ref": "#/$defs/digest"},
+        "automation_id": {"$ref": "#/$defs/safeId"},
+        "role_registry_digest": {"$ref": "#/$defs/digest"},
+        "migration_reason": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "prepared_state_version": {"type": "integer", "minimum": 1},
+        "prepare_observation_path": {"type": "string", "minLength": 1},
+        "prepare_observation_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "controllerPackMigrationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["migration_id", "outcome", "source_pack_identity", "target_pack_identity", "source_heartbeat_identity", "target_prompt_digest", "automation_id", "role_registry_digest", "migration_reason", "prepared_state_version", "completed_state_version", "prepare_observation_path", "prepare_observation_digest", "final_observation_path", "final_observation_digest", "outcome_reason"],
+      "properties": {
+        "migration_id": {"$ref": "#/$defs/safeId"},
+        "outcome": {"enum": ["COMPLETED", "ROLLED_BACK"]},
+        "source_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
+        "target_pack_identity": {"$ref": "#/$defs/controllerPackIdentity"},
+        "source_heartbeat_identity": {"$ref": "#/$defs/heartbeatPromptIdentity"},
+        "target_prompt_digest": {"$ref": "#/$defs/digest"},
+        "automation_id": {"$ref": "#/$defs/safeId"},
+        "role_registry_digest": {"$ref": "#/$defs/digest"},
+        "migration_reason": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "prepared_state_version": {"type": "integer", "minimum": 1},
+        "completed_state_version": {"type": "integer", "minimum": 1},
+        "prepare_observation_path": {"type": "string", "minLength": 1},
+        "prepare_observation_digest": {"$ref": "#/$defs/digest"},
+        "final_observation_path": {"type": "string", "minLength": 1},
+        "final_observation_digest": {"$ref": "#/$defs/digest"},
+        "outcome_reason": {"type": "string", "minLength": 1, "maxLength": 1024}
       }
     },
     "leaseClaim": {
@@ -1671,7 +1761,7 @@
     "validationEvidence": {"type": "object", "additionalProperties": false, "required": ["evidence_path", "evidence_digest", "artifact_digest", "checked_at"], "properties": {"evidence_path": {"type": "string", "minLength": 1}, "evidence_digest": {"$ref": "#/$defs/digest"}, "evidence_media_type": {"type": "string", "minLength": 1}, "artifact_digest": {"$ref": "#/$defs/digest"}, "worker_dispatch_id": {"$ref": "#/$defs/safeId"}, "checked_at": {"$ref": "#/$defs/timestamp"}}},
     "validationEvidenceDimensions": {"type": "object", "propertyNames": {"enum": ["functional", "regression", "static_quality", "compatibility", "security", "performance", "user_experience", "change_impact"]}, "additionalProperties": {"$ref": "#/$defs/validationEvidence"}},
     "validationEvidenceMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/validationEvidenceDimensions"}}, "additionalProperties": false},
-    "statusProjectionTarget": {"type": "object", "additionalProperties": false, "required": ["path", "target_state_version", "target_digest", "render_contract_version"], "properties": {"path": {"const": ".codex-loop/STATUS.md"}, "target_state_version": {"type": "integer", "minimum": 1}, "target_digest": {"$ref": "#/$defs/digest"}, "render_contract_version": {"enum": ["status-v1", "status-v2"]}}},
+    "statusProjectionTarget": {"type": "object", "additionalProperties": false, "required": ["path", "target_state_version", "target_digest", "render_contract_version"], "properties": {"path": {"const": ".codex-loop/STATUS.md"}, "target_state_version": {"type": "integer", "minimum": 1}, "target_digest": {"$ref": "#/$defs/digest"}, "render_contract_version": {"enum": ["status-v1", "status-v2", "status-v3"]}}},
     "humanControlPolicy": {"type": "object", "additionalProperties": false, "required": ["human_steering_enabled", "status_projection_enabled", "decision_cards_enabled", "failure_fingerprint_enabled", "context_freshness_required", "review_evidence_policy"], "properties": {"human_steering_enabled": {"type": "boolean"}, "status_projection_enabled": {"type": "boolean"}, "decision_cards_enabled": {"type": "boolean"}, "failure_fingerprint_enabled": {"const": true}, "context_freshness_required": {"const": true}, "review_evidence_policy": {"const": "deterministic_first"}}},
     "jsonValue": {
       "oneOf": [

@@ -34,7 +34,10 @@
       "oneOf": [
         {"$ref": "#/$defs/initialize"},
         {"$ref": "#/$defs/migrateV1ToV2"},
+        {"$ref": "#/$defs/prepareControllerPackMigration"},
         {"$ref": "#/$defs/migrateControllerPack"},
+        {"$ref": "#/$defs/rollbackControllerPackMigration"},
+        {"$ref": "#/$defs/recordHeartbeatObservation"},
         {"$ref": "#/$defs/reconcileWorkerExecutionClassification"},
         {"$ref": "#/$defs/recordSteering"},
         {"$ref": "#/$defs/resolveSteering"},
@@ -453,25 +456,90 @@
     },
     "humanControlPolicy": {"type": "object", "additionalProperties": false, "required": ["human_steering_enabled", "status_projection_enabled", "decision_cards_enabled", "failure_fingerprint_enabled", "context_freshness_required", "review_evidence_policy"], "properties": {"human_steering_enabled": {"type": "boolean"}, "status_projection_enabled": {"type": "boolean"}, "decision_cards_enabled": {"type": "boolean"}, "failure_fingerprint_enabled": {"const": true}, "context_freshness_required": {"const": true}, "review_evidence_policy": {"const": "deterministic_first"}}},
     "migrateV1ToV2": {"type": "object", "additionalProperties": false, "required": ["type", "source_state_digest"], "properties": {"type": {"const": "MIGRATE_V1_TO_V2"}, "source_state_digest": {"$ref": "#/$defs/digest"}}},
+    "heartbeatObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["automation_id", "status", "automation_name", "kind", "target_thread_id", "rrule", "prompt_digest", "prompt_normalization", "observed_at"],
+      "properties": {
+        "automation_id": {"$ref": "#/$defs/safeId"},
+        "status": {"enum": ["ACTIVE", "PAUSED"]},
+        "automation_name": {"$ref": "#/$defs/boundedText"},
+        "kind": {"const": "HEARTBEAT"},
+        "target_thread_id": {"$ref": "#/$defs/safeId"},
+        "rrule": {"type": "string", "pattern": "^FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}$"},
+        "prompt_digest": {"$ref": "#/$defs/digest"},
+        "prompt_normalization": {"const": "LF_NORMALIZED_NO_TRAILING_NEWLINE"},
+        "observed_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "prepareControllerPackMigration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "migration_id", "source_pack_digest", "target_pack_digest", "target_pack_path", "target_prompt_digest", "migration_reason", "heartbeat_observation", "automation_observation_path", "automation_observation_digest"],
+      "properties": {
+        "type": {"const": "PREPARE_CONTROLLER_PACK_MIGRATION"},
+        "migration_id": {"$ref": "#/$defs/safeId"},
+        "source_pack_digest": {"$ref": "#/$defs/digest"},
+        "target_pack_digest": {"$ref": "#/$defs/digest"},
+        "target_pack_path": {"type": "string", "pattern": "^\\.codex-loop/sources/CONTROLLER_PACK\\.[a-f0-9]{64}\\.md$"},
+        "target_prompt_digest": {"$ref": "#/$defs/digest"},
+        "migration_reason": {"$ref": "#/$defs/boundedText"},
+        "heartbeat_observation": {"$ref": "#/$defs/heartbeatObservation"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
     "migrateControllerPack": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "type",
+        "migration_id",
         "source_pack_digest",
         "target_pack_digest",
         "target_pack_path",
-        "migration_reason"
+        "migration_reason",
+        "heartbeat_observation",
+        "automation_observation_path",
+        "automation_observation_digest"
       ],
       "properties": {
         "type": {"const": "MIGRATE_CONTROLLER_PACK"},
+        "migration_id": {"$ref": "#/$defs/safeId"},
         "source_pack_digest": {"$ref": "#/$defs/digest"},
         "target_pack_digest": {"$ref": "#/$defs/digest"},
         "target_pack_path": {
           "type": "string",
           "pattern": "^\\.codex-loop/sources/CONTROLLER_PACK\\.[a-f0-9]{64}\\.md$"
         },
-        "migration_reason": {"$ref": "#/$defs/boundedText"}
+        "migration_reason": {"$ref": "#/$defs/boundedText"},
+        "heartbeat_observation": {"$ref": "#/$defs/heartbeatObservation"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "rollbackControllerPackMigration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "migration_id", "heartbeat_observation", "automation_observation_path", "automation_observation_digest", "rollback_reason"],
+      "properties": {
+        "type": {"const": "ROLLBACK_CONTROLLER_PACK_MIGRATION"},
+        "migration_id": {"$ref": "#/$defs/safeId"},
+        "heartbeat_observation": {"$ref": "#/$defs/heartbeatObservation"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"},
+        "rollback_reason": {"$ref": "#/$defs/boundedText"}
+      }
+    },
+    "recordHeartbeatObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "heartbeat_observation", "automation_observation_path", "automation_observation_digest"],
+      "properties": {
+        "type": {"const": "RECORD_HEARTBEAT_OBSERVATION"},
+        "heartbeat_observation": {"$ref": "#/$defs/heartbeatObservation"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"}
       }
     },
     "reconcileWorkerExecutionClassification": {

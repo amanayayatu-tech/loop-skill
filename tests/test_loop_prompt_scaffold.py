@@ -908,6 +908,28 @@ class GeneratedPackTests(unittest.TestCase):
         self.assertIn("page read_thread with cursors", pack)
         self.assertIn("checking only the latest turn is insufficient", pack)
 
+    @mock.patch.dict(os.environ, {"CODEX_HOME": "/workspace/.codex"})
+    def test_pack_migration_reconciles_the_same_live_heartbeat(self) -> None:
+        pack = scaffold.render_controller_pack(
+            scaffold.load_payload(
+                scaffold.build_parser().parse_args(
+                    ["--input", str(ROOT / "examples/03-adaptive-passkey-input.json")]
+                )
+            ),
+            "full",
+        )
+        for marker in (
+            "PREPARE_CONTROLLER_PACK_MIGRATION",
+            "MIGRATE_CONTROLLER_PACK",
+            "ROLLBACK",
+            "controller_pack_identity.path",
+            "UNKNOWN_NOT_OBSERVED",
+            "route-reserving PREPARED/SENT/ACKED outbox",
+            "routing target ACTIVE",
+        ):
+            self.assertIn(marker, pack)
+        self.assertIn("never create another heartbeat", pack)
+
     def test_goal_scope_can_narrow_worker_scope(self) -> None:
         payload = base_payload()
         payload["goals"] = [

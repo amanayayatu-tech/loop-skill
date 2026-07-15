@@ -83,11 +83,27 @@ reads do not migrate. Repeating an applied migration is idempotent, while an
 unknown version or changed source digest is a zero-side-effect rejection.
 
 Every post-initialize request attests the active `controller_pack_digest`.
-`MIGRATE_CONTROLLER_PACK` is the only way to activate different Pack bytes. It
-runs only at `PAUSED_AT_SAFE_POINT` with no lease or active outbox, archives the
-new Pack at its digest-versioned source path, and appends immutable predecessor
-history. The native Controller Goal keeps its launch identity, which must remain
-in that history; a changed but unmigrated Pack has no routing authority.
+Different Pack bytes use a journaled `PREPARE_CONTROLLER_PACK_MIGRATION` then
+`MIGRATE_CONTROLLER_PACK` protocol. Prepare requires `PAUSED_AT_SAFE_POINT`, no
+lease or route-reserving PREPARED/SENT/ACKED outbox, all five role identities,
+and an exact PAUSED readback of the registered heartbeat. It records the old
+and target Pack, old and target prompt digest, role-registry digest, and the same
+automation id before any external update. Commit accepts only a second PAUSED
+readback of that same automation id, target Controller, schedule, and target
+prompt digest; it then archives the digest-versioned Pack, appends immutable
+predecessor history, and records a completion receipt. A mismatch stays paused
+and must either converge to the target or use
+`ROLLBACK_CONTROLLER_PACK_MIGRATION` after readback proves the old prompt was
+restored. No replacement heartbeat is allowed.
+
+`RECORD_HEARTBEAT_OBSERVATION` binds exact readback JSON into canonical state.
+STATUS v3 uses only this live observation; absence is
+`UNKNOWN_NOT_OBSERVED`. Canonical PAUSED plus live ACTIVE is a safety fault,
+while canonical RUNNING plus PAUSED is an intentional reconciliation gap.
+After a committed migration, RESUME requires target PAUSED readback and routing
+remains blocked until the same heartbeat has a target ACTIVE readback. The
+native Controller Goal keeps its launch identity in Pack history; changed but
+unmigrated bytes have no routing authority.
 
 Human steering, STATUS projection, Decision Card, review surface, convergence,
 Validation Matrix, Context Freshness, and evidence-order rules are defined in

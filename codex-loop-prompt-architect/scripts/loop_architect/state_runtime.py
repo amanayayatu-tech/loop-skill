@@ -40,7 +40,8 @@ DEFAULT_HUMAN_CONTROL_POLICY = {
     "review_evidence_policy": "deterministic_first",
 }
 
-CURRENT_STATUS_RENDER_CONTRACT = "status-v2"
+CURRENT_STATUS_RENDER_CONTRACT = "status-v3"
+PREVIOUS_STATUS_RENDER_CONTRACT = "status-v2"
 LEGACY_STATUS_RENDER_CONTRACT = "status-v1"
 
 
@@ -252,7 +253,10 @@ V2_ONLY_MUTATIONS = {
     "RECORD_VALIDATION",
     "RECORD_CONTEXT_FRESHNESS",
     "RECORD_CONTROLLER_GOAL_RESUME",
+    "PREPARE_CONTROLLER_PACK_MIGRATION",
     "MIGRATE_CONTROLLER_PACK",
+    "ROLLBACK_CONTROLLER_PACK_MIGRATION",
+    "RECORD_HEARTBEAT_OBSERVATION",
     "RECONCILE_WORKER_EXECUTION_CLASSIFICATION",
 }
 
@@ -406,6 +410,12 @@ REVIEW_CLOSEOUT_CANDIDATE_STAGES = (
     "REVIEW_CLOSEOUT_OUTBOX_COMPLETED",
     "REVIEW_CLOSEOUT_ROUTE_FINISHED",
 )
+PACK_MIGRATION_CANDIDATE_STAGES = (
+    "PACK_MIGRATION_PREPARED_PROJECTED",
+    "PACK_MIGRATION_AUTOMATION_READBACK_VALIDATED",
+    "PACK_MIGRATION_CANONICAL_IDENTITY_PROJECTED",
+    "PACK_MIGRATION_COMPLETED_PROJECTED",
+)
 STATUS_PROJECTION_STAGES = (
     "STATUS_JOURNAL_TEMP_FSYNCED",
     "STATUS_JOURNAL_REPLACED",
@@ -421,6 +431,7 @@ CRASH_STAGES = (
     + EXTERNAL_RECEIPT_STAGES
     + WORKER_ACK_CANDIDATE_STAGES
     + REVIEW_CLOSEOUT_CANDIDATE_STAGES
+    + PACK_MIGRATION_CANDIDATE_STAGES
     + STATUS_PROJECTION_STAGES
 )
 
@@ -1645,7 +1656,12 @@ class AdaptiveStateRuntime:
                     and state.get("schema_version") == 2
                     and "worker_validation_projection_contract_version" not in state
                     and mutation_type
-                    not in {"MIGRATE_V1_TO_V2", "MIGRATE_CONTROLLER_PACK"}
+                    not in {
+                        "MIGRATE_V1_TO_V2",
+                        "PREPARE_CONTROLLER_PACK_MIGRATION",
+                        "MIGRATE_CONTROLLER_PACK",
+                        "ROLLBACK_CONTROLLER_PACK_MIGRATION",
+                    }
                 ):
                     raise RuntimeRejection(
                         "WORKER_VALIDATION_CONTRACT_MIGRATION_REQUIRED",
@@ -3358,13 +3374,15 @@ class AdaptiveStateRuntime:
         version = contract_version or CURRENT_STATUS_RENDER_CONTRACT
         if version == LEGACY_STATUS_RENDER_CONTRACT:
             return self._render_status_v1(state)
+        if version == PREVIOUS_STATUS_RENDER_CONTRACT:
+            return self._render_status_v2(state, live_heartbeat_contract=False)
         if version != CURRENT_STATUS_RENDER_CONTRACT:
             raise RuntimeRejection(
                 "STATUS_RENDER_CONTRACT_UNSUPPORTED",
                 "/status_projection_target/render_contract_version",
                 {"render_contract_version": version},
             )
-        return self._render_status_v2(state)
+        return self._render_status_v2(state, live_heartbeat_contract=True)
 
     def _render_status_v1(self, state: dict[str, Any]) -> bytes:
         active_outboxes = [
@@ -3481,7 +3499,12 @@ class AdaptiveStateRuntime:
         ]
         return "\n".join(lines).encode("utf-8")
 
-    def _render_status_v2(self, state: dict[str, Any]) -> bytes:
+    def _render_status_v2(
+        self,
+        state: dict[str, Any],
+        *,
+        live_heartbeat_contract: bool,
+    ) -> bytes:
         active_outbox_entries = [
             (kind, record)
             for kind, field in OUTBOX_FIELDS.items()
@@ -3597,7 +3620,29 @@ class AdaptiveStateRuntime:
             control_phase = "ROUTING"
         else:
             control_phase = "PLANNING"
-        if run_status == "PAUSED_AT_SAFE_POINT":
+        migration_pending = (
+            state.get("controller_pack_migration") is not None
+            if live_heartbeat_contract
+            else False
+        )
+        heartbeat_observation = (
+            state.get("heartbeat_live_observation")
+            if live_heartbeat_contract
+            else None
+        )
+        heartbeat_status = (
+            heartbeat_observation.get("status")
+            if isinstance(heartbeat_observation, dict)
+            else "UNKNOWN_NOT_OBSERVED"
+        )
+        if migration_pending:
+            control_phase = "PACK_MIGRATION_RECONCILIATION"
+            next_action = "RECONCILE_PACK_AND_SAME_HEARTBEAT"
+        elif run_status == "PAUSED_AT_SAFE_POINT" and heartbeat_status == "ACTIVE":
+            next_action = "PAUSE_SAME_HEARTBEAT"
+        elif run_status == "RUNNING" and heartbeat_status == "PAUSED":
+            next_action = "ACTIVATE_AND_READ_BACK_SAME_HEARTBEAT"
+        elif run_status == "PAUSED_AT_SAFE_POINT":
             next_action = "WAIT_FOR_RESUME"
         elif pending_steering:
             next_action = "RESOLVE_PENDING_STEERING"
@@ -3607,23 +3652,34 @@ class AdaptiveStateRuntime:
             next_action = "ROUTE_NEXT_LEGAL_GOAL_OR_ASSURANCE_ACTION"
         else:
             next_action = "FINALIZE_OR_WAIT_FOR_CANONICAL_GATE"
-        heartbeat_records = sorted(
-            state["automation_outbox"].values(),
-            key=lambda item: item["outbox_id"],
-        )
-        heartbeat_summary = "NONE"
-        if heartbeat_records:
-            heartbeat = heartbeat_records[-1]
-            observed = heartbeat.get("result") or {}
+        heartbeat_summary = "UNKNOWN_NOT_OBSERVED"
+        if not live_heartbeat_contract:
+            heartbeat_records = sorted(
+                state["automation_outbox"].values(),
+                key=lambda item: item["outbox_id"],
+            )
+            heartbeat_summary = "NONE"
+            if heartbeat_records:
+                heartbeat = heartbeat_records[-1]
+                observed = heartbeat.get("result") or {}
+                heartbeat_summary = ":".join(
+                    [
+                        heartbeat["outbox_id"],
+                        str(observed.get("status", heartbeat["status"])),
+                        str(
+                            heartbeat.get("identity", {}).get(
+                                "rrule", "SCHEDULE_UNKNOWN"
+                            )
+                        ),
+                    ]
+                )
+        elif isinstance(heartbeat_observation, dict):
             heartbeat_summary = ":".join(
                 [
-                    heartbeat["outbox_id"],
-                    str(observed.get("status", heartbeat["status"])),
-                    str(
-                        heartbeat.get("identity", {}).get(
-                            "rrule", "SCHEDULE_UNKNOWN"
-                        )
-                    ),
+                    heartbeat_observation["automation_id"],
+                    heartbeat_observation["status"],
+                    heartbeat_observation["rrule"],
+                    heartbeat_observation["observed_at"],
                 ]
             )
         failure_summaries = [
@@ -3638,6 +3694,12 @@ class AdaptiveStateRuntime:
             )
         if state["run_control"].get("reason"):
             limitations.append(str(state["run_control"]["reason"]))
+        if migration_pending:
+            limitations.append("PACK_MIGRATION_RECONCILIATION_REQUIRED")
+        if run_status == "RUNNING" and heartbeat_status == "PAUSED":
+            limitations.append("HEARTBEAT_PAUSED_WHILE_CANONICAL_RUNNING")
+        if run_status == "PAUSED_AT_SAFE_POINT" and heartbeat_status == "ACTIVE":
+            limitations.append("HEARTBEAT_ACTIVE_WHILE_CANONICAL_PAUSED")
         limitations.extend(failure_summaries)
         if state["terminal_status"] and "COMPLETE" not in state["terminal_status"]:
             limitations.append(str(state["terminal_status"]))
@@ -3916,6 +3978,7 @@ class AdaptiveStateRuntime:
                 "/controller_pack_identity",
             )
         self._validate_controller_pack_history(state)
+        self._validate_controller_pack_migration_state(state)
         self._validate_outboxes(state)
         self._validate_assurance_consistency(state)
         self._validate_finalization_state(state)
@@ -3940,6 +4003,7 @@ class AdaptiveStateRuntime:
         )
         valid_versions = {
             LEGACY_STATUS_RENDER_CONTRACT,
+            PREVIOUS_STATUS_RENDER_CONTRACT,
             CURRENT_STATUS_RENDER_CONTRACT,
         }
         if projection_enabled and (
@@ -4025,6 +4089,119 @@ class AdaptiveStateRuntime:
                 raise RuntimeRejection(
                     "CONTROLLER_PACK_HISTORY_INVALID",
                     f"/controller_pack_history/{index}",
+                )
+
+    @staticmethod
+    def _role_registry_identity_digest(state: dict[str, Any]) -> str:
+        return _digest(
+            {
+                thread_id: {
+                    "thread_id": record["thread_id"],
+                    "project_id": record["project_id"],
+                    "bootstrap_role_kind": record["bootstrap_role_kind"],
+                    "role_kind": record["role_kind"],
+                    "bootstrap_prompt_digest": record["bootstrap_prompt_digest"],
+                    "status": record["status"],
+                    "worktree_path": record["worktree_path"],
+                }
+                for thread_id, record in sorted(state["thread_registry"].items())
+            }
+        )
+
+    @staticmethod
+    def _registered_heartbeat_record(state: dict[str, Any]) -> dict[str, Any]:
+        matches = [
+            record
+            for record in state["automation_outbox"].values()
+            if record["status"] == "ACKED"
+            and isinstance(record.get("result"), dict)
+            and isinstance(record["result"].get("automation_id"), str)
+        ]
+        if len(matches) != 1:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_HEARTBEAT_IDENTITY_MISSING",
+                "/automation_outbox",
+            )
+        return matches[0]
+
+    @staticmethod
+    def _heartbeat_identity_from_record(record: dict[str, Any]) -> dict[str, Any]:
+        identity = record["identity"]
+        result = record["result"]
+        return {
+            "automation_id": result["automation_id"],
+            "automation_name": identity["automation_name"],
+            "kind": identity["kind"],
+            "target_thread_id": identity["target_thread_id"],
+            "rrule": identity["rrule"],
+            "prompt_digest": identity["prompt_digest"],
+            "prompt_normalization": identity["prompt_normalization"],
+        }
+
+    def _validate_controller_pack_migration_state(
+        self, state: dict[str, Any]
+    ) -> None:
+        migration = state.get("controller_pack_migration")
+        receipts = state.get("controller_pack_migration_history", [])
+        if len({item["migration_id"] for item in receipts}) != len(receipts):
+            raise RuntimeRejection(
+                "PACK_MIGRATION_HISTORY_INVALID",
+                "/controller_pack_migration_history",
+            )
+        if migration is not None:
+            route_reserving = self._migration_blocking_outboxes(state)
+            if (
+                state["run_control"]["status"] != "PAUSED_AT_SAFE_POINT"
+                or state["controller_lease"] is not None
+                or route_reserving
+                or migration["source_pack_identity"]
+                != state["controller_pack_identity"]
+                or migration["role_registry_digest"]
+                != self._role_registry_identity_digest(state)
+                or migration["migration_id"]
+                in {item["migration_id"] for item in receipts}
+            ):
+                raise RuntimeRejection(
+                    "PACK_MIGRATION_STATE_INVALID",
+                    "/controller_pack_migration",
+                )
+        prompt_identity = state.get("heartbeat_prompt_identity")
+        observation = state.get("heartbeat_live_observation")
+        if prompt_identity is not None:
+            record = self._registered_heartbeat_record(state)
+            if self._heartbeat_identity_from_record(record) != prompt_identity:
+                raise RuntimeRejection(
+                    "HEARTBEAT_PROMPT_IDENTITY_INVALID",
+                    "/heartbeat_prompt_identity",
+                )
+        if observation is not None:
+            identity_fields = (
+                "automation_id",
+                "automation_name",
+                "kind",
+                "target_thread_id",
+                "rrule",
+                "prompt_digest",
+                "prompt_normalization",
+            )
+            artifact = state["artifact_ledger"].get(
+                observation["observation_path"]
+            )
+            if (
+                prompt_identity is None
+                or any(
+                    observation[field] != prompt_identity[field]
+                    for field in identity_fields
+                )
+                or artifact is None
+                or artifact["digest"] != observation["observation_digest"]
+                or artifact["media_type"] != "application/json"
+                or artifact["archived_state_version"]
+                != observation["recorded_state_version"]
+            ):
+                raise RuntimeRejection(
+                    "HEARTBEAT_LIVE_OBSERVATION_INVALID",
+                    "/heartbeat_live_observation",
                 )
 
     @staticmethod
@@ -6035,8 +6212,20 @@ class AdaptiveStateRuntime:
             result = self._migrate_v1_to_v2(
                 candidate, request, mutation, after_version
             )
+        elif mutation_type == "PREPARE_CONTROLLER_PACK_MIGRATION":
+            result = self._prepare_controller_pack_migration(
+                candidate, request, mutation, after_version
+            )
         elif mutation_type == "MIGRATE_CONTROLLER_PACK":
             result = self._migrate_controller_pack(
+                candidate, request, mutation, after_version
+            )
+        elif mutation_type == "ROLLBACK_CONTROLLER_PACK_MIGRATION":
+            result = self._rollback_controller_pack_migration(
+                candidate, request, mutation, after_version
+            )
+        elif mutation_type == "RECORD_HEARTBEAT_OBSERVATION":
+            result = self._record_heartbeat_observation(
                 candidate, request, mutation, after_version
             )
         elif mutation_type == "RECONCILE_WORKER_EXECUTION_CLASSIFICATION":
@@ -6458,6 +6647,31 @@ class AdaptiveStateRuntime:
         elif requested == "RESUME":
             if current != "PAUSED_AT_SAFE_POINT":
                 raise RuntimeRejection("RUN_CONTROL_TRANSITION_INVALID", "/mutation/requested_status")
+            if state.get("controller_pack_migration") is not None:
+                raise RuntimeRejection(
+                    "PACK_MIGRATION_RECONCILIATION_REQUIRED",
+                    "/controller_pack_migration",
+                )
+            if state.get("heartbeat_routing_gate_enforced") is True:
+                observation = state.get("heartbeat_live_observation")
+                prompt_identity = state.get("heartbeat_prompt_identity")
+                if (
+                    not isinstance(observation, dict)
+                    or not isinstance(prompt_identity, dict)
+                    or observation.get("status") != "PAUSED"
+                    or any(
+                        observation.get(field) != prompt_identity.get(field)
+                        for field in (
+                            "automation_id",
+                            "target_thread_id",
+                            "prompt_digest",
+                        )
+                    )
+                ):
+                    raise RuntimeRejection(
+                        "HEARTBEAT_PAUSED_READBACK_REQUIRED",
+                        "/heartbeat_live_observation",
+                    )
             target = "RUNNING"
         else:
             raise RuntimeRejection("RUN_CONTROL_TRANSITION_INVALID", "/mutation/requested_status")
@@ -7282,6 +7496,7 @@ class AdaptiveStateRuntime:
             "schema_version": 2,
             "review_contract_version": 2,
             "worker_validation_projection_contract_version": 1,
+            "controller_pack_migration_contract_version": 1,
             "native_goal_policy": mutation.get("native_goal_policy", "required"),
             "loop_id": mutation["loop_id"],
             "root": str(self.root),
@@ -7302,6 +7517,11 @@ class AdaptiveStateRuntime:
                 }
             ],
             "controller_pack_revision": 1,
+            "controller_pack_migration": None,
+            "controller_pack_migration_history": [],
+            "heartbeat_prompt_identity": None,
+            "heartbeat_live_observation": None,
+            "heartbeat_routing_gate_enforced": False,
             "pack_identity_enforced": True,
             "controller_turn_enforcement": True,
             "consumed_controller_turn_ids": [],
@@ -7409,14 +7629,43 @@ class AdaptiveStateRuntime:
             },
         }
 
-    def _migrate_controller_pack(
+    @staticmethod
+    def _migration_blocking_outboxes(state: dict[str, Any]) -> list[str]:
+        return sorted(
+            record["outbox_id"]
+            for field in OUTBOX_FIELDS.values()
+            for record in state[field].values()
+            if record["status"] in ACTIVE_OUTBOX_STATUSES
+            or (
+                record["status"] == "ACKED"
+                and record["outbox_kind"]
+                in {"DISPATCH", "ASSURANCE", "LOCAL", "DELEGATION"}
+            )
+        )
+
+    def _require_pack_migration_safe_point(
         self,
         state: dict[str, Any],
         request: dict[str, Any],
-        mutation: dict[str, Any],
-        after_version: int,
-    ) -> dict[str, Any]:
+    ) -> None:
         self._require_controller_actor(state, request)
+        registered_roles = {
+            record["role_kind"]
+            for record in state["thread_registry"].values()
+            if record["status"] == "REGISTERED"
+        }
+        if registered_roles != {
+            "CONTROLLER",
+            "STATE_WRITER",
+            "WORKER",
+            "REVIEWER",
+            "LOCAL_VERIFIER",
+        }:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_ROLE_IDENTITY_INCOMPLETE",
+                "/thread_registry",
+                {"registered_role_kinds": sorted(registered_roles)},
+            )
         if state["run_control"]["status"] != "PAUSED_AT_SAFE_POINT":
             raise RuntimeRejection(
                 "PACK_MIGRATION_REQUIRES_PAUSED_SAFE_POINT",
@@ -7426,25 +7675,235 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "PACK_MIGRATION_ACTIVE_LEASE", "/controller_lease"
             )
-        active = [
-            record["outbox_id"]
-            for field in OUTBOX_FIELDS.values()
-            for record in state[field].values()
-            if record["status"] in ACTIVE_OUTBOX_STATUSES
-            or (
-                record["outbox_kind"] == "ASSURANCE"
-                and record["status"] == "ACKED"
-            )
-        ]
+        active = self._migration_blocking_outboxes(state)
         if active:
             raise RuntimeRejection(
                 "PACK_MIGRATION_ACTIVE_OUTBOX",
                 "/mutation/type",
                 {"outbox_ids": sorted(active)},
             )
+
+    def _require_heartbeat_observation(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        expected_identity: dict[str, Any],
+        *,
+        required_status: str | None,
+    ) -> dict[str, Any]:
+        observation = mutation["heartbeat_observation"]
+        identity_fields = (
+            "automation_id",
+            "automation_name",
+            "kind",
+            "target_thread_id",
+            "rrule",
+            "prompt_digest",
+            "prompt_normalization",
+        )
+        if any(
+            observation[field] != expected_identity[field]
+            for field in identity_fields
+        ) or (
+            required_status is not None
+            and observation["status"] != required_status
+        ):
+            raise RuntimeRejection(
+                "PACK_MIGRATION_AUTOMATION_READBACK_MISMATCH",
+                "/mutation/heartbeat_observation",
+            )
+        path = mutation["automation_observation_path"]
+        observation_digest = mutation["automation_observation_digest"]
+        if path not in request["evidence_paths"]:
+            raise RuntimeRejection(
+                "OBSERVATION_ARTIFACT_UNBOUND",
+                "/mutation/automation_observation_path",
+            )
+        self._require_json_observation_artifact(
+            request,
+            path,
+            observation_digest,
+            observation,
+            "/mutation/automation_observation_digest",
+        )
+        self._observe_time(
+            state,
+            observation["observed_at"],
+            "/mutation/heartbeat_observation/observed_at",
+        )
+        return observation
+
+    @staticmethod
+    def _project_heartbeat_observation(
+        state: dict[str, Any],
+        observation: dict[str, Any],
+        path: str,
+        observation_digest: str,
+        after_version: int,
+    ) -> None:
+        state["heartbeat_live_observation"] = {
+            **copy.deepcopy(observation),
+            "observation_path": path,
+            "observation_digest": observation_digest,
+            "recorded_state_version": after_version,
+        }
+
+    def _prepare_controller_pack_migration(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        self._require_pack_migration_safe_point(state, request)
+        pending = state.get("controller_pack_migration")
+        if pending is not None:
+            exact = (
+                pending["migration_id"] == mutation["migration_id"]
+                and pending["source_pack_identity"]["digest"]
+                == mutation["source_pack_digest"]
+                and pending["target_pack_identity"]["digest"]
+                == mutation["target_pack_digest"]
+                and pending["target_pack_identity"]["path"]
+                == mutation["target_pack_path"]
+                and pending["target_prompt_digest"]
+                == mutation["target_prompt_digest"]
+                and pending["migration_reason"] == mutation["migration_reason"]
+            )
+            if exact:
+                raise RuntimeRejection(
+                    "PACK_MIGRATION_ALREADY_PREPARED",
+                    "/controller_pack_migration",
+                    {
+                        "migration_id": pending["migration_id"],
+                        "next_action_code": "READ_BACK_SAME_HEARTBEAT",
+                    },
+                )
+            raise RuntimeRejection(
+                "PACK_MIGRATION_ALREADY_PREPARED",
+                "/controller_pack_migration",
+            )
+        if any(
+            item["migration_id"] == mutation["migration_id"]
+            for item in state.get("controller_pack_migration_history", [])
+        ):
+            raise RuntimeRejection(
+                "PACK_MIGRATION_ID_CONFLICT",
+                "/mutation/migration_id",
+            )
+        source_identity = copy.deepcopy(state["controller_pack_identity"])
         source_digest = mutation["source_pack_digest"]
         target_digest = mutation["target_pack_digest"]
         target_path = mutation["target_pack_path"]
+        if source_digest != source_identity["digest"]:
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_SOURCE_MISMATCH",
+                "/mutation/source_pack_digest",
+                _canonical_loaded_pack_digest_details(
+                    source_identity["digest"],
+                    source_digest,
+                    self._controller_pack_bytes_locked(state),
+                ),
+            )
+        if source_digest == target_digest:
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_MIGRATION_NOOP",
+                "/mutation/target_pack_digest",
+            )
+        expected_path = (
+            ".codex-loop/sources/CONTROLLER_PACK."
+            f"{target_digest.removeprefix('sha256:')}.md"
+        )
+        if target_path != expected_path:
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_MIGRATION_ARTIFACT_INVALID",
+                "/mutation/target_pack_path",
+            )
+        record = self._registered_heartbeat_record(state)
+        source_heartbeat_identity = self._heartbeat_identity_from_record(record)
+        observation = self._require_heartbeat_observation(
+            state,
+            request,
+            mutation,
+            source_heartbeat_identity,
+            required_status="PAUSED",
+        )
+        state["controller_pack_migration_contract_version"] = 1
+        state.setdefault("worker_validation_projection_contract_version", 0)
+        state.setdefault("controller_pack_migration_history", [])
+        state["heartbeat_prompt_identity"] = copy.deepcopy(
+            source_heartbeat_identity
+        )
+        record["result"] = {**record["result"], "status": "PAUSED"}
+        self._project_heartbeat_observation(
+            state,
+            observation,
+            mutation["automation_observation_path"],
+            mutation["automation_observation_digest"],
+            after_version,
+        )
+        state["controller_pack_migration"] = {
+            "migration_id": mutation["migration_id"],
+            "status": "PREPARED",
+            "source_pack_identity": source_identity,
+            "target_pack_identity": {
+                "path": target_path,
+                "digest": target_digest,
+                "media_type": "text/markdown",
+            },
+            "source_heartbeat_identity": source_heartbeat_identity,
+            "target_prompt_digest": mutation["target_prompt_digest"],
+            "automation_id": source_heartbeat_identity["automation_id"],
+            "role_registry_digest": self._role_registry_identity_digest(state),
+            "migration_reason": mutation["migration_reason"],
+            "prepared_state_version": after_version,
+            "prepare_observation_path": mutation["automation_observation_path"],
+            "prepare_observation_digest": mutation[
+                "automation_observation_digest"
+            ],
+        }
+        self._inject("PACK_MIGRATION_PREPARED_PROJECTED")
+        return {
+            "code": "CONTROLLER_PACK_MIGRATION_PREPARED",
+            "next_action_code": "UPDATE_AND_READ_BACK_SAME_HEARTBEAT",
+            "result": {
+                "migration_id": mutation["migration_id"],
+                "automation_id": source_heartbeat_identity["automation_id"],
+                "target_prompt_digest": mutation["target_prompt_digest"],
+            },
+        }
+
+    def _migrate_controller_pack(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        self._require_pack_migration_safe_point(state, request)
+        prepared = state.get("controller_pack_migration")
+        if prepared is None:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_NOT_PREPARED",
+                "/controller_pack_migration",
+            )
+        source_digest = mutation["source_pack_digest"]
+        target_digest = mutation["target_pack_digest"]
+        target_path = mutation["target_pack_path"]
+        if (
+            mutation["migration_id"] != prepared["migration_id"]
+            or source_digest != prepared["source_pack_identity"]["digest"]
+            or target_digest != prepared["target_pack_identity"]["digest"]
+            or target_path != prepared["target_pack_identity"]["path"]
+            or mutation["migration_reason"] != prepared["migration_reason"]
+            or prepared["role_registry_digest"]
+            != self._role_registry_identity_digest(state)
+        ):
+            raise RuntimeRejection(
+                "PACK_MIGRATION_PREPARED_IDENTITY_MISMATCH",
+                "/mutation",
+            )
         if source_digest != state["controller_pack_identity"]["digest"]:
             raise RuntimeRejection(
                 "CONTROLLER_PACK_SOURCE_MISMATCH",
@@ -7463,6 +7922,18 @@ class AdaptiveStateRuntime:
             ".codex-loop/sources/CONTROLLER_PACK."
             f"{target_digest.removeprefix('sha256:')}.md"
         )
+        target_heartbeat_identity = {
+            **prepared["source_heartbeat_identity"],
+            "prompt_digest": prepared["target_prompt_digest"],
+        }
+        observation = self._require_heartbeat_observation(
+            state,
+            request,
+            mutation,
+            target_heartbeat_identity,
+            required_status="PAUSED",
+        )
+        self._inject("PACK_MIGRATION_AUTOMATION_READBACK_VALIDATED")
         matching = [
             artifact
             for artifact in request["artifacts"]
@@ -7471,7 +7942,7 @@ class AdaptiveStateRuntime:
         if (
             target_path != expected_path
             or len(matching) != 1
-            or len(request["artifacts"]) != 1
+            or len(request["artifacts"]) != 2
             or matching[0]["digest"] != target_digest
             or matching[0]["media_type"] != "text/markdown"
         ):
@@ -7512,6 +7983,26 @@ class AdaptiveStateRuntime:
         state["controller_pack_history"] = history
         state["controller_pack_revision"] = revision
         state["pack_identity_enforced"] = True
+        heartbeat_record = self._registered_heartbeat_record(state)
+        heartbeat_record["identity"] = {
+            **heartbeat_record["identity"],
+            "prompt_digest": prepared["target_prompt_digest"],
+        }
+        heartbeat_record["result"] = {
+            **heartbeat_record["result"],
+            "prompt_digest": prepared["target_prompt_digest"],
+            "status": "PAUSED",
+        }
+        state["heartbeat_prompt_identity"] = target_heartbeat_identity
+        self._project_heartbeat_observation(
+            state,
+            observation,
+            mutation["automation_observation_path"],
+            mutation["automation_observation_digest"],
+            after_version,
+        )
+        state["heartbeat_routing_gate_enforced"] = True
+        self._inject("PACK_MIGRATION_CANONICAL_IDENTITY_PROJECTED")
         routed_controller_turn_ids: list[str] = []
         legacy_routing_turns_backfilled = 0
         for routing_turn_id, routing_turn in state["routing_turn_ledger"].items():
@@ -7529,6 +8020,35 @@ class AdaptiveStateRuntime:
         )
         state["controller_turn_enforcement"] = True
         state["worker_validation_projection_contract_version"] = 1
+        state.setdefault("controller_pack_migration_history", []).append(
+            {
+                **{
+                    key: copy.deepcopy(prepared[key])
+                    for key in (
+                        "migration_id",
+                        "source_pack_identity",
+                        "target_pack_identity",
+                        "source_heartbeat_identity",
+                        "target_prompt_digest",
+                        "automation_id",
+                        "role_registry_digest",
+                        "migration_reason",
+                        "prepared_state_version",
+                        "prepare_observation_path",
+                        "prepare_observation_digest",
+                    )
+                },
+                "outcome": "COMPLETED",
+                "completed_state_version": after_version,
+                "final_observation_path": mutation["automation_observation_path"],
+                "final_observation_digest": mutation[
+                    "automation_observation_digest"
+                ],
+                "outcome_reason": mutation["migration_reason"],
+            }
+        )
+        state["controller_pack_migration"] = None
+        self._inject("PACK_MIGRATION_COMPLETED_PROJECTED")
         return {
             "code": "CONTROLLER_PACK_MIGRATED",
             "next_action_code": "RECONCILE_BEFORE_RESUME",
@@ -7538,6 +8058,149 @@ class AdaptiveStateRuntime:
                 "target_pack_path": target_path,
                 "controller_pack_revision": revision,
                 "legacy_routing_turns_backfilled": legacy_routing_turns_backfilled,
+                "automation_id": prepared["automation_id"],
+                "heartbeat_status": "PAUSED",
+            },
+        }
+
+    def _rollback_controller_pack_migration(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        self._require_pack_migration_safe_point(state, request)
+        prepared = state.get("controller_pack_migration")
+        if prepared is None or mutation["migration_id"] != prepared["migration_id"]:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_NOT_PREPARED",
+                "/controller_pack_migration",
+            )
+        if prepared["role_registry_digest"] != self._role_registry_identity_digest(state):
+            raise RuntimeRejection(
+                "PACK_MIGRATION_ROLE_IDENTITY_MISMATCH",
+                "/thread_registry",
+            )
+        observation = self._require_heartbeat_observation(
+            state,
+            request,
+            mutation,
+            prepared["source_heartbeat_identity"],
+            required_status="PAUSED",
+        )
+        record = self._registered_heartbeat_record(state)
+        record["identity"] = {
+            **record["identity"],
+            "prompt_digest": prepared["source_heartbeat_identity"][
+                "prompt_digest"
+            ],
+        }
+        record["result"] = {**record["result"], "status": "PAUSED"}
+        state["heartbeat_prompt_identity"] = copy.deepcopy(
+            prepared["source_heartbeat_identity"]
+        )
+        self._project_heartbeat_observation(
+            state,
+            observation,
+            mutation["automation_observation_path"],
+            mutation["automation_observation_digest"],
+            after_version,
+        )
+        state.setdefault("controller_pack_migration_history", []).append(
+            {
+                **{
+                    key: copy.deepcopy(prepared[key])
+                    for key in (
+                        "migration_id",
+                        "source_pack_identity",
+                        "target_pack_identity",
+                        "source_heartbeat_identity",
+                        "target_prompt_digest",
+                        "automation_id",
+                        "role_registry_digest",
+                        "migration_reason",
+                        "prepared_state_version",
+                        "prepare_observation_path",
+                        "prepare_observation_digest",
+                    )
+                },
+                "outcome": "ROLLED_BACK",
+                "completed_state_version": after_version,
+                "final_observation_path": mutation["automation_observation_path"],
+                "final_observation_digest": mutation[
+                    "automation_observation_digest"
+                ],
+                "outcome_reason": mutation["rollback_reason"],
+            }
+        )
+        state["controller_pack_migration"] = None
+        state["heartbeat_routing_gate_enforced"] = False
+        self._inject("PACK_MIGRATION_COMPLETED_PROJECTED")
+        return {
+            "code": "CONTROLLER_PACK_MIGRATION_ROLLED_BACK",
+            "next_action_code": "WAIT_FOR_SCOPED_CORRECTION",
+            "result": {
+                "migration_id": mutation["migration_id"],
+                "automation_id": prepared["automation_id"],
+                "heartbeat_status": "PAUSED",
+            },
+        }
+
+    def _record_heartbeat_observation(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        self._require_controller_actor(state, request)
+        if state.get("controller_pack_migration") is not None:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_RECONCILIATION_REQUIRED",
+                "/controller_pack_migration",
+            )
+        record = self._registered_heartbeat_record(state)
+        expected_identity = state.get("heartbeat_prompt_identity")
+        if expected_identity is None:
+            expected_identity = self._heartbeat_identity_from_record(record)
+        observation = self._require_heartbeat_observation(
+            state,
+            request,
+            mutation,
+            expected_identity,
+            required_status=None,
+        )
+        state["heartbeat_prompt_identity"] = copy.deepcopy(expected_identity)
+        record["result"] = {
+            **record["result"],
+            "prompt_digest": expected_identity["prompt_digest"],
+            "status": observation["status"],
+        }
+        self._project_heartbeat_observation(
+            state,
+            observation,
+            mutation["automation_observation_path"],
+            mutation["automation_observation_digest"],
+            after_version,
+        )
+        unsafe_active = (
+            state["run_control"]["status"] == "PAUSED_AT_SAFE_POINT"
+            and observation["status"] == "ACTIVE"
+        )
+        return {
+            "code": (
+                "HEARTBEAT_ACTIVE_WHILE_CANONICAL_PAUSED"
+                if unsafe_active
+                else "HEARTBEAT_OBSERVATION_RECORDED"
+            ),
+            "next_action_code": (
+                "PAUSE_SAME_HEARTBEAT" if unsafe_active else "READ_STATE"
+            ),
+            "result": {
+                "automation_id": observation["automation_id"],
+                "status": observation["status"],
+                "observed_at": observation["observed_at"],
             },
         }
 
@@ -7768,6 +8431,35 @@ class AdaptiveStateRuntime:
             )
         return trusted_turn_metadata.turn_id
 
+    @staticmethod
+    def _require_heartbeat_routing_reconciled(state: dict[str, Any]) -> None:
+        if state.get("heartbeat_routing_gate_enforced") is not True:
+            return
+        observation = state.get("heartbeat_live_observation")
+        identity = state.get("heartbeat_prompt_identity")
+        if state.get("controller_pack_migration") is not None:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_RECONCILIATION_REQUIRED",
+                "/controller_pack_migration",
+            )
+        if (
+            not isinstance(observation, dict)
+            or not isinstance(identity, dict)
+            or observation.get("status") != "ACTIVE"
+            or any(
+                observation.get(field) != identity.get(field)
+                for field in (
+                    "automation_id",
+                    "target_thread_id",
+                    "prompt_digest",
+                )
+            )
+        ):
+            raise RuntimeRejection(
+                "HEARTBEAT_ACTIVE_READBACK_REQUIRED",
+                "/heartbeat_live_observation",
+            )
+
     def _acquire_lease(
         self,
         state: dict[str, Any],
@@ -7778,6 +8470,7 @@ class AdaptiveStateRuntime:
     ) -> dict[str, Any]:
         if state.get("schema_version") == 2 and state["run_control"]["status"] != "RUNNING":
             raise RuntimeRejection("LOOP_PAUSED", "/run_control/status")
+        self._require_heartbeat_routing_reconciled(state)
         observed = self._observe_time(state, mutation["observed_at"], "/mutation/observed_at")
         expires = _parse_time(mutation["expires_at"], "/mutation/expires_at")
         if expires <= observed:
@@ -8044,6 +8737,7 @@ class AdaptiveStateRuntime:
         *,
         trusted_turn_metadata: TrustedTurnMetadata | None,
     ) -> dict[str, Any]:
+        self._require_heartbeat_routing_reconciled(state)
         old_claim = mutation["lease_claim"]
         lease = state["controller_lease"]
         if lease is None or lease["claim"] != old_claim:
@@ -12707,6 +13401,7 @@ __all__ = [
     "InjectedCrash",
     "PAYLOAD_DIGEST_FIELD",
     "PAYLOAD_DIGEST_PLACEHOLDER",
+    "PACK_MIGRATION_CANDIDATE_STAGES",
     "PERSISTENT_STAGES",
     "REPORT_STAGE_STAGES",
     "REVIEW_CLOSEOUT_CANDIDATE_STAGES",

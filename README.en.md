@@ -106,8 +106,15 @@ assurance ledger, Goal, outbox completion, and lease consumption in one journal
 transaction. A new request-id replay of the same review/report/artifact returns
 the existing closeout receipt without another event.
 
-Pack changes require atomic `MIGRATE_CONTROLLER_PACK` at a paused safe point and
-retain immutable revision history; an unmigrated digest has no routing authority.
+Pack changes first persist old/new Pack, the five-role digest, and a PAUSED
+readback of the same heartbeat with `PREPARE_CONTROLLER_PACK_MIGRATION`. After
+updating that heartbeat in place, `MIGRATE_CONTROLLER_PACK` requires a second
+PAUSED readback of the same id, target, schedule, and target prompt digest.
+Mismatch stays paused and can only converge or explicitly roll back after the
+old prompt is read back; replacement heartbeats are forbidden. STATUS v3 uses
+only evidence-bound live readback and reports `UNKNOWN_NOT_OBSERVED` otherwise.
+Resume requires target PAUSED readback, and routing waits for the same
+heartbeat's ACTIVE readback. An unmigrated digest has no routing authority.
 The Controller invokes `ACQUIRE_LEASE` / `TAKEOVER_LEASE` only through the
 installed `route_state_mutation` MCP tool and omits `controller_turn_id` from
 model arguments. The bridge verifies Codex-injected turn metadata and its direct

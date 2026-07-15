@@ -14,7 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from loop_architect.schema import INPUT_SCHEMA  # noqa: E402
-from loop_architect.protocol_model import mutation_schema  # noqa: E402
+from loop_architect.protocol_model import mutation_schema, state_schema  # noqa: E402
 import loop_prompt_scaffold as scaffold  # noqa: E402
 
 
@@ -236,6 +236,33 @@ class PublicDraft202012SchemaTests(unittest.TestCase):
                 "freshness_observation"
             ],
             {"$ref": "#/$defs/reviewFreshnessObservation"},
+        )
+
+    def test_pack_migration_and_live_heartbeat_schemas_are_closed(self) -> None:
+        mutation = mutation_schema()
+        observation = mutation["$defs"]["heartbeatObservation"]
+        self.assertFalse(observation["additionalProperties"])
+        self.assertEqual(
+            observation["properties"]["status"]["enum"],
+            ["ACTIVE", "PAUSED"],
+        )
+        for name in (
+            "prepareControllerPackMigration",
+            "migrateControllerPack",
+            "rollbackControllerPackMigration",
+            "recordHeartbeatObservation",
+        ):
+            self.assertFalse(mutation["$defs"][name]["additionalProperties"])
+        self.assertIn(
+            "heartbeat_observation",
+            mutation["$defs"]["migrateControllerPack"]["required"],
+        )
+        state = state_schema()
+        self.assertEqual(
+            state["$defs"]["statusProjectionTarget"]["properties"][
+                "render_contract_version"
+            ]["enum"],
+            ["status-v1", "status-v2", "status-v3"],
         )
 
     def test_empty_permissions_object_matches_runtime_when_workers_are_explicit(self) -> None:

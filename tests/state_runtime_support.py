@@ -480,12 +480,14 @@ class Harness:
         mutation: dict[str, Any],
         *,
         expected: int | None = None,
+        evidence_paths: list[str] | None = None,
         artifacts: list[dict[str, Any]] | None = None,
         trusted_turn_id: str | None | object = _AUTO_TRUSTED_TURN,
     ) -> dict[str, Any]:
         request = self.make_request(
             mutation,
             expected=expected,
+            evidence_paths=evidence_paths,
             artifacts=artifacts,
         )
         metadata = None
@@ -1538,6 +1540,164 @@ class Harness:
         )
         if not acked["ok"]:
             raise AssertionError(acked)
+
+    def ensure_heartbeat(self) -> dict[str, Any]:
+        existing = [
+            record
+            for record in self.state()["automation_outbox"].values()
+            if record["status"] == "ACKED"
+        ]
+        if not existing:
+            self.register_control_result(
+                "AUTOMATION",
+                "heartbeat-create-1",
+                "controller-1",
+                {},
+                {"automation_id": "heartbeat-1", "status": "ACTIVE"},
+            )
+            existing = [
+                record
+                for record in self.state()["automation_outbox"].values()
+                if record["status"] == "ACKED"
+            ]
+        assert len(existing) == 1
+        return existing[0]
+
+    def ensure_all_roles(self) -> None:
+        present = {
+            record["role_kind"]
+            for record in self.state()["thread_registry"].values()
+            if record["status"] == "REGISTERED"
+        }
+        for role, thread_id in (
+            ("WORKER", "worker-1"),
+            ("REVIEWER", "reviewer-1"),
+            ("LOCAL_VERIFIER", "local-1"),
+        ):
+            if role not in present:
+                self.register_control_result(
+                    "THREAD",
+                    f"{role.lower()}-migration-create",
+                    "controller-1",
+                    {"role_kind": role},
+                    {"thread_id": thread_id, "worktree_path": "."},
+                )
+
+    def heartbeat_observation_artifact(
+        self,
+        *,
+        prompt_digest: str,
+        status: str,
+        stem: str,
+        observed_at: str = T1,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        record = self.ensure_heartbeat()
+        observation = {
+            "automation_id": record["result"]["automation_id"],
+            "status": status,
+            "automation_name": record["identity"]["automation_name"],
+            "kind": record["identity"]["kind"],
+            "target_thread_id": record["identity"]["target_thread_id"],
+            "rrule": record["identity"]["rrule"],
+            "prompt_digest": prompt_digest,
+            "prompt_normalization": record["identity"]["prompt_normalization"],
+            "observed_at": observed_at,
+        }
+        content = json.dumps(
+            observation,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        path = f".codex-loop/reports/{stem}.json"
+        artifact = {
+            "path": path,
+            "content": content,
+            "digest": digest(content),
+            "media_type": "application/json",
+        }
+        return observation, artifact
+
+    def prepare_pack_migration(
+        self,
+        *,
+        content: str,
+        target_prompt_digest: str,
+        migration_id: str = "pack-migration-1",
+        reason: str = "test control-plane reconciliation",
+        apply_request: bool = True,
+    ) -> dict[str, Any]:
+        heartbeat = self.ensure_heartbeat()
+        source_digest = self.state()["controller_pack_identity"]["digest"]
+        target_digest = digest(content)
+        target_path = (
+            ".codex-loop/sources/CONTROLLER_PACK."
+            f"{target_digest.removeprefix('sha256:')}.md"
+        )
+        observation, artifact = self.heartbeat_observation_artifact(
+            prompt_digest=heartbeat["identity"]["prompt_digest"],
+            status="PAUSED",
+            stem=f"{migration_id}-prepare",
+        )
+        mutation = {
+            "type": "PREPARE_CONTROLLER_PACK_MIGRATION",
+            "migration_id": migration_id,
+            "source_pack_digest": source_digest,
+            "target_pack_digest": target_digest,
+            "target_pack_path": target_path,
+            "target_prompt_digest": target_prompt_digest,
+            "migration_reason": reason,
+            "heartbeat_observation": observation,
+            "automation_observation_path": artifact["path"],
+            "automation_observation_digest": artifact["digest"],
+        }
+        request = self.make_request(
+            mutation,
+            evidence_paths=[artifact["path"]],
+            artifacts=[artifact],
+        )
+        response = self.runtime.apply(request) if apply_request else None
+        return {
+            "response": response,
+            "mutation": mutation,
+            "content": content,
+            "request": request,
+        }
+
+    def commit_pack_migration(
+        self,
+        prepared: dict[str, Any],
+    ) -> dict[str, Any]:
+        plan = prepared["mutation"]
+        observation, observation_artifact = self.heartbeat_observation_artifact(
+            prompt_digest=plan["target_prompt_digest"],
+            status="PAUSED",
+            stem=f"{plan['migration_id']}-commit",
+        )
+        pack_artifact = {
+            "path": plan["target_pack_path"],
+            "content": prepared["content"],
+            "digest": plan["target_pack_digest"],
+            "media_type": "text/markdown",
+        }
+        return self.apply(
+            {
+                "type": "MIGRATE_CONTROLLER_PACK",
+                "migration_id": plan["migration_id"],
+                "source_pack_digest": plan["source_pack_digest"],
+                "target_pack_digest": plan["target_pack_digest"],
+                "target_pack_path": plan["target_pack_path"],
+                "migration_reason": plan["migration_reason"],
+                "heartbeat_observation": observation,
+                "automation_observation_path": observation_artifact["path"],
+                "automation_observation_digest": observation_artifact["digest"],
+            },
+            evidence_paths=[
+                observation_artifact["path"],
+                pack_artifact["path"],
+            ],
+            artifacts=[pack_artifact, observation_artifact],
+        )
 
 
 def controller_goal_resume_request(

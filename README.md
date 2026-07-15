@@ -65,8 +65,13 @@ Reviewer `ACK_OUTBOX` 仍只证明 report 已 durable；随后单次 `RECORD_REV
 freshness、validation gate、assurance ledger、Goal、outbox completion 与 lease consumption。
 同 review/report/artifact 的新 request-id 重放直接返回既有 closeout receipt，不新增 event。
 
-Pack 身份变化必须通过暂停安全点上的 `MIGRATE_CONTROLLER_PACK` 原子迁移并保留不可变
-历史；未迁移的新 digest 没有路由权限。`ACQUIRE_LEASE` / `TAKEOVER_LEASE` 只能由
+Pack 身份变化先在暂停安全点通过 `PREPARE_CONTROLLER_PACK_MIGRATION` 持久化 old/new
+Pack、五角色摘要和同一 heartbeat 的 PAUSED readback，再更新该 heartbeat 并以第二次
+PAUSED readback提交 `MIGRATE_CONTROLLER_PACK`；不一致时保持暂停，只能收敛目标或在旧
+prompt 读回后显式 rollback，禁止创建替代 heartbeat。STATUS v3 只使用受证据绑定的 live
+readback，未观察显示 `UNKNOWN_NOT_OBSERVED`；迁移后 resume 要求 PAUSED readback，路由还要
+等待同一 heartbeat 的 ACTIVE readback。未迁移的新 digest 没有路由权限。
+`ACQUIRE_LEASE` / `TAKEOVER_LEASE` 只能由
 Controller 直接调用安装的 `route_state_mutation` MCP 工具，并在模型参数中省略
 `controller_turn_id`；桥接进程验证 Codex 注入的 turn metadata 与 OpenAI 签名的直接
 app-server 父进程，要求 metadata `thread_id` 等于外层 request `threadId` 后再注入真实

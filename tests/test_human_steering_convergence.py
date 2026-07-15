@@ -524,7 +524,7 @@ class HumanControlRuntimeTests(unittest.TestCase):
         self.assertEqual(state["schema_version"], 2)
         self.assertEqual(
             state["status_projection_target"]["render_contract_version"],
-            "status-v2",
+            "status-v3",
         )
         status = (Path(self.temp.name) / ".codex-loop" / "STATUS.md").read_text()
         self.assertIn("## What's done", status)
@@ -625,9 +625,68 @@ class HumanControlRuntimeTests(unittest.TestCase):
         current = runtime.read_state()
         self.assertEqual(
             current["status_projection_target"]["render_contract_version"],
-            "status-v2",
+            "status-v3",
         )
         self.assertIn("Control phase", runtime.status_path.read_text())
+
+    def test_previous_status_v2_projection_is_verified_then_upgraded(self) -> None:
+        initialized, _ = self.harness.initialize()
+        self.assertTrue(initialized["ok"], initialized)
+        runtime = self.harness.runtime
+        state = runtime.read_state()
+        previous_payload = runtime._render_status(
+            state, contract_version="status-v2"
+        )
+        self.assertIsNotNone(previous_payload)
+        previous_digest = digest(previous_payload.decode("utf-8"))
+        state["status_projection_target"] = {
+            "path": ".codex-loop/STATUS.md",
+            "target_state_version": state["state_version"],
+            "target_digest": previous_digest,
+            "render_contract_version": "status-v2",
+        }
+        runtime.state_path.write_bytes(runtime._render_state(state))
+        runtime.status_path.write_bytes(previous_payload)
+        journal_path = (
+            runtime.projection_transactions_dir
+            / f"status-v{state['state_version']}.json"
+        )
+        journal_path.write_text(
+            json.dumps(
+                {
+                    "journal_version": 1,
+                    "status": "APPLIED",
+                    "target_state_version": state["state_version"],
+                    "target_digest": previous_digest,
+                    "render_contract_version": "status-v2",
+                    "projected_digest": previous_digest,
+                    "readback_digest": previous_digest,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        upgraded = self.request(
+            {
+                "type": "RECORD_STEERING",
+                "steering_id": "upgrade-status-v2",
+                "steering_type": "CORRECTION",
+                "normalized_digest": digest("upgrade status v2 projection"),
+                "identity_algorithm": "message-item-v1",
+                "message_item_id": "upgrade-status-v2-message",
+                "summary": "upgrade status v2 projection",
+                "classification_reason": "preserve old reader compatibility",
+            }
+        )
+        self.assertTrue(upgraded["ok"], upgraded)
+        self.assertEqual(
+            runtime.read_state()["status_projection_target"][
+                "render_contract_version"
+            ],
+            "status-v3",
+        )
 
     def test_tampered_legacy_status_v1_projection_is_rejected_without_side_effects(self) -> None:
         initialized, _ = self.harness.initialize()
