@@ -1852,6 +1852,23 @@ def runtime_surface_fingerprint(root: Path) -> dict[str, Any]:
     return fingerprint
 
 
+def zero_effect_runtime_identity(root: Path) -> dict[str, Any]:
+    """Return the minimal exact identity needed for a per-request no-op check."""
+
+    control = root / ".codex-loop"
+    identity: dict[str, Any] = {}
+    for name in ("LOOP_STATE.md", "LOOP_EVENTS.jsonl"):
+        path = control / name
+        identity[name] = path.read_bytes() if path.exists() else None
+    for directory in ("transactions", "sources", "reports"):
+        base = control / directory
+        identity[directory] = tuple(
+            str(path.relative_to(control))
+            for path in sorted(base.rglob("*"))
+        ) if base.exists() else ()
+    return identity
+
+
 def event_lines(root: Path) -> list[dict[str, Any]]:
     path = root / ".codex-loop" / "LOOP_EVENTS.jsonl"
     if not path.exists():

@@ -1729,7 +1729,14 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                     replayed_release["state_version_after"], released_version
                 )
 
+                # The cached state is only source material for constructing
+                # near-valid proposals. Every request still crosses the full
+                # runtime validation boundary and receives an immediate
+                # per-case zero-effect check below.
+                current = harness.state()
                 baseline = runtime_surface_fingerprint(root)
+                per_case_identity = zero_effect_runtime_identity(root)
+                checked_cases = 0
                 for index in range(
                     batch_start,
                     min(batch_start + batch_size, case_count),
@@ -1743,7 +1750,6 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                         "owner_identity": "controller-1",
                         "intended_transition": "ROUTE_ONE_TRANSITION",
                     }
-                    current = harness.state()
                     proposal = {
                         "proposal_id": f"fuzz-proposal-{index}",
                         "roadmap_audit_dispatch_id": f"fuzz-roadmap-dispatch-{index}",
@@ -1988,6 +1994,19 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                     response = harness.runtime.apply(near_valid)
                     self.assertFalse(response["ok"])
                     self.assertNotEqual(response["status"], "REQUEST_SCHEMA_INVALID")
+                    self.assertEqual(response["state_version"], released_version)
+                    self.assertEqual(response["external_actions"], [])
+                    self.assertEqual(response["external_action_count"], 0)
+                    self.assertEqual(
+                        zero_effect_runtime_identity(root),
+                        per_case_identity,
+                    )
+                    checked_cases += 1
+                self.assertEqual(
+                    checked_cases,
+                    min(batch_start + batch_size, case_count) - batch_start,
+                )
+                self.assertEqual(harness.state(), current)
                 self.assertEqual(runtime_surface_fingerprint(root), baseline)
 
             fake_claim = {
@@ -2019,7 +2038,11 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                 )
                 self.assertEqual(response["status"], "STALE_OR_MISSING_CONTROLLER_LEASE")
             self.assertEqual(runtime_surface_fingerprint(root), baseline)
+            final_state = harness.state()
+            self.assertEqual(final_state, current)
+            self.assertEqual(final_state["external_action_count"], 0)
+            self.assertIsNone(final_state["controller_lease"])
             self.assertEqual(
-                harness.state()["routing_turn_count"],
+                final_state["routing_turn_count"],
                 (case_count + batch_size - 1) // batch_size,
             )
