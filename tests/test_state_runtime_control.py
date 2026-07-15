@@ -35,7 +35,10 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                     },
                 }
                 barrier.wait()
-                return runtime.apply(request)
+                return runtime.apply(
+                    request,
+                    trusted_turn_metadata=trusted_metadata_for_request(request),
+                )
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 results = list(executor.map(writer, (1, 2)))
@@ -167,7 +170,10 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                     },
                 }
                 barrier.wait()
-                return AdaptiveStateRuntime(root).apply(request)
+                return AdaptiveStateRuntime(root).apply(
+                    request,
+                    trusted_turn_metadata=trusted_metadata_for_request(request),
+                )
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 results = list(executor.map(wake, ("GOAL_TURN", "HEARTBEAT")))

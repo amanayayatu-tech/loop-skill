@@ -18,6 +18,7 @@ import os
 import re
 import stat
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Mapping
@@ -49,6 +50,7 @@ SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 DIGEST_RE = re.compile(r"sha256:[a-f0-9]{64}\Z")
 SHA256_HEX_RE = re.compile(r"[a-f0-9]{64}\Z")
 INTENDED_TRANSITION = "ROUTE_ONE_TRANSITION"
+TRUSTED_TURN_SOURCE = "CODEX_APP_TOOL_BOUNDARY"
 PAYLOAD_DIGEST_FIELD = "dispatch_payload_digest"
 PAYLOAD_DIGEST_PLACEHOLDER = "PAYLOAD_DIGEST_PLACEHOLDER"
 DISPATCH_ENVELOPE_TYPES = (
@@ -140,6 +142,21 @@ DISPATCH_PAYLOAD_KEYS = {
         "verification_id",
     },
 }
+
+
+@dataclass(frozen=True)
+class TrustedTurnMetadata:
+    """Carrier reserved for a host-controlled in-process tool boundary.
+
+    The value type is not proof of provenance by itself. No shipped CLI accepts
+    it; release remains blocked until Codex App owns the calling boundary.
+    """
+
+    thread_id: str
+    turn_id: str
+    source: str
+
+
 PHASE_PERMISSION_FIELDS = (
     "git_init",
     "branch_create",
@@ -1300,7 +1317,12 @@ class AdaptiveStateRuntime:
         self._triggered_crashes: set[str] = set()
         self._validators: tuple[Any, Any] | None = None
 
-    def apply(self, request: Any) -> dict[str, Any]:
+    def apply(
+        self,
+        request: Any,
+        *,
+        trusted_turn_metadata: TrustedTurnMetadata | None = None,
+    ) -> dict[str, Any]:
         """Validate and apply a request, returning structured JSON-compatible data."""
 
         try:
@@ -1408,6 +1430,7 @@ class AdaptiveStateRuntime:
                     state,
                     normalized,
                     after_version,
+                    trusted_turn_metadata=trusted_turn_metadata,
                 )
                 next_state["state_version"] = after_version
                 supplied_projection = normalized["mutation"].get(
@@ -5226,6 +5249,8 @@ class AdaptiveStateRuntime:
         state: dict[str, Any] | None,
         request: dict[str, Any],
         after_version: int,
+        *,
+        trusted_turn_metadata: TrustedTurnMetadata | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         mutation = request["mutation"]
         mutation_type = mutation["type"]
@@ -5258,7 +5283,12 @@ class AdaptiveStateRuntime:
             candidate.setdefault("native_goal_policy", "required")
             candidate.setdefault("controller_goal_resume_receipt", None)
         if mutation_type == "ACQUIRE_LEASE":
-            result = self._acquire_lease(candidate, request, mutation)
+            result = self._acquire_lease(
+                candidate,
+                request,
+                mutation,
+                trusted_turn_metadata=trusted_turn_metadata,
+            )
         elif mutation_type == "MIGRATE_V1_TO_V2":
             result = self._migrate_v1_to_v2(
                 candidate, request, mutation, after_version
@@ -5296,7 +5326,12 @@ class AdaptiveStateRuntime:
         elif mutation_type == "RENEW_LEASE":
             result = self._renew_lease(candidate, request, mutation)
         elif mutation_type == "TAKEOVER_LEASE":
-            result = self._takeover_lease(candidate, request, mutation)
+            result = self._takeover_lease(
+                candidate,
+                request,
+                mutation,
+                trusted_turn_metadata=trusted_turn_metadata,
+            )
         elif mutation_type == "PREPARE_OUTBOX":
             result = self._prepare_outbox(candidate, mutation, after_version)
         elif mutation_type == "CANCEL_OUTBOX":
@@ -6875,11 +6910,55 @@ class AdaptiveStateRuntime:
     def _claim_from_lease(lease: dict[str, Any]) -> dict[str, Any]:
         return copy.deepcopy(lease["claim"])
 
+    @staticmethod
+    def _require_trusted_controller_turn(
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        trusted_turn_metadata: TrustedTurnMetadata | None,
+    ) -> str:
+        if trusted_turn_metadata is None:
+            raise RuntimeRejection(
+                "BLOCKED_BY_APP_ATTESTATION",
+                "/trusted_turn_metadata",
+                {
+                    "required_source": TRUSTED_TURN_SOURCE,
+                    "upstream_requirement": "host-injected caller turn metadata",
+                },
+            )
+        if (
+            not isinstance(trusted_turn_metadata, TrustedTurnMetadata)
+            or trusted_turn_metadata.source != TRUSTED_TURN_SOURCE
+            or SAFE_ID_RE.fullmatch(trusted_turn_metadata.thread_id) is None
+            or SAFE_ID_RE.fullmatch(trusted_turn_metadata.turn_id) is None
+        ):
+            raise RuntimeRejection(
+                "APP_TURN_ATTESTATION_INVALID",
+                "/trusted_turn_metadata",
+            )
+        claimed_turn_id = mutation.get("controller_turn_id")
+        if (
+            claimed_turn_id != trusted_turn_metadata.turn_id
+            or request.get("thread_id") != trusted_turn_metadata.thread_id
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_TURN_ATTESTATION_MISMATCH",
+                "/mutation/controller_turn_id",
+                {
+                    "claimed_turn_id": claimed_turn_id,
+                    "attested_turn_id": trusted_turn_metadata.turn_id,
+                    "request_thread_id": request.get("thread_id"),
+                    "attested_thread_id": trusted_turn_metadata.thread_id,
+                },
+            )
+        return trusted_turn_metadata.turn_id
+
     def _acquire_lease(
         self,
         state: dict[str, Any],
         request: dict[str, Any],
         mutation: dict[str, Any],
+        *,
+        trusted_turn_metadata: TrustedTurnMetadata | None,
     ) -> dict[str, Any]:
         if state.get("schema_version") == 2 and state["run_control"]["status"] != "RUNNING":
             raise RuntimeRejection("LOOP_PAUSED", "/run_control/status")
@@ -6893,13 +6972,11 @@ class AdaptiveStateRuntime:
             )
         controller_turn_id = mutation.get("controller_turn_id")
         if state.get("controller_turn_enforcement") is True:
-            if (
-                not isinstance(controller_turn_id, str)
-                or SAFE_ID_RE.fullmatch(controller_turn_id) is None
-            ):
-                raise RuntimeRejection(
-                    "CONTROLLER_TURN_ID_REQUIRED", "/mutation/controller_turn_id"
-                )
+            controller_turn_id = self._require_trusted_controller_turn(
+                request,
+                mutation,
+                trusted_turn_metadata,
+            )
             if controller_turn_id in state.get("consumed_controller_turn_ids", []):
                 raise RuntimeRejection(
                     "CONTROLLER_TURN_ALREADY_ROUTED",
@@ -7148,6 +7225,8 @@ class AdaptiveStateRuntime:
         state: dict[str, Any],
         request: dict[str, Any],
         mutation: dict[str, Any],
+        *,
+        trusted_turn_metadata: TrustedTurnMetadata | None,
     ) -> dict[str, Any]:
         old_claim = mutation["lease_claim"]
         lease = state["controller_lease"]
@@ -7169,13 +7248,11 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("CONTROLLER_IDENTITY_MISMATCH", "/mutation/new_owner_identity")
         controller_turn_id = mutation.get("controller_turn_id")
         if state.get("controller_turn_enforcement") is True:
-            if (
-                not isinstance(controller_turn_id, str)
-                or SAFE_ID_RE.fullmatch(controller_turn_id) is None
-            ):
-                raise RuntimeRejection(
-                    "CONTROLLER_TURN_ID_REQUIRED", "/mutation/controller_turn_id"
-                )
+            controller_turn_id = self._require_trusted_controller_turn(
+                request,
+                mutation,
+                trusted_turn_metadata,
+            )
             if controller_turn_id in state.get("consumed_controller_turn_ids", []):
                 raise RuntimeRejection(
                     "CONTROLLER_TURN_ALREADY_ROUTED",

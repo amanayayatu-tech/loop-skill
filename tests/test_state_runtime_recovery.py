@@ -152,7 +152,12 @@ class AdaptiveStateRuntimeRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 AdaptiveStateRuntime(
                     root,
                     crash_at="PREPARED_JOURNAL_DIR_FSYNCED",
-                ).apply(acquire_request)
+                ).apply(
+                    acquire_request,
+                    trusted_turn_metadata=trusted_metadata_for_request(
+                        acquire_request
+                    ),
+                )
             journal_path = (
                 root / ".codex-loop" / "transactions" / "prepared-request.json"
             )
@@ -350,14 +355,17 @@ class AdaptiveStateRuntimeRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                         "evidence_paths": [f"evidence/process-race-{index}.json"],
                         "controller_pack_digest": controller_pack_artifact()["digest"],
                         "mutation": {
-                            "type": "ACQUIRE_LEASE",
-                            "routing_turn_id": f"process-race-turn-{index}",
-                            "lease_id": f"process-race-lease-{index}",
-                            "owner_kind": "HEARTBEAT",
-                            "owner_identity": "controller-1",
-                            "observed_at": T1,
-                            "expires_at": T4,
-                            "controller_turn_id": f"process-race-app-turn-{index}",
+                            "type": "RECORD_STEERING",
+                            "steering_id": f"process-race-steering-{index}",
+                            "steering_type": "CORRECTION",
+                            "normalized_digest": digest(
+                                f"process-race-steering-{index}"
+                            ),
+                            "identity_algorithm": "message-item-v1",
+                            "message_item_id": f"process-race-message-{index}",
+                            "summary": "cross-process CAS race",
+                            "classification_reason": "test lock serialization",
+                            "target_goal_id": "g1",
                         },
                     }
                 )

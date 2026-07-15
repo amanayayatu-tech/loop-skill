@@ -25,8 +25,10 @@ from loop_architect.state_runtime import (  # noqa: E402
     ARTIFACT_STAGES,
     PAYLOAD_DIGEST_PLACEHOLDER,
     PERSISTENT_STAGES,
+    TRUSTED_TURN_SOURCE,
     AdaptiveStateRuntime,
     InjectedCrash,
+    TrustedTurnMetadata,
     goal_definition_payload_digest,
     materialize_dispatch_payload,
     verify_dispatch_payload_against_state,
@@ -39,6 +41,7 @@ T1 = "2026-01-01T00:01:00Z"
 T2 = "2026-01-01T00:02:00Z"
 T3 = "2026-01-01T00:03:00Z"
 T4 = "2026-01-01T01:00:00Z"
+_AUTO_TRUSTED_TURN = object()
 
 
 def digest(value: str) -> str:
@@ -53,6 +56,19 @@ def json_digest(value: Any) -> str:
             sort_keys=True,
             separators=(",", ":"),
         )
+    )
+
+
+def trusted_metadata_for_request(
+    request: dict[str, Any],
+    *,
+    turn_id: str | None = None,
+) -> TrustedTurnMetadata:
+    mutation = request["mutation"]
+    return TrustedTurnMetadata(
+        thread_id=request["thread_id"],
+        turn_id=turn_id or mutation["controller_turn_id"],
+        source=TRUSTED_TURN_SOURCE,
     )
 
 
@@ -450,13 +466,29 @@ class Harness:
         *,
         expected: int | None = None,
         artifacts: list[dict[str, Any]] | None = None,
+        trusted_turn_id: str | None | object = _AUTO_TRUSTED_TURN,
     ) -> dict[str, Any]:
         request = self.make_request(
             mutation,
             expected=expected,
             artifacts=artifacts,
         )
-        response = self.runtime.apply(request)
+        metadata = None
+        if request["mutation"]["type"] in {"ACQUIRE_LEASE", "TAKEOVER_LEASE"}:
+            resolved_turn_id = (
+                request["mutation"].get("controller_turn_id")
+                if trusted_turn_id is _AUTO_TRUSTED_TURN
+                else trusted_turn_id
+            )
+            if isinstance(resolved_turn_id, str):
+                metadata = trusted_metadata_for_request(
+                    request,
+                    turn_id=resolved_turn_id,
+                )
+        response = self.runtime.apply(
+            request,
+            trusted_turn_metadata=metadata,
+        )
         if response.get("ok") and mutation.get("type") == "MIGRATE_CONTROLLER_PACK":
             self.active_pack_digest = mutation["target_pack_digest"]
         return response

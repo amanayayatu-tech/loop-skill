@@ -661,7 +661,10 @@
         "owner_identity": {"$ref": "#/$defs/safeId"},
         "observed_at": {"$ref": "#/$defs/timestamp"},
         "expires_at": {"$ref": "#/$defs/timestamp"},
-        "controller_turn_id": {"$ref": "#/$defs/safeId"},
+        "controller_turn_id": {
+          "$ref": "#/$defs/safeId",
+          "description": "Untrusted request claim; routing additionally requires matching host-injected CODEX_APP_TOOL_BOUNDARY metadata outside this JSON envelope."
+        },
         "intended_transition": {"const": "ROUTE_ONE_TRANSITION"}
       }
     },
@@ -738,7 +741,10 @@
         "observed_at": {"$ref": "#/$defs/timestamp"},
         "expires_at": {"$ref": "#/$defs/timestamp"},
         "takeover_evidence": {"$ref": "#/$defs/takeoverEvidence"},
-        "controller_turn_id": {"$ref": "#/$defs/safeId"}
+        "controller_turn_id": {
+          "$ref": "#/$defs/safeId",
+          "description": "Untrusted request claim; routing additionally requires matching host-injected CODEX_APP_TOOL_BOUNDARY metadata outside this JSON envelope."
+        }
       }
     },
     "prepareOutbox": {

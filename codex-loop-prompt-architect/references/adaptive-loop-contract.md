@@ -497,10 +497,18 @@ Reusing the same id with another owner does not transfer ownership. A competing
 turn returns `WAITING_CONTROLLER_LEASE` and sends nothing. Expired takeover
 requires trustworthy current time plus structured `read_thread` evidence for
 the exact owner task, increments the epoch, and fences every old action.
-Each acquisition and takeover also carries the current real Codex App
-`controller_turn_id`. Runtime consumes it with the first route lease and rejects
-a second lease from that same App turn even after completion or voluntary
-release. A model-generated replacement id is not a valid continuation strategy.
+Each acquisition and takeover carries a claimed `controller_turn_id`, but that
+JSON field is not identity evidence. Runtime accepts the route only when the
+host tool boundary separately supplies immutable `CODEX_APP_TOOL_BOUNDARY`
+metadata whose thread and turn identities exactly match the request. It indexes
+the canonical ledger by the attested turn and rejects a second lease from that
+same App turn even after completion or voluntary release. JSON, argv,
+environment variables, task titles, timestamps, and model-generated UUIDs are
+not attestation. Without host metadata, routing returns
+`BLOCKED_BY_APP_ATTESTATION` with zero canonical side effects. The current
+direct CLI has no trusted turn channel and therefore deliberately fails closed;
+the repository does not claim real App one-route enforcement until the App
+integration supplies that channel and passes the real two-route canary.
 
 Except for initialization, counted routing-turn creation, and lease
 acquisition/takeover itself, every Adaptive

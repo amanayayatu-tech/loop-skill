@@ -52,7 +52,6 @@ class ControlPlaneFixtureTests(unittest.TestCase):
 
 
 class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
-    @baseline_expected_failure
     def test_same_real_turn_cannot_route_twice_with_different_claimed_ids(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -68,8 +67,9 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                     "owner_identity": "controller-1",
                     "observed_at": T1,
                     "expires_at": T4,
-                    "controller_turn_id": "model-claim-a",
-                }
+                    "controller_turn_id": "attested-real-turn",
+                },
+                trusted_turn_id="attested-real-turn",
             )
             self.assertTrue(first["ok"], first)
             released = harness.apply(
@@ -92,9 +92,150 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                     "observed_at": T1,
                     "expires_at": T4,
                     "controller_turn_id": "model-claim-b",
-                }
+                },
+                trusted_turn_id="attested-real-turn",
             )
             self.assertFalse(second["ok"], second)
+            self.assertEqual(second["status"], "CONTROLLER_TURN_ATTESTATION_MISMATCH")
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_same_claim_cannot_be_reused_by_a_different_attested_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            first = harness.apply(
+                {
+                    "type": "ACQUIRE_LEASE",
+                    "routing_turn_id": "claim-conflict-route-a",
+                    "lease_id": "claim-conflict-lease-a",
+                    "owner_kind": "GOAL_TURN",
+                    "owner_identity": "controller-1",
+                    "observed_at": T1,
+                    "expires_at": T4,
+                    "controller_turn_id": "claim-conflict-turn-a",
+                },
+                trusted_turn_id="claim-conflict-turn-a",
+            )
+            self.assertTrue(first["ok"], first)
+            released = harness.apply(
+                {
+                    "type": "RELEASE_LEASE",
+                    "lease_claim": first["result"]["lease_claim"],
+                    "observed_at": T1,
+                    "reason_code": "NO_ROUTE_READY",
+                }
+            )
+            self.assertTrue(released["ok"], released)
+            request = harness.make_request(
+                {
+                    "type": "ACQUIRE_LEASE",
+                    "routing_turn_id": "claim-conflict-route-b",
+                    "lease_id": "claim-conflict-lease-b",
+                    "owner_kind": "GOAL_TURN",
+                    "owner_identity": "controller-1",
+                    "observed_at": T1,
+                    "expires_at": T4,
+                    "controller_turn_id": "claim-conflict-turn-a",
+                }
+            )
+            before = persisted_snapshot(root)
+            rejected = harness.runtime.apply(
+                request,
+                trusted_turn_metadata=trusted_metadata_for_request(
+                    request,
+                    turn_id="different-attested-turn",
+                ),
+            )
+            self.assertEqual(rejected["status"], "CONTROLLER_TURN_ATTESTATION_MISMATCH")
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_route_without_trusted_app_metadata_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            request = harness.make_request(
+                {
+                    "type": "ACQUIRE_LEASE",
+                    "routing_turn_id": "missing-attestation-route",
+                    "lease_id": "missing-attestation-lease",
+                    "owner_kind": "GOAL_TURN",
+                    "owner_identity": "controller-1",
+                    "observed_at": T1,
+                    "expires_at": T4,
+                    "controller_turn_id": "untrusted-model-claim",
+                }
+            )
+            before = persisted_snapshot(root)
+            rejected = harness.runtime.apply(request)
+            self.assertEqual(rejected["status"], "BLOCKED_BY_APP_ATTESTATION")
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_cli_cannot_promote_payload_turn_claim_to_trusted_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            request = harness.make_request(
+                {
+                    "type": "ACQUIRE_LEASE",
+                    "routing_turn_id": "cli-untrusted-route",
+                    "lease_id": "cli-untrusted-lease",
+                    "owner_kind": "GOAL_TURN",
+                    "owner_identity": "controller-1",
+                    "observed_at": T1,
+                    "expires_at": T4,
+                    "controller_turn_id": "payload-controlled-turn-claim",
+                }
+            )
+            before = persisted_snapshot(root)
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "adaptive_state_runtime.py"),
+                    "--root",
+                    str(root),
+                ],
+                input=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 1, completed.stderr)
+            response = json.loads(completed.stdout)
+            self.assertEqual(response["status"], "BLOCKED_BY_APP_ATTESTATION")
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_exact_route_replay_is_read_only_without_second_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            request = harness.make_request(
+                {
+                    "type": "ACQUIRE_LEASE",
+                    "routing_turn_id": "attested-replay-route",
+                    "lease_id": "attested-replay-lease",
+                    "owner_kind": "GOAL_TURN",
+                    "owner_identity": "controller-1",
+                    "observed_at": T1,
+                    "expires_at": T4,
+                    "controller_turn_id": "attested-replay-turn",
+                }
+            )
+            applied = harness.runtime.apply(
+                request,
+                trusted_turn_metadata=trusted_metadata_for_request(request),
+            )
+            self.assertTrue(applied["ok"], applied)
+            before = persisted_snapshot(root)
+            replay = harness.runtime.apply(request)
+            self.assertEqual(replay["status"], "STATE_WRITE_ALREADY_APPLIED")
             self.assertEqual(before, persisted_snapshot(root))
 
     @baseline_expected_failure

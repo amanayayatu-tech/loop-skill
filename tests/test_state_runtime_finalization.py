@@ -1377,7 +1377,10 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                 request_id="z-acquire-request",
                 event_id="z-acquire-event",
             )
-            acquired = harness.runtime.apply(acquire_request)
+            acquired = harness.runtime.apply(
+                acquire_request,
+                trusted_turn_metadata=trusted_metadata_for_request(acquire_request),
+            )
             self.assertTrue(acquired["ok"], acquired)
             released = harness.runtime.apply(
                 harness.make_request(
@@ -1692,7 +1695,10 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                     request_id=f"fuzz-acquire-request-{batch_start}",
                     event_id=f"fuzz-acquire-event-{batch_start}",
                 )
-                acquired = harness.runtime.apply(acquire)
+                acquired = harness.runtime.apply(
+                    acquire,
+                    trusted_turn_metadata=trusted_metadata_for_request(acquire),
+                )
                 self.assertTrue(acquired["ok"])
                 acquired_version = acquired["state_version_after"]
                 replayed_acquire = harness.runtime.apply(copy.deepcopy(acquire))
