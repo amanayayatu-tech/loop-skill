@@ -1,18 +1,21 @@
 # Release process
 
-`VERSION` is the package version source of truth. The root-owned self-hosted
-`loop-ci` attestation is the authoritative repository gate. GitHub Actions is a
+`VERSION` is the package version source of truth. The root-owned/read-only
+Mac mini attestation is the authoritative repository gate. GitHub Actions is a
 compatibility mirror only: a green GitHub check is never release acceptance.
+Ubuntu `loop-ci` evidence is historical only and must not be reused for a new
+candidate.
 
 ## Evidence layers
 
 Keep these claims separate:
 
 1. local checks: targeted tests, compile, schema, installer syntax;
-2. server CI: exact-SHA quick, full, generator fuzz 5000, state fuzz 5000,
-   all-shipped branch coverage, isolated install, security and release lanes;
-3. macOS App smoke: the same exact SHA and installed manifest under one real,
-   identified Codex App build;
+2. Mac mini CI: exact-SHA quick, full, generator fuzz 5000, state fuzz 5000,
+   all-shipped branch coverage, isolated install/rollback, source/install
+   drift, security/risky-artifact and release lanes;
+3. primary-Mac App smoke: the same exact SHA, tracked tree and installed
+   manifest under one real, identified Codex App build;
 4. merge/main attestation, annotated tag and public GitHub Release.
 
 The repository can mitigate and fail closed around app-server behavior. It
@@ -39,13 +42,14 @@ does not claim to repair app-server process reaping or metadata delivery.
    coverage report
    ```
 
-3. Push exactly one candidate SHA to the restricted `ci` remote. Record the
-   exact commit, tree digest, active pipeline-config digest, attestation path,
-   attestation/manifest digest, start/end time and verdict. Do not push a newer
-   candidate while any required lane for the current identity is still active.
-4. Let every Linux lane not requiring a Mac receipt finish. A release lane that
-   remains `BLOCKED` solely because the same-SHA App receipt is absent is the
-   expected pre-canary state, not PASS.
+3. Submit exactly one candidate SHA to the unattended Mac mini runner. Record
+   the exact commit, tracked-tree SHA-256, pipeline-config digest, root-owned
+   attestation path, attestation/manifest digest, start/end time and verdict.
+   Do not submit a newer candidate while any required lane for the current
+   identity is active. Do not push the candidate to Ubuntu `loop-ci`.
+4. Let every Mac mini lane not requiring an App receipt finish. A release lane
+   that remains `BLOCKED` solely because the same-SHA App receipt is absent is
+   the expected pre-canary state, not PASS.
 5. Install into an isolated macOS `CODEX_HOME`. `scripts/install.sh` atomically
    registers `codex-loop-state`, preserves prior config bytes, rejects a
    conflicting registration, writes an install manifest, and verifies zero
@@ -55,12 +59,13 @@ does not claim to repair app-server process reaping or metadata delivery.
    receipt must reach the canary's own canonical `FINALIZATION_ACKED`; synthetic
    MCP tests, a Node REPL observation, source reading, or a tool-list screenshot
    are only prerequisites.
-7. Bind the minimized, non-secret App receipt to the same server attestation by
-   the CI's trusted out-of-band mechanism and finalize/re-run only the release
-   lane for the same SHA. If the server lacks such an interface, report the CI
-   contract gap; do not commit raw local logs, user state or secrets to bypass it.
-8. Merge only after the exact candidate has server PASS plus real App PASS.
-   Push the exact merge commit to self-hosted `main` and obtain a new main
+7. Bind the minimized, non-secret App receipt to the same Mac mini attestation
+   by its trusted out-of-band mechanism and finalize/re-run only the combined
+   release lane for the same SHA. If the runner lacks such an interface,
+   report the CI contract gap; do not commit raw local logs, user state or
+   secrets to bypass it.
+8. Merge only after the exact candidate has Mac mini PASS plus real App PASS.
+   Submit the exact merge commit to the Mac mini `main` lane and obtain a new main
    attestation. Only then create an annotated tag on that precise commit and a
    matching GitHub Release.
 9. Back up the real `CODEX_HOME`, install the exact release package, validate
@@ -74,7 +79,8 @@ The schema is
 `codex-loop-prompt-architect/references/app-canary-receipt.schema.json`; validate
 it with `validate_app_canary_receipt.py`. A PASS receipt binds:
 
-- exact repo commit, Pack digest and installed-manifest digest;
+- exact repo commit, tracked-tree SHA-256, Pack digest and
+  installed-manifest digest;
 - Codex/ChatGPT App version, build and bundle identifier;
 - app-server executable path, verified signature, Identifier, TeamIdentifier
   and non-secret CDHash;
@@ -92,9 +98,9 @@ it with `validate_app_canary_receipt.py`. A PASS receipt binds:
 App version/build, bundle id, executable/signature/CDHash, MCP protocol/config
 schema, requestMeta shape, or registration identity changes invalidate the old
 compatibility digest. The release gate passes the currently observed
-compatibility digest, exact Pack digest, repo commit and install-manifest digest
-as validator expectations; a self-consistent old receipt is insufficient. The
-next release must obtain a new real receipt. Receipts
+compatibility digest, exact Pack digest, repo commit, tracked-tree SHA-256 and
+install-manifest digest as validator expectations; a self-consistent old
+receipt is insufficient. The next release must obtain a new real receipt. Receipts
 must not contain prompts, raw responses, Authorization, API keys, raw
 session/thread/turn ids, secrets or canonical user content.
 
@@ -128,5 +134,5 @@ Before commit, merge, tag and installation, reject unscoped validation logs,
 `REVIEW_BUNDLE`, `SMOKE_FINDINGS`, `FIX_REPORT`, run environments, API keys,
 Authorization values, `*.tar.gz`, `*.bundle`, SQLite/DB files, real
 `.codex-loop/**`, generated Controller Packs and user evidence. A clean local
-tree or compatibility workflow is not a substitute for the root-owned server
+tree or compatibility workflow is not a substitute for the root-owned Mac mini
 attestation and same-SHA App receipt.

@@ -12,6 +12,7 @@
     "finished_at",
     "timezone",
     "repo_commit",
+    "tracked_tree_digest",
     "pack_digest",
     "installed_manifest_digest",
     "app",
@@ -31,6 +32,7 @@
     "finished_at": {"type": "string", "format": "date-time"},
     "timezone": {"const": "Asia/Shanghai"},
     "repo_commit": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "tracked_tree_digest": {"$ref": "#/$defs/digest"},
     "pack_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "installed_manifest_digest": {"$ref": "#/$defs/digest"},
     "app": {

@@ -36,15 +36,15 @@ All notable changes to this project are documented here. The project follows
   least 80%, separates full tests from the two 5000-case fuzz lanes, checks the
   complete reviewed whitespace range, pins every Action to a full commit, and
   verifies exact protected-main tag identity.
-- Root-owned self-hosted CI attestation is authoritative. GitHub Actions is a
-  compatibility mirror. Every release candidate additionally requires a
-  privacy-bounded real Codex App receipt for the same exact commit, installed
-  manifest and current App/MCP/signature identity, ending at canonical
-  `FINALIZATION_ACKED`.
+- Mac mini root-owned/read-only CI attestation is authoritative. Ubuntu CI and
+  GitHub Actions are non-authoritative. Every release candidate additionally
+  requires a privacy-bounded real Codex App receipt for the same exact commit,
+  tracked-tree SHA-256, installed manifest and current App/MCP/signature
+  identity, ending at canonical `FINALIZATION_ACKED`.
 
 ### Evidence boundary
 
-Repository tests and server attestation remain separate from the real macOS App
+Repository tests and Mac mini attestation remain separate from the real macOS App
 canary. This release validates, mitigates and fails closed around app-server
 behavior; it does not claim to fix app-server process-group cleanup upstream.
 

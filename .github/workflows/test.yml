@@ -16,7 +16,7 @@ concurrency:
   group: compatibility-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
-# This workflow is a compatibility mirror. Root-owned self-hosted loop-ci
+# This workflow is a compatibility mirror. Root-owned/read-only Mac mini
 # attestation, followed by the same-SHA real Codex App canary, is authoritative.
 jobs:
   quick:

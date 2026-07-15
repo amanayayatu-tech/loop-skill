@@ -48,6 +48,7 @@ class ReleaseContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for option in (
             "--expected-commit",
+            "--expected-tracked-tree-digest",
             "--expected-manifest-digest",
             "--expected-pack-digest",
             "--expected-compatibility-identity-digest",
@@ -102,7 +103,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("branches:\n      - main", workflow)
         self.assertIn('tags:\n      - "v*"', workflow)
         self.assertIn("github.event.pull_request.head.ref || github.ref_name", workflow)
-        self.assertIn("self-hosted loop-ci", workflow)
+        self.assertIn("Root-owned/read-only Mac mini", workflow)
         self.assertIn("coverage run --parallel-mode", workflow)
         self.assertIn("coverage combine", workflow)
         self.assertNotIn("full-fuzz:", workflow)
@@ -131,11 +132,12 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertGreaterEqual(int(match.group(1)), 80)
 
-    def test_server_attestation_and_real_app_receipt_are_release_authorities(self) -> None:
+    def test_mac_mini_attestation_and_real_app_receipt_are_release_authorities(self) -> None:
         releasing = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
-        self.assertIn("`loop-ci` attestation is the authoritative repository gate", releasing)
+        self.assertIn("Mac mini attestation is the authoritative repository gate", releasing)
         self.assertIn("GitHub Actions is a\ncompatibility mirror only", releasing)
         self.assertIn("same-SHA App receipt", releasing)
+        self.assertIn("tracked-tree SHA-256", releasing)
         self.assertIn("FINALIZATION_ACKED", releasing)
         self.assertIn("app-canary-receipt.schema.json", releasing)
         self.assertNotIn("required GitHub Actions checks pass", releasing)

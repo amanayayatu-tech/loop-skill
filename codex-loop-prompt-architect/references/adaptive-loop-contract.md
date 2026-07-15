@@ -548,8 +548,9 @@ emits a schema-validated manifest binding the installed bridge SHA, config
 readback, exact repo identity when the source is clean, and zero source/install
 drift. A dirty source is `UNVERIFIED_SOURCE`, never the current HEAD by proxy.
 
-Release acceptance requires a root-owned self-hosted exact-SHA attestation and
-then a real Codex App receipt for that same SHA and installed-manifest digest.
+Release acceptance requires a root-owned/read-only Mac mini exact-SHA
+attestation and then a real Codex App receipt for that same SHA,
+tracked-tree SHA-256, and installed-manifest digest.
 The receipt binds App version/build/bundle, app-server executable/signature/
 CDHash, MCP protocol/config/requestMeta shape, registration identity, same-turn
 second-route rejection before side effects, next-turn success, partial-frame

@@ -46,6 +46,7 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "finished_at": "2026-07-15T15:03:00+08:00",
             "timezone": "Asia/Shanghai",
             "repo_commit": "a" * 40,
+            "tracked_tree_digest": "f" * 64,
             "pack_digest": "sha256:" + "b" * 64,
             "installed_manifest_digest": "c" * 64,
             "app": {"version": "1.2.3", "build": "456", "bundle_identifier": "com.openai.chat"},
@@ -100,6 +101,7 @@ class AppCanaryReceiptTests(unittest.TestCase):
             self.path,
             SCHEMA,
             expected_commit="a" * 40,
+            expected_tracked_tree_digest="f" * 64,
             expected_manifest_digest="c" * 64,
             expected_pack_digest="sha256:" + "b" * 64,
             expected_compatibility_identity_digest=self.receipt[
@@ -110,6 +112,23 @@ class AppCanaryReceiptTests(unittest.TestCase):
             expected_bundle_identifier="com.openai.chat",
         )
         self.assertEqual(result["status"], "PASS")
+
+    def test_tracked_tree_is_required_and_bound_to_the_exact_candidate(self) -> None:
+        self.receipt.pop("tracked_tree_digest")
+        self._seal()
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate_receipt(self.path, SCHEMA)
+
+        self.receipt["tracked_tree_digest"] = "f" * 64
+        self._seal()
+        with self.assertRaisesRegex(
+            validator.CanaryReceiptError, "CANARY_TRACKED_TREE_MISMATCH"
+        ):
+            validator.validate_receipt(
+                self.path,
+                SCHEMA,
+                expected_tracked_tree_digest="0" * 64,
+            )
 
     def test_app_or_metadata_change_invalidates_old_receipt(self) -> None:
         with self.assertRaisesRegex(validator.CanaryReceiptError, "CANARY_APP_BUILD_MISMATCH"):

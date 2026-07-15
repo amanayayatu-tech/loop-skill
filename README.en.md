@@ -6,8 +6,8 @@
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
 
 The test badge is a GitHub compatibility mirror. Authoritative release evidence
-is the root-owned self-hosted `loop-ci` attestation plus a real Codex App canary
-receipt for the same exact commit.
+is a root-owned/read-only Mac mini attestation plus a real Codex App canary
+receipt from the primary Mac for the same exact commit.
 
 `codex-loop-prompt-architect` is a skill for the Codex macOS App. It quality-gates
 rough ideas and PRDs, then turns only `READY_FOR_LOOP` requirements into a
@@ -63,14 +63,16 @@ execution semantics, rolls back skill/config on failure, and writes a
 schema-validated manifest proving registration readback and zero source/install
 drift.
 
-Release evidence stays layered: local checks, authoritative exact-SHA server
+Release evidence stays layered: local checks, authoritative exact-SHA Mac mini
 attestation, a real canary on the current App build, then merge/main/tag/Release.
 Any App version/build/bundle, app-server signature/CDHash, MCP protocol/config/
 requestMeta shape, or installation identity change invalidates the old receipt.
 PASS covers same-turn pre-side-effect rejection, next-turn success, partial-frame
 cleanup, lost-stdout recovery, Pack/same-heartbeat migration, and canonical
 `FINALIZATION_ACKED`. The repository does not claim to fix upstream app-server
-process reaping.
+process reaping. The receipt directly binds the exact commit, tracked-tree
+SHA-256, Pack digest, and installed-manifest digest; commit identity alone is
+not accepted as an implicit substitute for the tested tree.
 
 ### v3.2.4 canonical schema hotfix
 
@@ -289,8 +291,9 @@ two 5000-case fuzz lanes do not repeat that suite.
 An isolated install also registers `codex-loop-state`, checks exact command/args
 readback, writes a schema-validated install manifest, and proves zero
 source/install drift. GitHub Actions checks compatibility only. Authoritative
-release acceptance requires the self-hosted exact-SHA attestation, then a real
-same-SHA/current-App receipt, followed by the merge/main attestation. See the
+release acceptance requires the Mac mini root-owned/read-only exact-SHA
+attestation, then a real same-SHA/tracked-tree/current-App receipt from the
+primary Mac, followed by the Mac mini merge/main attestation. See the
 [release process](docs/RELEASING.md).
 
 ## Documentation map

@@ -81,6 +81,7 @@ def validate_receipt(
     schema: Path,
     *,
     expected_commit: str | None = None,
+    expected_tracked_tree_digest: str | None = None,
     expected_manifest_digest: str | None = None,
     expected_pack_digest: str | None = None,
     expected_compatibility_identity_digest: str | None = None,
@@ -107,6 +108,11 @@ def validate_receipt(
         raise CanaryReceiptError("CANARY_RECEIPT_DIGEST_MISMATCH")
     if expected_commit is not None and receipt["repo_commit"] != expected_commit:
         raise CanaryReceiptError("CANARY_REPO_COMMIT_MISMATCH")
+    if (
+        expected_tracked_tree_digest is not None
+        and receipt["tracked_tree_digest"] != expected_tracked_tree_digest
+    ):
+        raise CanaryReceiptError("CANARY_TRACKED_TREE_MISMATCH")
     if expected_manifest_digest is not None and receipt["installed_manifest_digest"] != expected_manifest_digest:
         raise CanaryReceiptError("CANARY_INSTALL_MANIFEST_MISMATCH")
     if expected_pack_digest is not None and receipt["pack_digest"] != expected_pack_digest:
@@ -138,6 +144,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("receipt", type=Path)
     parser.add_argument("--schema", required=True, type=Path)
     parser.add_argument("--expected-commit")
+    parser.add_argument("--expected-tracked-tree-digest")
     parser.add_argument("--expected-manifest-digest")
     parser.add_argument("--expected-pack-digest")
     parser.add_argument("--expected-compatibility-identity-digest")
@@ -154,6 +161,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.receipt,
             args.schema,
             expected_commit=args.expected_commit,
+            expected_tracked_tree_digest=args.expected_tracked_tree_digest,
             expected_manifest_digest=args.expected_manifest_digest,
             expected_pack_digest=args.expected_pack_digest,
             expected_compatibility_identity_digest=args.expected_compatibility_identity_digest,

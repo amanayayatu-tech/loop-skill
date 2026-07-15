@@ -5,8 +5,8 @@
 [![Test](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/test.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
 
-Test badge 只表示 GitHub 兼容性镜像；发布权威证据是同一 exact SHA 的自建
-`loop-ci` root-owned attestation 与真实 Codex App canary receipt。
+Test badge 只表示 GitHub 兼容性镜像；发布权威证据是同一 exact SHA 的 Mac mini
+root-owned/read-only attestation 与当前主力 Mac 的真实 Codex App canary receipt。
 
 `codex-loop-prompt-architect` 是一个只面向 Codex macOS App 的 skill。它把
 不成熟、信息不完整或容易断停的需求，转换成一个可直接发送给控制线程的
@@ -33,12 +33,13 @@ usage/artifact，stdout 丢失时只恢复 COMPLETED，不重发。Worker requir
 额外 env/cwd/disabled 语义或中断均 fail-closed 并回滚旧 skill/config。每次成功安装产生
 schema-validated manifest，记录 bridge SHA、registration readback 与 source/install 0 drift。
 
-发布按四层分开：local checks、自建服务器 exact-SHA attestation、当前 App build 的真实
+发布按四层分开：local checks、Mac mini exact-SHA attestation、当前 App build 的真实
 canary、merge/main/tag/Release。App version/build/bundle、app-server signature/CDHash、MCP
 protocol/config/requestMeta shape 或安装身份变化都会让旧 canary receipt 失效。PASS 必须
 覆盖 same-turn 第二 route 在副作用前拒绝、next-turn 成功、partial-frame 清理、lost-stdout
 恢复、Pack/同 heartbeat 迁移及 canonical `FINALIZATION_ACKED`；仓库不宣称修复了
-app-server 上游进程回收。
+app-server 上游进程回收。receipt 还必须直接绑定 exact commit、tracked-tree SHA-256、
+Pack digest 与 installed-manifest digest；不能只依赖 commit 间接推导受测文件树。
 
 ### v3.2.4 canonical schema 热修
 
@@ -1744,16 +1745,17 @@ fuzz 限为 25 case，只执行 deterministic tests 一次并产生 coverage dat
 GitHub workflow 是兼容性镜像：whitespace 检查覆盖受审范围内每个 commit，PR 使用
 merge-base..HEAD，push 使用 before..after；zero-before、force-push、shallow baseline
 缺失、tag 和 manual 均有明确 full-history fallback。所有 Action 固定完整 commit SHA。
-权威验收使用自建 `loop-ci` 的 exact-SHA、root-owned/read-only attestation；GitHub 绿灯
-不构成发布 PASS。
+权威验收使用 Mac mini 的 exact-SHA、root-owned/read-only attestation；Ubuntu
+`loop-ci` 与 GitHub 绿灯都不构成新候选的发布 PASS。
 
 隔离安装会验证 source/install manifest 0 drift、MCP command/args readback、bridge
-executable/SHA、重复安装幂等及配置/skill 回滚。服务器所有不依赖 Mac receipt 的 lane
-通过后，仍须在同一 exact SHA、同一 installed manifest、当前 Codex App build 上生成真实
-canary receipt；只有绑定该 receipt 的服务器 release gate 才可能放行。完整命令、Action
+executable/SHA、重复安装幂等及配置/skill 回滚。Mac mini 所有不依赖 App receipt 的 lane
+通过后，仍须在同一 exact SHA、tracked-tree SHA-256、同一 installed manifest、当前 Codex
+App build 上生成真实 canary receipt；只有绑定该 receipt 的 Mac mini combined release gate
+才可能放行。完整命令、Action
 pin 来源、receipt schema 与发布顺序见 [发布流程](docs/RELEASING.md)。
 
-以上仍只是分层证据：local checks、server CI、Mac App smoke、merge/main/tag/Release
+以上仍只是分层证据：local checks、Mac mini CI、Mac App smoke、merge/main/tag/Release
 不得互相替代。历史 E2E 记录继续保留在下节，不会被新测试名称或 README 描述升级成
 当前 App build 的 PASS。
 
