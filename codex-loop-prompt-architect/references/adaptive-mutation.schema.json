@@ -523,6 +523,18 @@
       "required": ["type", "checkpoint_id", "checkpoint", "goal_id", "observed_identity_delta", "observed_identity_digest", "classification", "classification_source"],
       "properties": {"type": {"const": "RECORD_CONTEXT_FRESHNESS"}, "checkpoint_id": {"$ref": "#/$defs/safeId"}, "checkpoint": {"enum": ["GOAL_DISPATCH", "WORKER_RECOVERY", "REPAIR", "STEERING_SCOPE", "CODE_REVIEW", "ROADMAP_AUDIT", "FINAL_AUDIT"]}, "goal_id": {"$ref": "#/$defs/safeId"}, "dispatch_id": {"$ref": "#/$defs/safeId"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "observed_identity_delta": {"$ref": "#/$defs/observedIdentityDelta"}, "observed_identity_digest": {"$ref": "#/$defs/digest"}, "classification": {"enum": ["FRESH", "CHANGED_IRRELEVANT", "RELOAD_SAFE", "SCOPE_CONFLICT", "HARD_BLOCK", "JUDGMENT_REQUIRED"]}, "classification_source": {"enum": ["DETERMINISTIC_IDENTITY", "DETERMINISTIC_SCOPE_RULE", "MODEL_JUDGMENT_REQUIRED"]}}
     },
+    "reviewFreshnessObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpoint_id", "observed_identity_delta", "observed_identity_digest", "classification", "classification_source"],
+      "properties": {
+        "checkpoint_id": {"$ref": "#/$defs/safeId"},
+        "observed_identity_delta": {"$ref": "#/$defs/observedIdentityDelta"},
+        "observed_identity_digest": {"$ref": "#/$defs/digest"},
+        "classification": {"enum": ["FRESH", "CHANGED_IRRELEVANT", "RELOAD_SAFE", "SCOPE_CONFLICT", "HARD_BLOCK", "JUDGMENT_REQUIRED"]},
+        "classification_source": {"enum": ["DETERMINISTIC_IDENTITY", "DETERMINISTIC_SCOPE_RULE", "MODEL_JUDGMENT_REQUIRED"]}
+      }
+    },
     "recordControllerGoalResume": {
       "type": "object",
       "additionalProperties": false,
@@ -920,7 +932,8 @@
             "FINAL_REVIEW_NEEDS_REPAIR"
           ]
         },
-        "review_evidence_paths": {"$ref": "#/$defs/stringArray"}
+        "review_evidence_paths": {"$ref": "#/$defs/stringArray"},
+        "freshness_observation": {"$ref": "#/$defs/reviewFreshnessObservation"}
       }
     },
     "roadmapOperation": {

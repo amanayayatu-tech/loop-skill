@@ -397,6 +397,15 @@ WORKER_ACK_CANDIDATE_STAGES = (
     "WORKER_ACK_OUTBOX_COMPLETED",
     "WORKER_ACK_ROUTE_FINISHED",
 )
+REVIEW_CLOSEOUT_CANDIDATE_STAGES = (
+    "REVIEW_CLOSEOUT_REPORT_REVALIDATED",
+    "REVIEW_CLOSEOUT_FRESHNESS_PROJECTED",
+    "REVIEW_CLOSEOUT_VALIDATION_GATE_CHECKED",
+    "REVIEW_CLOSEOUT_LEDGER_PROJECTED",
+    "REVIEW_CLOSEOUT_GOAL_PROJECTED",
+    "REVIEW_CLOSEOUT_OUTBOX_COMPLETED",
+    "REVIEW_CLOSEOUT_ROUTE_FINISHED",
+)
 STATUS_PROJECTION_STAGES = (
     "STATUS_JOURNAL_TEMP_FSYNCED",
     "STATUS_JOURNAL_REPLACED",
@@ -411,6 +420,7 @@ CRASH_STAGES = (
     + REPORT_STAGE_STAGES
     + EXTERNAL_RECEIPT_STAGES
     + WORKER_ACK_CANDIDATE_STAGES
+    + REVIEW_CLOSEOUT_CANDIDATE_STAGES
     + STATUS_PROJECTION_STAGES
 )
 
@@ -1657,6 +1667,27 @@ class AdaptiveStateRuntime:
                 )
                 if duplicate is not None:
                     return duplicate
+                if state is not None and mutation_type == "RECORD_REVIEW":
+                    if (
+                        state.get("pack_identity_enforced") is True
+                        and normalized.get("controller_pack_digest")
+                        != state["controller_pack_identity"]["digest"]
+                    ):
+                        raise RuntimeRejection(
+                            "CONTROLLER_PACK_MIGRATION_REQUIRED",
+                            "/controller_pack_digest",
+                            _canonical_loaded_pack_digest_details(
+                                state["controller_pack_identity"]["digest"],
+                                normalized.get("controller_pack_digest"),
+                                self._controller_pack_bytes_locked(state),
+                            ),
+                        )
+                    closeout_replay = self._review_closeout_replay_locked(
+                        state,
+                        normalized,
+                    )
+                    if closeout_replay is not None:
+                        return closeout_replay
 
                 expected = normalized["expected_state_version"]
                 if expected != state_version:
@@ -5741,6 +5772,111 @@ class AdaptiveStateRuntime:
                 {"event_id": event_id},
             )
         return None
+
+    def _review_closeout_replay_locked(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Recover a completed review closeout without another transaction."""
+
+        mutation = request["mutation"]
+        existing = state["assurance_ledger"].get(mutation["review_id"])
+        if existing is None:
+            return None
+        semantic_fields = (
+            "review_id",
+            "review_kind",
+            "review_dispatch_id",
+            "goal_id",
+            "worker_dispatch_id",
+            "worker_report_digest",
+            "reviewer_thread_id",
+            "roadmap_version",
+            "artifact_digest",
+            "report_digest",
+            "decision",
+        )
+        if any(existing.get(field) != mutation.get(field) for field in semantic_fields):
+            raise RuntimeRejection("REVIEW_ID_CONFLICT", "/mutation/review_id")
+        if existing.get("evidence_paths") != mutation.get("review_evidence_paths"):
+            raise RuntimeRejection("REVIEW_ID_CONFLICT", "/mutation/review_id")
+        outbox = state["assurance_dispatch_outbox"].get(
+            mutation["review_dispatch_id"]
+        )
+        expected_result = {
+            "status": mutation["decision"],
+            "report_digest": mutation["report_digest"],
+            "artifact_digest": mutation["artifact_digest"],
+        }
+        if (
+            outbox is None
+            or outbox.get("status") != "COMPLETED"
+            or outbox.get("lease_claim") != mutation["lease_claim"]
+            or outbox.get("result") != expected_result
+        ):
+            raise RuntimeRejection("REVIEW_ID_CONFLICT", "/mutation/review_id")
+        observation = mutation.get("freshness_observation")
+        checkpoint_id = existing.get("freshness_checkpoint_id")
+        if observation is not None:
+            freshness = next(
+                (
+                    item
+                    for item in state["context_freshness_ledger"]
+                    if item["checkpoint_id"] == checkpoint_id
+                ),
+                None,
+            )
+            if (
+                freshness is None
+                or observation["checkpoint_id"] != checkpoint_id
+                or freshness["checkpoint"] != mutation["review_kind"]
+                or freshness["goal_id"] != mutation["goal_id"]
+                or freshness.get("dispatch_id") != mutation["worker_dispatch_id"]
+                or freshness.get("artifact_digest") != mutation["artifact_digest"]
+                or any(
+                    freshness[field] != observation[field]
+                    for field in (
+                        "observed_identity_delta",
+                        "observed_identity_digest",
+                        "classification",
+                        "classification_source",
+                    )
+                )
+            ):
+                raise RuntimeRejection("REVIEW_ID_CONFLICT", "/mutation/review_id")
+        report = self._require_canonical_assurance_report(
+            state,
+            outbox,
+            request,
+            mutation["review_evidence_paths"],
+            mutation["report_digest"],
+            "/mutation/report_digest",
+        )
+        self._validate_formal_report(state, outbox, expected_result, report)
+        return {
+            "ok": True,
+            "status": "STATE_WRITE_ALREADY_APPLIED",
+            "operation_status": "REVIEW_CLOSEOUT_ALREADY_APPLIED",
+            "state_request_id": request["state_request_id"],
+            "event_id": request["event_id"],
+            "state_version_after": state["state_version"],
+            "roadmap_version": state["roadmap_version"],
+            "terminal_status": state["terminal_status"],
+            "next_action_code": "READ_STATE",
+            "result": {
+                "review_id": existing["review_id"],
+                "review_kind": existing["review_kind"],
+                "decision": existing["decision"],
+                "report_digest": existing["report_digest"],
+                "artifact_digest": existing["artifact_digest"],
+                "freshness_checkpoint_id": checkpoint_id,
+            },
+            "evidence_paths": self._base_evidence_paths()
+            + list(existing["evidence_paths"]),
+            "external_actions": [],
+            "external_action_count": 0,
+        }
 
     def _applied_response(
         self,
@@ -10070,13 +10206,81 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("ROADMAP_VERSION_CONFLICT", "/mutation/roadmap_version")
         if mutation["decision"] not in REVIEW_DECISIONS[mutation["review_kind"]]:
             raise RuntimeRejection("REVIEW_DECISION_INVALID", "/mutation/decision")
+        ack_result = outbox.get("result")
+        legacy_empty_result = ack_result in ({}, None)
+        if legacy_empty_result:
+            ack_result = {
+                "status": mutation["decision"],
+                "report_digest": mutation["report_digest"],
+                "artifact_digest": mutation["artifact_digest"],
+            }
+        elif ack_result != {
+            "status": mutation["decision"],
+            "report_digest": mutation["report_digest"],
+            "artifact_digest": mutation["artifact_digest"],
+        }:
+            raise RuntimeRejection(
+                "REVIEW_ACK_RESULT_MISMATCH",
+                "/mutation",
+            )
+        report = self._require_canonical_assurance_report(
+            state,
+            outbox,
+            request,
+            mutation["review_evidence_paths"],
+            mutation["report_digest"],
+            "/mutation/report_digest",
+        )
+        self._validate_formal_report(state, outbox, ack_result, report)
+        self._inject("REVIEW_CLOSEOUT_REPORT_REVALIDATED")
+        if legacy_empty_result:
+            outbox["result"] = copy.deepcopy(ack_result)
+        if (
+            outbox["target_id"] != mutation["reviewer_thread_id"]
+            or mutation["reviewer_thread_id"] not in state["thread_registry"]
+        ):
+            raise RuntimeRejection(
+                "REVIEWER_IDENTITY_MISMATCH",
+                "/mutation/reviewer_thread_id",
+            )
+        self._assert_assurance_ready(
+            state,
+            identity,
+            mutation["reviewer_thread_id"],
+        )
         human_control_enabled = (
             state.get("schema_version") == 2
             and state.get("human_control_policy", {}).get(
                 "context_freshness_required", True
             )
         )
+        accepted_freshness = None
         if human_control_enabled:
+            observation = mutation.get("freshness_observation")
+            if observation is not None:
+                freshness_mutation = {
+                    "type": "RECORD_CONTEXT_FRESHNESS",
+                    "checkpoint_id": observation["checkpoint_id"],
+                    "checkpoint": mutation["review_kind"],
+                    "goal_id": mutation["goal_id"],
+                    "dispatch_id": mutation["worker_dispatch_id"],
+                    "artifact_digest": mutation["artifact_digest"],
+                    "observed_identity_delta": copy.deepcopy(
+                        observation["observed_identity_delta"]
+                    ),
+                    "observed_identity_digest": observation[
+                        "observed_identity_digest"
+                    ],
+                    "classification": observation["classification"],
+                    "classification_source": observation[
+                        "classification_source"
+                    ],
+                }
+                self._record_context_freshness(
+                    state,
+                    request,
+                    freshness_mutation,
+                )
             applicable_freshness = [
                 item
                 for item in state["context_freshness_ledger"]
@@ -10106,73 +10310,41 @@ class AdaptiveStateRuntime:
                     "RELOAD_SAFE",
                 }
             ):
-                raise RuntimeRejection("CONTEXT_FRESHNESS_REQUIRED", "/context_freshness_ledger")
-            if (
-                mutation["review_kind"] == "CODE_REVIEW"
-                and mutation["decision"] in CODE_REVIEW_PASS
-            ):
-                requirements = state["validation_requirements"].get(mutation["goal_id"], {})
-                results = state["validation_results"].get(mutation["goal_id"], {})
-                evidence_identity = state["validation_evidence_identity"].get(
-                    mutation["goal_id"], {}
+                raise RuntimeRejection(
+                    "CONTEXT_FRESHNESS_REQUIRED",
+                    "/context_freshness_ledger",
                 )
-                missing = [
-                    name
-                    for name, rule in requirements.items()
-                    if rule.get("required")
-                    and (
-                        results.get(name) != "PASS"
-                        or evidence_identity.get(name, {}).get("artifact_digest")
-                        != mutation["artifact_digest"]
-                    )
-                ]
-                if missing:
-                    raise RuntimeRejection(
-                        "REQUIRED_VALIDATION_INCOMPLETE",
-                        "/validation_results",
-                        {"missing": missing},
-                    )
-        ack_result = outbox.get("result")
-        legacy_empty_result = ack_result in ({}, None)
-        if legacy_empty_result:
-            ack_result = {
-                "status": mutation["decision"],
-                "report_digest": mutation["report_digest"],
-                "artifact_digest": mutation["artifact_digest"],
-            }
-        elif ack_result != {
-            "status": mutation["decision"],
-            "report_digest": mutation["report_digest"],
-            "artifact_digest": mutation["artifact_digest"],
-        }:
-            raise RuntimeRejection(
-                "REVIEW_ACK_RESULT_MISMATCH",
-                "/mutation",
-            )
-        report = self._require_canonical_assurance_report(
-            state,
-            outbox,
-            request,
-            mutation["review_evidence_paths"],
-            mutation["report_digest"],
-            "/mutation/report_digest",
-        )
-        self._validate_formal_report(state, outbox, ack_result, report)
-        if legacy_empty_result:
-            outbox["result"] = copy.deepcopy(ack_result)
+            accepted_freshness = latest_freshness
+        self._inject("REVIEW_CLOSEOUT_FRESHNESS_PROJECTED")
         if (
-            outbox["target_id"] != mutation["reviewer_thread_id"]
-            or mutation["reviewer_thread_id"] not in state["thread_registry"]
+            human_control_enabled
+            and mutation["review_kind"] == "CODE_REVIEW"
+            and mutation["decision"] in CODE_REVIEW_PASS
         ):
-            raise RuntimeRejection(
-                "REVIEWER_IDENTITY_MISMATCH",
-                "/mutation/reviewer_thread_id",
+            requirements = state["validation_requirements"].get(
+                mutation["goal_id"], {}
             )
-        self._assert_assurance_ready(
-            state,
-            identity,
-            mutation["reviewer_thread_id"],
-        )
+            results = state["validation_results"].get(mutation["goal_id"], {})
+            evidence_identity = state["validation_evidence_identity"].get(
+                mutation["goal_id"], {}
+            )
+            missing = [
+                name
+                for name, rule in requirements.items()
+                if rule.get("required")
+                and (
+                    results.get(name) != "PASS"
+                    or evidence_identity.get(name, {}).get("artifact_digest")
+                    != mutation["artifact_digest"]
+                )
+            ]
+            if missing:
+                raise RuntimeRejection(
+                    "REQUIRED_VALIDATION_INCOMPLETE",
+                    "/validation_results",
+                    {"missing": missing},
+                )
+        self._inject("REVIEW_CLOSEOUT_VALIDATION_GATE_CHECKED")
         review_id = mutation["review_id"]
         record = {
             "review_id": review_id,
@@ -10190,6 +10362,10 @@ class AdaptiveStateRuntime:
             "roadmap_proposal": copy.deepcopy(report.get("roadmap_proposal")),
             "evidence_paths": list(mutation["review_evidence_paths"]),
         }
+        if accepted_freshness is not None:
+            record["freshness_checkpoint_id"] = accepted_freshness[
+                "checkpoint_id"
+            ]
         if mutation["review_kind"] == "ROADMAP_AUDIT":
             record["code_review_id"] = identity["code_review_id"]
             record["estimate_revision"] = copy.deepcopy(
@@ -10207,7 +10383,7 @@ class AdaptiveStateRuntime:
         if existing is not None:
             raise RuntimeRejection("REVIEW_ALREADY_RECORDED", "/mutation/review_id")
         state["assurance_ledger"][review_id] = record
-        outbox["status"] = "COMPLETED"
+        self._inject("REVIEW_CLOSEOUT_LEDGER_PROJECTED")
         goal = state["goal_execution_ledger"][mutation["goal_id"]]
         kind = mutation["review_kind"]
         decision = mutation["decision"]
@@ -10241,7 +10417,11 @@ class AdaptiveStateRuntime:
         else:
             goal["status"] = "FINAL_AUDIT_PASS" if decision in FINAL_PASS else "REPAIR_REQUIRED"
             next_action = "FINALIZE_LOOP" if decision in FINAL_PASS else "REPAIR_REQUIRED"
+        self._inject("REVIEW_CLOSEOUT_GOAL_PROJECTED")
+        outbox["status"] = "COMPLETED"
+        self._inject("REVIEW_CLOSEOUT_OUTBOX_COMPLETED")
         self._finish_route(state, claim, after_version)
+        self._inject("REVIEW_CLOSEOUT_ROUTE_FINISHED")
         return {
             "code": f"{kind}_ACKED",
             "next_action_code": next_action,
@@ -12529,6 +12709,7 @@ __all__ = [
     "PAYLOAD_DIGEST_PLACEHOLDER",
     "PERSISTENT_STAGES",
     "REPORT_STAGE_STAGES",
+    "REVIEW_CLOSEOUT_CANDIDATE_STAGES",
     "STATUS_PROJECTION_STAGES",
     "RuntimeRejection",
     "WORKER_ACK_CANDIDATE_STAGES",

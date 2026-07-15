@@ -6,6 +6,270 @@ from state_runtime_support import *  # noqa: F403
 
 
 class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
+    def _atomic_code_review_closeout(
+        self,
+        root: Path,
+    ) -> tuple[Harness, dict[str, Any], dict[str, str], str]:
+        harness, worker, claim, review_dispatch_id, payload = (
+            self._prepare_sent_code_review(
+                root,
+                record_freshness=False,
+                required_validation=True,
+            )
+        )
+        result = {
+            "status": "REVIEW_PASS",
+            "artifact_digest": worker["artifact_digest"],
+        }
+        report_text = harness.formal_report_content(
+            "ASSURANCE", review_dispatch_id, result
+        )
+        report_digest = digest(report_text)
+        acked = harness.ack_outbox(
+            claim,
+            "ASSURANCE",
+            review_dispatch_id,
+            payload,
+            target_id="reviewer-1",
+            result={**result, "report_digest": report_digest},
+            report_content=report_text,
+        )
+        self.assertTrue(acked["ok"], acked)
+        mutation = self._canonical_reuse_review_mutation(
+            harness,
+            worker,
+            claim,
+            review_dispatch_id,
+            report_digest,
+        )
+        freshness_delta = context_identity_delta(
+            worker_report_digest=worker["report_digest"],
+            artifact_digest=worker["artifact_digest"],
+            diff_digest=digest("atomic-review-closeout-diff"),
+        )
+        mutation["freshness_observation"] = {
+            "checkpoint_id": "atomic-review-freshness-1",
+            "observed_identity_delta": freshness_delta,
+            "observed_identity_digest": json_digest(freshness_delta),
+            "classification": "FRESH",
+            "classification_source": "DETERMINISTIC_IDENTITY",
+        }
+        request = harness.make_request(
+            mutation,
+            evidence_paths=mutation["review_evidence_paths"],
+        )
+        return harness, request, worker, review_dispatch_id
+
+    def test_record_review_projects_freshness_and_closeout_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, request, worker, review_dispatch_id = (
+                self._atomic_code_review_closeout(root)
+            )
+            before_version = harness.version()
+            response = harness.runtime.apply(copy.deepcopy(request))
+            self.assertTrue(response["ok"], response)
+            self.assertEqual(response["operation_status"], "CODE_REVIEW_ACKED")
+            state = harness.state()
+            self.assertEqual(state["state_version"], before_version + 1)
+            self.assertEqual(state["validation_gate_status"], "PASS")
+            self.assertEqual(
+                state["assurance_ledger"]["canonical-reuse-review-1"][
+                    "freshness_checkpoint_id"
+                ],
+                "atomic-review-freshness-1",
+            )
+            self.assertEqual(
+                state["context_freshness_ledger"][-1]["artifact_digest"],
+                worker["artifact_digest"],
+            )
+            self.assertEqual(
+                state["assurance_dispatch_outbox"][review_dispatch_id]["status"],
+                "COMPLETED",
+            )
+            self.assertEqual(
+                state["goal_execution_ledger"][worker["goal_id"]]["status"],
+                "CODE_REVIEW_PASS",
+            )
+            self.assertIsNone(state["controller_lease"])
+
+    def test_record_review_candidate_and_journal_faults_converge_once(self) -> None:
+        stages = (
+            *state_runtime_module.REVIEW_CLOSEOUT_CANDIDATE_STAGES,
+            *(
+                stage
+                for stage in state_runtime_module.PERSISTENT_STAGES
+                if not stage.startswith("DASHBOARD_")
+            ),
+        )
+        for stage in stages:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness, request, worker, review_dispatch_id = (
+                    self._atomic_code_review_closeout(root)
+                )
+                crashing = state_runtime_module.AdaptiveStateRuntime(
+                    root,
+                    crash_at=stage,
+                )
+                with self.assertRaises(state_runtime_module.InjectedCrash):
+                    crashing.apply(copy.deepcopy(request))
+                recovered = state_runtime_module.AdaptiveStateRuntime(root)
+                recovery = recovered.recover()
+                self.assertTrue(recovery["ok"], recovery)
+                replay = recovered.apply(copy.deepcopy(request))
+                self.assertTrue(replay["ok"], replay)
+                state = recovered.read_state()
+                assert state is not None
+                self.assertEqual(
+                    state["assurance_dispatch_outbox"][review_dispatch_id]["status"],
+                    "COMPLETED",
+                )
+                self.assertEqual(
+                    state["goal_execution_ledger"][worker["goal_id"]]["status"],
+                    "CODE_REVIEW_PASS",
+                )
+                self.assertIsNone(state["controller_lease"])
+                events = [
+                    json.loads(line)
+                    for line in recovered.events_path.read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                    if line
+                ]
+                matching_events = [
+                    event
+                    for event in events
+                    if event["event_type"] == "RECORD_REVIEW"
+                    and event.get("goal_id") == worker["goal_id"]
+                ]
+                self.assertEqual(len(matching_events), 1)
+
+    def test_record_review_semantic_replay_and_conflict_are_zero_effect(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, request, _, _ = self._atomic_code_review_closeout(root)
+            applied = harness.runtime.apply(copy.deepcopy(request))
+            self.assertTrue(applied["ok"], applied)
+            before = persisted_snapshot(root)
+            replay = copy.deepcopy(request)
+            replay["state_request_id"] = "semantic-review-replay-request"
+            replay["event_id"] = "semantic-review-replay-event"
+            replay["expected_state_version"] = 0
+            recovered = harness.runtime.apply(replay)
+            self.assertEqual(recovered["status"], "STATE_WRITE_ALREADY_APPLIED")
+            self.assertEqual(
+                recovered["operation_status"],
+                "REVIEW_CLOSEOUT_ALREADY_APPLIED",
+            )
+            self.assertEqual(persisted_snapshot(root), before)
+
+            conflict = copy.deepcopy(replay)
+            conflict["state_request_id"] = "semantic-review-conflict-request"
+            conflict["event_id"] = "semantic-review-conflict-event"
+            conflict["mutation"]["artifact_digest"] = digest("different-artifact")
+            rejected = harness.runtime.apply(conflict)
+            self.assertEqual(rejected["status"], "REVIEW_ID_CONFLICT")
+            self.assertEqual(persisted_snapshot(root), before)
+
+            wrong_pack = copy.deepcopy(replay)
+            wrong_pack["state_request_id"] = "semantic-review-wrong-pack-request"
+            wrong_pack["event_id"] = "semantic-review-wrong-pack-event"
+            wrong_pack["controller_pack_digest"] = digest("unmigrated-pack")
+            rejected_pack = harness.runtime.apply(wrong_pack)
+            self.assertEqual(
+                rejected_pack["status"],
+                "CONTROLLER_PACK_MIGRATION_REQUIRED",
+            )
+            self.assertEqual(persisted_snapshot(root), before)
+
+    def test_record_review_atomic_rejections_leave_acked_route_unchanged(self) -> None:
+        for case in ("invalid-freshness", "validation-incomplete"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness, request, worker, review_dispatch_id = (
+                    self._atomic_code_review_closeout(root)
+                )
+                expected_status = "CONTEXT_CLASSIFICATION_UNPROVEN"
+                if case == "invalid-freshness":
+                    request["mutation"]["freshness_observation"][
+                        "observed_identity_delta"
+                    ]["artifact_digest_changed"] = True
+                    request["mutation"]["freshness_observation"][
+                        "observed_identity_digest"
+                    ] = json_digest(
+                        request["mutation"]["freshness_observation"][
+                            "observed_identity_delta"
+                        ]
+                    )
+                else:
+                    evidence_path = (
+                        ".codex-loop/reports/atomic-review-blocked-validation.json"
+                    )
+                    evidence_content = '{"status":"BLOCKED"}'
+                    blocked = harness.runtime.apply(
+                        harness.make_request(
+                            {
+                                "type": "RECORD_VALIDATION",
+                                "goal_id": worker["goal_id"],
+                                "dimension": "functional",
+                                "status": "BLOCKED",
+                                "evidence_digest": digest(evidence_content),
+                                "artifact_digest": worker["artifact_digest"],
+                            },
+                            evidence_paths=[evidence_path],
+                            artifacts=[
+                                {
+                                    "path": evidence_path,
+                                    "content": evidence_content,
+                                    "digest": digest(evidence_content),
+                                    "media_type": "application/json",
+                                }
+                            ],
+                        )
+                    )
+                    self.assertTrue(blocked["ok"], blocked)
+                    request["expected_state_version"] = harness.version()
+                    expected_status = "REQUIRED_VALIDATION_INCOMPLETE"
+                before = persisted_snapshot(root)
+                rejected = harness.runtime.apply(request)
+                self.assertEqual(rejected["status"], expected_status)
+                self.assertEqual(persisted_snapshot(root), before)
+                state = harness.state()
+                self.assertEqual(
+                    state["assurance_dispatch_outbox"][review_dispatch_id]["status"],
+                    "ACKED",
+                )
+                self.assertIsNotNone(state["controller_lease"])
+                self.assertNotIn(
+                    "atomic-review-freshness-1",
+                    {
+                        item["checkpoint_id"]
+                        for item in state["context_freshness_ledger"]
+                    },
+                )
+
+    def test_code_review_route_uses_five_state_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = Harness(Path(temporary))
+            harness.initialize()
+            worker = harness.worker_pass()
+            harness.register_control_result(
+                "THREAD",
+                "atomic-reviewer-create",
+                "controller-1",
+                {"role_kind": "REVIEWER"},
+                {
+                    "thread_id": "reviewer-1",
+                    "role_kind": "REVIEWER",
+                    "worktree_path": ".",
+                },
+            )
+            before_version = harness.version()
+            review_id = harness.review("CODE_REVIEW", "REVIEW_PASS", worker)
+            self.assertIn(review_id, harness.state()["assurance_ledger"])
+            self.assertEqual(harness.version() - before_version, 5)
+
     def _prepare_worker_validation_projection(
         self,
         root: Path,

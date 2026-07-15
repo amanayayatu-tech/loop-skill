@@ -99,6 +99,12 @@ already archived evidence path/digest/media type. Any missing, duplicate,
 unknown, non-required, stale-artifact, or unarchived item rejects the whole ACK.
 `RECORD_VALIDATION` remains only for legacy Packs or independent validation
 performed after Worker ACK.
+Reviewer `ACK_OUTBOX` still proves only that the report is durable. One following
+`RECORD_REVIEW` carries a bounded `freshness_observation`, revalidates the
+canonical report, and atomically commits freshness, the validation gate,
+assurance ledger, Goal, outbox completion, and lease consumption in one journal
+transaction. A new request-id replay of the same review/report/artifact returns
+the existing closeout receipt without another event.
 
 Pack changes require atomic `MIGRATE_CONTROLLER_PACK` at a paused safe point and
 retain immutable revision history; an unmigrated digest has no routing authority.

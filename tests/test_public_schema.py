@@ -155,6 +155,14 @@ class PublicDraft202012SchemaTests(unittest.TestCase):
             "evidence_paths": [".codex-loop/reports/review.json"],
         }
         self.assertEqual(list(validator.iter_errors(base)), [])
+        self.assertEqual(
+            list(
+                validator.iter_errors(
+                    {**base, "freshness_checkpoint_id": "freshness-1"}
+                )
+            ),
+            [],
+        )
         self.assertTrue(
             list(
                 validator.iter_errors(
@@ -207,6 +215,27 @@ class PublicDraft202012SchemaTests(unittest.TestCase):
         self.assertIn(
             "worker_validation_projection_contract_version",
             state_schema["allOf"][0]["then"]["required"],
+        )
+
+    def test_record_review_freshness_observation_schema_is_closed(self) -> None:
+        schema = mutation_schema()
+        observation = schema["$defs"]["reviewFreshnessObservation"]
+        self.assertFalse(observation["additionalProperties"])
+        self.assertEqual(
+            set(observation["required"]),
+            {
+                "checkpoint_id",
+                "observed_identity_delta",
+                "observed_identity_digest",
+                "classification",
+                "classification_source",
+            },
+        )
+        self.assertEqual(
+            schema["$defs"]["recordReview"]["properties"][
+                "freshness_observation"
+            ],
+            {"$ref": "#/$defs/reviewFreshnessObservation"},
         )
 
     def test_empty_permissions_object_matches_runtime_when_workers_are_explicit(self) -> None:

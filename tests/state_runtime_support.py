@@ -1093,6 +1093,7 @@ class Harness:
                     "worktree_path": ".",
                 },
             )
+        freshness_observation = None
         if record_freshness:
             freshness_delta = context_identity_delta(
                 worker_report_digest=worker["report_digest"],
@@ -1101,22 +1102,13 @@ class Harness:
                     f"auto-review-diff:{kind}:{worker['dispatch_id']}"
                 ),
             )
-            freshness = self.apply(
-                {
-                    "type": "RECORD_CONTEXT_FRESHNESS",
-                    "checkpoint_id": self.next_id(f"{kind.lower()}-freshness"),
-                    "checkpoint": kind,
-                    "goal_id": worker["goal_id"],
-                    "dispatch_id": worker["dispatch_id"],
-                    "artifact_digest": worker["artifact_digest"],
-                    "observed_identity_delta": freshness_delta,
-                    "observed_identity_digest": json_digest(freshness_delta),
-                    "classification": "FRESH",
-                    "classification_source": "DETERMINISTIC_IDENTITY",
-                }
-            )
-            if not freshness["ok"]:
-                raise AssertionError(freshness)
+            freshness_observation = {
+                "checkpoint_id": self.next_id(f"{kind.lower()}-freshness"),
+                "observed_identity_delta": freshness_delta,
+                "observed_identity_digest": json_digest(freshness_delta),
+                "classification": "FRESH",
+                "classification_source": "DETERMINISTIC_IDENTITY",
+            }
         claim = claim or self.acquire(owner_kind="HEARTBEAT")
         dispatch_id = self.next_id(f"{kind.lower()}-dispatch")
         review_id = self.next_id(f"{kind.lower()}-review")
@@ -1202,27 +1194,28 @@ class Harness:
             report_content=review_content,
         )["ok"]:
             raise AssertionError("review outbox ACK failed")
-        response = self.apply(
-            {
-                "type": "RECORD_REVIEW",
-                "lease_claim": claim,
-                "observed_at": T1,
-                "review_id": review_id,
-                "review_kind": kind,
-                "review_dispatch_id": dispatch_id,
-                "goal_id": worker["goal_id"],
-                "worker_dispatch_id": worker["dispatch_id"],
-                "worker_report_digest": worker["report_digest"],
-                "reviewer_thread_id": "reviewer-1",
-                "roadmap_version": self.state()["roadmap_version"],
-                "artifact_digest": worker["artifact_digest"],
-                "report_digest": review_digest,
-                "decision": decision,
-                "review_evidence_paths": [
-                    f".codex-loop/reports/{dispatch_id}-ack.json"
-                ],
-            },
-        )
+        closeout = {
+            "type": "RECORD_REVIEW",
+            "lease_claim": claim,
+            "observed_at": T1,
+            "review_id": review_id,
+            "review_kind": kind,
+            "review_dispatch_id": dispatch_id,
+            "goal_id": worker["goal_id"],
+            "worker_dispatch_id": worker["dispatch_id"],
+            "worker_report_digest": worker["report_digest"],
+            "reviewer_thread_id": "reviewer-1",
+            "roadmap_version": self.state()["roadmap_version"],
+            "artifact_digest": worker["artifact_digest"],
+            "report_digest": review_digest,
+            "decision": decision,
+            "review_evidence_paths": [
+                f".codex-loop/reports/{dispatch_id}-ack.json"
+            ],
+        }
+        if freshness_observation is not None:
+            closeout["freshness_observation"] = freshness_observation
+        response = self.apply(closeout)
         if not response["ok"]:
             raise AssertionError(response)
         return review_id
@@ -1726,10 +1719,24 @@ class AdaptiveStateRuntimeTestCase(unittest.TestCase):
         return harness, claim, dispatch_id, payload
 
     def _prepare_sent_code_review(
-        self, root: Path
+        self,
+        root: Path,
+        *,
+        record_freshness: bool = True,
+        required_validation: bool = False,
     ) -> tuple[Harness, dict[str, str], dict[str, Any], str, str]:
         harness = Harness(root)
-        harness.initialize()
+        if required_validation:
+            definition = goal("g1", "m1")
+            definition["validation_matrix"] = complete_validation_matrix(
+                required_dimensions=("functional",)
+            )
+            definition["payload_template_digest"] = goal_definition_digest(
+                definition
+            )
+            harness.initialize(definitions={"g1": definition})
+        else:
+            harness.initialize()
         worker = harness.worker_pass()
         harness.register_control_result(
             "THREAD",
@@ -1742,26 +1749,27 @@ class AdaptiveStateRuntimeTestCase(unittest.TestCase):
                 "worktree_path": ".",
             },
         )
-        freshness_delta = context_identity_delta(
-            worker_report_digest=worker["report_digest"],
-            artifact_digest=worker["artifact_digest"],
-            diff_digest=digest("review-report-contract-diff"),
-        )
-        freshness = harness.apply(
-            {
-                "type": "RECORD_CONTEXT_FRESHNESS",
-                "checkpoint_id": "review-report-contract-freshness",
-                "checkpoint": "CODE_REVIEW",
-                "goal_id": worker["goal_id"],
-                "dispatch_id": worker["dispatch_id"],
-                "artifact_digest": worker["artifact_digest"],
-                "observed_identity_delta": freshness_delta,
-                "observed_identity_digest": json_digest(freshness_delta),
-                "classification": "FRESH",
-                "classification_source": "DETERMINISTIC_IDENTITY",
-            }
-        )
-        self.assertTrue(freshness["ok"], freshness)
+        if record_freshness:
+            freshness_delta = context_identity_delta(
+                worker_report_digest=worker["report_digest"],
+                artifact_digest=worker["artifact_digest"],
+                diff_digest=digest("review-report-contract-diff"),
+            )
+            freshness = harness.apply(
+                {
+                    "type": "RECORD_CONTEXT_FRESHNESS",
+                    "checkpoint_id": "review-report-contract-freshness",
+                    "checkpoint": "CODE_REVIEW",
+                    "goal_id": worker["goal_id"],
+                    "dispatch_id": worker["dispatch_id"],
+                    "artifact_digest": worker["artifact_digest"],
+                    "observed_identity_delta": freshness_delta,
+                    "observed_identity_digest": json_digest(freshness_delta),
+                    "classification": "FRESH",
+                    "classification_source": "DETERMINISTIC_IDENTITY",
+                }
+            )
+            self.assertTrue(freshness["ok"], freshness)
         claim = harness.acquire()
         review_dispatch_id = "review-report-contract-1"
         prepared, payload = harness.prepare_outbox(

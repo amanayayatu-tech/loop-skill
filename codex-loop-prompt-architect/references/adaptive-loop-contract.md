@@ -775,6 +775,16 @@ duplicate, unknown, non-required, stale-artifact, or unarchived evidence rejects
 the complete ACK with no canonical side effect. `RECORD_VALIDATION` remains for
 legacy Pack compatibility and independent validation performed after Worker ACK;
 it is not part of the new Pack's normal Worker PASS route.
+Reviewer `ACK_OUTBOX` and review acceptance remain separate facts. The ACK makes
+the exact report durable and leaves the assurance route reserved. The following
+`RECORD_REVIEW` may carry one closed `freshness_observation`; runtime derives its
+checkpoint/Goal/dispatch/artifact binding from the review mutation, validates
+the observation, reopens the canonical report, checks the required validation
+gate, and commits freshness, assurance ledger, Goal projection, outbox
+completion, and lease consumption in one journal transaction. A failure at any
+stage commits none of them. A different request id with the same completed
+review/report/artifact returns the existing closeout receipt without another
+event; changed identity returns `REVIEW_ID_CONFLICT` with no side effect.
 `RECORD_REVIEW` carries zero artifacts and repeats the exact sole canonical ACK
 report path; runtime reopens that immutable artifact through `artifact_ledger`,
 rechecks its bytes/digest/media type, and parses it again without Controller

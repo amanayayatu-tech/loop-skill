@@ -1383,6 +1383,7 @@
         "final_audit_context_digest": {"$ref": "#/$defs/digest"},
         "estimate_revision": {"$ref": "#/$defs/estimateRevision"},
         "legacy_revalidation_required": {"const": true},
+        "freshness_checkpoint_id": {"$ref": "#/$defs/safeId"},
         "evidence_paths": {"$ref": "#/$defs/stringArray"}
       }
     },
