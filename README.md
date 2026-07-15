@@ -36,10 +36,13 @@ attempt/latest-worker 的分类；不会删除历史、清空 repair counter 或
 `tty:false`，再一次写入 compact JSON frame；生成 Pack 会拒绝前置 stdin helper、
 `tty:true`、`dd/stty`、固定字节 reader、heredoc 和 shell pipeline。
 
-外部模型调用与 Local Verification 现在使用脱敏、不可变的 `STARTED` / `COMPLETED`
-receipt。即使 deferred exec 丢失 stdout，Controller 仍可从
-`.codex-loop/external-receipts/` 恢复结果；只有 `STARTED` 时保守记为已消耗一次且 token
-未知，不得自动重试。Worker 报告会区分真实执行与确定性的控制面拒绝，后者只有在
+外部模型调用与 Local Verification 现在由既有 LOCAL outbox 的
+`external_call_authorization` 绑定 route、Pack、Goal、lease、target、provider/model、request
+digest 和 call index，并使用脱敏、不可变的 `STARTED` / `COMPLETED` receipt。时间顺序、
+PASS/exit code、只读 artifact digest 与 token 算术都由 runtime 校验。即使 deferred exec
+丢失 stdout，Controller 仍可从 `.codex-loop/external-receipts/` 恢复 COMPLETED 且不得重调
+provider；只有 `STARTED` 时返回 `EXTERNAL_CALL_OUTCOME_UNKNOWN`，保守记为已消耗一次且
+未知 token 保持 `null` / `complete=false`。Worker 报告会区分真实执行与确定性的控制面拒绝，后者只有在
 `execution_started=false` 且 blocker code 命中 runtime 白名单时才不消耗 repair。
 
 Pack 身份变化必须通过暂停安全点上的 `MIGRATE_CONTROLLER_PACK` 原子迁移并保留不可变

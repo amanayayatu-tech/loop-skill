@@ -611,13 +611,23 @@ acknowledged Local `FAIL` or `BLOCKED` record. Roadmap Revision then preserves
 the original attempts and marks the source Goal `RETIRED`; it never upgrades the
 old Goal or Local result to PASS. Without that exact non-PASS evidence, the
 ordinary Local PASS gate remains mandatory.
-Before a metered external call or Local Verification, stage one sanitized,
-immutable `STARTED` receipt through `--external-receipt-stage`; stage its bound
-`COMPLETED` receipt before stdout. Lost stdout is recovered from
-`.codex-loop/external-receipts/`. A lone `STARTED` receipt conservatively
-consumes one call with unknown result/tokens and cannot authorize a retry.
-Receipts contain digests, status, usage counts, and process status only, never
-prompts, responses, keys, or secrets.
+Before a metered external call or Local Verification, the canonical SENT LOCAL
+outbox must carry one `external_call_authorization`: `receipt_id`, action kind,
+provider, model, request digest, call index, and a confined result artifact path.
+Both receipt phases additionally
+bind loop, active Pack, Goal, local dispatch/outbox, lease/routing turn, target
+role/thread, and start time. `COMPLETED` also binds completion time, exact
+STARTED digest, result status, process exit code, immutable read-only artifact
+path/digest, and usage. Runtime rejects a missing/mismatched route, provider,
+model, request, call index, target, artifact, or Pack without writing a receipt.
+Stage `STARTED` before provider send and `COMPLETED` before stdout. A replayed
+COMPLETED is recovered without provider retry. A lone/replayed STARTED returns
+`EXTERNAL_CALL_OUTCOME_UNKNOWN`, conservatively consumes one call, and forbids
+retry. PASS requires exit 0; token arithmetic must agree, and unknown tokens
+remain null with `complete=false`. Receipts contain no prompt, response, key,
+Authorization value, or secret. Pre-contract historical receipts remain
+immutable legacy/unverified audit evidence and cannot prove PASS, exact usage,
+or retry permission.
 `REVIEW_NEEDS_REPAIR`, Local Verification FAIL,
 `ROADMAP_AUDIT_NEEDS_REPAIR`, and `FINAL_REVIEW_NEEDS_REPAIR` share one closed
 repair-source union and the same per-Goal repair budget.

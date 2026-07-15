@@ -662,6 +662,15 @@ class Harness:
                 "worker_dispatch_id": identity["worker_dispatch_id"],
                 "artifact_digest": identity["artifact_digest"],
                 "code_review_id": identity["code_review_id"],
+                **(
+                    {
+                        "external_call_authorization": copy.deepcopy(
+                            identity["external_call_authorization"]
+                        )
+                    }
+                    if "external_call_authorization" in identity
+                    else {}
+                ),
             }
         elif kind == "AUTOMATION":
             identity = {
@@ -1285,6 +1294,87 @@ class Harness:
         if not response["ok"]:
             raise AssertionError(response)
         return dispatch_id
+
+    def prepare_local_external_call(
+        self,
+        *,
+        receipt_id: str,
+        action_kind: str = "EXTERNAL_MODEL_CALL",
+        provider: str = "minimax",
+        model: str = "MiniMax-M2.5",
+        request_digest: str | None = None,
+        call_index: int = 1,
+        artifact_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Create one canonical SENT Local route authorized for one call."""
+
+        worker = self.worker_pass()
+        code_review_id = self.review("CODE_REVIEW", "REVIEW_PASS", worker)
+        if "local-verifier-1" not in self.state()["thread_registry"]:
+            self.register_control_result(
+                "THREAD",
+                self.next_id("local-verifier-thread-create"),
+                "controller-1",
+                {"role_kind": "LOCAL_VERIFIER"},
+                {
+                    "thread_id": "local-verifier-1",
+                    "role_kind": "LOCAL_VERIFIER",
+                    "worktree_path": ".",
+                },
+            )
+        authorization = {
+            "receipt_id": receipt_id,
+            "action_kind": action_kind,
+            "provider": provider,
+            "model": model,
+            "request_digest": request_digest or digest(f"request:{receipt_id}"),
+            "call_index": call_index,
+            "artifact_path": artifact_path or f"evidence/{receipt_id}.json",
+        }
+        claim = self.acquire()
+        dispatch_id = self.next_id("local-dispatch")
+        prepared, payload = self.prepare_outbox(
+            claim,
+            "LOCAL",
+            dispatch_id,
+            {
+                "goal_id": worker["goal_id"],
+                "worker_dispatch_id": worker["dispatch_id"],
+                "artifact_digest": worker["artifact_digest"],
+                "verification_id": self.next_id("verification"),
+                "code_review_id": code_review_id,
+                "external_call_authorization": authorization,
+            },
+            target_id="local-verifier-1",
+        )
+        if not prepared["ok"]:
+            raise AssertionError(prepared)
+        sent = self.mark_sent(
+            claim,
+            "LOCAL",
+            dispatch_id,
+            payload,
+            target_id="local-verifier-1",
+        )
+        if not sent["ok"]:
+            raise AssertionError(sent)
+        state = self.state()
+        return {
+            **authorization,
+            "phase": "STARTED",
+            "loop_id": state["loop_id"],
+            "controller_pack_digest": state["controller_pack_identity"]["digest"],
+            "goal_id": worker["goal_id"],
+            "outbox_kind": "LOCAL",
+            "outbox_id": dispatch_id,
+            "dispatch_id": dispatch_id,
+            "lease_id": claim["lease_id"],
+            "routing_turn_id": claim["routing_turn_id"],
+            "target_role": "LOCAL_VERIFIER",
+            "target_thread_id": "local-verifier-1",
+            "calls_consumed": 1,
+            "started_at": T1,
+        }
 
     def ensure_controller_goal(self, milestone_id: str | None = None) -> dict[str, Any]:
         milestone_id = milestone_id or self.state()["active_milestone_id"]

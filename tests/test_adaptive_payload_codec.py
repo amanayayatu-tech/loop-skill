@@ -73,6 +73,61 @@ class AdaptivePayloadCodecTests(unittest.TestCase):
             },
         }
 
+    def local_specification(self) -> dict[str, object]:
+        claim = {
+            "lease_epoch": 8,
+            "lease_id": "lease-local-8",
+            "routing_turn_id": "turn-local-8",
+            "owner_kind": "GOAL_TURN",
+            "owner_identity": "controller-1",
+            "intended_transition": "ROUTE_ONE_TRANSITION",
+        }
+        return {
+            "envelope_type": "LOCAL_VERIFY_DISPATCH",
+            "payload": {
+                "artifact_identity": {"kind": "NO_DIFF"},
+                "canonical_state_snapshot": {
+                    "active_milestone_id": "m1",
+                    "controller_lease": {
+                        "claim": claim,
+                        "routing_turn_id": "turn-local-8",
+                        "acquired_at": "2026-01-01T00:00:00Z",
+                        "expires_at": "2026-01-01T01:00:00Z",
+                        "route_action": None,
+                    },
+                    "loop_id": "loop-1",
+                    "roadmap_version": 3,
+                    "state_version": 41,
+                },
+                "code_review_id": "code-review-1",
+                "dispatch_lease_claim": claim,
+                "dispatch_payload_digest": PAYLOAD_DIGEST_PLACEHOLDER,
+                "evidence_capture_rules": ["capture sanitized result"],
+                "expected_result": "one deterministic result",
+                "external_call_authorization": {
+                    "receipt_id": "receipt-local-1",
+                    "action_kind": "EXTERNAL_MODEL_CALL",
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.5",
+                    "request_digest": "sha256:" + "c" * 64,
+                    "call_index": 1,
+                    "artifact_path": "evidence/local-result.json",
+                },
+                "goal_id": "g1",
+                "local_dispatch_id": "local-dispatch-1",
+                "milestone_id": "m1",
+                "prerequisites": ["review passed"],
+                "privacy_boundary": "sanitized evidence only",
+                "roadmap_version": 3,
+                "source_artifact_digest": "sha256:" + "a" * 64,
+                "source_worker_dispatch_id": "dispatch-g1-001",
+                "steps": ["run once"],
+                "stop_conditions": ["hard blocker"],
+                "target_thread_id": "local-verifier-1",
+                "verification_id": "verification-1",
+            },
+        }
+
     def test_materialize_and_verify_round_trip(self) -> None:
         result = materialize_dispatch_payload(self.specification())
         self.assertEqual(result["status"], "PAYLOAD_MATERIALIZED")
@@ -87,6 +142,19 @@ class AdaptivePayloadCodecTests(unittest.TestCase):
         self.assertEqual(
             verified["canonical_byte_count"], result["canonical_byte_count"]
         )
+
+    def test_local_payload_binds_closed_external_call_authorization(self) -> None:
+        result = materialize_dispatch_payload(self.local_specification())
+        verified = verify_dispatch_payload(result["transport_text"])
+        self.assertEqual(verified["payload_digest"], result["payload_digest"])
+
+        invalid = self.local_specification()
+        invalid["payload"]["external_call_authorization"]["prompt"] = "secret"  # type: ignore[index]
+        with self.assertRaisesRegex(
+            RuntimeRejection,
+            "EXTERNAL_CALL_AUTHORIZATION_INVALID",
+        ):
+            materialize_dispatch_payload(invalid)
 
     def test_old_angle_bracket_interpretation_is_not_the_protocol(self) -> None:
         result = materialize_dispatch_payload(self.specification())

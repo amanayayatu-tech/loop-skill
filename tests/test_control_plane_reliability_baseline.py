@@ -238,41 +238,34 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
             self.assertEqual(replay["status"], "STATE_WRITE_ALREADY_APPLIED")
             self.assertEqual(before, persisted_snapshot(root))
 
-    @baseline_expected_failure
     def test_external_receipt_requires_canonical_route_and_provider_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             harness = Harness(Path(temporary))
             initialized, _ = harness.initialize()
             self.assertTrue(initialized["ok"], initialized)
+            request = harness.prepare_local_external_call(
+                receipt_id="underbound-receipt"
+            )
             before = persisted_snapshot(Path(temporary))
             with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
                 harness.runtime.stage_external_receipt(
                     {
-                        "receipt_id": "underbound-receipt",
-                        "phase": "STARTED",
-                        "action_kind": "LOCAL_VERIFICATION",
-                        "request_digest": digest("underbound-request"),
-                        "observed_at": T1,
-                        "calls_consumed": 1,
+                        **request,
+                        "provider": "different-provider",
                     }
                 )
-            self.assertEqual(context.exception.code, "EXTERNAL_RECEIPT_IDENTITY_INCOMPLETE")
+            self.assertEqual(context.exception.code, "EXTERNAL_RECEIPT_IDENTITY_CONFLICT")
             self.assertEqual(before, persisted_snapshot(Path(temporary)))
 
-    @baseline_expected_failure
     def test_external_receipt_rejects_completion_before_start(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             harness = Harness(Path(temporary))
             initialized, _ = harness.initialize()
             self.assertTrue(initialized["ok"], initialized)
-            started_request = {
-                "receipt_id": "time-order-receipt",
-                "phase": "STARTED",
-                "action_kind": "EXTERNAL_MODEL_CALL",
-                "request_digest": digest("time-order-request"),
-                "observed_at": T2,
-                "calls_consumed": 1,
-            }
+            started_request = harness.prepare_local_external_call(
+                receipt_id="time-order-receipt"
+            )
+            started_request["started_at"] = T2
             started = harness.runtime.stage_external_receipt(started_request)
             before = persisted_snapshot(Path(temporary))
             with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
@@ -280,9 +273,10 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                     {
                         **started_request,
                         "phase": "COMPLETED",
-                        "observed_at": T1,
+                        "completed_at": T1,
                         "started_receipt_digest": started["receipt_digest"],
                         "result_status": "BLOCKED",
+                        "artifact_path": "evidence/time-order-result.json",
                         "artifact_digest": digest("time-order-artifact"),
                         "process_exit_code": 0,
                         "usage": {
@@ -296,20 +290,14 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
             self.assertEqual(context.exception.code, "EXTERNAL_RECEIPT_TIME_ORDER_INVALID")
             self.assertEqual(before, persisted_snapshot(Path(temporary)))
 
-    @baseline_expected_failure
     def test_external_receipt_rejects_pass_with_nonzero_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             harness = Harness(Path(temporary))
             initialized, _ = harness.initialize()
             self.assertTrue(initialized["ok"], initialized)
-            started_request = {
-                "receipt_id": "exit-status-receipt",
-                "phase": "STARTED",
-                "action_kind": "EXTERNAL_MODEL_CALL",
-                "request_digest": digest("exit-status-request"),
-                "observed_at": T1,
-                "calls_consumed": 1,
-            }
+            started_request = harness.prepare_local_external_call(
+                receipt_id="exit-status-receipt"
+            )
             started = harness.runtime.stage_external_receipt(started_request)
             before = persisted_snapshot(Path(temporary))
             with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
@@ -317,9 +305,10 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                     {
                         **started_request,
                         "phase": "COMPLETED",
-                        "observed_at": T2,
+                        "completed_at": T2,
                         "started_receipt_digest": started["receipt_digest"],
                         "result_status": "PASS",
+                        "artifact_path": "evidence/exit-status-result.json",
                         "artifact_digest": digest("exit-status-artifact"),
                         "process_exit_code": 137,
                         "usage": {
@@ -333,20 +322,14 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
             self.assertEqual(context.exception.code, "EXTERNAL_RECEIPT_RESULT_INCONSISTENT")
             self.assertEqual(before, persisted_snapshot(Path(temporary)))
 
-    @baseline_expected_failure
     def test_external_receipt_rejects_invalid_usage_arithmetic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             harness = Harness(Path(temporary))
             initialized, _ = harness.initialize()
             self.assertTrue(initialized["ok"], initialized)
-            started_request = {
-                "receipt_id": "usage-arithmetic-receipt",
-                "phase": "STARTED",
-                "action_kind": "EXTERNAL_MODEL_CALL",
-                "request_digest": digest("usage-arithmetic-request"),
-                "observed_at": T1,
-                "calls_consumed": 1,
-            }
+            started_request = harness.prepare_local_external_call(
+                receipt_id="usage-arithmetic-receipt"
+            )
             started = harness.runtime.stage_external_receipt(started_request)
             before = persisted_snapshot(Path(temporary))
             with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
@@ -354,9 +337,10 @@ class UnclosedControlPlaneFindingTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                     {
                         **started_request,
                         "phase": "COMPLETED",
-                        "observed_at": T2,
+                        "completed_at": T2,
                         "started_receipt_digest": started["receipt_digest"],
                         "result_status": "PASS",
+                        "artifact_path": "evidence/usage-result.json",
                         "artifact_digest": digest("usage-arithmetic-artifact"),
                         "process_exit_code": 0,
                         "usage": {

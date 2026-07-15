@@ -67,11 +67,15 @@ itself with `tty:false`, then write one compact JSON frame once. Generated Packs
 reject pre-runtime stdin helpers, `tty:true`, `dd`/`stty`, fixed-byte readers,
 heredocs, and shell pipelines.
 
-External model calls and Local Verification now use sanitized immutable
-`STARTED`/`COMPLETED` receipts. If deferred execution loses stdout, the
-Controller can recover the result from `.codex-loop/external-receipts/`; a lone
-`STARTED` receipt conservatively records one consumed call with unknown tokens
-and cannot be retried automatically. Worker reports distinguish actual product
+External model calls and Local Verification now bind route, Pack, Goal, lease,
+target, provider/model, request digest, and call index through the existing LOCAL
+outbox `external_call_authorization`, then use sanitized immutable
+`STARTED`/`COMPLETED` receipts. Runtime validates time ordering, PASS/exit
+consistency, read-only artifact digests, and token arithmetic. If deferred
+execution loses stdout, the Controller recovers COMPLETED without another
+provider call; a lone STARTED returns `EXTERNAL_CALL_OUTCOME_UNKNOWN`, counts one
+call conservatively, and keeps unknown tokens `null` with `complete=false`.
+Worker reports distinguish actual product
 execution from deterministic control-plane rejection. Only an approved blocker
 with `execution_started=false` avoids repair consumption.
 

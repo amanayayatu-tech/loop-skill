@@ -853,6 +853,45 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
 
 
 class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
+    @staticmethod
+    def _write_receipt_artifact(
+        root: Path,
+        name: str,
+        content: str = '{"status":"BLOCKED"}',
+    ) -> tuple[str, str]:
+        artifact_path = root / "evidence" / name
+        artifact_path.parent.mkdir(exist_ok=True)
+        artifact_path.write_text(content, encoding="utf-8")
+        artifact_path.chmod(0o444)
+        return f"evidence/{name}", digest(content)
+
+    @staticmethod
+    def _completed_request(
+        started_request: dict[str, Any],
+        started: dict[str, Any],
+        artifact_path: str,
+        artifact_digest: str,
+        *,
+        usage: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            **started_request,
+            "phase": "COMPLETED",
+            "completed_at": T2,
+            "started_receipt_digest": started["receipt_digest"],
+            "result_status": "BLOCKED",
+            "artifact_path": artifact_path,
+            "artifact_digest": artifact_digest,
+            "process_exit_code": 0,
+            "usage": usage
+            or {
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+                "complete": False,
+            },
+        }
+
     def test_completed_receipt_survives_lost_stdout_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -860,24 +899,26 @@ class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             initialized, _ = harness.initialize()
             self.assertTrue(initialized["ok"], initialized)
             runtime = harness.runtime
-            started_request = {
-                "receipt_id": "minimax-g03-real-001",
-                "phase": "STARTED",
-                "action_kind": "EXTERNAL_MODEL_CALL",
-                "request_digest": digest("sanitized-g03-request"),
-                "observed_at": T1,
-                "calls_consumed": 1,
-                "model": "MiniMax-M2.5",
-            }
+            started_request = harness.prepare_local_external_call(
+                receipt_id="minimax-g03-real-001",
+                request_digest=digest("sanitized-g03-request"),
+                artifact_path="evidence/minimax-g03-result.json",
+            )
             started = runtime.stage_external_receipt(started_request)
             self.assertTrue(started["ok"], started)
+            artifact_path = root / "evidence" / "minimax-g03-result.json"
+            artifact_path.parent.mkdir()
+            artifact_content = '{"status":"BLOCKED"}'
+            artifact_path.write_text(artifact_content, encoding="utf-8")
+            artifact_path.chmod(0o444)
             completed_request = {
                 **started_request,
                 "phase": "COMPLETED",
-                "observed_at": T2,
+                "completed_at": T2,
                 "started_receipt_digest": started["receipt_digest"],
                 "result_status": "BLOCKED",
-                "artifact_digest": digest("sanitized-g03-result"),
+                "artifact_path": "evidence/minimax-g03-result.json",
+                "artifact_digest": digest(artifact_content),
                 "process_exit_code": 0,
                 "usage": {
                     "prompt_tokens": None,
@@ -898,7 +939,11 @@ class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             self.assertEqual(recovered["result_status"], "BLOCKED")
             self.assertEqual(recovered["calls_consumed"], 1)
             replayed = runtime.stage_external_receipt(completed_request)
-            self.assertEqual(replayed["status"], "EXTERNAL_CALL_RECEIPT_STAGED")
+            self.assertEqual(replayed["status"], "EXTERNAL_CALL_RECEIPT_RECOVERED")
+            self.assertEqual(
+                replayed["next_action_code"],
+                "RECOVER_RESULT_WITHOUT_PROVIDER_RETRY",
+            )
 
     def test_cli_completed_receipt_is_recoverable_when_stdout_is_discarded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -907,14 +952,14 @@ class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             initialized, _ = harness.initialize()
             self.assertTrue(initialized["ok"], initialized)
             cli = SCRIPTS / "adaptive_state_runtime.py"
-            started_request = {
-                "receipt_id": "cli-lost-stdout-001",
-                "phase": "STARTED",
-                "action_kind": "LOCAL_VERIFICATION",
-                "request_digest": digest("cli-local-verification"),
-                "observed_at": T1,
-                "calls_consumed": 1,
-            }
+            started_request = harness.prepare_local_external_call(
+                receipt_id="cli-lost-stdout-001",
+                action_kind="LOCAL_VERIFICATION",
+                provider="local-process",
+                model="NOT_APPLICABLE",
+                request_digest=digest("cli-local-verification"),
+                artifact_path="evidence/cli-local-result.json",
+            )
             started_run = subprocess.run(
                 [
                     sys.executable,
@@ -930,13 +975,19 @@ class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             )
             self.assertEqual(started_run.returncode, 0, started_run.stdout)
             started = json.loads(started_run.stdout)
+            artifact_path = root / "evidence" / "cli-local-result.json"
+            artifact_path.parent.mkdir()
+            artifact_content = '{"status":"BLOCKED"}'
+            artifact_path.write_text(artifact_content, encoding="utf-8")
+            artifact_path.chmod(0o444)
             completed_request = {
                 **started_request,
                 "phase": "COMPLETED",
-                "observed_at": T2,
+                "completed_at": T2,
                 "started_receipt_digest": started["receipt_digest"],
                 "result_status": "BLOCKED",
-                "artifact_digest": digest("cli-local-result"),
+                "artifact_path": "evidence/cli-local-result.json",
+                "artifact_digest": digest(artifact_content),
                 "process_exit_code": 0,
                 "usage": {
                     "prompt_tokens": None,
@@ -968,6 +1019,164 @@ class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             )
             self.assertEqual(receipt["result_status"], "BLOCKED")
             self.assertFalse(receipt["usage"]["complete"])
+
+    def test_started_recovery_is_conservative_and_forbids_provider_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            request = harness.prepare_local_external_call(
+                receipt_id="started-only-crash-001"
+            )
+            first = harness.runtime.stage_external_receipt(request)
+            self.assertEqual(first["next_action_code"], "PERFORM_EXTERNAL_CALL_ONCE")
+            before = persisted_snapshot(root)
+            recovered = harness.runtime.stage_external_receipt(request)
+            self.assertEqual(recovered["status"], "EXTERNAL_CALL_OUTCOME_UNKNOWN")
+            self.assertEqual(recovered["next_action_code"], "DO_NOT_RETRY_PROVIDER")
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_completion_without_started_receipt_has_zero_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            request = harness.prepare_local_external_call(
+                receipt_id="missing-started-001",
+                artifact_path="evidence/missing-started.json",
+            )
+            artifact_path, artifact_digest = self._write_receipt_artifact(
+                root, "missing-started.json"
+            )
+            fake_started = {"receipt_digest": digest("missing-started")}
+            completed = self._completed_request(
+                request,
+                fake_started,
+                artifact_path,
+                artifact_digest,
+            )
+            before = persisted_snapshot(root)
+            with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
+                harness.runtime.stage_external_receipt(completed)
+            self.assertEqual(context.exception.code, "EXTERNAL_RECEIPT_STARTED_NOT_FOUND")
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_route_identity_fields_are_all_bound(self) -> None:
+        mutations = {
+            "controller_pack_digest": digest("wrong-pack"),
+            "goal_id": "wrong-goal",
+            "outbox_id": "wrong-outbox",
+            "dispatch_id": "wrong-dispatch",
+            "lease_id": "wrong-lease",
+            "routing_turn_id": "wrong-routing-turn",
+            "target_thread_id": "wrong-target",
+            "provider": "wrong-provider",
+            "model": "wrong-model",
+            "request_digest": digest("wrong-request"),
+            "call_index": 2,
+            "artifact_path": "evidence/wrong-artifact.json",
+        }
+        for field, wrong_value in mutations.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = Harness(root)
+                initialized, _ = harness.initialize()
+                self.assertTrue(initialized["ok"], initialized)
+                request = harness.prepare_local_external_call(
+                    receipt_id=f"wrong-{field.replace('_', '-')}-001"
+                )
+                request[field] = wrong_value
+                before = persisted_snapshot(root)
+                with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
+                    harness.runtime.stage_external_receipt(request)
+                expected_code = (
+                    "EXTERNAL_RECEIPT_ROUTE_NOT_FOUND"
+                    if field == "outbox_id"
+                    else "EXTERNAL_RECEIPT_IDENTITY_CONFLICT"
+                )
+                self.assertEqual(context.exception.code, expected_code)
+                self.assertEqual(before, persisted_snapshot(root))
+
+    def test_completed_artifact_must_exist_be_read_only_and_match_digest(self) -> None:
+        cases = ("missing", "writable", "digest")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = Harness(root)
+                initialized, _ = harness.initialize()
+                self.assertTrue(initialized["ok"], initialized)
+                request = harness.prepare_local_external_call(
+                    receipt_id=f"artifact-{case}-001",
+                    artifact_path=(
+                        "evidence/missing.json"
+                        if case == "missing"
+                        else f"evidence/artifact-{case}.json"
+                    ),
+                )
+                started = harness.runtime.stage_external_receipt(request)
+                if case == "missing":
+                    artifact_path = "evidence/missing.json"
+                    artifact_digest = digest("missing")
+                else:
+                    artifact_path, artifact_digest = self._write_receipt_artifact(
+                        root, f"artifact-{case}.json"
+                    )
+                    if case == "writable":
+                        (root / artifact_path).chmod(0o644)
+                    else:
+                        artifact_digest = digest("wrong-digest")
+                completed = self._completed_request(
+                    request,
+                    started,
+                    artifact_path,
+                    artifact_digest,
+                )
+                before = persisted_snapshot(root)
+                with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
+                    harness.runtime.stage_external_receipt(completed)
+                self.assertEqual(context.exception.code, "EXTERNAL_RECEIPT_ARTIFACT_INVALID")
+                self.assertEqual(before, persisted_snapshot(root))
+
+    def test_unknown_usage_is_explicit_and_complete_usage_is_arithmetic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            request = harness.prepare_local_external_call(
+                receipt_id="usage-unknown-001",
+                artifact_path="evidence/usage-unknown.json",
+            )
+            started = harness.runtime.stage_external_receipt(request)
+            artifact_path, artifact_digest = self._write_receipt_artifact(
+                root, "usage-unknown.json"
+            )
+            completed = self._completed_request(
+                request,
+                started,
+                artifact_path,
+                artifact_digest,
+                usage={
+                    "prompt_tokens": 10,
+                    "completion_tokens": None,
+                    "total_tokens": None,
+                    "complete": False,
+                },
+            )
+            response = harness.runtime.stage_external_receipt(completed)
+            self.assertTrue(response["ok"], response)
+            receipt = json.loads(Path(response["source_path"]).read_text())
+            self.assertIsNone(receipt["usage"]["completion_tokens"])
+            self.assertFalse(receipt["usage"]["complete"])
+            invalid = copy.deepcopy(completed)
+            invalid["usage"]["complete"] = True
+            before = persisted_snapshot(root)
+            with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
+                harness.runtime.stage_external_receipt(invalid)
+            self.assertEqual(context.exception.code, "EXTERNAL_RECEIPT_USAGE_INVALID")
+            self.assertEqual(before, persisted_snapshot(root))
 
 
 class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F405

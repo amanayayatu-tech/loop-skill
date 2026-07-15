@@ -307,6 +307,8 @@ def validate(skill_dir: Path) -> list[str]:
             "scripts/adaptive_state_runtime.py",
             "route_state_mutation",
             "omit controller_turn_id",
+            "external_call_authorization",
+            "EXTERNAL_CALL_OUTCOME_UNKNOWN",
             "--payload-materialize",
             "Universal runtime transport contract",
             "every `adaptive_state_runtime.py` mode",

@@ -130,6 +130,7 @@ DISPATCH_PAYLOAD_KEYS = {
         "dispatch_lease_claim",
         "dispatch_payload_digest",
         "evidence_capture_rules",
+        "external_call_authorization",
         "expected_result",
         "goal_id",
         "local_dispatch_id",
@@ -144,6 +145,46 @@ DISPATCH_PAYLOAD_KEYS = {
         "target_thread_id",
         "verification_id",
     },
+}
+
+EXTERNAL_CALL_AUTHORIZATION_FIELDS = {
+    "receipt_id",
+    "action_kind",
+    "provider",
+    "model",
+    "request_digest",
+    "call_index",
+    "artifact_path",
+}
+EXTERNAL_RECEIPT_BASE_FIELDS = {
+    "receipt_id",
+    "phase",
+    "action_kind",
+    "loop_id",
+    "controller_pack_digest",
+    "goal_id",
+    "outbox_kind",
+    "outbox_id",
+    "dispatch_id",
+    "lease_id",
+    "routing_turn_id",
+    "target_role",
+    "target_thread_id",
+    "provider",
+    "model",
+    "request_digest",
+    "call_index",
+    "calls_consumed",
+    "started_at",
+    "artifact_path",
+}
+EXTERNAL_RECEIPT_COMPLETION_FIELDS = {
+    "completed_at",
+    "started_receipt_digest",
+    "result_status",
+    "artifact_digest",
+    "process_exit_code",
+    "usage",
 }
 
 
@@ -561,6 +602,74 @@ def _require_dispatch_string(payload: Mapping[str, Any], field: str) -> None:
         _dispatch_payload_rejection("DISPATCH_PAYLOAD_FIELD_INVALID", field)
 
 
+def _validate_external_call_authorization(
+    value: Any,
+    path: str,
+) -> None:
+    if not isinstance(value, dict) or set(value) != EXTERNAL_CALL_AUTHORIZATION_FIELDS:
+        raise RuntimeRejection(
+            "EXTERNAL_CALL_AUTHORIZATION_INVALID",
+            path,
+            {"required_keys": sorted(EXTERNAL_CALL_AUTHORIZATION_FIELDS)},
+        )
+    for field in ("receipt_id",):
+        item = value[field]
+        if not isinstance(item, str) or SAFE_ID_RE.fullmatch(item) is None:
+            raise RuntimeRejection(
+                "EXTERNAL_CALL_AUTHORIZATION_INVALID",
+                f"{path}/{field}",
+            )
+    if value["action_kind"] not in {
+        "EXTERNAL_MODEL_CALL",
+        "LOCAL_VERIFICATION",
+    }:
+        raise RuntimeRejection(
+            "EXTERNAL_CALL_AUTHORIZATION_INVALID",
+            f"{path}/action_kind",
+        )
+    for field in ("provider", "model"):
+        item = value[field]
+        if (
+            not isinstance(item, str)
+            or not item
+            or len(item) > 128
+            or any(ord(character) < 0x20 for character in item)
+        ):
+            raise RuntimeRejection(
+                "EXTERNAL_CALL_AUTHORIZATION_INVALID",
+                f"{path}/{field}",
+            )
+    if (
+        not isinstance(value["request_digest"], str)
+        or DIGEST_RE.fullmatch(value["request_digest"]) is None
+    ):
+        raise RuntimeRejection(
+            "EXTERNAL_CALL_AUTHORIZATION_INVALID",
+            f"{path}/request_digest",
+        )
+    if (
+        isinstance(value["call_index"], bool)
+        or not isinstance(value["call_index"], int)
+        or not 1 <= value["call_index"] <= 1_000_000
+    ):
+        raise RuntimeRejection(
+            "EXTERNAL_CALL_AUTHORIZATION_INVALID",
+            f"{path}/call_index",
+        )
+    artifact_path = value["artifact_path"]
+    if (
+        not isinstance(artifact_path, str)
+        or not artifact_path
+        or Path(artifact_path).is_absolute()
+        or ".." in Path(artifact_path).parts
+        or Path(artifact_path).parts[0] == ".codex-loop"
+    ):
+        raise RuntimeRejection(
+            "EXTERNAL_CALL_AUTHORIZATION_INVALID",
+            f"{path}/artifact_path",
+        )
+
+
 def _validate_dispatch_payload_shape(envelope_type: str, payload: Mapping[str, Any]) -> None:
     required = DISPATCH_PAYLOAD_KEYS.get(envelope_type)
     if required is None:
@@ -569,11 +678,14 @@ def _validate_dispatch_payload_shape(envelope_type: str, payload: Mapping[str, A
             "/envelope_type",
             {"allowed": list(DISPATCH_ENVELOPE_TYPES)},
         )
-    compatibility_optional = (
-        {"validation_matrix", "review_surface", "context_freshness_snapshot"}
-        if envelope_type == "WORKER_DISPATCH"
-        else set()
-    )
+    compatibility_optional = {
+        "WORKER_DISPATCH": {
+            "validation_matrix",
+            "review_surface",
+            "context_freshness_snapshot",
+        },
+        "LOCAL_VERIFY_DISPATCH": {"external_call_authorization"},
+    }.get(envelope_type, set())
     minimum = required - compatibility_optional
     if not minimum.issubset(payload) or not set(payload).issubset(required):
         raise RuntimeRejection(
@@ -831,6 +943,11 @@ def _validate_dispatch_payload_shape(envelope_type: str, payload: Mapping[str, A
             _dispatch_payload_rejection("DISPATCH_PAYLOAD_FIELD_INVALID", "source_artifact_digest")
         if not isinstance(payload["artifact_identity"], dict):
             _dispatch_payload_rejection("DISPATCH_PAYLOAD_FIELD_INVALID", "artifact_identity")
+        if "external_call_authorization" in payload:
+            _validate_external_call_authorization(
+                payload["external_call_authorization"],
+                "/payload/external_call_authorization",
+            )
         for field in ("expected_result", "privacy_boundary"):
             _require_dispatch_string(payload, field)
         for field in (
@@ -1260,6 +1377,10 @@ def verify_dispatch_payload_against_state(
             "artifact_digest": payload["source_artifact_digest"],
             "code_review_id": payload["code_review_id"],
         }
+        if "external_call_authorization" in payload:
+            expected["external_call_authorization"] = payload[
+                "external_call_authorization"
+            ]
         if identity != expected:
             raise RuntimeRejection(
                 "DISPATCH_LOCAL_IDENTITY_MISMATCH", "/payload"
@@ -1887,72 +2008,69 @@ class AdaptiveStateRuntime:
         """Persist an immutable, sanitized before/after receipt for one external call."""
 
         self._ensure_json_value(request, "/")
-        required = {
-            "receipt_id",
-            "phase",
-            "action_kind",
-            "request_digest",
-            "observed_at",
-            "calls_consumed",
-        }
-        completion_fields = {
-            "started_receipt_digest",
-            "result_status",
-            "artifact_digest",
-            "process_exit_code",
-            "usage",
-        }
-        allowed = required | completion_fields | {"model"}
-        if (
-            not isinstance(request, dict)
-            or not required.issubset(request)
-            or not set(request).issubset(allowed)
-        ):
+        if not isinstance(request, dict):
             raise RuntimeRejection(
                 "EXTERNAL_RECEIPT_INPUT_INVALID",
                 "/",
-                {"required_keys": sorted(required), "allowed_keys": sorted(allowed)},
             )
-        receipt_id = request["receipt_id"]
-        phase = request["phase"]
-        if not isinstance(receipt_id, str) or SAFE_ID_RE.fullmatch(receipt_id) is None:
-            raise RuntimeRejection("UNSAFE_ID", "/receipt_id")
+        phase = request.get("phase")
         if phase not in {"STARTED", "COMPLETED"}:
             raise RuntimeRejection("EXTERNAL_RECEIPT_PHASE_INVALID", "/phase")
-        if request["action_kind"] not in {
-            "EXTERNAL_MODEL_CALL",
-            "LOCAL_VERIFICATION",
-        }:
+        required = set(EXTERNAL_RECEIPT_BASE_FIELDS)
+        if phase == "COMPLETED":
+            required |= EXTERNAL_RECEIPT_COMPLETION_FIELDS
+        if set(request) != required:
             raise RuntimeRejection(
-                "EXTERNAL_RECEIPT_ACTION_KIND_INVALID", "/action_kind"
+                "EXTERNAL_RECEIPT_INPUT_INVALID",
+                "/",
+                {
+                    "missing_keys": sorted(required - set(request)),
+                    "unexpected_keys": sorted(set(request) - required),
+                },
+            )
+        receipt_id = request["receipt_id"]
+        for field in (
+            "receipt_id",
+            "loop_id",
+            "goal_id",
+            "outbox_id",
+            "dispatch_id",
+            "lease_id",
+            "routing_turn_id",
+            "target_thread_id",
+        ):
+            value = request[field]
+            if not isinstance(value, str) or SAFE_ID_RE.fullmatch(value) is None:
+                raise RuntimeRejection("UNSAFE_ID", f"/{field}")
+        authorization = {
+            field: request[field] for field in EXTERNAL_CALL_AUTHORIZATION_FIELDS
+        }
+        _validate_external_call_authorization(authorization, "/")
+        if request["outbox_kind"] != "LOCAL":
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_OUTBOX_KIND_INVALID",
+                "/outbox_kind",
+                {"allowed": ["LOCAL"]},
+            )
+        if request["target_role"] != "LOCAL_VERIFIER":
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_TARGET_ROLE_INVALID", "/target_role"
             )
         if (
-            not isinstance(request["request_digest"], str)
-            or DIGEST_RE.fullmatch(request["request_digest"]) is None
+            not isinstance(request["controller_pack_digest"], str)
+            or DIGEST_RE.fullmatch(request["controller_pack_digest"]) is None
         ):
-            raise RuntimeRejection("DIGEST_INVALID", "/request_digest")
-        _parse_time(request["observed_at"], "/observed_at")
+            raise RuntimeRejection("DIGEST_INVALID", "/controller_pack_digest")
         if request["calls_consumed"] != 1:
             raise RuntimeRejection(
                 "EXTERNAL_RECEIPT_CALL_COUNT_INVALID", "/calls_consumed"
             )
-        model = request.get("model")
-        if model is not None and (
-            not isinstance(model, str) or not model or len(model) > 128
-        ):
-            raise RuntimeRejection("EXTERNAL_RECEIPT_MODEL_INVALID", "/model")
-        if phase == "STARTED" and set(request) & completion_fields:
-            raise RuntimeRejection(
-                "EXTERNAL_RECEIPT_INPUT_INVALID",
-                "/",
-                {"reason": "STARTED_HAS_COMPLETION_FIELDS"},
-            )
+        started_at = _parse_time(request["started_at"], "/started_at")
         if phase == "COMPLETED":
-            if not completion_fields.issubset(request):
+            completed_at = _parse_time(request["completed_at"], "/completed_at")
+            if completed_at < started_at:
                 raise RuntimeRejection(
-                    "EXTERNAL_RECEIPT_INPUT_INVALID",
-                    "/",
-                    {"missing_completion_fields": sorted(completion_fields - set(request))},
+                    "EXTERNAL_RECEIPT_TIME_ORDER_INVALID", "/completed_at"
                 )
             if request["result_status"] not in {"PASS", "FAIL", "BLOCKED"}:
                 raise RuntimeRejection(
@@ -1968,6 +2086,11 @@ class AdaptiveStateRuntime:
                     or DIGEST_RE.fullmatch(request[key]) is None
                 ):
                     raise RuntimeRejection("DIGEST_INVALID", f"/{key}")
+            if request["result_status"] == "PASS" and request["process_exit_code"] != 0:
+                raise RuntimeRejection(
+                    "EXTERNAL_RECEIPT_RESULT_INCONSISTENT",
+                    "/process_exit_code",
+                )
             usage = request["usage"]
             if (
                 not isinstance(usage, dict)
@@ -1984,6 +2107,24 @@ class AdaptiveStateRuntime:
                 raise RuntimeRejection(
                     "EXTERNAL_RECEIPT_USAGE_INVALID", "/usage"
                 )
+            token_values = [
+                usage["prompt_tokens"],
+                usage["completion_tokens"],
+                usage["total_tokens"],
+            ]
+            if usage["complete"] is True and any(
+                value is None for value in token_values
+            ):
+                raise RuntimeRejection(
+                    "EXTERNAL_RECEIPT_USAGE_INVALID", "/usage/complete"
+                )
+            if all(value is not None for value in token_values) and (
+                usage["total_tokens"]
+                != usage["prompt_tokens"] + usage["completion_tokens"]
+            ):
+                raise RuntimeRejection(
+                    "EXTERNAL_RECEIPT_USAGE_INVALID", "/usage/total_tokens"
+                )
 
         payload = _canonical_json(request).encode("utf-8")
         receipt_digest = _bytes_digest(payload)
@@ -1995,8 +2136,14 @@ class AdaptiveStateRuntime:
             if state is None:
                 raise RuntimeRejection("STATE_NOT_INITIALIZED", "/receipt_id")
             self._ensure_external_receipts_locked()
+            self._validate_external_receipt_route_binding(state, request)
             if phase == "COMPLETED":
                 started = self.external_receipts_dir / f"{receipt_id}.started.json"
+                if not started.is_file() or started.is_symlink():
+                    raise RuntimeRejection(
+                        "EXTERNAL_RECEIPT_STARTED_NOT_FOUND",
+                        "/started_receipt_digest",
+                    )
                 self._require_external_receipt_file(
                     started, request["started_receipt_digest"], "/started_receipt_digest"
                 )
@@ -2007,14 +2154,16 @@ class AdaptiveStateRuntime:
                 )
                 if any(
                     started_value.get(key) != request.get(key)
-                    for key in ("receipt_id", "action_kind", "request_digest", "calls_consumed", "model")
+                    for key in EXTERNAL_RECEIPT_BASE_FIELDS - {"phase"}
                 ):
                     raise RuntimeRejection(
                         "EXTERNAL_RECEIPT_IDENTITY_CONFLICT", "/started_receipt_digest"
                     )
+                self._validate_external_receipt_artifact(state, request)
             suffix = phase.lower()
             source = self.external_receipts_dir / f"{receipt_id}.{suffix}.json"
             self._assert_confined(source, self.external_receipts_dir, "/source_path")
+            created = False
             if source.exists() or source.is_symlink():
                 self._require_external_receipt_file(source, receipt_digest, "/source_path")
                 if source.read_bytes() != payload:
@@ -2033,9 +2182,23 @@ class AdaptiveStateRuntime:
                 self._require_external_receipt_file(
                     source, receipt_digest, "/source_path"
                 )
+                created = True
+            if phase == "STARTED" and not created:
+                status = "EXTERNAL_CALL_OUTCOME_UNKNOWN"
+                next_action_code = "DO_NOT_RETRY_PROVIDER"
+            elif phase == "COMPLETED" and not created:
+                status = "EXTERNAL_CALL_RECEIPT_RECOVERED"
+                next_action_code = "RECOVER_RESULT_WITHOUT_PROVIDER_RETRY"
+            elif phase == "STARTED":
+                status = "EXTERNAL_CALL_RECEIPT_STAGED"
+                next_action_code = "PERFORM_EXTERNAL_CALL_ONCE"
+            else:
+                status = "EXTERNAL_CALL_RECEIPT_STAGED"
+                next_action_code = "STAGE_TARGET_REPORT"
             return {
                 "ok": True,
-                "status": "EXTERNAL_CALL_RECEIPT_STAGED",
+                "status": status,
+                "next_action_code": next_action_code,
                 "state_version": state["state_version"],
                 "receipt_id": receipt_id,
                 "phase": phase,
@@ -2045,6 +2208,87 @@ class AdaptiveStateRuntime:
                 "external_actions": [],
                 "external_action_count": 0,
             }
+
+    def _validate_external_receipt_route_binding(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+    ) -> None:
+        record = state["local_verification_outbox"].get(request["outbox_id"])
+        if record is None or record.get("outbox_kind") != "LOCAL":
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_ROUTE_NOT_FOUND", "/outbox_id"
+            )
+        identity = record.get("identity")
+        lease_claim = record.get("lease_claim")
+        target = state["thread_registry"].get(request["target_thread_id"])
+        authorization = {
+            field: request[field] for field in EXTERNAL_CALL_AUTHORIZATION_FIELDS
+        }
+        record_status = record.get("status")
+        completed_receipt = (
+            self.external_receipts_dir
+            / f"{request['receipt_id']}.completed.json"
+        )
+        route_status_valid = record_status == "SENT" or (
+            request["phase"] == "COMPLETED"
+            and record_status == "COMPLETED"
+            and completed_receipt.is_file()
+            and not completed_receipt.is_symlink()
+        )
+        if (
+            not route_status_valid
+            or not isinstance(identity, dict)
+            or identity.get("external_call_authorization") != authorization
+            or identity.get("local_dispatch_id") != request["dispatch_id"]
+            or identity.get("goal_id") != request["goal_id"]
+            or identity.get("target_thread_id") != request["target_thread_id"]
+            or record.get("target_id") != request["target_thread_id"]
+            or not isinstance(lease_claim, dict)
+            or lease_claim.get("lease_id") != request["lease_id"]
+            or lease_claim.get("routing_turn_id") != request["routing_turn_id"]
+            or state.get("loop_id") != request["loop_id"]
+            or state.get("controller_pack_identity", {}).get("digest")
+            != request["controller_pack_digest"]
+            or not isinstance(target, dict)
+            or target.get("role_kind") != request["target_role"]
+            or target.get("status") != "REGISTERED"
+        ):
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_IDENTITY_CONFLICT", "/"
+            )
+
+    def _validate_external_receipt_artifact(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+    ) -> None:
+        target = state["thread_registry"][request["target_thread_id"]]
+        worktree = Path(target["worktree_path"])
+        if not worktree.is_absolute():
+            worktree = self.root / worktree
+        worktree = worktree.resolve()
+        self._assert_authorized_worktree(state, worktree, "/artifact_path")
+        artifact = Path(request["artifact_path"])
+        if not artifact.is_absolute():
+            artifact = worktree / artifact
+        self._assert_confined(artifact, worktree, "/artifact_path")
+        self._reject_symlink(artifact, "/artifact_path")
+        try:
+            metadata = artifact.lstat()
+            content = artifact.read_bytes()
+        except OSError as exc:
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_ARTIFACT_INVALID", "/artifact_path"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_mode & 0o222
+            or _bytes_digest(content) != request["artifact_digest"]
+        ):
+            raise RuntimeRejection(
+                "EXTERNAL_RECEIPT_ARTIFACT_INVALID", "/artifact_path"
+            )
 
     def _ensure_external_receipts_locked(self) -> None:
         path = self.external_receipts_dir
@@ -8367,22 +8611,34 @@ class AdaptiveStateRuntime:
                 )
             self._assert_assurance_ready(state, identity, target_id)
         elif kind == "LOCAL":
+            required_identity = {
+                "local_dispatch_id",
+                "verification_id",
+                "goal_id",
+                "milestone_id",
+                "roadmap_version",
+                "target_thread_id",
+                "payload_digest",
+                "worker_dispatch_id",
+                "artifact_digest",
+                "code_review_id",
+            }
+            if "external_call_authorization" in identity:
+                required_identity.add("external_call_authorization")
             self._require_exact_keys(
                 identity,
-                {
-                    "local_dispatch_id",
-                    "verification_id",
-                    "goal_id",
-                    "milestone_id",
-                    "roadmap_version",
-                    "target_thread_id",
-                    "payload_digest",
-                    "worker_dispatch_id",
-                    "artifact_digest",
-                    "code_review_id",
-                },
+                required_identity,
                 "/mutation/identity",
             )
+            if "external_call_authorization" in identity:
+                _validate_external_call_authorization(
+                    identity["external_call_authorization"],
+                    "/mutation/identity/external_call_authorization",
+                )
+                self._validate_scope(
+                    identity["external_call_authorization"]["artifact_path"],
+                    "/mutation/identity/external_call_authorization/artifact_path",
+                )
             if (
                 identity["local_dispatch_id"] != outbox_id
                 or identity["payload_digest"] != payload_digest
