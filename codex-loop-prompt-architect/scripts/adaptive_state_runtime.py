@@ -216,7 +216,14 @@ def _load_request(payload: str) -> Any:
             result[key] = value
         return result
 
-    return json.loads(payload, object_pairs_hook=no_duplicates)
+    def reject_non_finite(value: str) -> None:
+        raise ValueError(f"NON_FINITE_JSON_NUMBER:{value}")
+
+    return json.loads(
+        payload,
+        object_pairs_hook=no_duplicates,
+        parse_constant=reject_non_finite,
+    )
 
 
 def _emit(response: dict[str, Any]) -> None:

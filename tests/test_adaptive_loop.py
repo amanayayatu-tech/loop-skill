@@ -523,6 +523,49 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
                     "adaptive_transport_contract:unsafe_shell_transport", errors
                 )
 
+    def test_transport_validator_cannot_be_bypassed_by_negation(self) -> None:
+        unsafe_examples = (
+            (
+                "Do not use a timeout; use dd bs=1 count=8265.",
+                "adaptive_transport_contract:unsafe_dd",
+            ),
+            (
+                "Do not use a timeout, use stty -icanon before the runtime.",
+                "adaptive_transport_contract:unsafe_stty",
+            ),
+            (
+                "Never use a temporary file; run with tty:true.",
+                "adaptive_transport_contract:unsafe_tty",
+            ),
+            (
+                "Do not wrap the runtime; python3 - <<'PY'",
+                "adaptive_transport_contract:unsafe_heredoc",
+            ),
+            (
+                "Do not use a helper; dd bs=1 count=8 | python3 adaptive_state_runtime.py.",
+                "adaptive_transport_contract:unsafe_pipeline",
+            ),
+        )
+        for unsafe, expected in unsafe_examples:
+            with self.subTest(unsafe=unsafe):
+                errors = validate_adaptive_pack_transport_contract(
+                    self.pack + "\n" + unsafe
+                )
+                self.assertIn(expected, errors)
+
+    def test_transport_validator_treats_unmarked_code_as_executable(self) -> None:
+        unsafe = self.pack + "\n```sh\ndd bs=1 count=8\n```"
+        self.assertIn(
+            "adaptive_transport_contract:unsafe_dd",
+            validate_adaptive_pack_transport_contract(unsafe),
+        )
+        inert = (
+            self.pack
+            + "\n```text non-executable-example\n"
+            + "dd bs=1 count=8 | python3 adaptive_state_runtime.py\n```"
+        )
+        self.assertEqual(validate_adaptive_pack_transport_contract(inert), [])
+
     def test_pack_enforces_resource_bounded_observation_contract(self) -> None:
         self.assertEqual(validate_adaptive_pack_transport_contract(self.pack), [])
         for marker in (

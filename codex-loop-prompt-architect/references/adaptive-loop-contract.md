@@ -114,7 +114,8 @@ Every stdin mode uses one bounded frame reader: 30 seconds of wall-clock time,
 a 4 MB byte ceiling, and strict UTF-8. JSON/state/report modes return as soon as
 one complete top-level object is available, without waiting for EOF; payload
 verification accepts its existing envelope-plus-JSON framing. Closed-pipe EOF
-remains compatible. Timeout, size, and encoding failures return structured
+remains compatible. Strict JSON rejects duplicate keys, non-finite numbers,
+multiple frames, and trailing garbage. Timeout, size, and encoding failures return structured
 `INPUT_TRANSPORT_TIMEOUT`, `INPUT_TRANSPORT_TOO_LARGE`, and
 `INPUT_TRANSPORT_UTF8_INVALID` responses with nonzero exit status.
 
@@ -123,7 +124,9 @@ launch the runtime itself by direct argv with `tty:false`, then write one compac
 JSON frame exactly once (or no stdin for `--recover`). Never start a stdin
 helper, PTY configurator, fixed-byte reader, heredoc, or shell pipeline first.
 A yielded session may only be polled by its same id; success requires process
-exit, no live session, and one JSON response.
+exit, no live session, and one JSON response. Pack validation evaluates each
+executable clause: a negative phrase cannot mask a later affirmative unsafe
+command, and only an explicitly `non-executable` code fence is excluded.
 
 #### Resource-bounded observation and validation
 

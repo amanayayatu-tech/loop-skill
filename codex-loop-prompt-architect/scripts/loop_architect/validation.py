@@ -56,6 +56,52 @@ ADAPTIVE_RESOURCE_CONTRACT_MARKERS = (
     "lost stdout never authorizes an external retry",
 )
 
+_CLAUSE_SPLIT_RE = re.compile(r"(?:[;；。]|\.(?:\s+|$))")
+_NEGATIVE_DIRECTIVE_RE = re.compile(
+    r"(?:do\s+not|never|must\s+not|forbid(?:den)?|prohibit(?:ed)?|reject|禁止|不得)"
+)
+_POSITIVE_DIRECTIVE_RE = re.compile(
+    r"(?:^|[,:(]\s*)(?!(?:do\s+not|never|must\s+not|禁止|不得)\b)"
+    r"(?:please\s+)?(?:use|run|invoke|execute|start|launch|pipe|redirect|read)\b"
+    r"|\b(?:may|must|should|can)\s+(?:directly\s+)?"
+    r"(?:use|run|invoke|execute|start|launch|pipe|redirect|read)\b"
+)
+
+
+def _executable_clauses(pack: str) -> list[str]:
+    """Return finite generated-command clauses, excluding explicit inert examples."""
+
+    clauses: list[str] = []
+    in_fence = False
+    non_executable_fence = False
+    for line in pack.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if not in_fence:
+                in_fence = True
+                non_executable_fence = "non-executable" in stripped.lower()
+            else:
+                in_fence = False
+                non_executable_fence = False
+            continue
+        if in_fence and non_executable_fence:
+            continue
+        clauses.extend(
+            clause.strip().lower()
+            for clause in _CLAUSE_SPLIT_RE.split(line)
+            if clause.strip()
+        )
+    return clauses
+
+
+def _dangerous_clause_is_negated(clause: str, match: re.Match[str]) -> bool:
+    """Accept only a real negative directive governing the dangerous token."""
+
+    governing_text = clause[: match.end()]
+    if _POSITIVE_DIRECTIVE_RE.search(governing_text):
+        return False
+    return _NEGATIVE_DIRECTIVE_RE.search(governing_text) is not None
+
 
 def validate_adaptive_pack_transport_contract(pack: str) -> list[str]:
     """Reject an Adaptive Pack that weakens any runtime transport contract."""
@@ -71,57 +117,50 @@ def validate_adaptive_pack_transport_contract(pack: str) -> list[str]:
         if marker not in pack
     )
     unsafe_patterns = (
-        r"\btty\s*:\s*true\b",
-        r"\bstty\s+-",
-        r"\bdd\s+[^\n]*\bbs\s*=",
-        r"stdin\.buffer\.read\s*\(\s*[1-9]",
-        r"<<\s*['\"]?[A-Za-z_][A-Za-z0-9_]*",
-        r"\|\s*(?:python3?\s+)?[^\n]*adaptive_state_runtime\.py",
-        r"<\s*/(?:private/)?tmp/[^\s]+",
-        r"\bredirect(?:ion)?\b[^\n]{0,80}\bstdin\b[^\n]{0,80}/(?:private/)?tmp/",
+        ("tty", r"\btty\s*:\s*true\b"),
+        ("stty", r"\bstty\b"),
+        ("dd", r"\bdd\b"),
+        ("fixed_byte_reader", r"stdin\.buffer\.read\s*\(\s*[1-9]"),
+        ("heredoc", r"<<\s*['\"]?[A-Za-z_][A-Za-z0-9_]*"),
+        (
+            "pipeline",
+            r"(?:\|\s*(?:python3?\s+)?[^\n]*adaptive_state_runtime\.py|"
+            r"adaptive_state_runtime\.py[^\n]*\|)",
+        ),
+        ("stdin_redirection", r"<\s*/(?:private/)?tmp/[^\s]+"),
+        (
+            "stdin_redirection",
+            r"\bredirect(?:ion)?\b[^\n]{0,80}\bstdin\b[^\n]{0,80}/(?:private/)?tmp/",
+        ),
     )
-    for line in pack.splitlines():
-        lowered = line.lower()
-        if not (
-            any(token in lowered for token in ("`dd`", "`stty`", "heredoc"))
-            or any(re.search(pattern, lowered) for pattern in unsafe_patterns)
-        ):
-            continue
-        if not any(
-            guard in lowered
-            for guard in (
-                "do not use",
-                "never use",
-                "never place",
-                "禁止",
-                "不得",
-            )
-        ):
-            errors.append("adaptive_transport_contract:unsafe_shell_transport")
-            break
+    unsafe_kinds: set[str] = set()
+    for clause in _executable_clauses(pack):
+        for kind, pattern in unsafe_patterns:
+            for match in re.finditer(pattern, clause):
+                if not _dangerous_clause_is_negated(clause, match):
+                    unsafe_kinds.add(kind)
+    if unsafe_kinds:
+        errors.append("adaptive_transport_contract:unsafe_shell_transport")
+        errors.extend(
+            f"adaptive_transport_contract:unsafe_{kind}"
+            for kind in sorted(unsafe_kinds)
+        )
     unsafe_resource_patterns = (
         r"\bpoll(?:ing)?\s+(?:every|at)\s+[1-9][0-9]*\s*(?:s|sec|secs|second|seconds)\b",
-        r"\bwhile\s+(?:true|:)\s*;?\s*do\b",
+        r"\bwhile\s+(?:true|:)\b",
         r"\bread_thread\b[^\n]{0,120}\b(?:forward|paste|relay)\b[^\n]{0,80}\b(?:raw|full|entire)?\s*(?:output|result|transcript)\b",
         r"\b(?:lost|missing)\s+stdout\b[^\n]{0,100}\bretry\b",
         r"\bretry\b[^\n]{0,100}\b(?:lost|missing)\s+stdout\b",
     )
-    for line in pack.splitlines():
-        lowered = line.lower()
-        if not any(re.search(pattern, lowered) for pattern in unsafe_resource_patterns):
-            continue
-        if not any(
-            guard in lowered
-            for guard in (
-                "do not",
-                "never",
-                "forbid",
-                "must not",
-                "reject",
-                "prohibit",
-                "禁止",
-                "不得",
-            )
+    for clause in _executable_clauses(pack):
+        matches = [
+            match
+            for pattern in unsafe_resource_patterns
+            for match in re.finditer(pattern, clause)
+        ]
+        if any(
+            not _dangerous_clause_is_negated(clause, match)
+            for match in matches
         ):
             errors.append("adaptive_resource_contract:unsafe_resource_loop")
             break
