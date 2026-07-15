@@ -71,6 +71,8 @@ class ReleaseContractTests(unittest.TestCase):
         changelog = (ROOT / "CHANGELOG.md").read_text()
         self.assertIn(f"## [{version}]", changelog)
         self.assertIn(f"/releases/tag/v{version}", changelog)
+        for readme in ("README.md", "README.en.md"):
+            self.assertIn(f"v{version}", (ROOT / readme).read_text())
 
     def test_readmes_link_both_languages_and_release_documents(self) -> None:
         chinese = (ROOT / "README.md").read_text()

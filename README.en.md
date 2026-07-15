@@ -46,6 +46,13 @@ The skill creates one self-contained Controller Pack Markdown file plus separate
 Simplified Chinese usage instructions. It never silently authorizes push, merge,
 deploy, destructive operations, external writes, secrets, or paid runtime.
 
+### v3.2.6 interpreter identity hotfix
+
+Generated Adaptive Packs now resolve `RUNTIME_PYTHON` and the sibling runtime
+only from the exact installed `codex-loop-state` MCP registration readback. Any
+identity, dependency, or path mismatch returns zero-side-effect
+`STATE_RUNTIME_UNAVAILABLE`; ambient `python3` is never a fallback.
+
 ### v3.2.5 control-plane reliability closure
 
 This release makes the declared safety protocol enforceable. Every stdin mode
