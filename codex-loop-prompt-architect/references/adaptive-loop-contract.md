@@ -219,12 +219,13 @@ and archives those bytes directly after rejecting symlinks, path escape,
 non-UTF-8 data, or digest mismatch. Never transport the Pack as inline artifact
 `content`, Base64, wrapper text, or decoded HTML/XML entities. Other immutable
 formal report artifacts must not use inline `content`. The exact specification
-`{"outbox_id":ID,"result":{"status":STATUS,"artifact_digest":DIGEST},"report":REPORT}`
+`{"outbox_id":ID,"result":{"status":STATUS,"artifact_digest":DIGEST},"report_text":EXACT_JSON_TEXT}`
 is constructed and sent by Worker/Reviewer/Local inside its own target task to
 installed `adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage`
 before its final App reply. Only
 `FORMAL_REPORT_STAGED` is usable. Runtime infers the canonical SENT outbox,
-validates and canonicalizes the report, and returns its true digest, media type,
+validates strict UTF-8/JSON framing without reserialization, and returns the
+runtime-computed exact-byte digest, byte count, media type,
 ACK-ready result, and a regular non-symlink read-only `source_path` under the
 root-confined non-canonical staging directory `.codex-loop/report-staging/`.
 State-Writer accepts only such helper-produced files and runtime archives them
@@ -746,7 +747,7 @@ empty `changed_files`, and equal before/after snapshots. `PATCH_FILE_V1` names
 a root-confined regular non-symlink diff artifact whose bytes hash to
 `diff_sha256`. `FAIL` and `BLOCKED` reports remain archivable without this
 review handoff so a zero-effect failure can still close a SENT outbox.
-Worker, Reviewer, and Local Verifier build one strict JSON report inside the
+Worker, Reviewer, and Local Verifier build one strict JSON `report_text` inside the
 target task, without fences or trailing prose, whose `report_digest` value is
 the literal `PENDING_CONTROLLER_ARCHIVE`. That same role invokes
 `--report-stage` before replying and returns only the ASCII-safe
@@ -754,6 +755,8 @@ the literal `PENDING_CONTROLLER_ARCHIVE`. That same role invokes
 `.codex-loop/report-staging/` source path, digest, media type, and ACK-ready
 result may be supplied to State-Writer. Controller never reads or transports
 REPORT bytes, writes staging bytes, or computes its SHA-256. Formal
+report key order, whitespace, CRLF/LF, and Unicode bytes remain unchanged;
+`provided_report_digest`, when supplied, is only a checked assertion. Formal
 DISPATCH/ASSURANCE/LOCAL `ACK_OUTBOX` results
 contain status, archived report digest, and artifact digest. Each ACK rejects
 unless exactly one evidence-path artifact has that digest and media type.

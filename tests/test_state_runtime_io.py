@@ -97,10 +97,11 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 harness.formal_report_content("DISPATCH", dispatch_id, result)
             )
             report["transport_probe"] = "<tag>&中文 &lt;literal"
+            report_text = json.dumps(report, ensure_ascii=False, indent=2)
             stage_input = {
                 "outbox_id": dispatch_id,
                 "result": result,
-                "report": report,
+                "report_text": report_text,
             }
             staged = harness.runtime.stage_formal_report(stage_input)
             self.assertEqual(staged["status"], "FORMAL_REPORT_STAGED")
@@ -410,7 +411,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             stage_input = {
                 "outbox_id": dispatch_id,
                 "result": result,
-                "report": report,
+                "report_text": json.dumps(report, ensure_ascii=False, indent=2),
             }
             cli = subprocess.run(
                 [

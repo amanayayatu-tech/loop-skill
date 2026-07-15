@@ -1326,15 +1326,9 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         )
         self.assertIn("FORMAL_REPORT_STAGED", self.pack)
         self.assertIn(".codex-loop/report-staging/", self.pack)
-        self.assertIn(
-            "Before any final answer crosses App transport",
-            self.pack,
-        )
-        self.assertIn(
-            "Controller never reads, copies, parses, or transports REPORT bytes",
-            self.pack,
-        )
-        self.assertIn("Never accept a Controller-written staging file", self.pack)
+        self.assertIn("exact report_text", self.pack)
+        self.assertIn("computed digest/size", self.pack)
+        self.assertIn("Controller-written/inline REPORT bytes", self.pack)
         self.assertIn("product/review artifacts: read-only", self.pack)
         self.assertIn("RUNTIME-ONLY: installed --report-stage may write", self.pack)
         self.assertIn("EXCLUDE all other control-plane paths", self.pack)

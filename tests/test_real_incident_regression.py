@@ -1037,6 +1037,80 @@ class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             self.assertEqual(recovered["next_action_code"], "DO_NOT_RETRY_PROVIDER")
             self.assertEqual(before, persisted_snapshot(root))
 
+    def test_started_receipt_recovers_each_atomic_replace_crash_boundary(self) -> None:
+        for stage in state_runtime_module.EXTERNAL_RECEIPT_STAGES:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = Harness(root)
+                initialized, _ = harness.initialize()
+                self.assertTrue(initialized["ok"], initialized)
+                request = harness.prepare_local_external_call(
+                    receipt_id="started-crash-boundary-001"
+                )
+                crashing = state_runtime_module.AdaptiveStateRuntime(
+                    root, crash_at=stage
+                )
+                with self.assertRaises(state_runtime_module.InjectedCrash):
+                    crashing.stage_external_receipt(request)
+
+                recovered = state_runtime_module.AdaptiveStateRuntime(root)
+                result = recovered.stage_external_receipt(request)
+                source = Path(result["source_path"])
+                self.assertEqual(source.stat().st_mode & 0o222, 0)
+                self.assertEqual(
+                    json.loads(source.read_text(encoding="utf-8"))["phase"],
+                    "STARTED",
+                )
+                self.assertFalse(list(source.parent.glob("*.EXTERNAL_RECEIPT.tmp")))
+                if stage == "EXTERNAL_RECEIPT_TEMP_FSYNCED":
+                    self.assertEqual(result["next_action_code"], "PERFORM_EXTERNAL_CALL_ONCE")
+                else:
+                    self.assertEqual(result["next_action_code"], "DO_NOT_RETRY_PROVIDER")
+
+    def test_completed_receipt_recovers_each_atomic_replace_crash_boundary(self) -> None:
+        for stage in state_runtime_module.EXTERNAL_RECEIPT_STAGES:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = Harness(root)
+                initialized, _ = harness.initialize()
+                self.assertTrue(initialized["ok"], initialized)
+                started_request = harness.prepare_local_external_call(
+                    receipt_id="completed-crash-boundary-001",
+                    artifact_path="evidence/completed-crash-boundary.json",
+                )
+                started = harness.runtime.stage_external_receipt(started_request)
+                artifact_path, artifact_digest = self._write_receipt_artifact(
+                    root, "completed-crash-boundary.json"
+                )
+                request = self._completed_request(
+                    started_request,
+                    started,
+                    artifact_path,
+                    artifact_digest,
+                )
+                crashing = state_runtime_module.AdaptiveStateRuntime(
+                    root, crash_at=stage
+                )
+                with self.assertRaises(state_runtime_module.InjectedCrash):
+                    crashing.stage_external_receipt(request)
+
+                recovered = state_runtime_module.AdaptiveStateRuntime(root)
+                result = recovered.stage_external_receipt(request)
+                source = Path(result["source_path"])
+                self.assertEqual(source.stat().st_mode & 0o222, 0)
+                self.assertEqual(
+                    json.loads(source.read_text(encoding="utf-8"))["phase"],
+                    "COMPLETED",
+                )
+                self.assertFalse(list(source.parent.glob("*.EXTERNAL_RECEIPT.tmp")))
+                if stage == "EXTERNAL_RECEIPT_TEMP_FSYNCED":
+                    self.assertEqual(result["next_action_code"], "STAGE_TARGET_REPORT")
+                else:
+                    self.assertEqual(
+                        result["next_action_code"],
+                        "RECOVER_RESULT_WITHOUT_PROVIDER_RETRY",
+                    )
+
     def test_completion_without_started_receipt_has_zero_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1177,6 +1251,33 @@ class DurableExternalReceiptTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 harness.runtime.stage_external_receipt(invalid)
             self.assertEqual(context.exception.code, "EXTERNAL_RECEIPT_USAGE_INVALID")
             self.assertEqual(before, persisted_snapshot(root))
+
+    def test_runtime_generated_receipt_uses_canonical_utf8_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize()
+            self.assertTrue(initialized["ok"], initialized)
+            request = harness.prepare_local_external_call(
+                receipt_id="utf8-runtime-receipt-001",
+                provider="本地验证😀",
+                model="组合字符-e\u0301",
+            )
+            staged = harness.runtime.stage_external_receipt(request)
+            payload = Path(staged["source_path"]).read_bytes()
+            self.assertIn("本地验证😀".encode("utf-8"), payload)
+            self.assertIn("组合字符-e\u0301".encode("utf-8"), payload)
+            self.assertNotIn(b"\\u672c\\u5730", payload)
+            self.assertFalse(payload.endswith(b"\n"))
+            parsed = json.loads(payload.decode("utf-8"))
+            expected = json.dumps(
+                parsed,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            self.assertEqual(payload, expected)
+            self.assertEqual(staged["receipt_digest"], digest(payload.decode("utf-8")))
 
 
 class PackMigrationAndTurnLeaseTests(AdaptiveStateRuntimeTestCase):  # noqa: F405

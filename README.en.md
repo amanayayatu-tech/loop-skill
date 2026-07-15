@@ -87,6 +87,13 @@ Every digest mismatch uses provenance-bearing field pairs: caller assertions use
 the hashed byte length, and `side_effects=NONE`; digest errors never use the
 ambiguous `expected/actual` pair.
 
+Worker, Reviewer, and Local Verifier formal reports pass exact `report_text` to
+`--report-stage` inside the target task. Runtime validates the role-authored
+UTF-8 JSON framing and semantics, computes the digest and byte count from those
+exact bytes, and does not rewrite key order, line endings, or Unicode spelling.
+The Controller forwards only the `FORMAL_REPORT_STAGED` handle. Optional
+`provided_report_digest` is an assertion, never the identity authority.
+
 Pack changes require atomic `MIGRATE_CONTROLLER_PACK` at a paused safe point and
 retain immutable revision history; an unmigrated digest has no routing authority.
 The Controller invokes `ACQUIRE_LEASE` / `TAKEOVER_LEASE` only through the

@@ -378,6 +378,16 @@ ARTIFACT_STAGES = (
     "ARTIFACT_REPLACED",
     "ARTIFACT_DIR_FSYNCED",
 )
+REPORT_STAGE_STAGES = (
+    "REPORT_STAGE_TEMP_FSYNCED",
+    "REPORT_STAGE_REPLACED",
+    "REPORT_STAGE_DIR_FSYNCED",
+)
+EXTERNAL_RECEIPT_STAGES = (
+    "EXTERNAL_RECEIPT_TEMP_FSYNCED",
+    "EXTERNAL_RECEIPT_REPLACED",
+    "EXTERNAL_RECEIPT_DIR_FSYNCED",
+)
 STATUS_PROJECTION_STAGES = (
     "STATUS_JOURNAL_TEMP_FSYNCED",
     "STATUS_JOURNAL_REPLACED",
@@ -386,7 +396,13 @@ STATUS_PROJECTION_STAGES = (
     "STATUS_REPLACED",
     "STATUS_DIR_FSYNCED",
 )
-CRASH_STAGES = PERSISTENT_STAGES + ARTIFACT_STAGES + STATUS_PROJECTION_STAGES
+CRASH_STAGES = (
+    PERSISTENT_STAGES
+    + ARTIFACT_STAGES
+    + REPORT_STAGE_STAGES
+    + EXTERNAL_RECEIPT_STAGES
+    + STATUS_PROJECTION_STAGES
+)
 
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
 _PROCESS_LOCKS_GUARD = threading.Lock()
@@ -425,6 +441,18 @@ def _canonical_json(value: Any, *, indent: int | None = None) -> str:
         allow_nan=False,
         separators=(",", ":") if indent is None else None,
         indent=indent,
+    )
+
+
+def _canonical_utf8_json(value: Any) -> str:
+    """Canonical serialization for newly introduced runtime-owned JSON bytes."""
+
+    return json.dumps(
+        value,
+        sort_keys=True,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
     )
 
 
@@ -1870,6 +1898,8 @@ class AdaptiveStateRuntime:
         cls,
         result: dict[str, Any],
         report: dict[str, Any],
+        *,
+        allow_report_mutation: bool,
     ) -> None:
         """Bind Worker execution classification even when a target omits it from result."""
 
@@ -1886,6 +1916,11 @@ class AdaptiveStateRuntime:
         elif report_has_execution:
             result["execution_started"] = report["execution_started"]
         else:
+            if not allow_report_mutation:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EXACT_BYTES_CLASSIFICATION_MISSING",
+                    "/report_text/execution_started",
+                )
             report["execution_started"] = result["execution_started"]
 
         execution_started = result["execution_started"]
@@ -1920,6 +1955,11 @@ class AdaptiveStateRuntime:
                     {"allowed": sorted(ZERO_EXECUTION_BLOCKER_CODES)},
                 )
             result["blocker_code"] = blocker_code
+            if report_blocker is None and not allow_report_mutation:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EXACT_BYTES_CLASSIFICATION_MISSING",
+                    "/report_text/blocker_code",
+                )
             report["blocker_code"] = blocker_code
         elif result_blocker is not None or report.get("blocker_code") is not None:
             raise RuntimeRejection(
@@ -1931,19 +1971,28 @@ class AdaptiveStateRuntime:
         """Validate and stage one formal report for an exact canonical SENT outbox."""
 
         self._ensure_json_value(request, "/")
-        if not isinstance(request, dict) or set(request) != {
-            "outbox_id",
-            "result",
-            "report",
-        }:
+        legacy_keys = {"outbox_id", "result", "report"}
+        exact_required_keys = {"outbox_id", "result", "report_text"}
+        if not isinstance(request, dict) or not (
+            set(request) == legacy_keys
+            or (
+                exact_required_keys.issubset(request)
+                and set(request).issubset(
+                    exact_required_keys | {"provided_report_digest"}
+                )
+            )
+        ):
             raise RuntimeRejection(
                 "FORMAL_REPORT_STAGE_INPUT_INVALID",
                 "/",
-                {"required_keys": ["outbox_id", "report", "result"]},
+                {
+                    "required_keys": ["outbox_id", "report_text", "result"],
+                    "legacy_keys": ["outbox_id", "report", "result"],
+                },
             )
         outbox_id = request["outbox_id"]
         result_input = copy.deepcopy(request["result"])
-        report = copy.deepcopy(request["report"])
+        exact_bytes_mode = "report_text" in request
         if not isinstance(outbox_id, str) or SAFE_ID_RE.fullmatch(outbox_id) is None:
             raise RuntimeRejection("UNSAFE_ID", "/outbox_id")
         allowed_result_keys = {
@@ -1960,9 +2009,61 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "FORMAL_REPORT_STAGE_RESULT_INVALID", "/result"
             )
+        if exact_bytes_mode:
+            report_text = request["report_text"]
+            if not isinstance(report_text, str):
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_TEXT_INVALID", "/report_text"
+                )
+            try:
+                payload = report_text.encode("utf-8", errors="strict")
+            except UnicodeEncodeError as exc:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_UTF8_INVALID", "/report_text"
+                ) from exc
+            if len(payload) > MAX_ARTIFACT_CONTENT_SIZE:
+                raise RuntimeRejection(
+                    "ARTIFACT_CONTENT_TOO_LARGE",
+                    "/report_text",
+                    {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
+                )
+            report = _strict_json_loads(
+                report_text,
+                code="FORMAL_REPORT_JSON_INVALID",
+                path="/report_text",
+            )
+            serialization_mode = "ROLE_AUTHORED_EXACT_UTF8_V1"
+        else:
+            report = copy.deepcopy(request["report"])
+            if not isinstance(report, dict):
+                raise RuntimeRejection("FORMAL_REPORT_NOT_OBJECT", "/report")
+            serialization_mode = "LEGACY_RUNTIME_CANONICALIZED_JSON_V1"
         if not isinstance(report, dict):
-            raise RuntimeRejection("FORMAL_REPORT_NOT_OBJECT", "/report")
-        self._normalize_staged_worker_classification(result_input, report)
+            raise RuntimeRejection(
+                "FORMAL_REPORT_NOT_OBJECT",
+                "/report_text" if exact_bytes_mode else "/report",
+            )
+        self._normalize_staged_worker_classification(
+            result_input,
+            report,
+            allow_report_mutation=not exact_bytes_mode,
+        )
+        if not exact_bytes_mode:
+            try:
+                content = json.dumps(
+                    report,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_JSON_INVALID",
+                    "/report",
+                    {"error_type": type(exc).__name__},
+                ) from exc
+            payload = content.encode("utf-8")
         artifact_digest = result_input.get("artifact_digest")
         if (
             not isinstance(artifact_digest, str)
@@ -1971,31 +2072,32 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "DIGEST_INVALID", "/result/artifact_digest"
             )
-        try:
-            content = json.dumps(
-                report,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            )
-        except (TypeError, ValueError) as exc:
-            raise RuntimeRejection(
-                "FORMAL_REPORT_JSON_INVALID",
-                "/report",
-                {"error_type": type(exc).__name__},
-            ) from exc
-        payload = content.encode("utf-8")
-        if (
-            len(content) > MAX_ARTIFACT_CONTENT_SIZE
-            or len(payload) > MAX_ARTIFACT_CONTENT_SIZE
-        ):
+        if len(payload) > MAX_ARTIFACT_CONTENT_SIZE:
             raise RuntimeRejection(
                 "ARTIFACT_CONTENT_TOO_LARGE",
-                "/report",
+                "/report_text" if exact_bytes_mode else "/report",
                 {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
             )
         report_digest = _bytes_digest(payload)
+        provided_report_digest = request.get("provided_report_digest")
+        if provided_report_digest is not None:
+            if (
+                not isinstance(provided_report_digest, str)
+                or DIGEST_RE.fullmatch(provided_report_digest) is None
+            ):
+                raise RuntimeRejection(
+                    "DIGEST_INVALID", "/provided_report_digest"
+                )
+            if provided_report_digest != report_digest:
+                raise RuntimeRejection(
+                    "ARTIFACT_DIGEST_MISMATCH",
+                    "/provided_report_digest",
+                    _provided_computed_digest_details(
+                        provided_report_digest,
+                        report_digest,
+                        payload,
+                    ),
+                )
         result = {
             "status": result_input.get("status"),
             "artifact_digest": artifact_digest,
@@ -2062,10 +2164,10 @@ class AdaptiveStateRuntime:
             )
             self._assert_confined(source, self.report_staging_dir, "/source_path")
             if source.exists() or source.is_symlink():
-                self._require_staged_report_file(
+                staged_payload = self._require_staged_report_file(
                     source, report_digest, "/source_path"
                 )
-                if source.read_bytes() != payload:
+                if staged_payload != payload:
                     raise RuntimeRejection(
                         "FORMAL_REPORT_STAGE_CONFLICT", "/source_path"
                     )
@@ -2075,9 +2177,8 @@ class AdaptiveStateRuntime:
                     payload,
                     f"report-stage-{outbox_id}",
                     "REPORT_STAGE",
+                    final_mode=0o444,
                 )
-                os.chmod(source, 0o444, follow_symlinks=False)
-                self._fsync_dir(self.report_staging_dir)
                 self._require_staged_report_file(
                     source, report_digest, "/source_path"
                 )
@@ -2091,6 +2192,9 @@ class AdaptiveStateRuntime:
                 "path": artifact_path,
                 "source_path": str(source),
                 "report_digest": report_digest,
+                "report_byte_count": len(payload),
+                "report_identity_source": "RUNTIME_COMPUTED_FROM_STAGED_BYTES",
+                "serialization_mode": serialization_mode,
                 "media_type": "application/json",
                 "ack_evidence_paths": [artifact_path],
                 "result": result,
@@ -2226,7 +2330,7 @@ class AdaptiveStateRuntime:
                     "EXTERNAL_RECEIPT_USAGE_INVALID", "/usage/total_tokens"
                 )
 
-        payload = _canonical_json(request).encode("utf-8")
+        payload = _canonical_utf8_json(request).encode("utf-8")
         receipt_digest = _bytes_digest(payload)
         _, state_validator = self._load_validators()
         self._require_root()
@@ -2244,11 +2348,18 @@ class AdaptiveStateRuntime:
                         "EXTERNAL_RECEIPT_STARTED_NOT_FOUND",
                         "/started_receipt_digest",
                     )
-                self._require_external_receipt_file(
+                started_payload = self._require_external_receipt_file(
                     started, request["started_receipt_digest"], "/started_receipt_digest"
                 )
+                try:
+                    started_text = started_payload.decode("utf-8", errors="strict")
+                except UnicodeDecodeError as exc:
+                    raise RuntimeRejection(
+                        "EXTERNAL_RECEIPT_STARTED_INVALID",
+                        "/started_receipt_digest",
+                    ) from exc
                 started_value = _strict_json_loads(
-                    started.read_text(encoding="utf-8"),
+                    started_text,
                     code="EXTERNAL_RECEIPT_STARTED_INVALID",
                     path="/started_receipt_digest",
                 )
@@ -2265,8 +2376,10 @@ class AdaptiveStateRuntime:
             self._assert_confined(source, self.external_receipts_dir, "/source_path")
             created = False
             if source.exists() or source.is_symlink():
-                self._require_external_receipt_file(source, receipt_digest, "/source_path")
-                if source.read_bytes() != payload:
+                staged_payload = self._require_external_receipt_file(
+                    source, receipt_digest, "/source_path"
+                )
+                if staged_payload != payload:
                     raise RuntimeRejection(
                         "EXTERNAL_RECEIPT_STAGE_CONFLICT", "/source_path"
                     )
@@ -2276,9 +2389,8 @@ class AdaptiveStateRuntime:
                     payload,
                     f"external-receipt-{receipt_id}-{suffix}",
                     "EXTERNAL_RECEIPT",
+                    final_mode=0o444,
                 )
-                os.chmod(source, 0o444, follow_symlinks=False)
-                self._fsync_dir(self.external_receipts_dir)
                 self._require_external_receipt_file(
                     source, receipt_digest, "/source_path"
                 )
@@ -2398,20 +2510,40 @@ class AdaptiveStateRuntime:
 
     def _require_external_receipt_file(
         self, source: Path, digest: str, path: str
-    ) -> None:
+    ) -> bytes:
         self._assert_confined(source, self.external_receipts_dir, path)
-        self._reject_symlink(source, path)
         try:
-            mode = source.lstat().st_mode
-            payload = source.read_bytes()
+            descriptor = os.open(
+                source,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
         except OSError as exc:
             raise RuntimeRejection("EXTERNAL_RECEIPT_FILE_INVALID", path) from exc
-        if (
-            not stat.S_ISREG(mode)
-            or mode & 0o222
-            or _bytes_digest(payload) != digest
-        ):
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o222
+                or metadata.st_size > MAX_ARTIFACT_CONTENT_SIZE
+            ):
+                raise RuntimeRejection("EXTERNAL_RECEIPT_FILE_INVALID", path)
+            chunks: list[bytes] = []
+            remaining = MAX_ARTIFACT_CONTENT_SIZE + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+        except OSError as exc:
+            raise RuntimeRejection("EXTERNAL_RECEIPT_FILE_INVALID", path) from exc
+        finally:
+            os.close(descriptor)
+        if len(payload) > MAX_ARTIFACT_CONTENT_SIZE or _bytes_digest(payload) != digest:
             raise RuntimeRejection("EXTERNAL_RECEIPT_FILE_INVALID", path)
+        return payload
 
     def _ensure_report_staging_locked(self) -> None:
         path = self.report_staging_dir
@@ -2450,24 +2582,51 @@ class AdaptiveStateRuntime:
 
     def _require_staged_report_file(
         self, source: Path, expected_digest: str, json_path: str
-    ) -> None:
-        self._reject_symlink(source, json_path)
+    ) -> bytes:
         self._assert_confined(source, self.report_staging_dir, json_path)
         try:
-            metadata = os.stat(source, follow_symlinks=False)
-            payload = source.read_bytes()
+            descriptor = os.open(
+                source,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
         except OSError as exc:
             raise RuntimeRejection(
                 "ARTIFACT_SOURCE_UNAVAILABLE",
                 json_path,
                 {"error_type": type(exc).__name__},
             ) from exc
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.getuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o444
-        ):
-            raise RuntimeRejection("STAGED_REPORT_FILE_INVALID", json_path)
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o444
+                or metadata.st_size > MAX_ARTIFACT_CONTENT_SIZE
+            ):
+                raise RuntimeRejection("STAGED_REPORT_FILE_INVALID", json_path)
+            chunks: list[bytes] = []
+            remaining = MAX_ARTIFACT_CONTENT_SIZE + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+            if len(payload) > MAX_ARTIFACT_CONTENT_SIZE:
+                raise RuntimeRejection(
+                    "ARTIFACT_CONTENT_TOO_LARGE",
+                    json_path,
+                    {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
+                )
+        except OSError as exc:
+            raise RuntimeRejection(
+                "ARTIFACT_SOURCE_UNAVAILABLE",
+                json_path,
+                {"error_type": type(exc).__name__},
+            ) from exc
+        finally:
+            os.close(descriptor)
         actual_digest = _bytes_digest(payload)
         if actual_digest != expected_digest:
             raise RuntimeRejection(
@@ -2479,6 +2638,7 @@ class AdaptiveStateRuntime:
                     payload,
                 ),
             )
+        return payload
 
     def _load_validators(self) -> tuple[Any, Any]:
         if self._validators is not None:
@@ -2835,6 +2995,7 @@ class AdaptiveStateRuntime:
                     and mutation.get("outbox_kind")
                     in {"DISPATCH", "ASSURANCE", "LOCAL"}
                 )
+                staged_report_payload: bytes | None = None
                 if staged_report_source:
                     outbox_id = mutation.get("outbox_id")
                     result = mutation.get("result")
@@ -2858,7 +3019,7 @@ class AdaptiveStateRuntime:
                             "ARTIFACT_SOURCE_PATH_NOT_ALLOWED", source_json_path
                         )
                     self._validate_report_staging_locked()
-                    self._require_staged_report_file(
+                    staged_report_payload = self._require_staged_report_file(
                         source, artifact["digest"], source_json_path
                     )
                 elif not controller_pack_source:
@@ -2867,13 +3028,20 @@ class AdaptiveStateRuntime:
                         source_json_path,
                     )
                 try:
-                    if source.stat().st_size > MAX_ARTIFACT_CONTENT_SIZE:
+                    if (
+                        staged_report_payload is None
+                        and source.stat().st_size > MAX_ARTIFACT_CONTENT_SIZE
+                    ):
                         raise RuntimeRejection(
                             "ARTIFACT_CONTENT_TOO_LARGE",
                             source_json_path,
                             {"max_size": MAX_ARTIFACT_CONTENT_SIZE},
                         )
-                    payload = source.read_bytes()
+                    payload = (
+                        staged_report_payload
+                        if staged_report_payload is not None
+                        else source.read_bytes()
+                    )
                     content = payload.decode("utf-8", errors="strict")
                     if len(content) > MAX_ARTIFACT_CONTENT_SIZE:
                         raise RuntimeRejection(
@@ -4928,6 +5096,8 @@ class AdaptiveStateRuntime:
         payload: bytes,
         transaction_id: str,
         stage_prefix: str,
+        *,
+        final_mode: int = 0o600,
     ) -> None:
         self._reject_symlink(path.parent, f"/{stage_prefix.lower()}/parent")
         self._reject_symlink(path, f"/{stage_prefix.lower()}")
@@ -4935,11 +5105,26 @@ class AdaptiveStateRuntime:
         temp_path = path.parent / f".{path.name}.{transaction_id}.{stage_prefix}.tmp"
         self._reject_symlink(temp_path, f"/{stage_prefix.lower()}/temp")
         self._assert_confined(temp_path, path.parent, f"/{stage_prefix.lower()}/temp")
+        if temp_path.exists():
+            try:
+                metadata = os.stat(temp_path, follow_symlinks=False)
+            except OSError as exc:
+                raise RuntimeRejection(
+                    "ATOMIC_TEMP_INVALID",
+                    f"/{stage_prefix.lower()}/temp",
+                    {"error_type": type(exc).__name__},
+                ) from exc
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+                raise RuntimeRejection(
+                    "ATOMIC_TEMP_INVALID", f"/{stage_prefix.lower()}/temp"
+                )
+            temp_path.unlink()
+            self._fsync_dir(path.parent)
         descriptor = os.open(
             temp_path,
             os.O_WRONLY
             | os.O_CREAT
-            | os.O_TRUNC
+            | os.O_EXCL
             | getattr(os, "O_NOFOLLOW", 0),
             0o600,
         )
@@ -4951,6 +5136,7 @@ class AdaptiveStateRuntime:
                 if written <= 0:
                     raise OSError("short replace write")
                 offset += written
+            os.fchmod(descriptor, final_mode)
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
@@ -10003,7 +10189,7 @@ class AdaptiveStateRuntime:
         report_digest: Any,
         path: str,
     ) -> dict[str, Any]:
-        """Reuse the one report already archived by an ACKED assurance outbox."""
+        """Reuse the exact report bytes already archived by an ACKED assurance outbox."""
 
         if request["artifacts"]:
             raise RuntimeRejection(
@@ -10100,15 +10286,6 @@ class AdaptiveStateRuntime:
         )
         if not isinstance(report, dict):
             raise RuntimeRejection("FORMAL_REPORT_NOT_OBJECT", path)
-        canonical = json.dumps(
-            report,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        if content != canonical:
-            raise RuntimeRejection("FORMAL_REPORT_NOT_CANONICAL", path)
         return report
 
     @staticmethod
@@ -10158,15 +10335,6 @@ class AdaptiveStateRuntime:
         )
         if not isinstance(report, dict):
             raise RuntimeRejection("FORMAL_REPORT_NOT_OBJECT", path)
-        canonical = json.dumps(
-            report,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        if matches[0]["content"] != canonical:
-            raise RuntimeRejection("FORMAL_REPORT_NOT_CANONICAL", path)
         return report
 
     @staticmethod
@@ -12129,10 +12297,12 @@ __all__ = [
     "AdaptiveStateRuntime",
     "CRASH_STAGES",
     "DISPATCH_ENVELOPE_TYPES",
+    "EXTERNAL_RECEIPT_STAGES",
     "InjectedCrash",
     "PAYLOAD_DIGEST_FIELD",
     "PAYLOAD_DIGEST_PLACEHOLDER",
     "PERSISTENT_STAGES",
+    "REPORT_STAGE_STAGES",
     "STATUS_PROJECTION_STAGES",
     "RuntimeRejection",
     "goal_definition_payload_digest",

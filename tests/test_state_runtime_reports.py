@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import stat
+
 from state_runtime_support import *  # noqa: F403
 
 
@@ -431,6 +433,247 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
             )
             self.assertEqual(unexpected["status"], "REQUEST_SCHEMA_INVALID")
             self.assertEqual(persisted_snapshot(root), after_staging)
+
+    def test_role_authored_report_exact_bytes_define_runtime_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, worker, claim, review_dispatch_id, payload = (
+                self._prepare_sent_code_review(root)
+            )
+            result = {
+                "status": "REVIEW_PASS",
+                "artifact_digest": worker["artifact_digest"],
+            }
+            report = json.loads(
+                harness.formal_report_content(
+                    "ASSURANCE", review_dispatch_id, result
+                )
+            )
+            exact_report = {
+                "commentary": "中文路径/复核😀/e\u0301",
+                **report,
+            }
+            exact_text = json.dumps(
+                exact_report,
+                ensure_ascii=False,
+                indent=2,
+            ).replace("\n", "\r\n")
+            exact_bytes = exact_text.encode("utf-8")
+            exact_digest = digest(exact_text)
+            staged = harness.runtime.stage_formal_report(
+                {
+                    "outbox_id": review_dispatch_id,
+                    "result": result,
+                    "report_text": exact_text,
+                    "provided_report_digest": exact_digest,
+                }
+            )
+            self.assertEqual(staged["report_digest"], exact_digest)
+            self.assertEqual(staged["report_byte_count"], len(exact_bytes))
+            self.assertEqual(
+                staged["report_identity_source"],
+                "RUNTIME_COMPUTED_FROM_STAGED_BYTES",
+            )
+            self.assertEqual(
+                staged["serialization_mode"],
+                "ROLE_AUTHORED_EXACT_UTF8_V1",
+            )
+            self.assertEqual(Path(staged["source_path"]).read_bytes(), exact_bytes)
+
+            acknowledged = harness.apply(
+                {
+                    "type": "ACK_OUTBOX",
+                    "lease_claim": claim,
+                    "observed_at": T1,
+                    "outbox_kind": "ASSURANCE",
+                    "outbox_id": review_dispatch_id,
+                    "payload_digest": payload,
+                    "target_id": "reviewer-1",
+                    "ack_evidence_paths": staged["ack_evidence_paths"],
+                    "result": staged["result"],
+                },
+                artifacts=[staged["artifact"]],
+            )
+            self.assertTrue(acknowledged["ok"], acknowledged)
+            archived = root / staged["path"]
+            self.assertEqual(archived.read_bytes(), exact_bytes)
+            state = harness.state()
+            outbox = state["assurance_dispatch_outbox"][review_dispatch_id]
+            reopened = harness.runtime._require_canonical_assurance_report(
+                state,
+                outbox,
+                {"artifacts": []},
+                staged["ack_evidence_paths"],
+                exact_digest,
+                "/mutation/report_digest",
+            )
+            self.assertEqual(reopened["commentary"], exact_report["commentary"])
+
+    def test_report_digest_assertion_mismatch_has_zero_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, worker, _, review_dispatch_id, _ = (
+                self._prepare_sent_code_review(root)
+            )
+            result = {
+                "status": "REVIEW_PASS",
+                "artifact_digest": worker["artifact_digest"],
+            }
+            report_text = harness.formal_report_content(
+                "ASSURANCE", review_dispatch_id, result
+            )
+            before = persisted_snapshot(root)
+            with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
+                harness.runtime.stage_formal_report(
+                    {
+                        "outbox_id": review_dispatch_id,
+                        "result": result,
+                        "report_text": report_text,
+                        "provided_report_digest": digest("wrong assertion"),
+                    }
+                )
+            self.assertEqual(context.exception.code, "ARTIFACT_DIGEST_MISMATCH")
+            self.assertEqual(
+                context.exception.details["provided_digest"],
+                digest("wrong assertion"),
+            )
+            self.assertEqual(
+                context.exception.details["computed_digest"],
+                digest(report_text),
+            )
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_exact_report_stage_rejects_symlink_replacement_without_side_effects(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, worker, _, review_dispatch_id, _ = (
+                self._prepare_sent_code_review(root)
+            )
+            result = {
+                "status": "REVIEW_PASS",
+                "artifact_digest": worker["artifact_digest"],
+            }
+            report_text = harness.formal_report_content(
+                "ASSURANCE", review_dispatch_id, result
+            )
+            report_digest = digest(report_text)
+            staging = root / ".codex-loop" / "report-staging"
+            outside = root / "outside.json"
+            outside.write_text("outside remains unchanged", encoding="utf-8")
+            source = staging / (
+                f"{review_dispatch_id}."
+                f"{report_digest.removeprefix('sha256:')}.json"
+            )
+            source.symlink_to(outside)
+            before = persisted_snapshot(root)
+
+            with self.assertRaises(state_runtime_module.RuntimeRejection) as context:
+                harness.runtime.stage_formal_report(
+                    {
+                        "outbox_id": review_dispatch_id,
+                        "result": result,
+                        "report_text": report_text,
+                    }
+                )
+
+            self.assertEqual(context.exception.code, "SYMLINK_NOT_ALLOWED")
+            self.assertEqual(
+                outside.read_text(encoding="utf-8"),
+                "outside remains unchanged",
+            )
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_exact_report_read_fails_closed_on_post_check_symlink_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, worker, _, review_dispatch_id, _ = (
+                self._prepare_sent_code_review(root)
+            )
+            result = {
+                "status": "REVIEW_PASS",
+                "artifact_digest": worker["artifact_digest"],
+            }
+            report_text = harness.formal_report_content(
+                "ASSURANCE", review_dispatch_id, result
+            )
+            request = {
+                "outbox_id": review_dispatch_id,
+                "result": result,
+                "report_text": report_text,
+            }
+            staged = harness.runtime.stage_formal_report(request)
+            source = Path(staged["source_path"])
+            outside = root / "outside-race.json"
+            outside.write_text("outside remains unchanged", encoding="utf-8")
+            canonical_before = harness.state()
+            original_open = state_runtime_module.os.open
+            swapped = False
+
+            def swap_before_open(
+                path: Any, flags: int, *args: Any, **kwargs: Any
+            ) -> int:
+                nonlocal swapped
+                if not swapped and Path(path) == source:
+                    swapped = True
+                    source.unlink()
+                    source.symlink_to(outside)
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(
+                state_runtime_module.os, "open", swap_before_open
+            ):
+                with self.assertRaises(
+                    state_runtime_module.RuntimeRejection
+                ) as context:
+                    harness.runtime.stage_formal_report(request)
+
+            self.assertTrue(swapped)
+            self.assertEqual(context.exception.code, "ARTIFACT_SOURCE_UNAVAILABLE")
+            self.assertEqual(harness.state(), canonical_before)
+            self.assertEqual(
+                outside.read_text(encoding="utf-8"),
+                "outside remains unchanged",
+            )
+
+    def test_exact_report_stage_recovers_each_atomic_replace_crash_boundary(
+        self,
+    ) -> None:
+        for stage in state_runtime_module.REPORT_STAGE_STAGES:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness, worker, _, review_dispatch_id, _ = (
+                    self._prepare_sent_code_review(root)
+                )
+                result = {
+                    "status": "REVIEW_PASS",
+                    "artifact_digest": worker["artifact_digest"],
+                }
+                report_text = harness.formal_report_content(
+                    "ASSURANCE", review_dispatch_id, result
+                )
+                request = {
+                    "outbox_id": review_dispatch_id,
+                    "result": result,
+                    "report_text": report_text,
+                }
+
+                crashing = state_runtime_module.AdaptiveStateRuntime(
+                    root, crash_at=stage
+                )
+                with self.assertRaises(state_runtime_module.InjectedCrash):
+                    crashing.stage_formal_report(request)
+
+                recovered = state_runtime_module.AdaptiveStateRuntime(root)
+                staged = recovered.stage_formal_report(request)
+                source = Path(staged["source_path"])
+                self.assertEqual(source.read_bytes(), report_text.encode("utf-8"))
+                self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o444)
+                self.assertFalse(
+                    list(source.parent.glob("*.REPORT_STAGE.tmp")),
+                    "replay must consume the deterministic staging temp",
+                )
 
     def test_worker_artifact_digest_is_derived_from_after_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

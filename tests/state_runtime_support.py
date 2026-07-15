@@ -910,7 +910,7 @@ class Harness:
                                 else {}
                             ),
                         },
-                        "report": json.loads(report_content),
+                        "report_text": report_content,
                     }
                 )
             except state_runtime_module.RuntimeRejection as rejection:
