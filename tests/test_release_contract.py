@@ -12,6 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_installer_dependencies_are_complete_and_exactly_pinned(self) -> None:
+        requirements = (ROOT / "requirements-test.txt").read_text(encoding="utf-8")
+        self.assertIn("PyYAML==6.0.3", requirements.splitlines())
+        installer = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
+        self.assertIn("import jsonschema, yaml", installer)
+        self.assertIn("jsonschema, PyYAML, and a TOML reader", installer)
+
     def test_skill_validator_runs_as_a_covered_library_entrypoint(self) -> None:
         path = ROOT / "codex-loop-prompt-architect/scripts/validate_skill.py"
         scripts_dir = str(path.parent)

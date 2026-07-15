@@ -9,6 +9,10 @@ All notable changes to this project are documented here. The project follows
 
 ### Fixed
 
+- Declared and preflighted the PyYAML dependency used by Codex's optional
+  system `quick_validate.py`, so a real `CODEX_HOME` install either validates
+  successfully or fails before changing the installed skill or MCP config.
+
 - Replaced syntactic transport checks with one bounded semantic reader across
   every shipped stdin mode. Complete frames finish without EOF; partial,
   oversized and invalid UTF-8 input fails closed without a retained process.

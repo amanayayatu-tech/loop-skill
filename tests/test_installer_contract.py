@@ -53,6 +53,26 @@ class InstallerContractTests(unittest.TestCase):
             text=True,
         )
 
+    def test_missing_declared_dependencies_fail_before_install_mutation(self) -> None:
+        fake_python = Path(self.tempdir.name) / "python-without-dependencies"
+        fake_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        fake_python.chmod(0o755)
+        result = subprocess.run(
+            [str(INSTALLER)],
+            cwd=ROOT,
+            env={
+                **os.environ,
+                "CODEX_HOME": str(self.codex_home),
+                "PYTHON": str(fake_python),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("jsonschema, PyYAML, and a TOML reader", result.stderr)
+        self.assertFalse(self.codex_home.exists())
+
     def test_isolated_install_registers_exact_identity_and_is_idempotent(self) -> None:
         first = self._run()
         self.assertEqual(first.returncode, 0, first.stderr)

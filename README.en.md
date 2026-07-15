@@ -268,6 +268,10 @@ python3 codex-loop-prompt-architect/scripts/validate_skill.py
 bash -n scripts/install.sh
 ```
 
+`requirements-test.txt` pins PyYAML because the installer also executes Codex's
+system `quick_validate.py` when that validator is present. A missing YAML
+dependency fails before any installation or MCP configuration mutation.
+
 Full release fuzz gate:
 
 ```bash

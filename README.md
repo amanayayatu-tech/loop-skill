@@ -1734,7 +1734,8 @@ bash -n scripts/install.sh
 
 如果当前 Codex 安装还提供 system `quick_validate.py`，安装脚本会额外运行；
 它不存在时不会阻止安装，因为仓库自带 validator 已覆盖 frontmatter、目录、
-metadata、脚本编译和 schema 输出检查。
+metadata、脚本编译和 schema 输出检查。`requirements-test.txt` 明确固定 PyYAML，
+因为 system validator 存在时会导入 `yaml`；缺少该依赖会在任何安装变更前失败。
 
 覆盖率按 `pyproject.toml` 纳入全部 shipped Python entrypoint，不再只统计
 `scripts/loop_architect/**`；branch baseline 保持 `fail_under=80`。普通 full suite 把两组

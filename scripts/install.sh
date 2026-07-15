@@ -67,8 +67,8 @@ for required_file in "$STATE_RUNTIME" "$STATE_MCP" "$MCP_CONFIG_HELPER" "$INSTAL
   fi
 done
 
-if ! "$PYTHON_BIN" -c 'import jsonschema; import importlib.util; assert importlib.util.find_spec("tomllib") or importlib.util.find_spec("tomli")' >/dev/null 2>&1; then
-  echo "Missing Python dependencies: jsonschema and a TOML reader. Install requirements-test.txt before installing this skill." >&2
+if ! "$PYTHON_BIN" -c 'import jsonschema, yaml; import importlib.util; assert importlib.util.find_spec("tomllib") or importlib.util.find_spec("tomli")' >/dev/null 2>&1; then
+  echo "Missing Python dependencies: jsonschema, PyYAML, and a TOML reader. Install requirements-test.txt before installing this skill." >&2
   exit 1
 fi
 
