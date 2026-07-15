@@ -85,6 +85,10 @@ def _atomic_replace(path: Path, before: bytes, after: bytes, mode: int) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = os.open(temporary, flags, mode)
     try:
+        # os.open applies the process umask even when replacing an existing
+        # config. Restore the already-authorized mode before publication so a
+        # restrictive CI/App umask cannot silently change user permissions.
+        os.fchmod(descriptor, mode)
         with os.fdopen(descriptor, "wb", closefd=True) as stream:
             stream.write(after)
             stream.flush()

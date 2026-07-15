@@ -60,6 +60,19 @@ class McpRegistrationTests(unittest.TestCase):
         self.assertEqual(self.config.read_bytes(), after_first)
         self.assertEqual(stat.S_IMODE(self.config.stat().st_mode), 0o640)
 
+    def test_existing_mode_is_preserved_under_restrictive_umask(self) -> None:
+        original = b'model = "gpt-5"\n'
+        self.config.write_bytes(original)
+        self.config.chmod(0o640)
+        previous_umask = os.umask(0o077)
+        try:
+            changed, _ = configure_mcp.register(self.config, self.python, self.script)
+        finally:
+            os.umask(previous_umask)
+        self.assertTrue(changed)
+        self.assertTrue(self.config.read_bytes().startswith(original))
+        self.assertEqual(stat.S_IMODE(self.config.stat().st_mode), 0o640)
+
     def test_conflicting_registration_is_zero_effect(self) -> None:
         original = b'[mcp_servers.codex-loop-state]\ncommand = "/other/python"\nargs = ["/other/server.py"]\n'
         self.config.write_bytes(original)
