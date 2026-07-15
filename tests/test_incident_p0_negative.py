@@ -7,11 +7,23 @@ behavior and durable side-effect checks rather than searching generated text.
 
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
-import test_adaptive_runtime_transport as transport_tests
-import test_control_plane_reliability_baseline as control_plane_tests
-import test_real_incident_regression as incident_tests
+
+TESTS_DIR = Path(__file__).resolve().parent
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+
+try:
+    from tests import test_adaptive_runtime_transport as transport_tests
+    from tests import test_control_plane_reliability_baseline as control_plane_tests
+    from tests import test_real_incident_regression as incident_tests
+except ImportError:  # unittest discovery adds tests/ itself to sys.path.
+    import test_adaptive_runtime_transport as transport_tests
+    import test_control_plane_reliability_baseline as control_plane_tests
+    import test_real_incident_regression as incident_tests
 
 
 REQUIRED_P0_TESTS = (
