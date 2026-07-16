@@ -266,6 +266,7 @@ GitHub Actions 只是兼容性镜像，不是发布验收。历史 E2E 也只是
 
 ## 深入了解
 
+- [项目规范与安全演进规则](SPEC.md)
 - [Skill 指令](codex-loop-prompt-architect/SKILL.md)
 - [Intake Gate 合同](codex-loop-prompt-architect/references/loop-intake-gate.md)
 - [Standard Loop 合同](codex-loop-prompt-architect/references/loop-contract.md)

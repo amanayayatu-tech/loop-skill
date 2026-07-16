@@ -1,0 +1,222 @@
+schema_version: 1
+invariants:
+  - id: INV-INPUT-001
+    title: Bounded direct non-PTY input
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [adaptive runtime stdin modes, payload codec, report staging]
+    rationale: An incomplete or adversarial frame must not hang a controller turn or retain a child process.
+    normative_statement: Runtime input uses direct argv and a writable non-PTY pipe, accepts one bounded strict UTF-8 JSON frame, and fails closed on timeout, excess bytes, invalid encoding, duplicate keys, non-finite values, extra frames, or trailing garbage.
+    non_goals: [freezing a subprocess library, requiring one internal parser function]
+    allowed_evolution: [replace the parser or process API while preserving bounds and structured failures, tighten limits through a reviewed public-contract change]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_adaptive_runtime_transport.py]
+    evidence_surfaces: [docs/RELEASING.md]
+    adr: [docs/adr/0001-bounded-non-pty-input.md]
+    introduced_version: 3.2.1
+
+  - id: INV-ROUTE-001
+    title: One business route per real host turn
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [adaptive route acquisition, lease takeover]
+    rationale: A single App turn must not race itself into two state-changing routes.
+    normative_statement: One attested real host turn may reserve at most one business route, including after release or completion; a second route is rejected before canonical or external side effects.
+    non_goals: [limiting read-only observation, equating session identity with turn identity]
+    allowed_evolution: [change lease internals while retaining one-route semantics, support new host metadata only with equivalent attestation]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_mcp.py, codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_adaptive_state_mcp.py]
+    evidence_surfaces: [docs/RELEASING.md, codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
+    adr: [docs/adr/0002-one-route-per-real-host-turn.md]
+    introduced_version: 3.2.5
+
+  - id: INV-ATTESTATION-001
+    title: Host-owned route attestation
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [MCP route bridge, Controller turn identity]
+    rationale: Model-authored ids cannot prove which App turn owns a route.
+    normative_statement: Route identity comes from validated host-owned MCP metadata and the trusted direct app-server parent; model arguments, shell values, titles, timestamps, and generated UUIDs are not attestation channels.
+    non_goals: [claiming the host itself is bug-free, storing raw user or turn identifiers in release evidence]
+    allowed_evolution: [accept a new signed host channel with equivalent identity properties, change signature verification implementation]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_mcp.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_adaptive_state_mcp.py]
+    evidence_surfaces: [codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
+    adr: [docs/adr/0002-one-route-per-real-host-turn.md]
+    introduced_version: 3.2.5
+
+  - id: INV-RECEIPT-001
+    title: Durable receipt recovery without retry
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [receipt-governed metered external calls, Local Verification, lost stdout]
+    rationale: Lost transport output must not duplicate an irreversible or paid action.
+    normative_statement: Receipt-governed metered external calls and Local Verification are preceded by durable identity and STARTED evidence; a durable COMPLETED receipt is recovered without resending, while an unmatched STARTED receipt yields an unknown outcome and forbids automatic retry.
+    non_goals: [requiring stdout as durable truth, retaining prompts responses or secrets in receipts]
+    allowed_evolution: [change receipt storage or projection while retaining immutable identity and no-retry semantics]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json]
+    test_surfaces: [tests/test_state_runtime_reports.py]
+    evidence_surfaces: [codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
+    adr: [docs/adr/0003-durable-receipts-and-lost-stdout.md]
+    introduced_version: 3.2.2
+
+  - id: INV-LEASE-001
+    title: Fenced single-route lease
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [Controller routing, outbox recovery, takeover]
+    rationale: Concurrent or stale Controllers must not apply the same transition under ambiguous ownership.
+    normative_statement: Every routed mutation carries the complete current lease claim; one lease reserves one route, stale epochs are fenced, and renewal or takeover may rebind only the exact unfinished route without resending it.
+    non_goals: [freezing lease TTL values, requiring one lock implementation]
+    allowed_evolution: [change timing and storage mechanics while preserving fencing and one-route ownership]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_state_runtime_migration.py]
+    evidence_surfaces: [docs/RELEASING.md]
+    adr: [docs/adr/0002-one-route-per-real-host-turn.md]
+    introduced_version: 3.2.0
+
+  - id: INV-MIGRATION-001
+    title: Pack migration preserves heartbeat and Controller identity
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [Controller Pack migration, heartbeat prompt identity]
+    rationale: Replacing the control contract must not create a parallel loop or lose its audit history.
+    normative_statement: Pack migration occurs only at a paused safe point, preserves the same Controller identity and heartbeat automation, journals old and target identities, and resumes routing only after exact target readback.
+    non_goals: [requiring Pack migrations for ordinary code changes, rewriting historical Pack records]
+    allowed_evolution: [change archival layout or migration steps while preserving atomic identity and rollback evidence]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_state_runtime_migration.py]
+    evidence_surfaces: [codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
+    adr: [docs/adr/0004-pack-migration-identity.md]
+    introduced_version: 3.2.2
+
+  - id: INV-REPAIR-001
+    title: Bounded repair preserves attempt history
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [Worker execution, review repair, scoped correction]
+    rationale: New tasks or corrected classifications must not reset a hard repair budget or erase failed evidence.
+    normative_statement: Product repair attempts are bounded per Goal and survive task replacement; exhausted Goals cannot dispatch again, and scoped correction uses a new Goal while preserving prior definitions, attempts, and counters.
+    non_goals: [counting proven zero-execution control-plane rejection as product work, fixing one numeric default forever]
+    allowed_evolution: [change the configured bounded limit, refine zero-execution classifications through synchronized schema runtime and test updates]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md, codex-loop-prompt-architect/references/human-steering-and-convergence.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_repair_exhaustion_protocol.py, tests/test_real_incident_regression.py]
+    evidence_surfaces: [CHANGELOG.md]
+    adr: []
+    introduced_version: 3.2.1
+
+  - id: INV-FINALIZATION-001
+    title: Canonical finalization acknowledgement is the closeout gate
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [successful completion, blocked completion, external adapter sync]
+    rationale: Passing work or preparing finalization does not prove the external and canonical closeout identities agree.
+    normative_statement: A Loop is closed only at canonical FINALIZATION_ACKED with matching one-use capability, exact Goal outcome, paused heartbeat observation, review chain, artifact identities, and receipt; intermediate finalization statuses are not completion.
+    non_goals: [requiring every Loop to end successfully, treating review PASS alone as closeout]
+    allowed_evolution: [change adapter mechanics while preserving atomic evidence-bound acknowledgement]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_state_runtime_finalization.py]
+    evidence_surfaces: [docs/RELEASING.md, codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
+    adr: [docs/adr/0008-finalization-acked.md]
+    introduced_version: 3.2.0
+
+  - id: INV-EVIDENCE-001
+    title: Exact-artifact and exact-environment evidence
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [validation, review, release claims]
+    rationale: A PASS for another SHA artifact environment or App identity cannot establish the current claim.
+    normative_statement: Evidence is bound to the exact artifact digest and relevant environment identity; local checks, App compatibility, release acceptance, and public claims remain separate and cannot be promoted by prose.
+    non_goals: [making GitHub Actions the release authority, requiring every development change to run a release gate]
+    allowed_evolution: [add evidence layers or stronger identities, replace evidence collection tools without weakening bindings]
+    authoritative_sources: [SPEC.md, docs/RELEASING.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/validate_app_canary_receipt.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/app-canary-receipt.schema.json, codex-loop-prompt-architect/references/install-manifest.schema.json]
+    test_surfaces: [tests/test_app_canary_receipt.py, tests/test_release_contract.py]
+    evidence_surfaces: [docs/RELEASING.md, evidence/README.md]
+    adr: [docs/adr/0006-local-main-mac-exact-sha-evidence.md]
+    introduced_version: 3.2.0
+
+  - id: INV-FAIL-CLOSED-001
+    title: Invalid identity or contract input has zero side effects
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [runtime mutations, MCP routes, public validation]
+    rationale: Rejection after a partial write can corrupt the very state used for recovery.
+    normative_statement: Identity, schema, digest, authorization, and transition checks complete before mutation; rejection returns a typed failure and leaves canonical state, events, journals, outboxes, and external action count unchanged.
+    non_goals: [requiring all operational failures to share one error code, hiding diagnostic provenance]
+    allowed_evolution: [add typed failures or stronger validation while preserving zero-effect rejection]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py, codex-loop-prompt-architect/scripts/adaptive_state_mcp.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_incident_p0_negative.py, tests/test_adaptive_state_mcp.py]
+    evidence_surfaces: [docs/RELEASING.md]
+    adr: []
+    introduced_version: 3.2.0
+
+  - id: INV-REAL-LOOP-001
+    title: Real Loop isolation
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [release canaries, migrations, user canonical state]
+    rationale: Acceptance experiments must not mutate a user's real paused Loop or use it as a disposable fixture.
+    normative_statement: Validation and release canaries use isolated disposable roots; real Loop migration resume or mutation is a separately authorized operation after release evidence and never follows implicitly from installation.
+    non_goals: [preventing an explicitly authorized later migration, forbidding read-only baseline checks]
+    allowed_evolution: [change fixture construction while retaining path and identity isolation]
+    authoritative_sources: [SPEC.md, docs/RELEASING.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/validate_app_canary_receipt.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
+    test_surfaces: [tests/test_app_canary_receipt.py]
+    evidence_surfaces: [docs/RELEASING.md]
+    adr: [docs/adr/0006-local-main-mac-exact-sha-evidence.md]
+    introduced_version: 3.2.0
+
+  - id: INV-PROTOCOL-001
+    title: Negotiated MCP protocol truth is source-qualified
+    level: PUBLIC_CONTRACT
+    status: ACTIVE
+    scope: [App canary receipt, negotiated protocol observation]
+    rationale: Client-requested and server-supported versions do not prove the negotiated result.
+    normative_statement: A receipt records the negotiated protocol only when the host exchange exposes it; otherwise status is UNAVAILABLE_BY_HOST, value is null, and client and server observations remain separately attributed without being promoted to negotiation proof.
+    non_goals: [guessing a negotiated value, making host unavailability alone a release blocker]
+    allowed_evolution: [adopt a new host observation source, version the receipt schema when public fields change]
+    authoritative_sources: [docs/RELEASING.md, codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/validate_app_canary_receipt.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
+    test_surfaces: [tests/test_app_canary_receipt.py, tests/test_release_contract.py]
+    evidence_surfaces: [docs/RELEASING.md]
+    adr: [docs/adr/0007-negotiated-mcp-protocol-observation.md]
+    introduced_version: 3.2.7
+
+  - id: INV-GOAL-RECOVERY-001
+    title: Lost native Goal generation recovery remains unavailable
+    level: DEFERRED
+    status: DEFERRED
+    scope: [legacy recovery CLI, runtime mutation surface, MCP route]
+    rationale: The current App cannot safely restore the same native Goal identity before automatic dispatch.
+    normative_statement: Lost native Goal generation recovery returns NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE with side_effects=NONE, preserves historical evidence and the exact paused heartbeat, and never creates a substitute Goal thread session Controller or heartbeat.
+    non_goals: [claiming the capability works, deleting legacy audit fields, blocking unrelated supported work]
+    allowed_evolution: [promote through a new reviewed ADR only after same-identity host support and exact-SHA evidence exist]
+    authoritative_sources: [codex-loop-prompt-architect/references/adaptive-loop-contract.md, docs/RELEASING.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py, codex-loop-prompt-architect/scripts/adaptive_state_mcp.py, codex-loop-prompt-architect/scripts/loop_architect/native_goal_observer.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json, codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
+    test_surfaces: [tests/test_native_goal_recovery_unavailable.py]
+    evidence_surfaces: [CHANGELOG.md, docs/RELEASING.md]
+    adr: [docs/adr/0005-defer-native-goal-recovery.md]
+    introduced_version: 3.2.7
