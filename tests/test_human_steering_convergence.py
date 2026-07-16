@@ -430,8 +430,11 @@ class HumanControlHelperTests(unittest.TestCase):
             "EVIDENCE_CONFLICT",
         ):
             self.assertIn(token, pack)
-        self.assertLessEqual(len(pack.encode("utf-8")), int(224142 * 1.01))
-        self.assertLessEqual(len(pack.splitlines()), int(2640 * 1.01))
+        # v3.2.6 budget: 213556 bytes/2640 lines; tracked predecessor: 217477/2622.
+        # Deduplicated v3.2.7 recovery contract: 222707/2637 (+4.285% vs budget,
+        # +2.405% vs predecessor). One-percent headroom keeps later growth bounded.
+        self.assertLessEqual(len(pack.encode("utf-8")), int(222707 * 1.01))
+        self.assertLessEqual(len(pack.splitlines()), int(2637 * 1.01))
 
     def test_skill_links_one_layer_v32_reference_and_stays_bounded(self) -> None:
         skill = (ROOT / "codex-loop-prompt-architect" / "SKILL.md").read_text()
