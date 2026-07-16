@@ -2294,7 +2294,9 @@ def native_goal_generation_recovery_protocol_block(
 ) -> str:
     if not adaptive:
         return ""
-    return """Native Controller Goal Generation Recovery Protocol:
+    return """
+
+Native Controller Goal Generation Recovery Protocol:
 - This is a scoped recovery protocol, not a general Goal recreation path. Use it only when canonical state is PAUSED_AT_SAFE_POINT, the same heartbeat is PAUSED, no route-reserving PREPARED/SENT/ACKED outbox or lease exists, the exact five registered role identities remain unchanged, and an APPLIED CORRECTION Steering has classification_reason=NATIVE_GOAL_GENERATION_RECOVERY_AUTHORIZED.
 - A v3.2.7 Pack migration derives the source generation exclusively from the unique canonical ACKED GOAL CREATE outbox and its immutable create/ACK bytes. Controller and State-Writer never supply source generation id, objective, marker, createdAt, usage, call count, or historical receipt digest.
 - Controller obtains only one recovery-scoped ACQUIRE_LEASE per real App turn through route_state_mutation. The signed MCP bridge injects the real turn identity. PREPARE, COMMIT, and ROLLBACK themselves go only to the original State-Writer, which must consume the exact recovery lease and return only runtime JSON.
@@ -3916,9 +3918,7 @@ Thread Topology:
 {integration_topology_block(repo_mode)}
 - Reuse one Reviewer per integration workspace/worktree across repair/review rounds when possible. After a completed task is acknowledged and no longer reusable, record its lifecycle and call set_thread_archived(threadId=..., archived=true). Do not archive State-Writer before final state ACK.
 
-{startup_transaction_gate_block(state_writer_role, first_goal['worker_role'], audit_paths, adaptive, str(data.get('native_goal_policy', 'required')))}
-
-{native_goal_generation_recovery_protocol_block(adaptive)}
+    {startup_transaction_gate_block(state_writer_role, first_goal['worker_role'], audit_paths, adaptive, str(data.get('native_goal_policy', 'required')))}{native_goal_generation_recovery_protocol_block(adaptive)}
 
 Worker Routing:
 | Role | Runtime Thread ID Template | Permission | Responsibility |

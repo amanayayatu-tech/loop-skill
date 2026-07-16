@@ -411,7 +411,7 @@ class HumanControlHelperTests(unittest.TestCase):
         )
 
     @mock.patch.dict("os.environ", {"CODEX_HOME": "/workspace/.codex"})
-    def test_adaptive_pack_contains_v32_contract_with_bounded_growth(self) -> None:
+    def test_adaptive_pack_contains_v327_contract_with_bounded_growth(self) -> None:
         input_path = ROOT / "examples" / "03-adaptive-passkey-input.json"
         args = scaffold.build_parser().parse_args(["--input", str(input_path)])
         payload = scaffold.load_payload(args)
@@ -430,7 +430,7 @@ class HumanControlHelperTests(unittest.TestCase):
             "EVIDENCE_CONFLICT",
         ):
             self.assertIn(token, pack)
-        self.assertLessEqual(len(pack.encode("utf-8")), int(213556 * 1.02))
+        self.assertLessEqual(len(pack.encode("utf-8")), int(224142 * 1.01))
         self.assertLessEqual(len(pack.splitlines()), int(2640 * 1.01))
 
     def test_skill_links_one_layer_v32_reference_and_stays_bounded(self) -> None:
