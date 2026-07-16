@@ -2788,7 +2788,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 )
                 self.assertEqual(observed_again, observed)
 
-    def test_synthetic_restart_readback_and_cli_receipt_are_same_identity_and_sanitized(self) -> None:
+    def test_synthetic_restart_readback_remains_auditable_but_cli_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             codex_home = root / "codex-home"
@@ -2857,27 +2857,21 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 check=False,
                 env={**os.environ, "CODEX_HOME": str(codex_home)},
             )
-            self.assertEqual(
-                completed.returncode,
-                0,
-                completed.stderr or completed.stdout,
-            )
+            self.assertNotEqual(completed.returncode, 0)
             response = json.loads(completed.stdout)
-            self.assertTrue(response["ok"], response)
-            receipt_bytes = (
-                root / request["observation_path"]
-            ).read_bytes()
-            self.assertNotIn(objective.encode("utf-8"), receipt_bytes)
+            self.assertEqual(
+                response["status"],
+                "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+            )
+            self.assertEqual(
+                response["error"]["details"],
+                {
+                    "availability": "DEFERRED_UNAVAILABLE",
+                    "side_effects": "NONE",
+                },
+            )
+            self.assertFalse((root / request["observation_path"]).exists())
             self.assertNotIn(objective, completed.stdout)
-            self.assertEqual(
-                response["observation"]["goal"], first["goal"]
-            )
-            self.assertEqual(
-                response["observation"]["create_window"][
-                    "invocation_state"
-                ],
-                "NONE",
-            )
 
     def test_rollout_observer_rejects_symlink_and_partial_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

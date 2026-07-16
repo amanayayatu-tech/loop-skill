@@ -59,6 +59,24 @@ ADAPTIVE_RESOURCE_CONTRACT_MARKERS = (
     "lost stdout never authorizes an external retry",
 )
 
+ADAPTIVE_NATIVE_GOAL_RECOVERY_DEFERRED_MARKERS = (
+    "Native Controller Goal Generation Recovery: DEFERRED/UNAVAILABLE",
+    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+    "keep the exact heartbeat PAUSED",
+    "do not create a replacement Goal, Controller, thread, session, or heartbeat",
+)
+
+ADAPTIVE_NATIVE_GOAL_RECOVERY_FORBIDDEN_MARKERS = (
+    "NATIVE_GOAL_GENERATION_RECOVERY_AUTHORIZED",
+    "NATIVE_GOAL_GENERATION_PREPARE",
+    "NATIVE_GOAL_GENERATION_COMMIT",
+    "NATIVE_GOAL_GENERATION_ROLLBACK",
+    "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+    "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+    "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+    "--native-goal-observe",
+)
+
 _CLAUSE_SPLIT_RE = re.compile(r"(?:[;；。]|\.(?:\s+|$))")
 _NEGATIVE_DIRECTIVE_RE = re.compile(
     r"(?:do\s+not|never|must\s+not|forbid(?:den)?|prohibit(?:ed)?|reject|禁止|不得)"
@@ -119,6 +137,18 @@ def validate_adaptive_pack_transport_contract(pack: str) -> list[str]:
         for marker in ADAPTIVE_RESOURCE_CONTRACT_MARKERS
         if marker not in pack
     )
+    errors.extend(
+        f"adaptive_native_goal_recovery_contract:missing:{marker}"
+        for marker in ADAPTIVE_NATIVE_GOAL_RECOVERY_DEFERRED_MARKERS
+        if marker not in pack
+    )
+    if any(
+        marker in pack
+        for marker in ADAPTIVE_NATIVE_GOAL_RECOVERY_FORBIDDEN_MARKERS
+    ):
+        errors.append(
+            "adaptive_native_goal_recovery_contract:executable_surface_present"
+        )
     unsafe_patterns = (
         ("tty", r"\btty\s*:\s*true\b"),
         ("stty", r"\bstty\b"),

@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openai.local/codex-loop/adaptive-mutation.schema.json",
   "title": "Deterministic Adaptive State Mutation Request",
+  "$comment": "Native Goal generation recovery definitions are retained only for legacy audit/test compatibility. Installed CLI and MCP entrypoints reject them as NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE with zero side effects.",
   "type": "object",
   "additionalProperties": false,
   "required": [

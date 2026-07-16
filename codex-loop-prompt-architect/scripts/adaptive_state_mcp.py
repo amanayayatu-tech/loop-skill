@@ -43,6 +43,11 @@ MCP_THREAD_META_KEY = "threadId"
 MCP_INPUT_MAX_BYTES = 4_000_000
 MCP_PARTIAL_FRAME_TIMEOUT_SECONDS = 30.0
 MCP_READ_CHUNK_BYTES = 64 * 1024
+NATIVE_GOAL_GENERATION_RECOVERY_SCOPES = {
+    "NATIVE_GOAL_GENERATION_PREPARE",
+    "NATIVE_GOAL_GENERATION_COMMIT",
+    "NATIVE_GOAL_GENERATION_ROLLBACK",
+}
 CDHASH_RE = re.compile(r"^CDHash=([a-f0-9]{40,64})$", re.MULTILINE)
 IDENTIFIER_RE = re.compile(r"Identifier=([^\n]+)", re.MULTILINE)
 TEAM_ID_RE = re.compile(r"TeamIdentifier=([^\n]+)", re.MULTILINE)
@@ -428,6 +433,18 @@ class AdaptiveStateMcpServer:
                 raise McpBridgeError(
                     "MCP_ROUTE_MUTATION_TYPE_INVALID",
                     "/params/arguments/request/mutation/type",
+                )
+            if (
+                mutation.get("recovery_scope")
+                in NATIVE_GOAL_GENERATION_RECOVERY_SCOPES
+            ):
+                raise McpBridgeError(
+                    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+                    "/params/arguments/request/mutation/recovery_scope",
+                    {
+                        "availability": "DEFERRED_UNAVAILABLE",
+                        "side_effects": "NONE",
+                    },
                 )
             claimed_turn_id = mutation.get("controller_turn_id")
             if claimed_turn_id is None:

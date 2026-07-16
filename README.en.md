@@ -46,47 +46,11 @@ The skill creates one self-contained Controller Pack Markdown file plus separate
 Simplified Chinese usage instructions. It never silently authorizes push, merge,
 deploy, destructive operations, external writes, secrets, or paid runtime.
 
-### v3.2.7 native Goal generation recovery protocol
+### v3.2.7 native Goal generation recovery deferred
 
-If an App restart leaves the original Controller task, heartbeat, and canonical
-Loop intact but `get_goal` can no longer read the original native Goal, the new
-protocol keeps product routing paused and fails closed. The runtime derives the
-legacy generation only by reopening the unique canonical ACKED GOAL CREATE
-create/ACK evidence; callers cannot supply objective, createdAt, usage, digest,
-call count, or generation identity.
+This release does not provide lost native Goal generation recovery. Generated Packs no longer contain recovery steps; the standalone runtime CLI and MCP route bridge return `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with `side_effects=NONE` for legacy recovery requests. Historical canonical fields and existing BLOCKED receipts remain audit evidence and cannot be promoted to PASS.
 
-Recovery uses three short-lived scopes. The Controller acquires one
-host-attested recovery lease through MCP, while the original State-Writer alone
-applies journaled PREPARE, COMMIT, or ROLLBACK. A trusted read-only observer must
-run outside the target Controller rollout; recovery blocks when no such
-out-of-band path exists. Phase B contains only one official `create_goal` with
-the historical objective bytes and no `token_budget`. Phase C contains only one
-`get_goal`, and Phase D later acquires the COMMIT lease. Runtime requires four
-distinct A/B/C/D turn identities and create-before-readback ordering on the same
-rollout. A wrong objective or any STARTED, COMPLETED, or AMBIGUOUS evidence
-forbids another create and rollback. Lost stdout can only be adopted when the
-later rollout and active same-thread readback agree.
-
-Immediately before runtime apply, the original State-Writer recaptures the
-final active/null readback at the target Controller's current stable EOF. The
-same stable snapshot must classify both Goal identity and the complete create
-window; runtime may not reopen the rollout between those decisions. The control
-suffix starts exactly at the readback turn boundary, while route and
-State-Writer handoff bind canonical scope, migration, lease, attested turn,
-target thread, and normalized handoff digest. Rollout paths are opened from a
-trusted root with component-wise `openat`/`O_NOFOLLOW` and read only by fd.
-Any later byte fails closed as `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`.
-
-The observer reads canonical rollouts only from `CODEX_HOME/sessions` or
-`archived_sessions`, rejects path escape, final-file symlinks and symlinks in
-the canonical fd walk, unstable/incomplete JSONL,
-and wrong thread identity, and persists only sanitized receipts. A system-level
-lexical parent alias is canonicalized before the fd walk. COMMIT and
-ROLLBACK keep canonical state and the same heartbeat PAUSED; RESUME and
-heartbeat activation remain later independent turns. If the current App lacks
-durable invocation evidence, release fails closed as
-`UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE`. This repository
-does not claim to repair Codex App native Goal persistence.
+When required mode detects `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, canonical state remains unchanged, the same heartbeat remains PAUSED, business routing stops, and no replacement Goal, Controller, thread, session, State-Writer, or heartbeat may be created.
 
 ### v3.2.6 interpreter identity hotfix
 

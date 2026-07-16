@@ -55,11 +55,10 @@ does not claim to repair app-server process reaping or metadata delivery.
 5. On that exact SHA and installed manifest, run the real Codex App canary. The
    receipt must reach the canary's own canonical `FINALIZATION_ACKED`; synthetic
    MCP tests, a Node REPL observation, source reading, or a tool-list screenshot
-   are only prerequisites. In its disposable fixture, recover one deliberately
-   lost native Goal generation with exactly one official create, durable rollout
-   observation, restart/readback of the same Goal identity, and canonical plus
-   heartbeat PAUSED throughout. Never run this recovery against the real paused
-   product Loop.
+   are only prerequisites. The canary must record
+   `native_goal_generation_recovery_status=DEFERRED_UNAVAILABLE` and prove the
+   legacy CLI and MCP recovery surfaces reject before side effects. It must not
+   create or retry a disposable or real native Goal.
 6. Bind the local complete-gate result and minimized non-secret same-SHA App receipt in
    the local release receipt for the same SHA. PASS requires
    `release_eligible == true`, `reasons == []`, exact commit/tree/
@@ -95,17 +94,17 @@ it with `validate_app_canary_receipt.py`. A PASS receipt binds:
   readback, zero drift, and whether an App refresh or restart occurred;
 - first route, same-turn pre-side-effect rejection, next-turn success, partial
   frame cleanup, control-plane responsiveness, lost-stdout recovery without a
-  second send, Pack/same-heartbeat reconciliation, one native Goal generation
-  recovery with a durable rollout receipt, exactly one create, restart/readback,
-  canonical and heartbeat remaining PAUSED, and `FINALIZATION_ACKED`;
+  second send, Pack/same-heartbeat reconciliation, explicit
+  `DEFERRED_UNAVAILABLE` native Goal generation recovery status with zero-effect
+  CLI/MCP rejection, and `FINALIZATION_ACKED` through a supported non-recovery
+  fixture;
 - Asia/Shanghai start/end times and an exact error classification on failure.
 
-The native Goal generation canary uses only a disposable same-SHA fixture. If
-the current App cannot expose a stable, complete rollout record that proves the
-official create invocation count, classify
-`UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE` and block release;
-source inspection, a synthetic call, an active Goal readback without invocation
-evidence, or recreation in another thread/session is not a substitute.
+Native Goal generation recovery is outside this release scope. Preserve the
+existing upstream blocker receipt as historical BLOCKED evidence; do not rerun
+its A/B/C/D canary, create another Goal, or reinterpret the blocker as PASS.
+Release proof covers only the supported non-recovery surface and the explicit
+zero-effect unavailable contract.
 
 App version/build, bundle id, executable/signature/CDHash, MCP protocol/config
 schema, requestMeta shape, or registration identity changes invalidate the old

@@ -21,16 +21,22 @@ from loop_architect.state_runtime import (
     verify_dispatch_payload_against_state,
 )
 from loop_architect.human_control import build_failure_fingerprint
-from loop_architect.native_goal_observer import (
-    NativeGoalObservationError,
-    observe_native_goal_rollout,
-    write_observation,
-)
-
-
 INPUT_TRANSPORT_TIMEOUT_SECONDS = 30.0
 INPUT_TRANSPORT_MAX_BYTES = 4_000_000
 INPUT_TRANSPORT_CHUNK_BYTES = 64 * 1024
+NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE = (
+    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE"
+)
+NATIVE_GOAL_GENERATION_RECOVERY_MUTATIONS = {
+    "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+    "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+    "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+}
+NATIVE_GOAL_GENERATION_RECOVERY_SCOPES = {
+    "NATIVE_GOAL_GENERATION_PREPARE",
+    "NATIVE_GOAL_GENERATION_COMMIT",
+    "NATIVE_GOAL_GENERATION_ROLLBACK",
+}
 
 
 class InputTransportError(ValueError):
@@ -253,6 +259,30 @@ def _emit(response: dict[str, Any]) -> None:
     sys.stdout.write(payload + "\n")
 
 
+def _requests_deferred_native_goal_recovery(request: Any) -> bool:
+    if not isinstance(request, dict):
+        return False
+    mutation = request.get("mutation")
+    if not isinstance(mutation, dict):
+        return False
+    return bool(
+        mutation.get("type") in NATIVE_GOAL_GENERATION_RECOVERY_MUTATIONS
+        or mutation.get("recovery_scope")
+        in NATIVE_GOAL_GENERATION_RECOVERY_SCOPES
+    )
+
+
+def _native_goal_recovery_unavailable_response() -> dict[str, Any]:
+    return _response(
+        NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE,
+        "/native_goal_generation_recovery",
+        {
+            "availability": "DEFERRED_UNAVAILABLE",
+            "side_effects": "NONE",
+        },
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         root, mode, crash_at = _parse_args(list(sys.argv[1:] if argv is None else argv))
@@ -322,76 +352,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 response = AdaptiveStateRuntime(root).stage_external_receipt(request)
         elif mode == "native-goal-observe":
-            assert root is not None
-            try:
-                request = _load_request(payload)
-                if not isinstance(request, dict):
-                    raise ValueError("object required")
-                allowed = {
-                    "rollout_path",
-                    "controller_thread_id",
-                    "observation_mode",
-                    "scan_start_offset",
-                    "scan_end_offset",
-                    "historical_replay_snapshot_digest",
-                    "control_suffix_start_offset",
-                    "expected_objective_digest",
-                    "expected_objective_bytes_digest",
-                    "observed_at",
-                    "observation_path",
-                }
-                if set(request) - allowed:
-                    raise ValueError("unexpected field")
-                required = {
-                    "rollout_path",
-                    "controller_thread_id",
-                    "observation_mode",
-                    "observation_path",
-                }
-                if not required <= set(request):
-                    raise ValueError("missing field")
-                observation = observe_native_goal_rollout(
-                    rollout_path=Path(request["rollout_path"]),
-                    controller_thread_id=request["controller_thread_id"],
-                    mode=request["observation_mode"],
-                    scan_start_offset=request.get("scan_start_offset", 0),
-                    scan_end_offset=request.get("scan_end_offset"),
-                    historical_replay_snapshot_digest=request.get(
-                        "historical_replay_snapshot_digest"
-                    ),
-                    control_suffix_start_offset=request.get(
-                        "control_suffix_start_offset"
-                    ),
-                    expected_objective_digest=request.get(
-                        "expected_objective_digest"
-                    ),
-                    expected_objective_bytes_digest=request.get(
-                        "expected_objective_bytes_digest"
-                    ),
-                    observed_at=request.get("observed_at"),
-                )
-                _, digest = write_observation(
-                    root=Path(root),
-                    relative_path=request["observation_path"],
-                    observation=observation,
-                )
-                response = {
-                    "ok": True,
-                    "status": "NATIVE_GOAL_OBSERVATION_WRITTEN",
-                    "observation_path": request["observation_path"],
-                    "observation_digest": digest,
-                    "observation": observation,
-                    "external_actions": [],
-                    "external_action_count": 0,
-                }
-            except NativeGoalObservationError as exc:
-                response = _response(exc.code, "/native_goal_observer", exc.details)
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                response = _response(
-                    "NATIVE_GOAL_OBSERVATION_INPUT_INVALID",
-                    "/",
-                    {"error_type": type(exc).__name__},
-                )
+            response = _native_goal_recovery_unavailable_response()
         else:
             assert root is not None
             runtime = AdaptiveStateRuntime(root, crash_at=crash_at)
@@ -409,7 +370,10 @@ def main(argv: list[str] | None = None) -> int:
                         {"error_type": type(exc).__name__},
                     )
                 else:
-                    response = runtime.apply(request)
+                    if _requests_deferred_native_goal_recovery(request):
+                        response = _native_goal_recovery_unavailable_response()
+                    else:
+                        response = runtime.apply(request)
     except InputTransportError as exc:
         response = _response(exc.code, "/stdin", exc.details)
     except RuntimeRejection as exc:

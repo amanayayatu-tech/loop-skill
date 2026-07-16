@@ -7,58 +7,15 @@ All notable changes to this project are documented here. The project follows
 
 ## [3.2.7] - 2026-07-16
 
-### Fixed
+### Changed
 
-- Added a fail-closed, generation-aware recovery protocol for an original
-  Controller whose Codex native Goal disappeared after an App restart. Recovery
-  reuses the same Controller, State-Writer and heartbeat, derives the legacy
-  generation only from canonical ACKED create evidence, and never writes the
-  Goal database or invents a proxy Goal.
-- Added three short-lived recovery lease scopes bound to host-attested real App
-  turns. The original State-Writer alone performs journaled PREPARE, COMMIT and
-  ROLLBACK; the Controller can acquire a scope only through the signed MCP
-  bridge, and a second route in the same real turn remains forbidden.
-- Added a bounded, read-only rollout observer restricted to canonical Codex
-  session roots. It rejects path escape, symlinks, unstable/incomplete input and
-  ambiguous invocation framing, persists only sanitized receipts, and prevents
-  another `create_goal` after any matching started or completed invocation.
-- Made COMMIT adopt a lost-stdout create only when exact one-invocation rollout
-  evidence and active same-thread `get_goal` readback agree. ROLLBACK requires a
-  stable zero-invocation interval plus two newer null observations. Both paths
-  preserve the paused safe point, protected business state and immutable
-  historical outboxes.
-- Split create, active readback and COMMIT routing into distinct real App turns.
-  The observer now runs outside the target Controller rollout, COMMIT persists
-  separate readback/route identities and strict create-before-readback ordering,
-  and an exact create with the wrong objective is ambiguous rather than a
-  rollback-safe zero invocation.
-- Bound observer capture to the then-current stable EOF. Historical replay now
-  requires the captured prefix digest and append-only identity, while COMMIT
-  and ROLLBACK reclassify the complete window through the later readback so an
-  older cutoff cannot hide a second or ambiguous create.
-- Required COMMIT's active readback and ROLLBACK's final null receipt to match
-  the target Controller rollout's current stable EOF at runtime apply. Only the
-  two strict post-readback control wrappers are tolerated; later bytes fail
-  closed as `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`.
-- Derived the final Goal readback and complete create-window classification
-  from one stable rollout snapshot, removing the inter-read TOCTOU. Allowed
-  post-readback controls now use a finite exact-name set rather than suffix
-  matching.
-- Bound the post-readback route and State-Writer handoff to the canonical
-  recovery scope, migration, lease, attested turn, target and handoff digest.
-  The observer now opens trusted rollout paths component-by-component with
-  `openat`/`O_NOFOLLOW` and reads only from the bound file descriptor.
+- Deferred lost native Goal generation recovery because the current Codex App has no create-paused, resume, restore, or rebind interface that permits the recovery transaction to commit before automatic Goal dispatch.
+- Removed the recovery procedure from generated Packs and release canaries. Standalone runtime and MCP entrypoints now return `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with zero side effects for every legacy recovery request. Historical state remains readable for audit only.
+- Preserved the real App blocker receipt and upstream requirement as BLOCKED evidence. They are not rewritten, deleted, or promoted to release PASS.
 
 ### Evidence boundary
 
-Repository tests prove deterministic state, receipt and crash-recovery
-semantics only. The current main Mac owns the complete exact-SHA tests, real App
-canary and local release gate. Structured receipts use
-`evidence_layer=local-main-mac`; historical remote results are superseded and
-cannot be inherited by a new candidate. If durable native Goal invocation evidence
-is unavailable, the release remains blocked as
-`UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE`; this package does
-not claim to repair Codex App Goal persistence.
+Repository tests prove the explicit unavailable contract and the remaining deterministic control-plane behavior. Native Goal generation recovery is outside the supported release surface; this package does not claim to repair Codex App Goal persistence.
 
 ## [3.2.6] - 2026-07-16
 

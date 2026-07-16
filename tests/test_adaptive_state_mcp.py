@@ -268,6 +268,30 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 )
                 self.assertEqual(before, persisted_snapshot(root))  # noqa: F405
 
+    def test_recovery_scoped_route_is_explicitly_unavailable_and_zero_effect(self) -> None:
+        scopes = (
+            "NATIVE_GOAL_GENERATION_PREPARE",
+            "NATIVE_GOAL_GENERATION_COMMIT",
+            "NATIVE_GOAL_GENERATION_ROLLBACK",
+        )
+        for scope in scopes:
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = McpHarness(root)
+                request = harness.route_request("deferred-recovery")
+                request["mutation"]["recovery_scope"] = scope
+                before = persisted_snapshot(root)  # noqa: F405
+                response = harness.call(request, meta=harness.metadata())
+                self.assertEqual(
+                    response["status"],
+                    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+                )
+                self.assertEqual(
+                    response["error"]["details"]["availability"],
+                    "DEFERRED_UNAVAILABLE",
+                )
+                self.assertEqual(before, persisted_snapshot(root))  # noqa: F405
+
     def test_unattested_server_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             harness = McpHarness(Path(temporary))

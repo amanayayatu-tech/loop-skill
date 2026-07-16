@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openai.local/codex-loop/adaptive-state.schema.json",
   "title": "Deterministic Adaptive Loop Canonical State",
+  "$comment": "Native Goal generation recovery fields remain readable as immutable historical audit data; this release exposes no recovery transition.",
   "type": "object",
   "additionalProperties": false,
   "allOf": [

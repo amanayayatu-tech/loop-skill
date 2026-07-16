@@ -169,10 +169,7 @@
         "control_plane_responsive_after_partial_frame",
         "lost_stdout_recovered_without_second_send",
         "pack_migration_same_heartbeat_reconciled",
-        "native_goal_generation_rollout_receipt_durable",
-        "native_goal_generation_committed_once",
-        "native_goal_generation_restart_readback",
-        "native_goal_generation_kept_paused",
+        "native_goal_generation_recovery_status",
         "finalization_acked"
       ],
       "properties": {
@@ -188,10 +185,7 @@
         "control_plane_responsive_after_partial_frame": {"type": "boolean"},
         "lost_stdout_recovered_without_second_send": {"type": "boolean"},
         "pack_migration_same_heartbeat_reconciled": {"type": "boolean"},
-        "native_goal_generation_rollout_receipt_durable": {"type": "boolean"},
-        "native_goal_generation_committed_once": {"type": "boolean"},
-        "native_goal_generation_restart_readback": {"type": "boolean"},
-        "native_goal_generation_kept_paused": {"type": "boolean"},
+        "native_goal_generation_recovery_status": {"const": "DEFERRED_UNAVAILABLE"},
         "finalization_acked": {"type": "boolean"}
       }
     },
