@@ -76,7 +76,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-test.txt
       - name: Run every deterministic test once under branch coverage
-        run: coverage run --parallel-mode -m unittest discover -s tests -q
+        run: coverage run --parallel-mode -m unittest discover -s tests -q --durations 30
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-data

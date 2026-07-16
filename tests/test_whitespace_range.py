@@ -125,11 +125,15 @@ class WhitespaceRangeContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("fallback-full-history:tag-push:refs/tags/v9.9.9", result.stdout)
 
-    def test_workflow_dispatch_checks_reachable_history(self) -> None:
+    def test_manual_and_schedule_ranges_are_explicit(self) -> None:
         head = self._commit("manual.txt", "manual\n", "manual")
-        result = self._run("workflow_dispatch", {}, head)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("fallback-full-history:workflow-dispatch", result.stdout)
+        manual = self._run("workflow_dispatch", {}, head)
+        self.assertEqual(manual.returncode, 0, manual.stderr)
+        self.assertIn("fallback-full-history:workflow-dispatch", manual.stdout)
+        scheduled = self._run("schedule", {}, head)
+        self.assertEqual(scheduled.returncode, 0, scheduled.stderr)
+        self.assertIn(f"schedule:{head}:no-new-commits", scheduled.stdout)
+        self.assertIn("commit_count=0", scheduled.stdout)
 
     def test_push_deletion_is_explicit_no_new_object_check(self) -> None:
         result = self._run(

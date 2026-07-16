@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "expected_total_tests": 613,
+  "expected_shard_counts": {
+    "1": 172,
+    "2": 207,
+    "3": 98,
+    "4": 136
+  },
+  "shards": {
+    "1": [
+      "tests.test_state_runtime_reports",
+      "tests.test_state_runtime_recovery",
+      "tests.test_adaptive_loop",
+      "tests.test_digest_error_contract",
+      "tests.test_whitespace_range",
+      "tests.test_mcp_registration",
+      "tests.test_app_canary_receipt",
+      "tests.test_install_manifest"
+    ],
+    "2": [
+      "tests.test_native_goal_generation_recovery",
+      "tests.test_state_runtime_finalization",
+      "tests.test_loop_prompt_scaffold",
+      "tests.test_adaptive_payload_codec",
+      "tests.test_loop_intake_gate",
+      "tests.test_release_identity",
+      "tests.test_runtime_python_binding"
+    ],
+    "3": [
+      "tests.test_real_incident_regression",
+      "tests.test_control_plane_reliability_baseline",
+      "tests.test_state_runtime_io",
+      "tests.test_adaptive_state_mcp",
+      "tests.test_adaptive_fuzz",
+      "tests.test_adaptive_protocol_model",
+      "tests.test_adaptive_runtime_transport"
+    ],
+    "4": [
+      "tests.test_state_runtime_migration",
+      "tests.test_human_steering_convergence",
+      "tests.test_state_runtime_control",
+      "tests.test_repair_exhaustion_protocol",
+      "tests.test_installer_contract",
+      "tests.test_release_contract",
+      "tests.test_native_goal_recovery_unavailable",
+      "tests.test_public_schema",
+      "tests.test_spec_governance"
+    ]
+  },
+  "dedicated_only": {
+    "tests.test_adaptive_state_runtime": "state-fuzz",
+    "tests.test_incident_p0_negative": "quick"
+  }
+}
