@@ -1,0 +1,57 @@
+{
+  "layout": "pipeline",
+  "style": "editorial",
+  "animation": "flow",
+  "motion_level": "none",
+  "density": "airy",
+  "aspect_ratio": "landscape",
+  "canvas": {
+    "width": 1600,
+    "height": 650,
+    "fps": 10,
+    "frames": 20
+  },
+  "title": {
+    "prefix": "From request to",
+    "highlight": "verified finish",
+    "subtitle": "Human-confirmed work with a bounded repair path"
+  },
+  "subtitle": "Pack prepared, boundary confirmed, work verified",
+  "stages": [
+    {
+      "title": "Request / 需求",
+      "body": "intent + context",
+      "icon": "message"
+    },
+    {
+      "title": "Intake / 质检",
+      "body": "scope + evidence",
+      "icon": "scan"
+    },
+    {
+      "title": "Controller Pack",
+      "body": "roles + gates",
+      "icon": "package"
+    },
+    {
+      "title": "Confirm / 确认",
+      "body": "human boundary",
+      "icon": "shield"
+    },
+    {
+      "title": "Execute + Check",
+      "body": "review + verify",
+      "icon": "gear"
+    }
+  ],
+  "decision": {
+    "title": "Evidence?",
+    "yes_label": "Pass",
+    "no_label": "Bounded repair"
+  },
+  "output": {
+    "label": "FINALIZATION_\nACKED",
+    "icon": "check"
+  },
+  "footer": "Only canonical FINALIZATION_ACKED closes the Loop."
+}
