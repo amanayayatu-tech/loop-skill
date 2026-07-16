@@ -414,7 +414,10 @@ def queue_entry(
 class Harness:
     def __init__(self, root: str | os.PathLike[str]) -> None:
         self.root = Path(root)
-        self.runtime = AdaptiveStateRuntime(self.root)
+        self.runtime = AdaptiveStateRuntime(
+            self.root,
+            native_goal_rollout_roots=(self.root.resolve(),),
+        )
         self.counter = 0
         self.identity_counter = 0
         self.definitions: dict[str, dict[str, Any]] = {}
@@ -451,7 +454,10 @@ class Harness:
         if (
             self.active_pack_digest is not None
             and normalized_mutation.get("type")
-            in {"ACQUIRE_LEASE", "TAKEOVER_LEASE"}
+            in {
+                "ACQUIRE_LEASE",
+                "TAKEOVER_LEASE",
+            }
             and "controller_turn_id" not in normalized_mutation
         ):
             normalized_mutation["controller_turn_id"] = self.next_id("app-turn")
@@ -491,7 +497,10 @@ class Harness:
             artifacts=artifacts,
         )
         metadata = None
-        if request["mutation"]["type"] in {"ACQUIRE_LEASE", "TAKEOVER_LEASE"}:
+        if request["mutation"]["type"] in {
+            "ACQUIRE_LEASE",
+            "TAKEOVER_LEASE",
+        }:
             resolved_turn_id = (
                 request["mutation"].get("controller_turn_id")
                 if trusted_turn_id is _AUTO_TRUSTED_TURN
@@ -716,6 +725,8 @@ class Harness:
                     else {}
                 ),
             }
+            if action == "CREATE" and payload_digest is None:
+                payload = objective_digest
         response = self.apply(
             {
                 "type": "PREPARE_OUTBOX",
@@ -739,14 +750,55 @@ class Harness:
         *,
         target_id: str = "target-1",
         observed_at: str = T1,
+        native_goal_result: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        observation = {
-            "observation_kind": "EXTERNAL_SEND",
-            "outbox_kind": kind,
-            "outbox_id": outbox_id,
-            "payload_digest": payload,
-            "target_id": target_id,
+        record = {
+            "identity": {},
         }
+        if kind == "GOAL":
+            record = self.state()["controller_goal_outbox"][outbox_id]
+        identity = record["identity"]
+        if (
+            kind == "GOAL"
+            and identity.get("action") == "CREATE"
+            and self.state().get("native_goal_policy", "required")
+            == "required"
+        ):
+            objective = (
+                f"goal-objective:{identity['milestone_id']}\n"
+                f"{identity['marker']}"
+            )
+            native_goal_result = native_goal_result or {
+                "goal": {
+                    "createdAt": 100
+                    + len(self.state()["native_goal_generation_ledger"]),
+                    "objective": objective,
+                    "status": "active",
+                    "threadId": target_id,
+                    "timeUsedSeconds": 0,
+                    "tokensUsed": 0,
+                    "updatedAt": 100
+                    + len(self.state()["native_goal_generation_ledger"]),
+                },
+                "remainingTokens": None,
+                "completionBudgetReport": None,
+            }
+            observation = {
+                "observation_kind": "CODEX_TOOL_RESULT",
+                "outbox_kind": kind,
+                "outbox_id": outbox_id,
+                "payload_digest": payload,
+                "target_id": target_id,
+                "result": native_goal_result,
+            }
+        else:
+            observation = {
+                "observation_kind": "EXTERNAL_SEND",
+                "outbox_kind": kind,
+                "outbox_id": outbox_id,
+                "payload_digest": payload,
+                "target_id": target_id,
+            }
         content = json.dumps(observation, sort_keys=True, separators=(",", ":"))
         artifact = read_evidence_artifact(f"{outbox_id}-send", content)
         return self.apply(
@@ -1002,7 +1054,11 @@ class Harness:
             )
             mutation["ack_evidence_paths"] = [observation_artifact["path"]]
             artifacts.append(observation_artifact)
-        return self.apply(mutation, artifacts=artifacts)
+        return self.apply(
+            mutation,
+            evidence_paths=mutation["ack_evidence_paths"],
+            artifacts=artifacts,
+        )
 
     def worker_pass(self, goal_id: str = "g1") -> dict[str, str]:
         self.ensure_controller_goal(
@@ -1527,7 +1583,34 @@ class Harness:
         )
         if not prepared["ok"]:
             raise AssertionError(prepared)
-        sent = self.mark_sent(claim, kind, outbox_id, payload, target_id=target_id)
+        native_goal_result = None
+        if kind == "GOAL" and result["action"] == "CREATE":
+            native_goal_result = {
+                "goal": {
+                    "createdAt": 100
+                    + len(self.state()["native_goal_generation_ledger"]),
+                    "objective": (
+                        f"goal-objective:{result['milestone_id']}\n"
+                        f"{result['marker']}"
+                    ),
+                    "status": "active",
+                    "threadId": result["goal_id"],
+                    "timeUsedSeconds": 0,
+                    "tokensUsed": 0,
+                    "updatedAt": 100
+                    + len(self.state()["native_goal_generation_ledger"]),
+                },
+                "remainingTokens": None,
+                "completionBudgetReport": None,
+            }
+        sent = self.mark_sent(
+            claim,
+            kind,
+            outbox_id,
+            payload,
+            target_id=target_id,
+            native_goal_result=native_goal_result,
+        )
         if not sent["ok"]:
             raise AssertionError(sent)
         acked = self.ack_outbox(

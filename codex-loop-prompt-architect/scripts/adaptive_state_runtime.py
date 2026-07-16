@@ -9,6 +9,7 @@ import select
 import stat
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from loop_architect.state_runtime import (
@@ -20,6 +21,11 @@ from loop_architect.state_runtime import (
     verify_dispatch_payload_against_state,
 )
 from loop_architect.human_control import build_failure_fingerprint
+from loop_architect.native_goal_observer import (
+    NativeGoalObservationError,
+    observe_native_goal_rollout,
+    write_observation,
+)
 
 
 INPUT_TRANSPORT_TIMEOUT_SECONDS = 30.0
@@ -178,6 +184,11 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
                 raise ValueError(token)
             mode = "fingerprint-normalize"
             index += 1
+        elif token == "--native-goal-observe":
+            if mode != "apply":
+                raise ValueError(token)
+            mode = "native-goal-observe"
+            index += 1
         elif token == "--crash-at" and index + 1 < len(argv):
             crash_at = argv[index + 1]
             index += 2
@@ -189,6 +200,7 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
         "payload-verify",
         "report-stage",
         "external-receipt-stage",
+        "native-goal-observe",
     } and root is None:
         raise ValueError("--root")
     if mode in {"payload-materialize", "fingerprint-normalize"} and root is not None:
@@ -201,6 +213,7 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
             "fingerprint-normalize",
             "report-stage",
             "external-receipt-stage",
+            "native-goal-observe",
         }
     ) and crash_at is not None:
         raise ValueError("--crash-at")
@@ -308,6 +321,67 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 response = AdaptiveStateRuntime(root).stage_external_receipt(request)
+        elif mode == "native-goal-observe":
+            assert root is not None
+            try:
+                request = _load_request(payload)
+                if not isinstance(request, dict):
+                    raise ValueError("object required")
+                allowed = {
+                    "rollout_path",
+                    "controller_thread_id",
+                    "observation_mode",
+                    "scan_start_offset",
+                    "expected_objective_digest",
+                    "expected_objective_bytes_digest",
+                    "observed_at",
+                    "observation_path",
+                }
+                if set(request) - allowed:
+                    raise ValueError("unexpected field")
+                required = {
+                    "rollout_path",
+                    "controller_thread_id",
+                    "observation_mode",
+                    "observation_path",
+                }
+                if not required <= set(request):
+                    raise ValueError("missing field")
+                observation = observe_native_goal_rollout(
+                    rollout_path=Path(request["rollout_path"]),
+                    controller_thread_id=request["controller_thread_id"],
+                    mode=request["observation_mode"],
+                    scan_start_offset=request.get("scan_start_offset", 0),
+                    expected_objective_digest=request.get(
+                        "expected_objective_digest"
+                    ),
+                    expected_objective_bytes_digest=request.get(
+                        "expected_objective_bytes_digest"
+                    ),
+                    observed_at=request.get("observed_at"),
+                )
+                _, digest = write_observation(
+                    root=Path(root),
+                    relative_path=request["observation_path"],
+                    observation=observation,
+                )
+                response = {
+                    "ok": True,
+                    "status": "NATIVE_GOAL_OBSERVATION_WRITTEN",
+                    "observation_path": request["observation_path"],
+                    "observation_digest": digest,
+                    "observation": observation,
+                    "external_actions": [],
+                    "external_action_count": 0,
+                }
+            except NativeGoalObservationError as exc:
+                response = _response(exc.code, "/native_goal_observer", exc.details)
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                response = _response(
+                    "NATIVE_GOAL_OBSERVATION_INPUT_INVALID",
+                    "/",
+                    {"error_type": type(exc).__name__},
+                )
         else:
             assert root is not None
             runtime = AdaptiveStateRuntime(root, crash_at=crash_at)

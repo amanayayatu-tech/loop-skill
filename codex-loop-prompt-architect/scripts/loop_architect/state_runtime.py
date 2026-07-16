@@ -19,7 +19,7 @@ import re
 import stat
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Mapping
 
@@ -29,6 +29,11 @@ from .human_control import (
     classify_failure_progress,
     render_decision_card,
     validate_review_surface,
+)
+from .native_goal_observer import (
+    NativeGoalObservationError,
+    observe_native_goal_rollout,
+    runtime_manifest_digest as native_goal_runtime_manifest_digest,
 )
 
 DEFAULT_HUMAN_CONTROL_POLICY = {
@@ -256,6 +261,9 @@ V2_ONLY_MUTATIONS = {
     "PREPARE_CONTROLLER_PACK_MIGRATION",
     "MIGRATE_CONTROLLER_PACK",
     "ROLLBACK_CONTROLLER_PACK_MIGRATION",
+    "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+    "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+    "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
     "RECORD_HEARTBEAT_OBSERVATION",
     "RECONCILE_WORKER_EXECUTION_CLASSIFICATION",
 }
@@ -266,6 +274,18 @@ PAUSE_BLOCKED_ROUTING_MUTATIONS = {
     "ROADMAP_REVISION",
     "FINALIZE_LOOP",
 }
+
+NATIVE_GOAL_RECOVERY_SCOPES = {
+    "NATIVE_GOAL_GENERATION_PREPARE",
+    "NATIVE_GOAL_GENERATION_COMMIT",
+    "NATIVE_GOAL_GENERATION_ROLLBACK",
+}
+NATIVE_GOAL_RECOVERY_SCOPE_TO_MUTATION = {
+    "NATIVE_GOAL_GENERATION_PREPARE": "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+    "NATIVE_GOAL_GENERATION_COMMIT": "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+    "NATIVE_GOAL_GENERATION_ROLLBACK": "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+}
+MAX_NATIVE_GOAL_RECOVERY_LEASE_SECONDS = 300
 
 
 def _attempt_consumes_repair_budget(attempt: Mapping[str, Any]) -> bool:
@@ -1579,6 +1599,7 @@ class AdaptiveStateRuntime:
         crash_at: str | None = None,
         crash_injector: Callable[[str], None] | None = None,
         jsonschema_loader: Callable[[], Any] = _import_jsonschema,
+        native_goal_rollout_roots: tuple[Path, ...] | None = None,
     ) -> None:
         self.root = Path(root).expanduser().resolve(strict=False)
         self.control_dir = self.root / ".codex-loop"
@@ -1602,6 +1623,7 @@ class AdaptiveStateRuntime:
         self.crash_at = crash_at
         self.crash_injector = crash_injector
         self.jsonschema_loader = jsonschema_loader
+        self.native_goal_rollout_roots = native_goal_rollout_roots
         self._triggered_crashes: set[str] = set()
         self._validators: tuple[Any, Any] | None = None
 
@@ -3996,6 +4018,7 @@ class AdaptiveStateRuntime:
         self._validate_goal_graph(state)
         self._validate_controller_goal_identity(state)
         self._validate_controller_goal_resume_receipt(state)
+        self._validate_native_goal_generation_state(state)
         self._validate_authorization_boundary(
             state["goal_definition_registry"],
             state["milestones"],
@@ -4697,6 +4720,135 @@ class AdaptiveStateRuntime:
                 raise RuntimeRejection(
                     "CONTROLLER_GOAL_RESUME_RECEIPT_INVALID",
                     f"/controller_goal_resume_receipt/{prefix}_digest",
+                )
+
+    @staticmethod
+    def _validate_native_goal_generation_state(state: dict[str, Any]) -> None:
+        if state.get("native_goal_generation_contract_version") != 1:
+            return
+        ledger = state.get("native_goal_generation_ledger")
+        migration = state.get("native_goal_generation_migration")
+        history = state.get("native_goal_generation_migration_history")
+        if not isinstance(ledger, dict) or not isinstance(history, list):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_STATE_INVALID",
+                "/native_goal_generation_ledger",
+            )
+        if len({item["migration_id"] for item in history}) != len(history):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_MIGRATION_HISTORY_INVALID",
+                "/native_goal_generation_migration_history",
+            )
+        for generation_id, record in ledger.items():
+            if record["generation_id"] != generation_id:
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_STATE_INVALID",
+                    f"/native_goal_generation_ledger/{generation_id}/generation_id",
+                )
+            if (
+                not isinstance(record.get("created_at"), int)
+                or isinstance(record.get("created_at"), bool)
+                or record["created_at"] <= 0
+                or record.get("thread_id") != record.get("goal_id")
+                or record.get("usage", {}).get("tokens_complete")
+                != (
+                    record.get("usage", {}).get("tokens_used") is not None
+                )
+            ):
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_STATE_INVALID",
+                    f"/native_goal_generation_ledger/{generation_id}",
+                )
+            if generation_id.startswith("ngen-") and not generation_id.startswith(
+                "ngen-target-"
+            ):
+                expected_generation_id = (
+                    "ngen-"
+                    + hashlib.sha256(
+                        b"native-goal-generation-v1\0"
+                        + record["thread_id"].encode("utf-8")
+                        + b"\0"
+                        + str(record["created_at"]).encode("ascii")
+                        + b"\0"
+                        + record["objective_digest"].encode("utf-8")
+                    ).hexdigest()[:32]
+                )
+                if generation_id != expected_generation_id:
+                    raise RuntimeRejection(
+                        "NATIVE_GOAL_GENERATION_STATE_INVALID",
+                        f"/native_goal_generation_ledger/{generation_id}/generation_id",
+                    )
+            for prefix in ("create_observation", "ack_observation"):
+                path = record[f"{prefix}_path"]
+                digest = record[f"{prefix}_digest"]
+                artifact = state["artifact_ledger"].get(path)
+                if artifact is None or artifact["digest"] != digest:
+                    raise RuntimeRejection(
+                        "NATIVE_GOAL_GENERATION_EVIDENCE_INVALID",
+                        f"/native_goal_generation_ledger/{generation_id}/{prefix}_digest",
+                    )
+        goal = state.get("controller_goal")
+        if goal is not None and state.get("native_goal_policy", "required") == "required":
+            generation_id = goal.get("current_generation_id")
+            generation = ledger.get(generation_id)
+            if generation is None or any(
+                generation[key] != goal[key]
+                for key in (
+                    "goal_id",
+                    "pack_digest",
+                    "milestone_id",
+                    "objective_digest",
+                    "marker",
+                )
+            ):
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_STATE_INVALID",
+                    "/controller_goal/current_generation_id",
+                )
+        if migration is None:
+            return
+        if migration["migration_id"] in {
+            item["migration_id"] for item in history
+        }:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_MIGRATION_ID_CONFLICT",
+                "/native_goal_generation_migration/migration_id",
+            )
+        source = ledger.get(migration["source_generation_id"])
+        target = ledger.get(migration["target_generation_id"])
+        outbox = migration["create_outbox"]
+        if source is None or migration["target_controller_thread_id"] != source["thread_id"]:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_STATE_INVALID",
+                "/native_goal_generation_migration/source_generation_id",
+            )
+        if migration["status"] == "PREPARED":
+            if (
+                target is not None
+                or goal is None
+                or goal.get("current_generation_id") != source["generation_id"]
+                or outbox["status"] != "AUTHORIZED_UNUSED"
+                or outbox["create_attempt_count"] != 0
+            ):
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_STATE_INVALID",
+                    "/native_goal_generation_migration",
+                )
+        elif migration["status"] == "COMMITTED":
+            if (
+                target is None
+                or goal is None
+                or goal.get("current_generation_id") != target["generation_id"]
+                or source["status"] != "LOST_UPSTREAM"
+                or source["loss_classification"]
+                != "NATIVE_GOAL_PERSISTENCE_LOST"
+                or target["status"] != "ACTIVE"
+                or outbox["status"] != "ACKED"
+                or outbox["create_attempt_count"] != 1
+            ):
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_STATE_INVALID",
+                    "/native_goal_generation_migration",
                 )
 
     def _validate_authorization_boundary(
@@ -6362,6 +6514,11 @@ class AdaptiveStateRuntime:
             state["schema_version"] == 2
             and state["run_control"]["status"] != "RUNNING"
             and mutation_type in PAUSE_BLOCKED_ROUTING_MUTATIONS
+            and not (
+                mutation_type == "ACQUIRE_LEASE"
+                and mutation.get("recovery_scope")
+                in NATIVE_GOAL_RECOVERY_SCOPES
+            )
         ):
             raise RuntimeRejection("LOOP_PAUSED", "/run_control/status")
 
@@ -6374,6 +6531,7 @@ class AdaptiveStateRuntime:
                 candidate,
                 request,
                 mutation,
+                after_version,
                 trusted_turn_metadata=trusted_turn_metadata,
             )
         elif mutation_type == "MIGRATE_V1_TO_V2":
@@ -6391,6 +6549,27 @@ class AdaptiveStateRuntime:
         elif mutation_type == "ROLLBACK_CONTROLLER_PACK_MIGRATION":
             result = self._rollback_controller_pack_migration(
                 candidate, request, mutation, after_version
+            )
+        elif mutation_type == "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION":
+            result = self._prepare_native_goal_generation_migration(
+                candidate,
+                request,
+                mutation,
+                after_version,
+            )
+        elif mutation_type == "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION":
+            result = self._commit_native_goal_generation_migration(
+                candidate,
+                request,
+                mutation,
+                after_version,
+            )
+        elif mutation_type == "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION":
+            result = self._rollback_native_goal_generation_migration(
+                candidate,
+                request,
+                mutation,
+                after_version,
             )
         elif mutation_type == "RECORD_HEARTBEAT_OBSERVATION":
             result = self._record_heartbeat_observation(
@@ -6815,11 +6994,62 @@ class AdaptiveStateRuntime:
         elif requested == "RESUME":
             if current != "PAUSED_AT_SAFE_POINT":
                 raise RuntimeRejection("RUN_CONTROL_TRANSITION_INVALID", "/mutation/requested_status")
+            resume_blocking_outboxes = self._migration_blocking_outboxes(state)
+            resume_blocking_outboxes.extend(
+                sorted(
+                    record["proposal_id"]
+                    for record in state["roadmap_change_outbox"].values()
+                    if record.get("status") in ACTIVE_OUTBOX_STATUSES
+                )
+            )
+            finalization = state.get("finalization_outbox")
+            if isinstance(finalization, dict) and finalization.get("status") in {
+                "PREPARED",
+                "PENDING_EXTERNAL_SYNC",
+            }:
+                resume_blocking_outboxes.append(
+                    finalization["finalization_id"]
+                )
+            if state["controller_lease"] is not None or resume_blocking_outboxes:
+                raise RuntimeRejection(
+                    "RUN_CONTROL_ACTIVE_ROUTE",
+                    "/mutation/requested_status",
+                    {"outbox_ids": sorted(resume_blocking_outboxes)},
+                )
             if state.get("controller_pack_migration") is not None:
                 raise RuntimeRejection(
                     "PACK_MIGRATION_RECONCILIATION_REQUIRED",
                     "/controller_pack_migration",
                 )
+            generation_migration = state.get("native_goal_generation_migration")
+            if isinstance(generation_migration, dict) and generation_migration.get(
+                "status"
+            ) != "COMMITTED":
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_RECONCILIATION_REQUIRED",
+                    "/native_goal_generation_migration",
+                )
+            if (
+                state.get("native_goal_generation_contract_version") == 1
+                and state.get("native_goal_policy", "required") == "required"
+                and isinstance(state.get("controller_goal"), dict)
+            ):
+                controller_goal = state.get("controller_goal")
+                generation = (
+                    state.get("native_goal_generation_ledger", {}).get(
+                        controller_goal.get("current_generation_id")
+                    )
+                    if isinstance(controller_goal, dict)
+                    else None
+                )
+                if (
+                    not isinstance(generation, dict)
+                    or generation.get("status") != "ACTIVE"
+                ):
+                    raise RuntimeRejection(
+                        "NATIVE_GOAL_GENERATION_ACTIVE_READBACK_REQUIRED",
+                        "/controller_goal/current_generation_id",
+                    )
             if state.get("heartbeat_routing_gate_enforced") is True:
                 observation = state.get("heartbeat_live_observation")
                 prompt_identity = state.get("heartbeat_prompt_identity")
@@ -7665,6 +7895,7 @@ class AdaptiveStateRuntime:
             "review_contract_version": 2,
             "worker_validation_projection_contract_version": 1,
             "controller_pack_migration_contract_version": 2,
+            "native_goal_generation_contract_version": 1,
             "native_goal_policy": mutation.get("native_goal_policy", "required"),
             "loop_id": mutation["loop_id"],
             "root": str(self.root),
@@ -7738,6 +7969,9 @@ class AdaptiveStateRuntime:
             },
             "controller_goal": None,
             "controller_goal_resume_receipt": None,
+            "native_goal_generation_ledger": {},
+            "native_goal_generation_migration": None,
+            "native_goal_generation_migration_history": [],
             "controller_lease": None,
             "lease_epoch_counter": 0,
             "consumed_controller_lease_ids": [],
@@ -8140,6 +8374,8 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "CONTROLLER_PACK_MIGRATION_ARTIFACT_INVALID", "/artifacts"
             )
+        self._derive_native_goal_generation_baseline_locked(state)
+        self._inject("NATIVE_GOAL_GENERATION_BASELINE_DERIVED")
         history = state.get("controller_pack_history")
         if history is None:
             current = state["controller_pack_identity"]
@@ -8324,6 +8560,1188 @@ class AdaptiveStateRuntime:
             },
         }
 
+    @staticmethod
+    def _native_goal_generation_id(
+        thread_id: str,
+        created_at: int,
+        objective_digest: str,
+    ) -> str:
+        payload = (
+            b"native-goal-generation-v1\0"
+            + thread_id.encode("utf-8")
+            + b"\0"
+            + str(created_at).encode("ascii")
+            + b"\0"
+            + objective_digest.encode("ascii")
+        )
+        return "ngen-" + hashlib.sha256(payload).hexdigest()[:32]
+
+    @staticmethod
+    def _native_goal_recovery_target_generation_id(
+        migration_id: str,
+        source_generation_id: str,
+        thread_id: str,
+        objective_digest: str,
+    ) -> str:
+        payload = b"\0".join(
+            (
+                b"native-goal-generation-recovery-target-v1",
+                migration_id.encode("utf-8"),
+                source_generation_id.encode("utf-8"),
+                thread_id.encode("utf-8"),
+                objective_digest.encode("ascii"),
+            )
+        )
+        return "ngen-target-" + hashlib.sha256(payload).hexdigest()[:32]
+
+    def _read_native_goal_canonical_json_artifact(
+        self,
+        state: dict[str, Any],
+        path: str,
+        error_path: str,
+    ) -> tuple[dict[str, Any], str]:
+        record = state["artifact_ledger"].get(path)
+        if (
+            not isinstance(record, dict)
+            or record.get("media_type") != "application/json"
+            or DIGEST_RE.fullmatch(str(record.get("digest"))) is None
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                error_path,
+            )
+        target = self.root / path
+        self._assert_confined(target, self.control_dir, error_path)
+        self._reject_symlink(target, error_path)
+        try:
+            payload = target.read_bytes()
+        except OSError as exc:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                error_path,
+                {"reason": "ARTIFACT_UNAVAILABLE"},
+            ) from exc
+        if len(payload) > MAX_ARTIFACT_CONTENT_SIZE:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                error_path,
+                {"reason": "ARTIFACT_TOO_LARGE"},
+            )
+        digest = _bytes_digest(payload)
+        if digest != record["digest"]:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                error_path,
+                {"reason": "ARTIFACT_DIGEST_MISMATCH"},
+            )
+        try:
+            decoded = payload.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                error_path,
+                {"reason": "ARTIFACT_UTF8_INVALID"},
+            ) from exc
+        value = _strict_json_loads(
+            decoded,
+            code="NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+            path=error_path,
+        )
+        if not isinstance(value, dict):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                error_path,
+                {"reason": "ARTIFACT_SHAPE_INVALID"},
+            )
+        return value, digest
+
+    def _derive_native_goal_generation_baseline_locked(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+        if state.get("native_goal_generation_contract_version") == 1:
+            return
+        goal = state.get("controller_goal")
+        if not isinstance(goal, dict):
+            state["native_goal_generation_contract_version"] = 1
+            state["native_goal_generation_ledger"] = {}
+            state["native_goal_generation_migration"] = None
+            state["native_goal_generation_migration_history"] = []
+            return
+        canonical_goal = copy.deepcopy(goal)
+        canonical_goal.pop("current_generation_id", None)
+        matching = [
+            record
+            for record in state["controller_goal_outbox"].values()
+            if record.get("status") == "ACKED"
+            and record.get("identity", {}).get("action") == "CREATE"
+            and record.get("target_id") == goal.get("goal_id")
+            and record.get("result") == canonical_goal
+        ]
+        if len(matching) != 1:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                "/controller_goal_outbox",
+                {"matching_create_outbox_count": len(matching)},
+            )
+        outbox = matching[0]
+        sent_paths = outbox.get("sent_evidence_paths", [])
+        ack_paths = outbox.get("ack_evidence_paths", [])
+        if len(sent_paths) != 1 or len(ack_paths) != 1:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                "/controller_goal_outbox",
+                {"reason": "CREATE_ACK_EVIDENCE_CARDINALITY_INVALID"},
+            )
+        create_path = sent_paths[0]
+        ack_path = ack_paths[0]
+        create_observation, create_digest = (
+            self._read_native_goal_canonical_json_artifact(
+                state,
+                create_path,
+                "/controller_goal_outbox/sent_evidence_paths",
+            )
+        )
+        ack_observation, ack_digest = (
+            self._read_native_goal_canonical_json_artifact(
+                state,
+                ack_path,
+                "/controller_goal_outbox/ack_evidence_paths",
+            )
+        )
+        native_result = create_observation.get("result")
+        native_goal = (
+            native_result.get("goal")
+            if isinstance(native_result, dict)
+            else None
+        )
+        ack_result = ack_observation.get("result")
+        if not isinstance(native_goal, dict) or ack_result != canonical_goal:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                "/controller_goal_outbox",
+                {"reason": "CREATE_ACK_RESULT_INVALID"},
+            )
+        objective = native_goal.get("objective")
+        if (
+            create_observation.get("observation_kind")
+            != "CODEX_TOOL_RESULT"
+            or ack_observation.get("observation_kind")
+            != "CODEX_TOOL_RESULT"
+            or not isinstance(objective, str)
+            or not objective
+            or objective.endswith("\n")
+            or "\n" not in objective
+            or native_goal.get("threadId") != goal.get("goal_id")
+            or native_goal.get("status") not in {"active", "paused"}
+            or not isinstance(native_goal.get("createdAt"), int)
+            or native_goal["createdAt"] <= 0
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                "/controller_goal_outbox",
+                {"reason": "CREATE_RESULT_IDENTITY_INVALID"},
+            )
+        objective_body, marker = objective.rsplit("\n", 1)
+        objective_digest = _bytes_digest(objective_body.encode("utf-8"))
+        if (
+            objective_digest != goal.get("objective_digest")
+            or objective_digest != outbox.get("payload_digest")
+            or objective_digest != create_observation.get("payload_digest")
+            or marker != goal.get("marker")
+            or canonical_goal.get("pack_digest")
+            != state["controller_pack_identity"]["digest"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                "/controller_goal",
+                {"reason": "OBJECTIVE_OR_PACK_IDENTITY_INVALID"},
+            )
+        created_at = native_goal["createdAt"]
+        generation_id = self._native_goal_generation_id(
+            goal["goal_id"], created_at, objective_digest
+        )
+        state["native_goal_generation_contract_version"] = 1
+        state["native_goal_generation_ledger"] = {
+            generation_id: {
+                "generation_id": generation_id,
+                "thread_id": goal["goal_id"],
+                "goal_id": goal["goal_id"],
+                "pack_digest": goal["pack_digest"],
+                "milestone_id": goal["milestone_id"],
+                "objective_digest": objective_digest,
+                "marker": marker,
+                "created_at": created_at,
+                "last_seen_at": state["logical_time"],
+                "status": "ACTIVE",
+                "loss_classification": None,
+                "create_observation_path": create_path,
+                "create_observation_digest": create_digest,
+                "ack_observation_path": ack_path,
+                "ack_observation_digest": ack_digest,
+                "usage": {
+                    "tokens_used": native_goal.get("tokensUsed"),
+                    "time_used_seconds": native_goal.get(
+                        "timeUsedSeconds"
+                    ),
+                    "tokens_complete": native_goal.get("tokensUsed")
+                    is not None,
+                },
+                "superseded_by_generation_id": None,
+            }
+        }
+        state["native_goal_generation_migration"] = None
+        state["native_goal_generation_migration_history"] = []
+        goal["current_generation_id"] = generation_id
+
+    @staticmethod
+    def _native_goal_protected_state_digest(state: dict[str, Any]) -> str:
+        """Bind business/control history that generation recovery may not rewrite."""
+
+        recovery_routing_turn_ids = {
+            routing_turn_id
+            for routing_turn_id, record in state["routing_turn_ledger"].items()
+            if record.get("recovery_scope") in NATIVE_GOAL_RECOVERY_SCOPES
+        }
+        recovery_lease_ids = {
+            record["lease_id"]
+            for routing_turn_id, record in state["routing_turn_ledger"].items()
+            if routing_turn_id in recovery_routing_turn_ids
+        }
+        protected = {
+            "controller_pack_identity": state["controller_pack_identity"],
+            "controller_pack_history": state.get("controller_pack_history", []),
+            "controller_pack_migration_history": state.get(
+                "controller_pack_migration_history", []
+            ),
+            "thread_registry": state["thread_registry"],
+            "outboxes": {
+                field: state[field]
+                for field in sorted(set(OUTBOX_FIELDS.values()))
+            },
+            "roadmap_change_outbox": state["roadmap_change_outbox"],
+            "assurance_ledger": state["assurance_ledger"],
+            "local_verification_queue": state[
+                "local_verification_queue"
+            ],
+            "local_verification_ledger": state[
+                "local_verification_ledger"
+            ],
+            "subagent_attempt_ledger": state["subagent_attempt_ledger"],
+            "goal_execution_ledger": state["goal_execution_ledger"],
+            "milestones": state["milestones"],
+            "active_milestone_id": state["active_milestone_id"],
+            "goal_definition_registry": state[
+                "goal_definition_registry"
+            ],
+            "roadmap_version": state["roadmap_version"],
+            "goal_queue": state["goal_queue"],
+            "goal_queue_history": state["goal_queue_history"],
+            "failure_history": state["failure_history"],
+            "context_freshness_ledger": state[
+                "context_freshness_ledger"
+            ],
+            "validation_results": state["validation_results"],
+            "validation_evidence_identity": state[
+                "validation_evidence_identity"
+            ],
+            "routing_turn_count": (
+                state["routing_turn_count"] - len(recovery_routing_turn_ids)
+            ),
+            "routing_turn_ledger": {
+                key: value
+                for key, value in state["routing_turn_ledger"].items()
+                if key not in recovery_routing_turn_ids
+            },
+            "routing_action_ledger": {
+                key: value
+                for key, value in state["routing_action_ledger"].items()
+                if key not in recovery_lease_ids
+            },
+            "external_action_count": state["external_action_count"],
+            "finalization_outbox": state["finalization_outbox"],
+            "finalization_receipt": state["finalization_receipt"],
+        }
+        return _digest(protected)
+
+
+
+    def _validate_native_goal_null_observations(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        observation_paths: list[str],
+        thread_id: str,
+    ) -> list[dict[str, Any]]:
+        observations = [
+            self._require_runtime_native_goal_observation(
+                state,
+                request,
+                path,
+                expected_kind="NATIVE_GOAL_GET_GOAL_V1",
+            )[0]
+            for path in observation_paths
+        ]
+        if len(observations) < 2 or len(
+            {item.get("turn_id") for item in observations}
+        ) != len(observations):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_INSUFFICIENT_NULL_OBSERVATIONS",
+                "/mutation/null_observation_paths",
+            )
+        normalized: list[dict[str, Any]] = []
+        previous: datetime | None = None
+        for index, item in enumerate(observations):
+            observed_at = _parse_time(
+                item["observed_at"],
+                f"/mutation/null_observation_paths/{index}",
+            )
+            if (
+                item.get("goal") is not None
+                or item.get("tool_name") != "get_goal"
+                or item.get("controller_thread_digest")
+                != _bytes_digest(thread_id.encode("utf-8"))
+                or not isinstance(item.get("turn_id"), str)
+                or (
+                previous is not None and observed_at <= previous
+                )
+            ):
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_NULL_OBSERVATION_IDENTITY_INVALID",
+                    f"/mutation/null_observation_paths/{index}",
+                )
+            previous = observed_at
+            normalized.append(
+                {
+                    "thread_id": thread_id,
+                    "turn_id": item["turn_id"],
+                    "observed_at": item["observed_at"],
+                    "observation_path": observation_paths[index],
+                    "observation_digest": next(
+                        artifact["digest"]
+                        for artifact in request["artifacts"]
+                        if artifact["path"] == observation_paths[index]
+                    ),
+                }
+            )
+        if previous is not None and previous > _parse_time(
+            request["occurred_at"], "/occurred_at"
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_NULL_OBSERVATION_FROM_FUTURE",
+                "/mutation/null_observation_paths",
+            )
+        return normalized
+
+    @staticmethod
+    def _native_goal_observation_artifact(
+        request: dict[str, Any], path: str
+    ) -> tuple[dict[str, Any], str]:
+        matches = [
+            artifact
+            for artifact in request["artifacts"]
+            if artifact["path"] == path
+            and artifact["media_type"] == "application/json"
+        ]
+        if len(matches) != 1 or path not in request["evidence_paths"]:
+            raise RuntimeRejection(
+                "OBSERVATION_ARTIFACT_UNBOUND",
+                "/mutation",
+                {"path": path},
+            )
+        artifact = matches[0]
+        observation = _strict_json_loads(
+            artifact["content"],
+            code="OBSERVATION_ARTIFACT_INVALID",
+            path="/mutation",
+        )
+        if not isinstance(observation, dict):
+            raise RuntimeRejection("OBSERVATION_ARTIFACT_INVALID", "/mutation")
+        return observation, artifact["digest"]
+
+    def _require_runtime_native_goal_observation(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        path: str,
+        *,
+        expected_kind: str,
+    ) -> tuple[dict[str, Any], str]:
+        observed, digest = self._native_goal_observation_artifact(
+            request, path
+        )
+        if (
+            observed.get("observation_kind") != expected_kind
+            or observed.get("runtime_manifest_digest")
+            != native_goal_runtime_manifest_digest()
+            or not isinstance(observed.get("rollout_path"), str)
+            or not isinstance(observed.get("scan_start_offset"), int)
+            or not isinstance(observed.get("scan_end_offset"), int)
+            or not isinstance(observed.get("observed_at"), str)
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_RUNTIME_OBSERVATION_INVALID",
+                "/mutation",
+                {"path": path},
+            )
+        controller_id = self._registered_role_identity(
+            state, "CONTROLLER"
+        )
+        mode = (
+            "GET_GOAL"
+            if expected_kind == "NATIVE_GOAL_GET_GOAL_V1"
+            else "CREATE_GOAL"
+        )
+        try:
+            recomputed = observe_native_goal_rollout(
+                rollout_path=Path(observed["rollout_path"]),
+                controller_thread_id=controller_id,
+                mode=mode,
+                scan_start_offset=observed["scan_start_offset"],
+                scan_end_offset=observed["scan_end_offset"],
+                expected_objective_digest=observed.get(
+                    "expected_objective_digest"
+                ),
+                expected_objective_bytes_digest=observed.get(
+                    "expected_objective_bytes_digest"
+                ),
+                observed_at=observed["observed_at"],
+                trusted_rollout_roots=self.native_goal_rollout_roots,
+            )
+        except NativeGoalObservationError as exc:
+            raise RuntimeRejection(exc.code, "/mutation", exc.details) from exc
+        if recomputed != observed:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_RUNTIME_OBSERVATION_MISMATCH",
+                "/mutation",
+                {"path": path},
+            )
+        return copy.deepcopy(observed), digest
+
+
+    def _require_native_goal_recovery_state_writer_lease(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        expected_scope: str,
+    ) -> tuple[dict[str, Any], dict[str, Any], str]:
+        claim = mutation["lease_claim"]
+        if (
+            claim.get("recovery_scope") != expected_scope
+            or claim.get("migration_id") != mutation["migration_id"]
+            or claim.get("controller_pack_digest")
+            != state["controller_pack_identity"]["digest"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_RECOVERY_LEASE_SCOPE_MISMATCH",
+                "/mutation/lease_claim",
+            )
+        state_writer_id = self._registered_role_identity(
+            state, "STATE_WRITER"
+        )
+        if (
+            request["thread_id"] != state_writer_id
+            or claim.get("state_writer_thread_id") != state_writer_id
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_STATE_WRITER_IDENTITY_INVALID",
+                "/thread_id",
+            )
+        steering = state["steering_ledger"].get(
+            claim.get("authorization_steering_id")
+        )
+        if (
+            not isinstance(steering, dict)
+            or steering.get("status") != "APPLIED"
+            or steering.get("steering_type") != "CORRECTION"
+            or steering.get("classification_reason")
+            != "NATIVE_GOAL_GENERATION_RECOVERY_AUTHORIZED"
+            or steering.get("identity", {}).get("normalized_digest")
+            != claim.get("authorization_digest")
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_AUTHORIZATION_INVALID",
+                "/mutation/lease_claim/authorization_steering_id",
+            )
+        lease = self._require_exact_lease(
+            state,
+            claim,
+            mutation["observed_at"],
+        )
+        self._reserve_route(
+            lease,
+            "NATIVE_GOAL_GENERATION_MIGRATION",
+            mutation["migration_id"],
+        )
+        routing_turn = state["routing_turn_ledger"].get(
+            claim["routing_turn_id"]
+        )
+        controller_turn_id = (
+            routing_turn.get("controller_turn_id")
+            if isinstance(routing_turn, dict)
+            else None
+        )
+        if not isinstance(controller_turn_id, str):
+            raise RuntimeRejection(
+                "APP_TURN_ATTESTATION_INVALID",
+                "/routing_turn_ledger",
+            )
+        return claim, lease, controller_turn_id
+
+    def _source_native_goal_objective(
+        self,
+        state: dict[str, Any],
+        generation: dict[str, Any],
+    ) -> tuple[str, str]:
+        observation, digest = self._read_native_goal_canonical_json_artifact(
+            state,
+            generation["create_observation_path"],
+            "/native_goal_generation_ledger/create_observation_path",
+        )
+        if digest != generation["create_observation_digest"]:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                "/native_goal_generation_ledger/create_observation_digest",
+            )
+        result = observation.get("result")
+        native_goal = result.get("goal") if isinstance(result, dict) else None
+        objective = (
+            native_goal.get("objective")
+            if isinstance(native_goal, dict)
+            else None
+        )
+        if (
+            not isinstance(objective, str)
+            or objective.endswith("\n")
+            or "\n" not in objective
+            or native_goal.get("threadId") != generation["thread_id"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                "/native_goal_generation_ledger/create_observation_path",
+            )
+        body, marker = objective.rsplit("\n", 1)
+        if (
+            _bytes_digest(body.encode("utf-8"))
+            != generation["objective_digest"]
+            or marker != generation["marker"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                "/native_goal_generation_ledger/objective_digest",
+            )
+        return objective, _bytes_digest(objective.encode("utf-8"))
+
+
+    def _prepare_native_goal_generation_migration(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        claim, _, prepare_turn_id = (
+            self._require_native_goal_recovery_state_writer_lease(
+                state,
+                request,
+                mutation,
+                "NATIVE_GOAL_GENERATION_PREPARE",
+            )
+        )
+        pending = state.get("native_goal_generation_migration")
+        if pending is not None:
+            if (
+                pending.get("migration_id") == mutation["migration_id"]
+                and pending.get("status") == "PREPARED"
+                and pending.get("target_controller_thread_id")
+                == mutation["target_controller_thread_id"]
+                and pending.get("authorization_steering_id")
+                == claim["authorization_steering_id"]
+                and pending.get("authorization_digest")
+                == claim["authorization_digest"]
+                and pending.get("create_outbox", {}).get("outbox_id")
+                == mutation["create_outbox_id"]
+            ):
+                if mutation["null_observation_paths"] != [
+                    item["observation_path"]
+                    for item in pending["null_observations"]
+                ]:
+                    raise RuntimeRejection(
+                        "NATIVE_GOAL_GENERATION_PREPARE_REPLAY_IDENTITY_MISMATCH",
+                        "/mutation/null_observation_paths",
+                    )
+                expected_heartbeat_identity = state.get(
+                    "heartbeat_prompt_identity"
+                )
+                if not isinstance(expected_heartbeat_identity, dict):
+                    raise RuntimeRejection(
+                        "NATIVE_GOAL_GENERATION_HEARTBEAT_IDENTITY_MISSING",
+                        "/heartbeat_prompt_identity",
+                    )
+                heartbeat_observation = self._require_heartbeat_observation(
+                    state,
+                    request,
+                    mutation,
+                    expected_heartbeat_identity,
+                    required_status="PAUSED",
+                )
+                self._project_heartbeat_observation(
+                    state,
+                    heartbeat_observation,
+                    mutation["automation_observation_path"],
+                    mutation["automation_observation_digest"],
+                    after_version,
+                )
+                self._finish_route(state, claim, after_version)
+                return {
+                    "code": "NATIVE_GOAL_GENERATION_MIGRATION_ALREADY_PREPARED",
+                    "next_action_code": "READ_PREPARED_MIGRATION",
+                    "result": {
+                        "migration_id": pending["migration_id"],
+                        "create_outbox_id": pending["create_outbox"][
+                            "outbox_id"
+                        ],
+                        "target_generation_id": pending[
+                            "target_generation_id"
+                        ],
+                        "heartbeat_status": "PAUSED",
+                    },
+                }
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_MIGRATION_IDENTITY_CONFLICT",
+                "/native_goal_generation_migration",
+            )
+        if any(
+            item["migration_id"] == mutation["migration_id"]
+            for item in state.get("native_goal_generation_migration_history", [])
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_MIGRATION_ID_CONFLICT",
+                "/mutation/migration_id",
+            )
+        if state["run_control"]["status"] != "PAUSED_AT_SAFE_POINT":
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_RECOVERY_REQUIRES_PAUSED_SAFE_POINT",
+                "/run_control/status",
+            )
+        goal = state.get("controller_goal")
+        if (
+            not isinstance(goal, dict)
+            or goal.get("status") != "ACTIVE"
+            or goal.get("goal_id")
+            != mutation["target_controller_thread_id"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_CANONICAL_GOAL_INVALID",
+                "/controller_goal",
+            )
+        source_generation_id = goal.get("current_generation_id")
+        source = state.get("native_goal_generation_ledger", {}).get(
+            source_generation_id
+        )
+        if (
+            not isinstance(source_generation_id, str)
+            or not isinstance(source, dict)
+            or source.get("status") != "ACTIVE"
+            or source.get("thread_id") != goal["goal_id"]
+            or any(
+                source.get(field) != goal.get(field)
+                for field in (
+                    "goal_id",
+                    "pack_digest",
+                    "milestone_id",
+                    "objective_digest",
+                    "marker",
+                )
+            )
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_SOURCE_IDENTITY_INVALID",
+                "/controller_goal/current_generation_id",
+            )
+        objective, objective_bytes_digest = (
+            self._source_native_goal_objective(state, source)
+        )
+        target_generation_id = (
+            self._native_goal_recovery_target_generation_id(
+                mutation["migration_id"],
+                source_generation_id,
+                goal["goal_id"],
+                source["objective_digest"],
+            )
+        )
+        if target_generation_id in state["native_goal_generation_ledger"]:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_TARGET_IDENTITY_INVALID",
+                "/mutation/migration_id",
+            )
+        null_observations = self._validate_native_goal_null_observations(
+            state,
+            request,
+            mutation["null_observation_paths"],
+            goal["goal_id"],
+        )
+        full_null_observations = [
+            self._require_runtime_native_goal_observation(
+                state,
+                request,
+                path,
+                expected_kind="NATIVE_GOAL_GET_GOAL_V1",
+            )[0]
+            for path in mutation["null_observation_paths"]
+        ]
+        if len(
+            {item["rollout_file_identity_digest"] for item in full_null_observations}
+        ) != 1 or len({item["rollout_path"] for item in full_null_observations}) != 1:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_NULL_OBSERVATION_IDENTITY_INVALID",
+                "/mutation/null_observation_paths",
+            )
+        high_watermarks = [
+            item["scan_end_offset"] for item in full_null_observations
+        ]
+        if high_watermarks != sorted(high_watermarks) or len(
+            set(high_watermarks)
+        ) != len(high_watermarks):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_NULL_OBSERVATION_IDENTITY_INVALID",
+                "/mutation/null_observation_paths",
+            )
+        expected_heartbeat_identity = state.get("heartbeat_prompt_identity")
+        if not isinstance(expected_heartbeat_identity, dict):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_HEARTBEAT_IDENTITY_MISSING",
+                "/heartbeat_prompt_identity",
+            )
+        source_heartbeat_live_observation = copy.deepcopy(
+            state.get("heartbeat_live_observation")
+        )
+        source_heartbeat_routing_gate_enforced = state.get(
+            "heartbeat_routing_gate_enforced", False
+        )
+        heartbeat_observation = self._require_heartbeat_observation(
+            state,
+            request,
+            mutation,
+            expected_heartbeat_identity,
+            required_status="PAUSED",
+        )
+        expires_at = _parse_time(
+            mutation["expires_at"], "/mutation/expires_at"
+        )
+        if expires_at <= _parse_time(
+            mutation["observed_at"], "/mutation/observed_at"
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_MIGRATION_EXPIRY_INVALID",
+                "/mutation/expires_at",
+            )
+        if any(
+            mutation["create_outbox_id"] in state[field]
+            for field in OUTBOX_FIELDS.values()
+        ) or any(
+            migration.get("create_outbox", {}).get("outbox_id")
+            == mutation["create_outbox_id"]
+            for migration in state.get(
+                "native_goal_generation_migration_history", []
+            )
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_CREATE_OUTBOX_ID_CONFLICT",
+                "/mutation/create_outbox_id",
+            )
+        protected_digest = self._native_goal_protected_state_digest(state)
+        self._project_heartbeat_observation(
+            state,
+            heartbeat_observation,
+            mutation["automation_observation_path"],
+            mutation["automation_observation_digest"],
+            after_version,
+        )
+        state["native_goal_generation_migration"] = {
+            "migration_id": mutation["migration_id"],
+            "status": "PREPARED",
+            "source_generation_id": source_generation_id,
+            "target_generation_id": target_generation_id,
+            "target_controller_thread_id": goal["goal_id"],
+            "pack_digest": state["controller_pack_identity"]["digest"],
+            "milestone_id": goal["milestone_id"],
+            "objective_digest": source["objective_digest"],
+            "marker": source["marker"],
+            "authorization_steering_id": claim[
+                "authorization_steering_id"
+            ],
+            "authorization_digest": claim["authorization_digest"],
+            "historical_create_observation_path": source[
+                "create_observation_path"
+            ],
+            "historical_create_observation_digest": source[
+                "create_observation_digest"
+            ],
+            "historical_ack_observation_path": source[
+                "ack_observation_path"
+            ],
+            "historical_ack_observation_digest": source[
+                "ack_observation_digest"
+            ],
+            "null_observations": null_observations,
+            "prepare_heartbeat_observation_path": mutation[
+                "automation_observation_path"
+            ],
+            "prepare_heartbeat_observation_digest": mutation[
+                "automation_observation_digest"
+            ],
+            "role_registry_digest": self._role_registry_identity_digest(state),
+            "protected_state_digest": protected_digest,
+            "prepared_state_version": after_version,
+            "prepared_controller_turn_id": prepare_turn_id,
+            "expires_at": mutation["expires_at"],
+            "create_outbox": {
+                "outbox_id": mutation["create_outbox_id"],
+                "status": "AUTHORIZED_UNUSED",
+                "migration_id": mutation["migration_id"],
+                "source_generation_id": source_generation_id,
+                "target_generation_id": target_generation_id,
+                "payload_digest": source["objective_digest"],
+                "objective_bytes_digest": objective_bytes_digest,
+                "marker_digest": _bytes_digest(
+                    source["marker"].encode("utf-8")
+                ),
+                "target_thread_id": goal["goal_id"],
+                "pack_digest": state["controller_pack_identity"]["digest"],
+                "authorization_steering_id": claim[
+                    "authorization_steering_id"
+                ],
+                "authorization_digest": claim["authorization_digest"],
+                "prepare_rollout_path": full_null_observations[-1][
+                    "rollout_path"
+                ],
+                "prepare_high_watermark": high_watermarks[-1],
+                "prepare_snapshot_digest": full_null_observations[-1][
+                    "snapshot_digest"
+                ],
+                "create_attempt_count": 0,
+                "phase_b_turn_id": None,
+                "result_observation_path": None,
+                "result_observation_digest": None,
+            },
+            "completed_state_version": None,
+            "commit_controller_turn_id": None,
+            "source_heartbeat_live_observation": (
+                source_heartbeat_live_observation
+            ),
+            "source_heartbeat_routing_gate_enforced": (
+                source_heartbeat_routing_gate_enforced
+            ),
+        }
+        if not objective:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                "/native_goal_generation_ledger",
+            )
+        self._finish_route(state, claim, after_version)
+        self._inject("NATIVE_GOAL_GENERATION_PREPARED_PROJECTED")
+        return {
+            "code": "NATIVE_GOAL_GENERATION_MIGRATION_PREPARED",
+            "next_action_code": "END_TURN_THEN_CREATE_ONCE",
+            "result": {
+                "migration_id": mutation["migration_id"],
+                "create_outbox_id": mutation["create_outbox_id"],
+                "target_generation_id": target_generation_id,
+                "prepare_high_watermark": high_watermarks[-1],
+                "heartbeat_status": "PAUSED",
+            },
+        }
+
+
+    def _commit_native_goal_generation_migration(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        claim, _, commit_turn_id = (
+            self._require_native_goal_recovery_state_writer_lease(
+                state,
+                request,
+                mutation,
+                "NATIVE_GOAL_GENERATION_COMMIT",
+            )
+        )
+        prepared = state.get("native_goal_generation_migration")
+        if (
+            isinstance(prepared, dict)
+            and prepared.get("migration_id") == mutation["migration_id"]
+            and prepared.get("status") == "COMMITTED"
+        ):
+            create_outbox = prepared["create_outbox"]
+            target = state["native_goal_generation_ledger"].get(
+                prepared["target_generation_id"]
+            )
+            if (
+                not isinstance(target, dict)
+                or mutation["rollout_observation_path"]
+                != create_outbox.get("result_observation_path")
+                or mutation["goal_observation_path"]
+                != target.get("ack_observation_path")
+            ):
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_COMMIT_REPLAY_IDENTITY_MISMATCH",
+                    "/mutation",
+                )
+            expected_heartbeat_identity = state.get(
+                "heartbeat_prompt_identity"
+            )
+            if not isinstance(expected_heartbeat_identity, dict):
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_HEARTBEAT_IDENTITY_MISSING",
+                    "/heartbeat_prompt_identity",
+                )
+            heartbeat_observation = self._require_heartbeat_observation(
+                state,
+                request,
+                mutation,
+                expected_heartbeat_identity,
+                required_status="PAUSED",
+            )
+            self._project_heartbeat_observation(
+                state,
+                heartbeat_observation,
+                mutation["automation_observation_path"],
+                mutation["automation_observation_digest"],
+                after_version,
+            )
+            self._finish_route(state, claim, after_version)
+            return {
+                "code": "NATIVE_GOAL_GENERATION_MIGRATION_ALREADY_COMMITTED",
+                "next_action_code": "RECONCILE_BEFORE_RESUME",
+                "result": {
+                    "migration_id": prepared["migration_id"],
+                    "target_generation_id": prepared[
+                        "target_generation_id"
+                    ],
+                    "heartbeat_status": "PAUSED",
+                },
+            }
+        if not isinstance(prepared, dict) or prepared.get("status") != "PREPARED":
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_MIGRATION_NOT_PREPARED",
+                "/native_goal_generation_migration",
+            )
+        if (
+            prepared["migration_id"] != mutation["migration_id"]
+            or prepared["pack_digest"]
+            != state["controller_pack_identity"]["digest"]
+            or prepared["role_registry_digest"]
+            != self._role_registry_identity_digest(state)
+            or prepared["authorization_steering_id"]
+            != claim["authorization_steering_id"]
+            or prepared["authorization_digest"]
+            != claim["authorization_digest"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_PREPARED_IDENTITY_MISMATCH",
+                "/mutation/lease_claim",
+            )
+        if _parse_time(
+            mutation["observed_at"], "/mutation/observed_at"
+        ) >= _parse_time(
+            prepared["expires_at"],
+            "/native_goal_generation_migration/expires_at",
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_MIGRATION_EXPIRED",
+                "/native_goal_generation_migration/expires_at",
+            )
+        if (
+            self._native_goal_protected_state_digest(state)
+            != prepared["protected_state_digest"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_PROTECTED_STATE_CHANGED",
+                "/native_goal_generation_migration/protected_state_digest",
+            )
+        source = state["native_goal_generation_ledger"].get(
+            prepared["source_generation_id"]
+        )
+        goal = state.get("controller_goal")
+        if (
+            not isinstance(source, dict)
+            or source.get("status") != "ACTIVE"
+            or not isinstance(goal, dict)
+            or goal.get("current_generation_id")
+            != prepared["source_generation_id"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_SOURCE_IDENTITY_INVALID",
+                "/controller_goal/current_generation_id",
+            )
+        _, objective_bytes_digest = self._source_native_goal_objective(
+            state, source
+        )
+        create_outbox = prepared["create_outbox"]
+        if (
+            create_outbox["status"] != "AUTHORIZED_UNUSED"
+            or create_outbox["create_attempt_count"] != 0
+            or create_outbox["objective_bytes_digest"]
+            != objective_bytes_digest
+            or create_outbox["payload_digest"]
+            != prepared["objective_digest"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_CREATE_AUTHORIZATION_INVALID",
+                "/native_goal_generation_migration/create_outbox",
+            )
+        rollout_observation, rollout_digest = (
+            self._require_runtime_native_goal_observation(
+                state,
+                request,
+                mutation["rollout_observation_path"],
+                expected_kind="NATIVE_GOAL_CREATE_ROLLOUT_V1",
+            )
+        )
+        if (
+            rollout_observation.get("rollout_path")
+            != create_outbox["prepare_rollout_path"]
+            or rollout_observation.get("scan_start_offset")
+            != create_outbox["prepare_high_watermark"]
+            or rollout_observation.get("expected_objective_digest")
+            != create_outbox["payload_digest"]
+            or rollout_observation.get("expected_objective_bytes_digest")
+            != create_outbox["objective_bytes_digest"]
+            or rollout_observation.get("matching_invocation_count") != 1
+            or rollout_observation.get("invocation_state")
+            not in {"COMPLETED", "STARTED_UNKNOWN"}
+            or len(rollout_observation.get("invocations", [])) != 1
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_INVALID",
+                "/mutation/rollout_observation_path",
+            )
+        invocation = rollout_observation["invocations"][0]
+        phase_b_turn_id = invocation.get("turn_id")
+        goal_observation, goal_observation_digest = (
+            self._require_runtime_native_goal_observation(
+                state,
+                request,
+                mutation["goal_observation_path"],
+                expected_kind="NATIVE_GOAL_GET_GOAL_V1",
+            )
+        )
+        readback = goal_observation.get("goal")
+        if (
+            not isinstance(phase_b_turn_id, str)
+            or phase_b_turn_id
+            in {prepared["prepared_controller_turn_id"], commit_turn_id}
+            or goal_observation.get("turn_id") != commit_turn_id
+            or not isinstance(readback, dict)
+            or readback.get("thread_id")
+            != prepared["target_controller_thread_id"]
+            or readback.get("status") != "active"
+            or readback.get("objective_digest")
+            != prepared["objective_digest"]
+            or readback.get("objective_bytes_digest")
+            != objective_bytes_digest
+            or readback.get("created_at") == source["created_at"]
+            or not isinstance(readback.get("created_at"), int)
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_READBACK_IDENTITY_MISMATCH",
+                "/mutation/goal_observation_path",
+            )
+        created_goal = invocation.get("created_goal")
+        if created_goal is not None and created_goal != readback:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_CREATE_RESULT_READBACK_MISMATCH",
+                "/mutation/rollout_observation_path",
+            )
+        expected_heartbeat_identity = state.get("heartbeat_prompt_identity")
+        if not isinstance(expected_heartbeat_identity, dict):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_HEARTBEAT_IDENTITY_MISSING",
+                "/heartbeat_prompt_identity",
+            )
+        heartbeat_observation = self._require_heartbeat_observation(
+            state,
+            request,
+            mutation,
+            expected_heartbeat_identity,
+            required_status="PAUSED",
+        )
+        target_generation_id = prepared["target_generation_id"]
+        if target_generation_id in state["native_goal_generation_ledger"]:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_TARGET_IDENTITY_INVALID",
+                "/native_goal_generation_ledger",
+            )
+        source["status"] = "LOST_UPSTREAM"
+        source["loss_classification"] = "NATIVE_GOAL_PERSISTENCE_LOST"
+        source["superseded_by_generation_id"] = target_generation_id
+        state["native_goal_generation_ledger"][target_generation_id] = {
+            "generation_id": target_generation_id,
+            "thread_id": prepared["target_controller_thread_id"],
+            "goal_id": goal["goal_id"],
+            "pack_digest": goal["pack_digest"],
+            "milestone_id": goal["milestone_id"],
+            "objective_digest": prepared["objective_digest"],
+            "marker": prepared["marker"],
+            "created_at": readback["created_at"],
+            "last_seen_at": goal_observation["observed_at"],
+            "status": "ACTIVE",
+            "loss_classification": None,
+            "create_observation_path": mutation[
+                "rollout_observation_path"
+            ],
+            "create_observation_digest": rollout_digest,
+            "ack_observation_path": mutation["goal_observation_path"],
+            "ack_observation_digest": goal_observation_digest,
+            "usage": {
+                "tokens_used": readback.get("tokens_used"),
+                "time_used_seconds": readback.get("time_used_seconds"),
+                "tokens_complete": readback.get("tokens_used") is not None,
+            },
+            "superseded_by_generation_id": None,
+        }
+        goal["current_generation_id"] = target_generation_id
+        create_outbox.update(
+            {
+                "status": "ACKED",
+                "create_attempt_count": 1,
+                "phase_b_turn_id": phase_b_turn_id,
+                "result_observation_path": mutation[
+                    "rollout_observation_path"
+                ],
+                "result_observation_digest": rollout_digest,
+            }
+        )
+        prepared["status"] = "COMMITTED"
+        prepared["completed_state_version"] = after_version
+        prepared["commit_controller_turn_id"] = commit_turn_id
+        self._project_heartbeat_observation(
+            state,
+            heartbeat_observation,
+            mutation["automation_observation_path"],
+            mutation["automation_observation_digest"],
+            after_version,
+        )
+        self._finish_route(state, claim, after_version)
+        self._inject("NATIVE_GOAL_GENERATION_COMMITTED_PROJECTED")
+        return {
+            "code": "NATIVE_GOAL_GENERATION_MIGRATION_COMMITTED",
+            "next_action_code": "RECONCILE_BEFORE_RESUME",
+            "result": {
+                "migration_id": prepared["migration_id"],
+                "source_generation_id": prepared["source_generation_id"],
+                "target_generation_id": target_generation_id,
+                "phase_b_turn_id": phase_b_turn_id,
+                "lost_stdout_adopted": created_goal is None,
+                "heartbeat_status": "PAUSED",
+            },
+        }
+
+
     def _record_heartbeat_observation(
         self,
         state: dict[str, Any],
@@ -8378,6 +9796,178 @@ class AdaptiveStateRuntime:
                 "automation_id": observation["automation_id"],
                 "status": observation["status"],
                 "observed_at": observation["observed_at"],
+            },
+        }
+
+    def _rollback_native_goal_generation_migration(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> dict[str, Any]:
+        claim, _, _ = self._require_native_goal_recovery_state_writer_lease(
+            state,
+            request,
+            mutation,
+            "NATIVE_GOAL_GENERATION_ROLLBACK",
+        )
+        prepared = state.get("native_goal_generation_migration")
+        if (
+            not isinstance(prepared, dict)
+            or prepared.get("status") != "PREPARED"
+            or prepared.get("migration_id") != mutation["migration_id"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_ROLLBACK_FORBIDDEN",
+                "/native_goal_generation_migration",
+            )
+        if (
+            prepared["pack_digest"]
+            != state["controller_pack_identity"]["digest"]
+            or prepared["role_registry_digest"]
+            != self._role_registry_identity_digest(state)
+            or prepared["authorization_steering_id"]
+            != claim["authorization_steering_id"]
+            or prepared["authorization_digest"]
+            != claim["authorization_digest"]
+            or self._native_goal_protected_state_digest(state)
+            != prepared["protected_state_digest"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_PROTECTED_STATE_CHANGED",
+                "/native_goal_generation_migration/protected_state_digest",
+            )
+        create_outbox = prepared["create_outbox"]
+        if (
+            create_outbox["status"] != "AUTHORIZED_UNUSED"
+            or create_outbox["create_attempt_count"] != 0
+            or create_outbox["phase_b_turn_id"] is not None
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_ROLLBACK_FORBIDDEN",
+                "/native_goal_generation_migration/create_outbox",
+            )
+        rollout_observation, _ = (
+            self._require_runtime_native_goal_observation(
+                state,
+                request,
+                mutation["rollout_observation_path"],
+                expected_kind="NATIVE_GOAL_CREATE_ROLLOUT_V1",
+            )
+        )
+        if (
+            rollout_observation.get("rollout_path")
+            != create_outbox["prepare_rollout_path"]
+            or rollout_observation.get("scan_start_offset")
+            != create_outbox["prepare_high_watermark"]
+            or rollout_observation.get("expected_objective_digest")
+            != create_outbox["payload_digest"]
+            or rollout_observation.get("expected_objective_bytes_digest")
+            != create_outbox["objective_bytes_digest"]
+            or rollout_observation.get("matching_invocation_count") != 0
+            or rollout_observation.get("invocation_state") != "NONE"
+            or rollout_observation.get("invocations") != []
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_ROLLBACK_INVOCATION_UNCERTAIN",
+                "/mutation/rollout_observation_path",
+            )
+        null_observations = self._validate_native_goal_null_observations(
+            state,
+            request,
+            mutation["null_observation_paths"],
+            prepared["target_controller_thread_id"],
+        )
+        initial_turn_ids = {
+            item["turn_id"] for item in prepared["null_observations"]
+        }
+        full_null_observations = [
+            self._require_runtime_native_goal_observation(
+                state,
+                request,
+                path,
+                expected_kind="NATIVE_GOAL_GET_GOAL_V1",
+            )[0]
+            for path in mutation["null_observation_paths"]
+        ]
+        if any(
+            item["turn_id"] in initial_turn_ids
+            or item["scan_end_offset"]
+            <= create_outbox["prepare_high_watermark"]
+            or item["rollout_path"] != create_outbox["prepare_rollout_path"]
+            for item in full_null_observations
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_ROLLBACK_NULL_OBSERVATION_INVALID",
+                "/mutation/null_observation_paths",
+            )
+        expected_heartbeat_identity = state.get("heartbeat_prompt_identity")
+        if not isinstance(expected_heartbeat_identity, dict):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_HEARTBEAT_IDENTITY_MISSING",
+                "/heartbeat_prompt_identity",
+            )
+        self._require_heartbeat_observation(
+            state,
+            request,
+            mutation,
+            expected_heartbeat_identity,
+            required_status="PAUSED",
+        )
+        goal = state.get("controller_goal")
+        source = state["native_goal_generation_ledger"].get(
+            prepared["source_generation_id"]
+        )
+        if (
+            not isinstance(goal, dict)
+            or goal.get("current_generation_id")
+            != prepared["source_generation_id"]
+            or not isinstance(source, dict)
+            or source.get("status") != "ACTIVE"
+            or prepared["target_generation_id"]
+            in state["native_goal_generation_ledger"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_ROLLBACK_FORBIDDEN",
+                "/controller_goal/current_generation_id",
+            )
+        state.setdefault(
+            "native_goal_generation_migration_history", []
+        ).append(
+            {
+                "migration_id": prepared["migration_id"],
+                "outcome": "ROLLED_BACK",
+                "source_generation_id": prepared[
+                    "source_generation_id"
+                ],
+                "target_generation_id": prepared[
+                    "target_generation_id"
+                ],
+                "create_outbox_id": create_outbox["outbox_id"],
+                "completed_state_version": after_version,
+                "reason": mutation["rollback_reason"],
+            }
+        )
+        state["heartbeat_live_observation"] = copy.deepcopy(
+            prepared["source_heartbeat_live_observation"]
+        )
+        state["heartbeat_routing_gate_enforced"] = prepared[
+            "source_heartbeat_routing_gate_enforced"
+        ]
+        state["native_goal_generation_migration"] = None
+        self._finish_route(state, claim, after_version)
+        self._inject("NATIVE_GOAL_GENERATION_ROLLBACK_PROJECTED")
+        return {
+            "code": "NATIVE_GOAL_GENERATION_MIGRATION_ROLLED_BACK",
+            "next_action_code": "WAIT_FOR_SCOPED_CORRECTION",
+            "result": {
+                "migration_id": mutation["migration_id"],
+                "source_generation_id": prepared[
+                    "source_generation_id"
+                ],
+                "rollback_null_observation_count": len(null_observations),
+                "heartbeat_status": "PAUSED",
             },
         }
 
@@ -8637,27 +10227,261 @@ class AdaptiveStateRuntime:
                 "/heartbeat_live_observation",
             )
 
+    @staticmethod
+    def _registered_role_identity(
+        state: dict[str, Any], role_kind: str
+    ) -> str:
+        matches = [
+            thread_id
+            for thread_id, record in state["thread_registry"].items()
+            if record["status"] == "REGISTERED"
+            and record["role_kind"] == role_kind
+        ]
+        if len(matches) != 1:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_RECOVERY_ROLE_IDENTITY_INVALID",
+                "/thread_registry",
+                {"role_kind": role_kind, "registered_count": len(matches)},
+            )
+        return matches[0]
+
+    def _require_native_goal_recovery_lease_acquisition(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        mutation: dict[str, Any],
+        after_version: int,
+    ) -> None:
+        scope = mutation["recovery_scope"]
+        if scope not in NATIVE_GOAL_RECOVERY_SCOPES:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_RECOVERY_SCOPE_INVALID",
+                "/mutation/recovery_scope",
+            )
+        if state["run_control"]["status"] != "PAUSED_AT_SAFE_POINT":
+            raise RuntimeRejection("LOOP_PAUSED", "/run_control/status")
+        if state.get("terminal_status") is not None:
+            raise RuntimeRejection("LOOP_ALREADY_TERMINAL", "/terminal_status")
+        if state.get("native_goal_policy", "required") != "required":
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_RECOVERY_POLICY_INVALID",
+                "/native_goal_policy",
+            )
+        if state.get("controller_pack_migration") is not None:
+            raise RuntimeRejection(
+                "PACK_MIGRATION_RECONCILIATION_REQUIRED",
+                "/controller_pack_migration",
+            )
+        if state.get("heartbeat_routing_gate_enforced") is not True:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_HEARTBEAT_IDENTITY_MISSING",
+                "/heartbeat_routing_gate_enforced",
+            )
+        registered = [
+            record
+            for record in state["thread_registry"].values()
+            if record["status"] == "REGISTERED"
+        ]
+        if len(registered) != 5 or {
+            record["role_kind"] for record in registered
+        } != {
+            "CONTROLLER",
+            "STATE_WRITER",
+            "WORKER",
+            "REVIEWER",
+            "LOCAL_VERIFIER",
+        }:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_RECOVERY_ROLE_IDENTITY_INVALID",
+                "/thread_registry",
+            )
+        controller_id = self._registered_role_identity(state, "CONTROLLER")
+        state_writer_id = self._registered_role_identity(state, "STATE_WRITER")
+        if (
+            mutation["owner_kind"] != "GOAL_TURN"
+            or mutation["owner_identity"] != controller_id
+            or request["thread_id"] != controller_id
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_IDENTITY_MISMATCH",
+                "/mutation/owner_identity",
+            )
+        if mutation["state_writer_thread_id"] != state_writer_id:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_STATE_WRITER_IDENTITY_INVALID",
+                "/mutation/state_writer_thread_id",
+            )
+        if (
+            mutation["controller_pack_digest"]
+            != state["controller_pack_identity"]["digest"]
+        ):
+            raise RuntimeRejection(
+                "CONTROLLER_PACK_IDENTITY_MISMATCH",
+                "/mutation/controller_pack_digest",
+            )
+        steering = state["steering_ledger"].get(
+            mutation["authorization_steering_id"]
+        )
+        if (
+            not isinstance(steering, dict)
+            or steering.get("steering_type") != "CORRECTION"
+            or steering.get("status") != "APPLIED"
+            or steering.get("classification_reason")
+            != "NATIVE_GOAL_GENERATION_RECOVERY_AUTHORIZED"
+            or steering.get("identity", {}).get("normalized_digest")
+            != mutation["authorization_digest"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_AUTHORIZATION_INVALID",
+                "/mutation/authorization_steering_id",
+            )
+        migration = state.get("native_goal_generation_migration")
+        migration_id = mutation["migration_id"]
+        if scope == "NATIVE_GOAL_GENERATION_PREPARE":
+            replayable_prepare = (
+                isinstance(migration, dict)
+                and migration.get("migration_id") == migration_id
+                and migration.get("status") == "PREPARED"
+                and migration.get("authorization_steering_id")
+                == mutation["authorization_steering_id"]
+                and migration.get("authorization_digest")
+                == mutation["authorization_digest"]
+                and migration.get("pack_digest")
+                == mutation["controller_pack_digest"]
+            )
+            if (
+                migration is not None
+                and not replayable_prepare
+            ) or any(
+                item["migration_id"] == migration_id
+                for item in state.get(
+                    "native_goal_generation_migration_history", []
+                )
+            ):
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_MIGRATION_ID_CONFLICT",
+                    "/mutation/migration_id",
+                )
+            if not replayable_prepare:
+                goal = state.get("controller_goal")
+                current_generation = (
+                    state.get("native_goal_generation_ledger", {}).get(
+                        goal.get("current_generation_id")
+                    )
+                    if isinstance(goal, dict)
+                    else None
+                )
+                if (
+                    not isinstance(goal, dict)
+                    or not isinstance(current_generation, dict)
+                    or current_generation.get("status") != "ACTIVE"
+                ):
+                    raise RuntimeRejection(
+                        "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+                        "/controller_goal/current_generation_id",
+                    )
+        else:
+            allowed_statuses = (
+                {"PREPARED", "COMMITTED"}
+                if scope == "NATIVE_GOAL_GENERATION_COMMIT"
+                else {"PREPARED"}
+            )
+            if (
+                not isinstance(migration, dict)
+                or migration.get("migration_id") != migration_id
+                or migration.get("status") not in allowed_statuses
+            ):
+                raise RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_MIGRATION_NOT_PREPARED",
+                    "/native_goal_generation_migration",
+                )
+        active = self._migration_blocking_outboxes(state)
+        active.extend(
+            sorted(
+                record["proposal_id"]
+                for record in state["roadmap_change_outbox"].values()
+                if record.get("status") in ACTIVE_OUTBOX_STATUSES
+            )
+        )
+        finalization = state.get("finalization_outbox")
+        if isinstance(finalization, dict) and finalization.get("status") in {
+            "PREPARED",
+            "PENDING_EXTERNAL_SYNC",
+        }:
+            active.append(finalization["finalization_id"])
+        if active:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_RECOVERY_ACTIVE_OUTBOX",
+                "/mutation/recovery_scope",
+                {"outbox_ids": active},
+            )
+        expected_heartbeat_identity = state.get("heartbeat_prompt_identity")
+        if not isinstance(expected_heartbeat_identity, dict):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_HEARTBEAT_IDENTITY_MISSING",
+                "/heartbeat_prompt_identity",
+            )
+        observation = self._require_heartbeat_observation(
+            state,
+            request,
+            mutation,
+            expected_heartbeat_identity,
+            required_status="PAUSED",
+        )
+        self._project_heartbeat_observation(
+            state,
+            observation,
+            mutation["automation_observation_path"],
+            mutation["automation_observation_digest"],
+            after_version,
+        )
+
     def _acquire_lease(
         self,
         state: dict[str, Any],
         request: dict[str, Any],
         mutation: dict[str, Any],
+        after_version: int,
         *,
         trusted_turn_metadata: TrustedTurnMetadata | None,
     ) -> dict[str, Any]:
-        if state.get("schema_version") == 2 and state["run_control"]["status"] != "RUNNING":
-            raise RuntimeRejection("LOOP_PAUSED", "/run_control/status")
-        self._require_heartbeat_routing_reconciled(state)
+        recovery_scope = mutation.get("recovery_scope")
+        if recovery_scope is None:
+            if (
+                state.get("schema_version") == 2
+                and state["run_control"]["status"] != "RUNNING"
+            ):
+                raise RuntimeRejection("LOOP_PAUSED", "/run_control/status")
+            self._require_heartbeat_routing_reconciled(state)
+        else:
+            self._require_native_goal_recovery_lease_acquisition(
+                state,
+                request,
+                mutation,
+                after_version,
+            )
         observed = self._observe_time(state, mutation["observed_at"], "/mutation/observed_at")
         expires = _parse_time(mutation["expires_at"], "/mutation/expires_at")
         if expires <= observed:
             raise RuntimeRejection("LEASE_EXPIRY_INVALID", "/mutation/expires_at")
+        if (
+            recovery_scope is not None
+            and expires - observed
+            > timedelta(seconds=MAX_NATIVE_GOAL_RECOVERY_LEASE_SECONDS)
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_RECOVERY_LEASE_TOO_LONG",
+                "/mutation/expires_at",
+            )
         if not self._registered_controller(state, mutation["owner_identity"]):
             raise RuntimeRejection(
                 "CONTROLLER_IDENTITY_MISMATCH", "/mutation/owner_identity"
             )
         controller_turn_id = mutation.get("controller_turn_id")
-        if state.get("controller_turn_enforcement") is True:
+        if (
+            state.get("controller_turn_enforcement") is True
+            or recovery_scope is not None
+        ):
             controller_turn_id = self._require_trusted_controller_turn(
                 request,
                 mutation,
@@ -8705,6 +10529,26 @@ class AdaptiveStateRuntime:
             "intended_transition": mutation.get(
                 "intended_transition", INTENDED_TRANSITION
             ),
+            **(
+                {
+                    "recovery_scope": recovery_scope,
+                    "migration_id": mutation["migration_id"],
+                    "state_writer_thread_id": mutation[
+                        "state_writer_thread_id"
+                    ],
+                    "controller_pack_digest": mutation[
+                        "controller_pack_digest"
+                    ],
+                    "authorization_steering_id": mutation[
+                        "authorization_steering_id"
+                    ],
+                    "authorization_digest": mutation[
+                        "authorization_digest"
+                    ],
+                }
+                if recovery_scope is not None
+                else {}
+            ),
         }
         state["controller_lease"] = {
             "claim": claim,
@@ -8725,6 +10569,14 @@ class AdaptiveStateRuntime:
                 if controller_turn_id is not None
                 else {}
             ),
+            **(
+                {
+                    "recovery_scope": recovery_scope,
+                    "migration_id": mutation["migration_id"],
+                }
+                if recovery_scope is not None
+                else {}
+            ),
         }
         if controller_turn_id is not None:
             state.setdefault("consumed_controller_turn_ids", []).append(
@@ -8734,8 +10586,16 @@ class AdaptiveStateRuntime:
                 set(state["consumed_controller_turn_ids"])
             )
         return {
-            "code": "CONTROLLER_LEASE_ACQUIRED",
-            "next_action_code": "ROUTE_ONE_TRANSITION",
+            "code": (
+                "NATIVE_GOAL_GENERATION_RECOVERY_LEASE_ACQUIRED"
+                if recovery_scope is not None
+                else "CONTROLLER_LEASE_ACQUIRED"
+            ),
+            "next_action_code": (
+                NATIVE_GOAL_RECOVERY_SCOPE_TO_MUTATION[recovery_scope]
+                if recovery_scope is not None
+                else "ROUTE_ONE_TRANSITION"
+            ),
             "result": {"lease_claim": copy.deepcopy(claim)},
         }
 
@@ -9942,6 +11802,10 @@ class AdaptiveStateRuntime:
                 or identity["loop_id"] != state["loop_id"]
                 or identity["pack_digest"] != state["controller_pack_identity"]["digest"]
                 or identity["marker"] != expected_marker
+                or (
+                    action == "CREATE"
+                    and payload_digest != identity["objective_digest"]
+                )
             ):
                 raise RuntimeRejection("CONTROLLER_GOAL_IDENTITY_INVALID", "/mutation/identity")
             if action == "CREATE":
@@ -10393,7 +12257,22 @@ class AdaptiveStateRuntime:
                 result,
                 mutation["ack_evidence_paths"],
             )
+            previous_generation_id = (
+                state.get("controller_goal", {}).get("current_generation_id")
+                if kind == "GOAL"
+                and record["identity"].get("action") == "CREATE"
+                and isinstance(state.get("controller_goal"), dict)
+                else None
+            )
             self._record_control_outbox_result(state, record, result)
+            if kind == "GOAL" and record["identity"].get("action") == "CREATE":
+                self._record_native_goal_generation_create(
+                    state,
+                    request,
+                    record,
+                    after_version,
+                    previous_generation_id=previous_generation_id,
+                )
             record["status"] = "ACKED"
             self._finish_route(state, claim, after_version)
             next_action = "NONE"
@@ -10406,6 +12285,157 @@ class AdaptiveStateRuntime:
                 "outbox_status": record["status"],
             },
         }
+
+    def _record_native_goal_generation_create(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        record: dict[str, Any],
+        after_version: int,
+        *,
+        previous_generation_id: str | None,
+    ) -> None:
+        if (
+            state.get("native_goal_generation_contract_version") != 1
+            or state.get("native_goal_policy", "required") != "required"
+        ):
+            return
+        goal = state.get("controller_goal")
+        if not isinstance(goal, dict):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_STATE_INVALID",
+                "/controller_goal",
+            )
+        if (
+            record.get("status") != "SENT"
+            or len(record.get("sent_evidence_paths", [])) != 1
+            or len(record.get("ack_evidence_paths", [])) != 1
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_EVIDENCE_INVALID",
+                "/controller_goal_outbox",
+            )
+        create_path = record["sent_evidence_paths"][0]
+        ack_path = record["ack_evidence_paths"][0]
+        create_observation, create_digest = (
+            self._read_native_goal_canonical_json_artifact(
+                state,
+                create_path,
+                "/controller_goal_outbox/sent_evidence_paths",
+            )
+        )
+        ack_observation, ack_digest = self._native_goal_observation_artifact(
+            request,
+            ack_path,
+        )
+        native_result = create_observation.get("result")
+        native_goal = (
+            native_result.get("goal")
+            if isinstance(native_result, dict)
+            else None
+        )
+        objective = (
+            native_goal.get("objective")
+            if isinstance(native_goal, dict)
+            else None
+        )
+        if (
+            create_observation.get("observation_kind")
+            != "CODEX_TOOL_RESULT"
+            or create_observation.get("outbox_kind") != "GOAL"
+            or create_observation.get("outbox_id") != record["outbox_id"]
+            or create_observation.get("payload_digest")
+            != record["payload_digest"]
+            or create_observation.get("target_id") != record["target_id"]
+            or not isinstance(native_goal, dict)
+            or not isinstance(objective, str)
+            or not objective
+            or objective.endswith("\n")
+            or "\n" not in objective
+            or native_goal.get("threadId") != goal["goal_id"]
+            or native_goal.get("status") != "active"
+            or not isinstance(native_goal.get("createdAt"), int)
+            or native_goal["createdAt"] <= 0
+            or not isinstance(native_goal.get("updatedAt"), int)
+            or native_goal["updatedAt"] < native_goal["createdAt"]
+            or (
+                native_goal.get("tokensUsed") is not None
+                and (
+                    not isinstance(native_goal["tokensUsed"], int)
+                    or isinstance(native_goal["tokensUsed"], bool)
+                    or native_goal["tokensUsed"] < 0
+                )
+            )
+            or (
+                native_goal.get("timeUsedSeconds") is not None
+                and (
+                    not isinstance(native_goal["timeUsedSeconds"], int)
+                    or isinstance(native_goal["timeUsedSeconds"], bool)
+                    or native_goal["timeUsedSeconds"] < 0
+                )
+            )
+            or ack_observation.get("observation_kind")
+            != "CODEX_TOOL_RESULT"
+            or ack_observation.get("result") != goal
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_EVIDENCE_INVALID",
+                "/controller_goal_outbox",
+            )
+        objective_body, marker = objective.rsplit("\n", 1)
+        objective_digest = _bytes_digest(objective_body.encode("utf-8"))
+        if (
+            objective_digest != goal["objective_digest"]
+            or objective_digest != record["payload_digest"]
+            or objective_digest != record["identity"]["objective_digest"]
+            or marker != goal["marker"]
+            or marker != record["identity"]["marker"]
+            or goal["pack_digest"]
+            != state["controller_pack_identity"]["digest"]
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_EVIDENCE_INVALID",
+                "/controller_goal_outbox",
+            )
+        generation_id = self._native_goal_generation_id(
+            goal["goal_id"],
+            native_goal["createdAt"],
+            objective_digest,
+        )
+        ledger = state.setdefault("native_goal_generation_ledger", {})
+        if generation_id in ledger:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_GENERATION_IDENTITY_CONFLICT",
+                "/native_goal_generation_ledger",
+            )
+        previous = ledger.get(previous_generation_id)
+        if isinstance(previous, dict) and previous_generation_id != generation_id:
+            previous["status"] = "SUPERSEDED"
+            previous["superseded_by_generation_id"] = generation_id
+        ledger[generation_id] = {
+            "generation_id": generation_id,
+            "thread_id": goal["goal_id"],
+            "goal_id": goal["goal_id"],
+            "pack_digest": goal["pack_digest"],
+            "milestone_id": goal["milestone_id"],
+            "objective_digest": objective_digest,
+            "marker": marker,
+            "created_at": native_goal["createdAt"],
+            "last_seen_at": request["occurred_at"],
+            "status": "ACTIVE",
+            "loss_classification": None,
+            "create_observation_path": create_path,
+            "create_observation_digest": create_digest,
+            "ack_observation_path": ack_path,
+            "ack_observation_digest": ack_digest,
+            "usage": {
+                "tokens_used": native_goal.get("tokensUsed"),
+                "time_used_seconds": native_goal.get("timeUsedSeconds"),
+                "tokens_complete": native_goal.get("tokensUsed") is not None,
+            },
+            "superseded_by_generation_id": None,
+        }
+        goal["current_generation_id"] = generation_id
 
     @staticmethod
     def _require_control_outbox_observation(
@@ -10651,7 +12681,16 @@ class AdaptiveStateRuntime:
                 raise RuntimeRejection("CONTROLLER_GOAL_RESULT_INVALID", "/mutation/result/status")
             if identity["action"] == "CREATE":
                 state["controller_goal_resume_receipt"] = None
+            current_generation_id = (
+                state.get("controller_goal", {}).get("current_generation_id")
+                if identity["action"] == "UPDATE"
+                else None
+            )
             state["controller_goal"] = copy.deepcopy(result)
+            if current_generation_id is not None:
+                state["controller_goal"]["current_generation_id"] = (
+                    current_generation_id
+                )
 
     @staticmethod
     def _delegation_policy(state: dict[str, Any]) -> dict[str, Any]:

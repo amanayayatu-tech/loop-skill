@@ -1,0 +1,2061 @@
+from __future__ import annotations
+
+import hashlib
+import subprocess
+import sys
+
+from state_runtime_support import *  # noqa: F403
+
+from loop_architect.native_goal_observer import (  # noqa: E402
+    NativeGoalObservationError,
+    observe_native_goal_rollout,
+    write_observation,
+)
+
+
+T5 = "2026-01-01T02:00:00Z"
+
+
+class NativeGoalRolloutFixture:
+    def __init__(self, root: Path, thread_id: str = "controller-1") -> None:
+        self.root = root
+        self.thread_id = thread_id
+        self.path = root / f"rollout-{thread_id}.jsonl"
+        self.call_counter = 0
+        self._append(
+            {
+                "timestamp": T0,
+                "type": "session_meta",
+                "payload": {"id": thread_id},
+            }
+        )
+
+    def _append(self, event: dict[str, Any]) -> None:
+        payload = json.dumps(
+            event,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.path.open("a", encoding="utf-8", newline="") as handle:
+            handle.write(payload + "\n")
+
+    @staticmethod
+    def _tool_output(result: dict[str, Any]) -> list[dict[str, str]]:
+        return [
+            {"type": "input_text", "text": "Script completed"},
+            {
+                "type": "input_text",
+                "text": json.dumps(
+                    result,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            },
+        ]
+
+    def add_get_goal(
+        self,
+        turn_id: str,
+        goal: dict[str, Any] | None,
+    ) -> str:
+        self.call_counter += 1
+        call_id = f"call-get-{self.call_counter}"
+        self._append(
+            {
+                "timestamp": T1,
+                "type": "event_msg",
+                "payload": {"type": "task_started", "turn_id": turn_id},
+            }
+        )
+        self._append(
+            {
+                "timestamp": T1,
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": call_id,
+                    "status": "completed",
+                    "input": (
+                        "const result = await tools.get_goal({});\n"
+                        "text(JSON.stringify(result));"
+                    ),
+                },
+            }
+        )
+        self._append(
+            {
+                "timestamp": T1,
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": call_id,
+                    "output": self._tool_output(
+                        {
+                            "goal": goal,
+                            "remainingTokens": None,
+                            "completionBudgetReport": None,
+                        }
+                    ),
+                },
+            }
+        )
+        self._append(
+            {
+                "timestamp": T1,
+                "type": "event_msg",
+                "payload": {"type": "task_complete", "turn_id": turn_id},
+            }
+        )
+        return call_id
+
+    def add_create_goal(
+        self,
+        turn_id: str,
+        objective: str,
+        goal: dict[str, Any],
+        *,
+        include_output: bool = True,
+        ambiguous_source: bool = False,
+    ) -> str:
+        self.call_counter += 1
+        call_id = f"call-create-{self.call_counter}"
+        arguments = json.dumps(
+            {"objective": objective},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        source = (
+            f"const result = await tools.create_goal({arguments});\n"
+            "text(JSON.stringify(result));"
+        )
+        if ambiguous_source:
+            source = f"const fake = 'tools.create_goal';\n{source}"
+        self._append(
+            {
+                "timestamp": T3,
+                "type": "event_msg",
+                "payload": {"type": "task_started", "turn_id": turn_id},
+            }
+        )
+        self._append(
+            {
+                "timestamp": T3,
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": call_id,
+                    "status": "completed",
+                    "input": source,
+                },
+            }
+        )
+        if include_output:
+            self._append(
+                {
+                    "timestamp": T3,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": call_id,
+                        "output": self._tool_output(
+                            {
+                                "goal": goal,
+                                "remainingTokens": None,
+                                "completionBudgetReport": None,
+                            }
+                        ),
+                    },
+                }
+            )
+        self._append(
+            {
+                "timestamp": T3,
+                "type": "event_msg",
+                "payload": {"type": "task_complete", "turn_id": turn_id},
+            }
+        )
+        return call_id
+
+    def observation_artifact(
+        self,
+        *,
+        root: Path,
+        stem: str,
+        mode: str,
+        observed_at: str,
+        scan_start_offset: int = 0,
+        expected_objective_digest: str | None = None,
+        expected_objective_bytes_digest: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        observation = observe_native_goal_rollout(
+            rollout_path=self.path,
+            controller_thread_id=self.thread_id,
+            mode=mode,
+            scan_start_offset=scan_start_offset,
+            expected_objective_digest=expected_objective_digest,
+            expected_objective_bytes_digest=expected_objective_bytes_digest,
+            observed_at=observed_at,
+            trusted_rollout_roots=(self.root.resolve(),),
+        )
+        relative_path = f".codex-loop/reports/{stem}.json"
+        path, observation_digest = write_observation(
+            root=root,
+            relative_path=relative_path,
+            observation=observation,
+        )
+        content = path.read_text(encoding="utf-8")
+        return observation, {
+            "path": relative_path,
+            "content": content,
+            "digest": observation_digest,
+            "media_type": "application/json",
+        }
+
+
+class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
+    @staticmethod
+    def _rewrite_as_legacy_with_real_create_receipt(
+        harness: Harness,
+        *,
+        created_at: int = 100,
+    ) -> tuple[dict[str, Any], str]:
+        state = harness.state()
+        goal = copy.deepcopy(state["controller_goal"])
+        assert isinstance(goal, dict)
+        objective = f"goal-objective:{goal['milestone_id']}\n{goal['marker']}"
+        create_observation = {
+            "observation_kind": "CODEX_TOOL_RESULT",
+            "outbox_id": "legacy-native-goal-create",
+            "outbox_kind": "GOAL",
+            "payload_digest": goal["objective_digest"],
+            "result": {
+                "completionBudgetReport": None,
+                "goal": {
+                    "createdAt": created_at,
+                    "objective": objective,
+                    "status": "active",
+                    "threadId": "controller-1",
+                    "timeUsedSeconds": 17,
+                    "tokensUsed": 41,
+                    "updatedAt": created_at,
+                },
+                "remainingTokens": None,
+            },
+            "target_id": "controller-1",
+        }
+        content = json.dumps(
+            create_observation,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        artifact = read_evidence_artifact(
+            "legacy-native-goal-create-result", content
+        )
+        target = harness.root / artifact["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        state["artifact_ledger"][artifact["path"]] = {
+            "path": artifact["path"],
+            "digest": artifact["digest"],
+            "media_type": "application/json",
+            "archived_state_version": state["state_version"],
+        }
+        outbox = state["controller_goal_outbox"][
+            "legacy-native-goal-create"
+        ]
+        outbox["payload_digest"] = goal["objective_digest"]
+        outbox["sent_evidence_paths"] = [artifact["path"]]
+        state.pop("native_goal_generation_contract_version", None)
+        state.pop("native_goal_generation_ledger", None)
+        state.pop("native_goal_generation_migration", None)
+        state.pop("native_goal_generation_migration_history", None)
+        goal = state["controller_goal"]
+        assert isinstance(goal, dict)
+        goal.pop("current_generation_id", None)
+        harness.runtime._refresh_status_projection_target(state)
+        harness.runtime.state_path.write_bytes(harness.runtime._render_state(state))
+        harness.runtime.goals_path.write_bytes(harness.runtime._render_goals(state))
+        harness.runtime._write_status_projection_locked(state)
+        dashboard_bytes = harness.runtime._render_dashboard(state)
+        if dashboard_bytes is not None:
+            harness.runtime.dashboard_path.write_bytes(dashboard_bytes)
+        return artifact, objective
+
+    @staticmethod
+    def _pause(harness: Harness) -> None:
+        steering_id = "native-generation-pause"
+        recorded = harness.apply(
+            {
+                "type": "RECORD_STEERING",
+                "steering_id": steering_id,
+                "steering_type": "PAUSE",
+                "normalized_digest": digest(steering_id),
+                "identity_algorithm": "message-item-v1",
+                "message_item_id": "native-generation-pause-message",
+                "summary": "pause for native Goal generation recovery",
+                "classification_reason": "generation migration safe point",
+            }
+        )
+        assert recorded["ok"], recorded
+        paused = harness.apply(
+            {
+                "type": "SET_RUN_CONTROL",
+                "steering_id": steering_id,
+                "requested_status": "PAUSE",
+                "reason": "native Goal generation recovery",
+            }
+        )
+        assert paused["ok"], paused
+
+    @staticmethod
+    def _authorize(harness: Harness) -> tuple[str, str]:
+        authorization_id = "native-goal-generation-recovery-authorization"
+        authorization_digest = digest(
+            "explicit generation recovery authorization"
+        )
+        recorded = harness.apply(
+            {
+                "type": "RECORD_STEERING",
+                "steering_id": authorization_id,
+                "steering_type": "CORRECTION",
+                "normalized_digest": authorization_digest,
+                "identity_algorithm": "message-item-v1",
+                "message_item_id": "native-goal-generation-authorization-message",
+                "summary": "authorize one exact same-thread native Goal generation",
+                "classification_reason": (
+                    "NATIVE_GOAL_GENERATION_RECOVERY_AUTHORIZED"
+                ),
+            }
+        )
+        assert recorded["ok"], recorded
+        resolved = harness.apply(
+            {
+                "type": "RESOLVE_STEERING",
+                "steering_id": authorization_id,
+                "resolution_status": "APPLIED",
+                "resolution": "one exact native Goal generation",
+                "next_action_code": "NONE",
+            }
+        )
+        assert resolved["ok"], resolved
+        return authorization_id, authorization_digest
+
+    def _fixture(self, root: Path) -> dict[str, Any]:
+        harness = Harness(root)
+        initialized, _ = harness.initialize()
+        self.assertTrue(initialized["ok"], initialized)
+        harness.ensure_all_roles()
+        harness.ensure_heartbeat()
+        harness.register_control_result(
+            "GOAL",
+            "legacy-native-goal-create",
+            "controller-1",
+            {"action": "CREATE", "milestone_id": "m1"},
+            {"goal_id": "controller-1", "status": "ACTIVE"},
+        )
+        create_artifact, objective = (
+            self._rewrite_as_legacy_with_real_create_receipt(harness)
+        )
+        legacy_goal_outbox = copy.deepcopy(
+            harness.state()["controller_goal_outbox"][
+                "legacy-native-goal-create"
+            ]
+        )
+        legacy_heartbeat_outbox = copy.deepcopy(
+            harness.state()["automation_outbox"]["heartbeat-create-1"]
+        )
+        self._pause(harness)
+        migration = harness.prepare_pack_migration(
+            content="# v3.2.7 native Goal recovery test pack",
+            target_prompt="Resolve canonical Pack path and remain paused.",
+            migration_id="pack-to-v327",
+        )
+        self.assertTrue(migration["response"]["ok"], migration["response"])
+        migrated = harness.commit_pack_migration(migration)
+        self.assertTrue(migrated["ok"], migrated)
+        baseline_state = harness.state()
+        baseline_id = baseline_state["controller_goal"]["current_generation_id"]
+        self.assertTrue(baseline_id.startswith("ngen-"))
+        authorization_id, authorization_digest = self._authorize(harness)
+        rollout = NativeGoalRolloutFixture(root)
+        rollout.add_get_goal("null-turn-one", None)
+        _, null_one = rollout.observation_artifact(
+            root=root,
+            stem="native-goal-null-one",
+            mode="GET_GOAL",
+            observed_at=T1,
+        )
+        rollout.add_get_goal("null-turn-two", None)
+        _, null_two = rollout.observation_artifact(
+            root=root,
+            stem="native-goal-null-two",
+            mode="GET_GOAL",
+            observed_at=T2,
+        )
+        return {
+            "harness": harness,
+            "rollout": rollout,
+            "objective": objective,
+            "create_artifact": create_artifact,
+            "legacy_goal_outbox": legacy_goal_outbox,
+            "legacy_heartbeat_outbox": legacy_heartbeat_outbox,
+            "null_artifacts": [null_one, null_two],
+            "authorization_id": authorization_id,
+            "authorization_digest": authorization_digest,
+            "migration_id": "native-goal-generation-migration-1",
+        }
+
+    def _heartbeat_artifact(
+        self,
+        harness: Harness,
+        *,
+        stem: str,
+        observed_at: str,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        identity = harness.state()["heartbeat_prompt_identity"]
+        return harness.heartbeat_observation_artifact(
+            prompt_digest=identity["prompt_digest"],
+            status="PAUSED",
+            stem=stem,
+            observed_at=observed_at,
+        )
+
+    def _acquire_recovery(
+        self,
+        fixture: dict[str, Any],
+        *,
+        scope: str,
+        turn_id: str,
+        observed_at: str,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        request, heartbeat_artifact = self._recovery_acquire_request(
+            fixture,
+            scope=scope,
+            turn_id=turn_id,
+            observed_at=observed_at,
+        )
+        response = fixture["harness"].runtime.apply(
+            request,
+            trusted_turn_metadata=trusted_metadata_for_request(
+                request, turn_id=turn_id
+            ),
+        )
+        return response, heartbeat_artifact
+
+    def _recovery_acquire_request(
+        self,
+        fixture: dict[str, Any],
+        *,
+        scope: str,
+        turn_id: str,
+        observed_at: str,
+        state_writer_thread_id: str = "state-writer-1",
+        authorization_steering_id: str | None = None,
+        authorization_digest: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        harness: Harness = fixture["harness"]
+        heartbeat, heartbeat_artifact = self._heartbeat_artifact(
+            harness,
+            stem=f"{scope.lower()}-{turn_id}",
+            observed_at=observed_at,
+        )
+        lease_expiry = {
+            T3: "2026-01-01T00:04:00Z",
+            T4: "2026-01-01T01:04:00Z",
+            "2026-01-01T01:02:00Z": "2026-01-01T01:04:00Z",
+        }[observed_at]
+        mutation = {
+            "type": "ACQUIRE_LEASE",
+            "routing_turn_id": f"route-{turn_id}",
+            "lease_id": f"lease-{turn_id}",
+            "owner_kind": "GOAL_TURN",
+            "owner_identity": "controller-1",
+            "observed_at": observed_at,
+            "expires_at": lease_expiry,
+            "controller_turn_id": turn_id,
+            "recovery_scope": scope,
+            "migration_id": fixture["migration_id"],
+            "state_writer_thread_id": state_writer_thread_id,
+            "controller_pack_digest": harness.state()[
+                "controller_pack_identity"
+            ]["digest"],
+            "authorization_steering_id": (
+                authorization_steering_id or fixture["authorization_id"]
+            ),
+            "authorization_digest": (
+                authorization_digest or fixture["authorization_digest"]
+            ),
+            "heartbeat_observation": heartbeat,
+            "automation_observation_path": heartbeat_artifact["path"],
+            "automation_observation_digest": heartbeat_artifact["digest"],
+        }
+        request = harness.make_request(
+            mutation,
+            evidence_paths=[heartbeat_artifact["path"]],
+            artifacts=[heartbeat_artifact],
+        )
+        request["occurred_at"] = observed_at
+        return request, heartbeat_artifact
+
+    @staticmethod
+    def _state_writer_apply(
+        harness: Harness,
+        mutation: dict[str, Any],
+        *,
+        occurred_at: str,
+        artifacts: list[dict[str, str]],
+        expected: int | None = None,
+        runtime: AdaptiveStateRuntime | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        request = harness.make_request(
+            mutation,
+            expected=expected,
+            evidence_paths=[artifact["path"] for artifact in artifacts],
+            artifacts=artifacts,
+        )
+        request["thread_id"] = "state-writer-1"
+        request["actor"] = "STATE_WRITER"
+        request["occurred_at"] = occurred_at
+        return (runtime or harness.runtime).apply(request), request
+
+    def _prepare_request(
+        self,
+        fixture: dict[str, Any],
+    ) -> dict[str, Any]:
+        harness: Harness = fixture["harness"]
+        acquired, _ = self._acquire_recovery(
+            fixture,
+            scope="NATIVE_GOAL_GENERATION_PREPARE",
+            turn_id="prepare-turn-a",
+            observed_at=T3,
+        )
+        self.assertTrue(acquired["ok"], acquired)
+        claim = acquired["result"]["lease_claim"]
+        _, heartbeat_artifact = self._heartbeat_artifact(
+            harness,
+            stem="state-writer-prepare-heartbeat",
+            observed_at=T3,
+        )
+        heartbeat = json.loads(heartbeat_artifact["content"])
+        mutation = {
+            "type": "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+            "lease_claim": claim,
+            "migration_id": fixture["migration_id"],
+            "target_controller_thread_id": "controller-1",
+            "null_observation_paths": [
+                artifact["path"] for artifact in fixture["null_artifacts"]
+            ],
+            "heartbeat_observation": heartbeat,
+            "automation_observation_path": heartbeat_artifact["path"],
+            "automation_observation_digest": heartbeat_artifact["digest"],
+            "create_outbox_id": "native-goal-generation-create-1",
+            "expires_at": T5,
+            "observed_at": T3,
+        }
+        request = harness.make_request(
+            mutation,
+            evidence_paths=[
+                *(item["path"] for item in fixture["null_artifacts"]),
+                heartbeat_artifact["path"],
+            ],
+            artifacts=[*fixture["null_artifacts"], heartbeat_artifact],
+        )
+        request["thread_id"] = "state-writer-1"
+        request["actor"] = "STATE_WRITER"
+        request["occurred_at"] = T3
+        return request
+
+    def _prepare(self, fixture: dict[str, Any]) -> dict[str, Any]:
+        request = self._prepare_request(fixture)
+        response = fixture["harness"].runtime.apply(request)
+        self.assertTrue(response["ok"], response)
+        return response
+
+    def _active_goal(
+        self,
+        fixture: dict[str, Any],
+        created_at: int = 200,
+        *,
+        objective: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "createdAt": created_at,
+            "objective": objective or fixture["objective"],
+            "status": "active",
+            "threadId": "controller-1",
+            "timeUsedSeconds": 0,
+            "tokensUsed": 0,
+            "updatedAt": created_at,
+        }
+
+    def _commit(
+        self,
+        fixture: dict[str, Any],
+        *,
+        lost_stdout: bool = False,
+        create_count: int = 1,
+        phase_b_turn_id: str = "phase-b-create-turn",
+        commit_turn_id: str = "commit-turn-c",
+        created_at: int = 200,
+        objective: str | None = None,
+        runtime: AdaptiveStateRuntime | None = None,
+    ) -> dict[str, Any]:
+        harness: Harness = fixture["harness"]
+        prepared = harness.state()["native_goal_generation_migration"]
+        outbox = prepared["create_outbox"]
+        goal = self._active_goal(
+            fixture,
+            created_at,
+            objective=objective,
+        )
+        for index in range(create_count):
+            fixture["rollout"].add_create_goal(
+                (
+                    phase_b_turn_id
+                    if index == 0
+                    else f"{phase_b_turn_id}-{index + 1}"
+                ),
+                goal["objective"],
+                goal,
+                include_output=not lost_stdout,
+            )
+        _, rollout_artifact = fixture["rollout"].observation_artifact(
+            root=harness.root,
+            stem="native-goal-create-rollout",
+            mode="CREATE_GOAL",
+            observed_at=T4,
+            scan_start_offset=outbox["prepare_high_watermark"],
+            expected_objective_digest=outbox["payload_digest"],
+            expected_objective_bytes_digest=outbox[
+                "objective_bytes_digest"
+            ],
+        )
+        fixture["rollout"].add_get_goal(commit_turn_id, goal)
+        _, goal_artifact = fixture["rollout"].observation_artifact(
+            root=harness.root,
+            stem="native-goal-active-readback",
+            mode="GET_GOAL",
+            observed_at=T4,
+            scan_start_offset=outbox["prepare_high_watermark"],
+        )
+        acquired, _ = self._acquire_recovery(
+            fixture,
+            scope="NATIVE_GOAL_GENERATION_COMMIT",
+            turn_id=commit_turn_id,
+            observed_at=T4,
+        )
+        self.assertTrue(acquired["ok"], acquired)
+        _, heartbeat_artifact = self._heartbeat_artifact(
+            harness,
+            stem="state-writer-commit-heartbeat",
+            observed_at=T4,
+        )
+        mutation = {
+            "type": "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+            "lease_claim": acquired["result"]["lease_claim"],
+            "migration_id": fixture["migration_id"],
+            "goal_observation_path": goal_artifact["path"],
+            "rollout_observation_path": rollout_artifact["path"],
+            "heartbeat_observation": json.loads(
+                heartbeat_artifact["content"]
+            ),
+            "automation_observation_path": heartbeat_artifact["path"],
+            "automation_observation_digest": heartbeat_artifact["digest"],
+            "observed_at": T4,
+        }
+        response, _ = self._state_writer_apply(
+            harness,
+            mutation,
+            occurred_at=T4,
+            artifacts=[
+                rollout_artifact,
+                goal_artifact,
+                heartbeat_artifact,
+            ],
+            runtime=runtime,
+        )
+        return response
+
+    def _rollback(
+        self,
+        fixture: dict[str, Any],
+        *,
+        add_started_create: bool = False,
+        runtime: AdaptiveStateRuntime | None = None,
+        return_request: bool = False,
+    ) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]]:
+        harness: Harness = fixture["harness"]
+        prepared = harness.state()["native_goal_generation_migration"]
+        outbox = prepared["create_outbox"]
+        if add_started_create:
+            fixture["rollout"].add_create_goal(
+                "rollback-started-create",
+                fixture["objective"],
+                self._active_goal(fixture),
+                include_output=False,
+            )
+        _, rollout_artifact = fixture["rollout"].observation_artifact(
+            root=harness.root,
+            stem="native-goal-rollback-rollout",
+            mode="CREATE_GOAL",
+            observed_at="2026-01-01T01:02:00Z",
+            scan_start_offset=outbox["prepare_high_watermark"],
+            expected_objective_digest=outbox["payload_digest"],
+            expected_objective_bytes_digest=outbox[
+                "objective_bytes_digest"
+            ],
+        )
+        fixture["rollout"].add_get_goal("rollback-null-one", None)
+        _, null_one = fixture["rollout"].observation_artifact(
+            root=harness.root,
+            stem="native-goal-rollback-null-one",
+            mode="GET_GOAL",
+            observed_at="2026-01-01T01:00:30Z",
+            scan_start_offset=outbox["prepare_high_watermark"],
+        )
+        fixture["rollout"].add_get_goal("rollback-null-two", None)
+        _, null_two = fixture["rollout"].observation_artifact(
+            root=harness.root,
+            stem="native-goal-rollback-null-two",
+            mode="GET_GOAL",
+            observed_at="2026-01-01T01:01:00Z",
+            scan_start_offset=outbox["prepare_high_watermark"],
+        )
+        acquired, _ = self._acquire_recovery(
+            fixture,
+            scope="NATIVE_GOAL_GENERATION_ROLLBACK",
+            turn_id="rollback-turn-c",
+            observed_at="2026-01-01T01:02:00Z",
+        )
+        self.assertTrue(acquired["ok"], acquired)
+        _, heartbeat_artifact = self._heartbeat_artifact(
+            harness,
+            stem="state-writer-rollback-success-heartbeat",
+            observed_at="2026-01-01T01:02:00Z",
+        )
+        mutation = {
+            "type": "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+            "lease_claim": acquired["result"]["lease_claim"],
+            "migration_id": fixture["migration_id"],
+            "null_observation_paths": [null_one["path"], null_two["path"]],
+            "rollout_observation_path": rollout_artifact["path"],
+            "heartbeat_observation": json.loads(
+                heartbeat_artifact["content"]
+            ),
+            "automation_observation_path": heartbeat_artifact["path"],
+            "automation_observation_digest": heartbeat_artifact["digest"],
+            "rollback_reason": "stable evidence proves create was not invoked",
+            "observed_at": "2026-01-01T01:02:00Z",
+        }
+        response, request = self._state_writer_apply(
+            harness,
+            mutation,
+            occurred_at="2026-01-01T01:02:00Z",
+            artifacts=[
+                rollout_artifact,
+                null_one,
+                null_two,
+                heartbeat_artifact,
+            ],
+            runtime=runtime,
+        )
+        return (response, request) if return_request else response
+
+    def test_pack_migration_derives_legacy_generation_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            state = fixture["harness"].state()
+            generation_id = state["controller_goal"]["current_generation_id"]
+            generation = state["native_goal_generation_ledger"][generation_id]
+            self.assertEqual(generation["created_at"], 100)
+            self.assertEqual(generation["usage"]["tokens_used"], 41)
+            self.assertEqual(
+                generation["create_observation_path"],
+                fixture["create_artifact"]["path"],
+            )
+            expected = hashlib.sha256(
+                b"native-goal-generation-v1\0"
+                + b"controller-1\0"
+                + b"100\0"
+                + generation["objective_digest"].encode("utf-8")
+            ).hexdigest()[:32]
+            self.assertEqual(generation_id, f"ngen-{expected}")
+            goal_outbox = state["controller_goal_outbox"][
+                "legacy-native-goal-create"
+            ]
+            self.assertEqual(goal_outbox, fixture["legacy_goal_outbox"])
+            heartbeat_outbox = state["automation_outbox"][
+                "heartbeat-create-1"
+            ]
+            for field in (
+                "outbox_id",
+                "identity",
+                "sent_evidence_paths",
+                "ack_evidence_paths",
+            ):
+                self.assertEqual(
+                    heartbeat_outbox[field],
+                    fixture["legacy_heartbeat_outbox"][field],
+                )
+
+    def test_ordinary_native_goal_create_derives_real_generation_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            self.assertTrue(harness.initialize()[0]["ok"])
+            harness.register_control_result(
+                "GOAL",
+                "ordinary-native-goal-create",
+                "controller-1",
+                {"action": "CREATE", "milestone_id": "m1"},
+                {"goal_id": "controller-1", "status": "ACTIVE"},
+            )
+            state = harness.state()
+            generation_id = state["controller_goal"][
+                "current_generation_id"
+            ]
+            generation = state["native_goal_generation_ledger"][
+                generation_id
+            ]
+            self.assertEqual(generation["created_at"], 100)
+            self.assertEqual(generation["usage"]["tokens_used"], 0)
+            self.assertTrue(generation["usage"]["tokens_complete"])
+            self.assertNotEqual(
+                generation["create_observation_path"],
+                generation["ack_observation_path"],
+            )
+            for path_field, digest_field in (
+                ("create_observation_path", "create_observation_digest"),
+                ("ack_observation_path", "ack_observation_digest"),
+            ):
+                payload = (root / generation[path_field]).read_bytes()
+                self.assertEqual(
+                    "sha256:" + hashlib.sha256(payload).hexdigest(),
+                    generation[digest_field],
+                )
+
+    def test_prepare_rejects_caller_supplied_generation_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self._fixture(root)
+            acquired, heartbeat_artifact = self._acquire_recovery(
+                fixture,
+                scope="NATIVE_GOAL_GENERATION_PREPARE",
+                turn_id="caller-generation-turn",
+                observed_at=T3,
+            )
+            self.assertTrue(acquired["ok"], acquired)
+            mutation = {
+                "type": "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+                "lease_claim": acquired["result"]["lease_claim"],
+                "migration_id": fixture["migration_id"],
+                "target_controller_thread_id": "controller-1",
+                "source_generation_id": "caller-chosen-source",
+                "null_observation_paths": [
+                    item["path"] for item in fixture["null_artifacts"]
+                ],
+                "heartbeat_observation": json.loads(
+                    heartbeat_artifact["content"]
+                ),
+                "automation_observation_path": heartbeat_artifact["path"],
+                "automation_observation_digest": heartbeat_artifact["digest"],
+                "create_outbox_id": "caller-generation-outbox",
+                "expires_at": T5,
+                "observed_at": T3,
+            }
+            before = persisted_snapshot(root)
+            rejected, _ = self._state_writer_apply(
+                fixture["harness"],
+                mutation,
+                occurred_at=T3,
+                artifacts=[*fixture["null_artifacts"], heartbeat_artifact],
+            )
+            self.assertEqual(rejected["status"], "REQUEST_SCHEMA_INVALID")
+            self.assertEqual(persisted_snapshot(root), before)
+
+    def test_pack_migration_baseline_missing_receipt_is_zero_effect(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            self.assertTrue(harness.initialize()[0]["ok"])
+            harness.ensure_all_roles()
+            harness.ensure_heartbeat()
+            harness.register_control_result(
+                "GOAL",
+                "legacy-native-goal-create",
+                "controller-1",
+                {"action": "CREATE", "milestone_id": "m1"},
+                {"goal_id": "controller-1", "status": "ACTIVE"},
+            )
+            self._rewrite_as_legacy_with_real_create_receipt(harness)
+            state = harness.state()
+            sent_path = state["controller_goal_outbox"][
+                "legacy-native-goal-create"
+            ]["sent_evidence_paths"][0]
+            (root / sent_path).unlink()
+            self._pause(harness)
+            prepared = harness.prepare_pack_migration(
+                content="# target pack",
+                target_prompt="target prompt",
+                migration_id="missing-baseline-receipt",
+            )
+            self.assertTrue(prepared["response"]["ok"])
+            before = persisted_snapshot(root)
+            rejected = harness.commit_pack_migration(prepared)
+            self.assertEqual(
+                rejected["status"],
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+            )
+            self.assertEqual(persisted_snapshot(root), before)
+
+    def test_pack_migration_baseline_digest_mismatch_is_zero_effect(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            self.assertTrue(harness.initialize()[0]["ok"])
+            harness.ensure_all_roles()
+            harness.ensure_heartbeat()
+            harness.register_control_result(
+                "GOAL",
+                "legacy-native-goal-create",
+                "controller-1",
+                {"action": "CREATE", "milestone_id": "m1"},
+                {"goal_id": "controller-1", "status": "ACTIVE"},
+            )
+            self._rewrite_as_legacy_with_real_create_receipt(harness)
+            state = harness.state()
+            sent_path = state["controller_goal_outbox"][
+                "legacy-native-goal-create"
+            ]["sent_evidence_paths"][0]
+            (root / sent_path).write_text("{}", encoding="utf-8")
+            self._pause(harness)
+            prepared = harness.prepare_pack_migration(
+                content="# target pack",
+                target_prompt="target prompt",
+                migration_id="mismatched-baseline-receipt",
+            )
+            self.assertTrue(prepared["response"]["ok"])
+            before = persisted_snapshot(root)
+            rejected = harness.commit_pack_migration(prepared)
+            self.assertEqual(
+                rejected["status"],
+                "NATIVE_GOAL_GENERATION_BASELINE_EVIDENCE_INVALID",
+            )
+            self.assertEqual(persisted_snapshot(root), before)
+
+    def test_regular_paused_lease_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            rejected = fixture["harness"].apply(
+                {
+                    "type": "ACQUIRE_LEASE",
+                    "routing_turn_id": "ordinary-paused-route",
+                    "lease_id": "ordinary-paused-lease",
+                    "owner_kind": "GOAL_TURN",
+                    "owner_identity": "controller-1",
+                    "observed_at": T3,
+                    "expires_at": T5,
+                    "controller_turn_id": "ordinary-paused-turn",
+                }
+            )
+            self.assertEqual(rejected["status"], "LOOP_PAUSED")
+
+    def test_recovery_lease_binds_state_writer_and_trusted_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self._fixture(root)
+            before = persisted_snapshot(root)
+            acquired, _ = self._acquire_recovery(
+                fixture,
+                scope="NATIVE_GOAL_GENERATION_PREPARE",
+                turn_id="prepare-turn-a",
+                observed_at=T3,
+            )
+            self.assertTrue(acquired["ok"], acquired)
+            self.assertEqual(
+                acquired["result"]["lease_claim"]["state_writer_thread_id"],
+                "state-writer-1",
+            )
+            self.assertNotEqual(persisted_snapshot(root), before)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self._fixture(root)
+            heartbeat, artifact = self._heartbeat_artifact(
+                fixture["harness"], stem="wrong-state-writer", observed_at=T3
+            )
+            mutation = {
+                "type": "ACQUIRE_LEASE",
+                "routing_turn_id": "route-wrong-writer",
+                "lease_id": "lease-wrong-writer",
+                "owner_kind": "GOAL_TURN",
+                "owner_identity": "controller-1",
+                "observed_at": T3,
+                "expires_at": T5,
+                "controller_turn_id": "turn-wrong-writer",
+                "recovery_scope": "NATIVE_GOAL_GENERATION_PREPARE",
+                "migration_id": fixture["migration_id"],
+                "state_writer_thread_id": "worker-1",
+                "controller_pack_digest": fixture["harness"].state()[
+                    "controller_pack_identity"
+                ]["digest"],
+                "authorization_steering_id": fixture["authorization_id"],
+                "authorization_digest": fixture["authorization_digest"],
+                "heartbeat_observation": heartbeat,
+                "automation_observation_path": artifact["path"],
+                "automation_observation_digest": artifact["digest"],
+            }
+            request = fixture["harness"].make_request(
+                mutation,
+                evidence_paths=[artifact["path"]],
+                artifacts=[artifact],
+            )
+            request["occurred_at"] = T3
+            before = persisted_snapshot(root)
+            rejected = fixture["harness"].runtime.apply(
+                request,
+                trusted_turn_metadata=trusted_metadata_for_request(request),
+            )
+            self.assertEqual(
+                rejected["status"],
+                "NATIVE_GOAL_GENERATION_STATE_WRITER_IDENTITY_INVALID",
+            )
+            self.assertEqual(persisted_snapshot(root), before)
+
+    def test_recovery_scope_authorization_and_metadata_fail_closed(self) -> None:
+        cases = (
+            ("invalid-scope", "NOT_A_RECOVERY_SCOPE"),
+            ("missing-authorization", "NATIVE_GOAL_GENERATION_PREPARE"),
+            ("wrong-turn-metadata", "NATIVE_GOAL_GENERATION_PREPARE"),
+        )
+        for case, scope in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fixture = self._fixture(root)
+                request, _ = self._recovery_acquire_request(
+                    fixture,
+                    scope=scope,
+                    turn_id=f"{case}-turn",
+                    observed_at=T3,
+                    authorization_steering_id=(
+                        "missing-authorization"
+                        if case == "missing-authorization"
+                        else None
+                    ),
+                    authorization_digest=(
+                        digest("missing-authorization")
+                        if case == "missing-authorization"
+                        else None
+                    ),
+                )
+                before = persisted_snapshot(root)
+                metadata_turn = (
+                    "different-real-turn"
+                    if case == "wrong-turn-metadata"
+                    else f"{case}-turn"
+                )
+                rejected = fixture["harness"].runtime.apply(
+                    request,
+                    trusted_turn_metadata=trusted_metadata_for_request(
+                        request,
+                        turn_id=metadata_turn,
+                    ),
+                )
+                expected = {
+                    "invalid-scope": "REQUEST_SCHEMA_INVALID",
+                    "missing-authorization": (
+                        "NATIVE_GOAL_GENERATION_AUTHORIZATION_INVALID"
+                    ),
+                    "wrong-turn-metadata": (
+                        "CONTROLLER_TURN_ATTESTATION_MISMATCH"
+                    ),
+                }[case]
+                self.assertEqual(rejected["status"], expected)
+                self.assertEqual(persisted_snapshot(root), before)
+
+    def test_recovery_lease_is_single_use_and_real_turn_is_single_route(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self._fixture(root)
+            self._prepare(fixture)
+            state = fixture["harness"].state()
+            self.assertIn(
+                "lease-prepare-turn-a",
+                state["consumed_controller_lease_ids"],
+            )
+            claim = {
+                "lease_epoch": state["lease_epoch_counter"],
+                "lease_id": "lease-prepare-turn-a",
+                "routing_turn_id": "route-prepare-turn-a",
+                "owner_kind": "GOAL_TURN",
+                "owner_identity": "controller-1",
+                "intended_transition": "ROUTE_ONE_TRANSITION",
+                "recovery_scope": "NATIVE_GOAL_GENERATION_PREPARE",
+                "migration_id": fixture["migration_id"],
+                "state_writer_thread_id": "state-writer-1",
+                "controller_pack_digest": state[
+                    "controller_pack_identity"
+                ]["digest"],
+                "authorization_steering_id": fixture["authorization_id"],
+                "authorization_digest": fixture["authorization_digest"],
+            }
+            before = persisted_snapshot(root)
+            stale = fixture["harness"].apply(
+                {
+                    "type": "RELEASE_LEASE",
+                    "lease_claim": claim,
+                    "observed_at": T3,
+                    "reason_code": "RECOVERY_LEASE_REPLAY",
+                }
+            )
+            self.assertEqual(
+                stale["status"], "STALE_OR_MISSING_CONTROLLER_LEASE"
+            )
+            self.assertEqual(persisted_snapshot(root), before)
+
+            request, _ = self._recovery_acquire_request(
+                fixture,
+                scope="NATIVE_GOAL_GENERATION_COMMIT",
+                turn_id="prepare-turn-a",
+                observed_at=T4,
+            )
+            second_route = fixture["harness"].runtime.apply(
+                request,
+                trusted_turn_metadata=trusted_metadata_for_request(
+                    request,
+                    turn_id="prepare-turn-a",
+                ),
+            )
+            self.assertEqual(
+                second_route["status"], "CONTROLLER_TURN_ALREADY_ROUTED"
+            )
+            self.assertEqual(persisted_snapshot(root), before)
+
+    def test_prepare_consumes_recovery_lease_and_authorizes_unused_outbox(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            self._prepare(fixture)
+            state = fixture["harness"].state()
+            prepared = state["native_goal_generation_migration"]
+            self.assertIsNone(state["controller_lease"])
+            self.assertEqual(prepared["status"], "PREPARED")
+            self.assertEqual(
+                prepared["create_outbox"]["status"], "AUTHORIZED_UNUSED"
+            )
+            self.assertEqual(
+                prepared["prepared_controller_turn_id"], "prepare-turn-a"
+            )
+
+    def test_prepare_replay_is_exact_identity_bound(self) -> None:
+        for wrong_paths in (False, True):
+            with self.subTest(wrong_paths=wrong_paths), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fixture = self._fixture(root)
+                self._prepare(fixture)
+                acquired, _ = self._acquire_recovery(
+                    fixture,
+                    scope="NATIVE_GOAL_GENERATION_PREPARE",
+                    turn_id=(
+                        "prepare-replay-wrong-turn"
+                        if wrong_paths
+                        else "prepare-replay-turn"
+                    ),
+                    observed_at=T4,
+                )
+                self.assertTrue(acquired["ok"], acquired)
+                _, heartbeat_artifact = self._heartbeat_artifact(
+                    fixture["harness"],
+                    stem=(
+                        "state-writer-prepare-replay-wrong-heartbeat"
+                        if wrong_paths
+                        else "state-writer-prepare-replay-heartbeat"
+                    ),
+                    observed_at=T4,
+                )
+                null_paths = [
+                    item["path"] for item in fixture["null_artifacts"]
+                ]
+                if wrong_paths:
+                    null_paths = list(reversed(null_paths))
+                mutation = {
+                    "type": "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+                    "lease_claim": acquired["result"]["lease_claim"],
+                    "migration_id": fixture["migration_id"],
+                    "target_controller_thread_id": "controller-1",
+                    "null_observation_paths": null_paths,
+                    "heartbeat_observation": json.loads(
+                        heartbeat_artifact["content"]
+                    ),
+                    "automation_observation_path": heartbeat_artifact["path"],
+                    "automation_observation_digest": heartbeat_artifact[
+                        "digest"
+                    ],
+                    "create_outbox_id": "native-goal-generation-create-1",
+                    "expires_at": T5,
+                    "observed_at": T4,
+                }
+                before = persisted_snapshot(root)
+                replay, _ = self._state_writer_apply(
+                    fixture["harness"],
+                    mutation,
+                    occurred_at=T4,
+                    artifacts=[
+                        *fixture["null_artifacts"],
+                        heartbeat_artifact,
+                    ],
+                )
+                if wrong_paths:
+                    self.assertEqual(
+                        replay["status"],
+                        "NATIVE_GOAL_GENERATION_PREPARE_REPLAY_IDENTITY_MISMATCH",
+                    )
+                    self.assertEqual(persisted_snapshot(root), before)
+                else:
+                    self.assertTrue(replay["ok"], replay)
+                    self.assertEqual(
+                        replay["operation_status"],
+                        "NATIVE_GOAL_GENERATION_MIGRATION_ALREADY_PREPARED",
+                    )
+                    state = fixture["harness"].state()
+                    self.assertIsNone(state["controller_lease"])
+                    self.assertEqual(
+                        len(state["native_goal_generation_ledger"]), 1
+                    )
+
+    def test_prepare_crash_recovery_and_cas_conflict_are_fail_closed(self) -> None:
+        for stage in (
+            "NATIVE_GOAL_GENERATION_PREPARED_PROJECTED",
+            "STATE_REPLACED",
+        ):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fixture = self._fixture(root)
+                request = self._prepare_request(fixture)
+                crashing = state_runtime_module.AdaptiveStateRuntime(
+                    root,
+                    crash_at=stage,
+                    native_goal_rollout_roots=(root.resolve(),),
+                )
+                with self.assertRaises(state_runtime_module.InjectedCrash):
+                    crashing.apply(copy.deepcopy(request))
+                recovered = state_runtime_module.AdaptiveStateRuntime(
+                    root,
+                    native_goal_rollout_roots=(root.resolve(),),
+                )
+                self.assertTrue(recovered.recover()["ok"])
+                replay = recovered.apply(copy.deepcopy(request))
+                self.assertTrue(replay["ok"], replay)
+                state = recovered.read_state()
+                assert state is not None
+                self.assertEqual(
+                    state["native_goal_generation_migration"]["status"],
+                    "PREPARED",
+                )
+                self.assertIsNone(state["controller_lease"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self._fixture(root)
+            request = self._prepare_request(fixture)
+            intervening = fixture["harness"].apply(
+                {
+                    "type": "RECORD_STEERING",
+                    "steering_id": "intervening-cas-steering",
+                    "steering_type": "CONSTRAINT",
+                    "normalized_digest": digest("intervening CAS write"),
+                    "identity_algorithm": "message-item-v1",
+                    "message_item_id": "intervening-cas-message",
+                    "summary": "force a stale State-Writer CAS",
+                    "classification_reason": "recovery CAS regression",
+                }
+            )
+            self.assertTrue(intervening["ok"], intervening)
+            before = persisted_snapshot(root)
+            stale = fixture["harness"].runtime.apply(request)
+            self.assertEqual(stale["status"], "STATE_VERSION_CONFLICT")
+            self.assertEqual(persisted_snapshot(root), before)
+            self.assertIsNone(
+                fixture["harness"].state()[
+                    "native_goal_generation_migration"
+                ]
+            )
+
+    def test_state_writer_without_recovery_lease_cannot_prepare(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            harness = fixture["harness"]
+            heartbeat, artifact = self._heartbeat_artifact(
+                harness, stem="no-lease-prepare", observed_at=T3
+            )
+            fake_claim = {
+                "lease_epoch": 999,
+                "lease_id": "missing-lease",
+                "routing_turn_id": "missing-route",
+                "owner_kind": "GOAL_TURN",
+                "owner_identity": "controller-1",
+                "intended_transition": "ROUTE_ONE_TRANSITION",
+                "recovery_scope": "NATIVE_GOAL_GENERATION_PREPARE",
+                "migration_id": fixture["migration_id"],
+                "state_writer_thread_id": "state-writer-1",
+                "controller_pack_digest": harness.state()[
+                    "controller_pack_identity"
+                ]["digest"],
+                "authorization_steering_id": fixture["authorization_id"],
+                "authorization_digest": fixture["authorization_digest"],
+            }
+            mutation = {
+                "type": "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+                "lease_claim": fake_claim,
+                "migration_id": fixture["migration_id"],
+                "target_controller_thread_id": "controller-1",
+                "null_observation_paths": [
+                    item["path"] for item in fixture["null_artifacts"]
+                ],
+                "heartbeat_observation": heartbeat,
+                "automation_observation_path": artifact["path"],
+                "automation_observation_digest": artifact["digest"],
+                "create_outbox_id": "unused-outbox",
+                "expires_at": T5,
+                "observed_at": T3,
+            }
+            rejected, _ = self._state_writer_apply(
+                harness,
+                mutation,
+                occurred_at=T3,
+                artifacts=[*fixture["null_artifacts"], artifact],
+            )
+            self.assertEqual(
+                rejected["status"], "STALE_OR_MISSING_CONTROLLER_LEASE"
+            )
+
+    def test_state_writer_without_scoped_lease_cannot_commit_or_rollback(self) -> None:
+        for scope, mutation_type in (
+            (
+                "NATIVE_GOAL_GENERATION_COMMIT",
+                "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+            ),
+            (
+                "NATIVE_GOAL_GENERATION_ROLLBACK",
+                "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+            ),
+        ):
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fixture = self._fixture(root)
+                self._prepare(fixture)
+                harness = fixture["harness"]
+                _, heartbeat_artifact = self._heartbeat_artifact(
+                    harness,
+                    stem=f"no-{scope.lower()}-heartbeat",
+                    observed_at=T4,
+                )
+                fake_claim = {
+                    "lease_epoch": 999,
+                    "lease_id": f"missing-{scope.lower()}-lease",
+                    "routing_turn_id": f"missing-{scope.lower()}-route",
+                    "owner_kind": "GOAL_TURN",
+                    "owner_identity": "controller-1",
+                    "intended_transition": "ROUTE_ONE_TRANSITION",
+                    "recovery_scope": scope,
+                    "migration_id": fixture["migration_id"],
+                    "state_writer_thread_id": "state-writer-1",
+                    "controller_pack_digest": harness.state()[
+                        "controller_pack_identity"
+                    ]["digest"],
+                    "authorization_steering_id": fixture[
+                        "authorization_id"
+                    ],
+                    "authorization_digest": fixture[
+                        "authorization_digest"
+                    ],
+                }
+                common = {
+                    "type": mutation_type,
+                    "lease_claim": fake_claim,
+                    "migration_id": fixture["migration_id"],
+                    "heartbeat_observation": json.loads(
+                        heartbeat_artifact["content"]
+                    ),
+                    "automation_observation_path": heartbeat_artifact["path"],
+                    "automation_observation_digest": heartbeat_artifact[
+                        "digest"
+                    ],
+                    "observed_at": T4,
+                }
+                if scope == "NATIVE_GOAL_GENERATION_COMMIT":
+                    common.update(
+                        {
+                            "goal_observation_path": fixture[
+                                "null_artifacts"
+                            ][-1]["path"],
+                            "rollout_observation_path": fixture[
+                                "null_artifacts"
+                            ][-1]["path"],
+                        }
+                    )
+                else:
+                    common.update(
+                        {
+                            "null_observation_paths": [
+                                item["path"]
+                                for item in fixture["null_artifacts"]
+                            ],
+                            "rollout_observation_path": fixture[
+                                "null_artifacts"
+                            ][-1]["path"],
+                            "rollback_reason": "negative lease test",
+                        }
+                    )
+                before = persisted_snapshot(root)
+                rejected, _ = self._state_writer_apply(
+                    harness,
+                    common,
+                    occurred_at=T4,
+                    artifacts=[
+                        *fixture["null_artifacts"],
+                        heartbeat_artifact,
+                    ],
+                )
+                self.assertEqual(
+                    rejected["status"], "STALE_OR_MISSING_CONTROLLER_LEASE"
+                )
+                self.assertEqual(persisted_snapshot(root), before)
+
+    def test_commit_completed_rollout_switches_generation_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            self._prepare(fixture)
+            before = fixture["harness"].state()
+            source_id = before["controller_goal"]["current_generation_id"]
+            committed = self._commit(fixture)
+            self.assertTrue(committed["ok"], committed)
+            state = fixture["harness"].state()
+            migration = state["native_goal_generation_migration"]
+            target_id = migration["target_generation_id"]
+            self.assertEqual(migration["status"], "COMMITTED")
+            self.assertEqual(state["controller_goal"]["current_generation_id"], target_id)
+            self.assertEqual(
+                state["native_goal_generation_ledger"][source_id]["status"],
+                "LOST_UPSTREAM",
+            )
+            self.assertEqual(
+                state["native_goal_generation_ledger"][target_id]["status"],
+                "ACTIVE",
+            )
+            self.assertIsNone(state["controller_lease"])
+
+    def test_commit_lost_stdout_adopts_active_readback_without_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            self._prepare(fixture)
+            committed = self._commit(fixture, lost_stdout=True)
+            self.assertTrue(committed["ok"], committed)
+            self.assertTrue(committed["result"]["lost_stdout_adopted"])
+            outbox = fixture["harness"].state()[
+                "native_goal_generation_migration"
+            ]["create_outbox"]
+            self.assertEqual(outbox["create_attempt_count"], 1)
+
+    def test_commit_rejects_zero_or_multiple_create_invocations(self) -> None:
+        for create_count in (0, 2):
+            with self.subTest(create_count=create_count), tempfile.TemporaryDirectory() as temporary:
+                fixture = self._fixture(Path(temporary))
+                self._prepare(fixture)
+                rejected = self._commit(
+                    fixture,
+                    create_count=create_count,
+                )
+                self.assertEqual(
+                    rejected["status"],
+                    "NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_INVALID",
+                )
+                migration = fixture["harness"].state()[
+                    "native_goal_generation_migration"
+                ]
+                self.assertEqual(migration["status"], "PREPARED")
+                self.assertEqual(
+                    migration["create_outbox"]["create_attempt_count"], 0
+                )
+
+    def test_commit_rejects_turn_objective_and_created_at_identity_drift(self) -> None:
+        cases = (
+            {"phase_b_turn_id": "prepare-turn-a"},
+            {"phase_b_turn_id": "commit-turn-c"},
+            {"objective": "different body\n[different marker]"},
+            {"created_at": 100},
+        )
+        for options in cases:
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as temporary:
+                fixture = self._fixture(Path(temporary))
+                self._prepare(fixture)
+                rejected = self._commit(fixture, **options)
+                self.assertIn(
+                    rejected["status"],
+                    {
+                        "NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_INVALID",
+                        "NATIVE_GOAL_GENERATION_READBACK_IDENTITY_MISMATCH",
+                    },
+                )
+                self.assertEqual(
+                    fixture["harness"].state()[
+                        "native_goal_generation_migration"
+                    ]["status"],
+                    "PREPARED",
+                )
+
+    def test_commit_replay_is_identity_bound_and_keeps_loop_paused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self._fixture(root)
+            self._prepare(fixture)
+            committed = self._commit(fixture)
+            self.assertTrue(committed["ok"], committed)
+            state = fixture["harness"].state()
+            self.assertEqual(
+                state["run_control"]["status"], "PAUSED_AT_SAFE_POINT"
+            )
+            self.assertEqual(
+                state["heartbeat_live_observation"]["status"], "PAUSED"
+            )
+            prepared = state["native_goal_generation_migration"]
+            target = state["native_goal_generation_ledger"][
+                prepared["target_generation_id"]
+            ]
+            acquired, _ = self._acquire_recovery(
+                fixture,
+                scope="NATIVE_GOAL_GENERATION_COMMIT",
+                turn_id="commit-replay-turn",
+                observed_at="2026-01-01T01:02:00Z",
+            )
+            self.assertTrue(acquired["ok"], acquired)
+            _, heartbeat_artifact = self._heartbeat_artifact(
+                fixture["harness"],
+                stem="state-writer-commit-replay-heartbeat",
+                observed_at="2026-01-01T01:02:00Z",
+            )
+            mutation = {
+                "type": "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+                "lease_claim": acquired["result"]["lease_claim"],
+                "migration_id": fixture["migration_id"],
+                "goal_observation_path": target["ack_observation_path"],
+                "rollout_observation_path": prepared["create_outbox"][
+                    "result_observation_path"
+                ],
+                "heartbeat_observation": json.loads(
+                    heartbeat_artifact["content"]
+                ),
+                "automation_observation_path": heartbeat_artifact["path"],
+                "automation_observation_digest": heartbeat_artifact["digest"],
+                "observed_at": "2026-01-01T01:02:00Z",
+            }
+            replayed, _ = self._state_writer_apply(
+                fixture["harness"],
+                mutation,
+                occurred_at="2026-01-01T01:02:00Z",
+                artifacts=[heartbeat_artifact],
+            )
+            self.assertTrue(replayed["ok"], replayed)
+            self.assertEqual(
+                replayed["operation_status"],
+                "NATIVE_GOAL_GENERATION_MIGRATION_ALREADY_COMMITTED",
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self._fixture(root)
+            self._prepare(fixture)
+            self.assertTrue(self._commit(fixture)["ok"])
+            acquired, _ = self._acquire_recovery(
+                fixture,
+                scope="NATIVE_GOAL_GENERATION_COMMIT",
+                turn_id="wrong-commit-replay-turn",
+                observed_at="2026-01-01T01:02:00Z",
+            )
+            _, heartbeat_artifact = self._heartbeat_artifact(
+                fixture["harness"],
+                stem="wrong-commit-replay-heartbeat",
+                observed_at="2026-01-01T01:02:00Z",
+            )
+            mutation = {
+                "type": "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+                "lease_claim": acquired["result"]["lease_claim"],
+                "migration_id": fixture["migration_id"],
+                "goal_observation_path": ".codex-loop/reports/wrong.json",
+                "rollout_observation_path": ".codex-loop/reports/wrong.json",
+                "heartbeat_observation": json.loads(
+                    heartbeat_artifact["content"]
+                ),
+                "automation_observation_path": heartbeat_artifact["path"],
+                "automation_observation_digest": heartbeat_artifact["digest"],
+                "observed_at": "2026-01-01T01:02:00Z",
+            }
+            before = persisted_snapshot(root)
+            rejected, _ = self._state_writer_apply(
+                fixture["harness"],
+                mutation,
+                occurred_at="2026-01-01T01:02:00Z",
+                artifacts=[heartbeat_artifact],
+            )
+            self.assertEqual(
+                rejected["status"],
+                "NATIVE_GOAL_GENERATION_COMMIT_REPLAY_IDENTITY_MISMATCH",
+            )
+            self.assertEqual(persisted_snapshot(root), before)
+
+    def test_rollback_success_preserves_source_identity_and_prepared_blocks_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self._fixture(root)
+            before_prepare = fixture["harness"].state()
+            protected_before = fixture[
+                "harness"
+            ].runtime._native_goal_protected_state_digest(before_prepare)
+            self._prepare(fixture)
+            resume_id = "resume-before-generation-commit"
+            self.assertTrue(
+                fixture["harness"].apply(
+                    {
+                        "type": "RECORD_STEERING",
+                        "steering_id": resume_id,
+                        "steering_type": "RESUME",
+                        "normalized_digest": digest(resume_id),
+                        "identity_algorithm": "message-item-v1",
+                        "message_item_id": "resume-before-generation-message",
+                        "summary": "resume before recovery commit",
+                        "classification_reason": "negative recovery gate test",
+                    }
+                )["ok"]
+            )
+            before_resume = persisted_snapshot(root)
+            blocked = fixture["harness"].apply(
+                {
+                    "type": "SET_RUN_CONTROL",
+                    "steering_id": resume_id,
+                    "requested_status": "RESUME",
+                    "reason": "must remain paused",
+                }
+            )
+            self.assertEqual(
+                blocked["status"],
+                "NATIVE_GOAL_GENERATION_RECONCILIATION_REQUIRED",
+            )
+            self.assertEqual(persisted_snapshot(root), before_resume)
+            prepared_source_heartbeat = copy.deepcopy(
+                fixture["harness"].state()[
+                    "native_goal_generation_migration"
+                ]["source_heartbeat_live_observation"]
+            )
+            rolled_back = self._rollback(fixture)
+            self.assertTrue(rolled_back["ok"], rolled_back)
+            state = fixture["harness"].state()
+            self.assertIsNone(state["native_goal_generation_migration"])
+            self.assertIsNone(state["controller_lease"])
+            self.assertEqual(
+                state["controller_goal"], before_prepare["controller_goal"]
+            )
+            self.assertEqual(
+                state["native_goal_generation_ledger"],
+                before_prepare["native_goal_generation_ledger"],
+            )
+            self.assertEqual(
+                state["heartbeat_routing_gate_enforced"],
+                before_prepare["heartbeat_routing_gate_enforced"],
+            )
+            self.assertEqual(
+                state["heartbeat_live_observation"],
+                prepared_source_heartbeat,
+            )
+            self.assertEqual(
+                state["native_goal_generation_migration_history"][-1][
+                    "outcome"
+                ],
+                "ROLLED_BACK",
+            )
+            self.assertEqual(
+                fixture[
+                    "harness"
+                ].runtime._native_goal_protected_state_digest(state),
+                protected_before,
+            )
+
+    def test_rollback_same_request_replay_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self._fixture(root)
+            self._prepare(fixture)
+            rolled_back, request = self._rollback(
+                fixture,
+                return_request=True,
+            )
+            self.assertTrue(rolled_back["ok"], rolled_back)
+            before_replay = persisted_snapshot(root)
+            replay = fixture["harness"].runtime.apply(copy.deepcopy(request))
+            self.assertTrue(replay["ok"], replay)
+            self.assertEqual(replay["status"], "STATE_WRITE_ALREADY_APPLIED")
+            self.assertEqual(persisted_snapshot(root), before_replay)
+            history = fixture["harness"].state()[
+                "native_goal_generation_migration_history"
+            ]
+            self.assertEqual(
+                [item["migration_id"] for item in history].count(
+                    fixture["migration_id"]
+                ),
+                1,
+            )
+
+    def test_commit_and_rollback_crash_recovery_are_atomic(self) -> None:
+        cases = (
+            ("COMMIT", "NATIVE_GOAL_GENERATION_COMMITTED_PROJECTED"),
+            ("COMMIT", "STATE_REPLACED"),
+            ("ROLLBACK", "NATIVE_GOAL_GENERATION_ROLLBACK_PROJECTED"),
+            ("ROLLBACK", "STATE_REPLACED"),
+        )
+        for operation, stage in cases:
+            with self.subTest(operation=operation, stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fixture = self._fixture(root)
+                self._prepare(fixture)
+                crashing = state_runtime_module.AdaptiveStateRuntime(
+                    root,
+                    crash_at=stage,
+                    native_goal_rollout_roots=(root.resolve(),),
+                )
+                captured: dict[str, Any] = {}
+                original_apply = crashing.apply
+
+                def capturing_apply(
+                    request: dict[str, Any],
+                    **kwargs: Any,
+                ) -> dict[str, Any]:
+                    captured["request"] = copy.deepcopy(request)
+                    return original_apply(request, **kwargs)
+
+                crashing.apply = capturing_apply  # type: ignore[method-assign]
+                with self.assertRaises(state_runtime_module.InjectedCrash):
+                    if operation == "COMMIT":
+                        self._commit(fixture, runtime=crashing)
+                    else:
+                        self._rollback(fixture, runtime=crashing)
+                recovered = state_runtime_module.AdaptiveStateRuntime(
+                    root,
+                    native_goal_rollout_roots=(root.resolve(),),
+                )
+                self.assertTrue(recovered.recover()["ok"])
+                replay = recovered.apply(captured["request"])
+                self.assertTrue(replay["ok"], replay)
+                state = recovered.read_state()
+                assert state is not None
+                self.assertIsNone(state["controller_lease"])
+                if operation == "COMMIT":
+                    self.assertEqual(
+                        state["native_goal_generation_migration"]["status"],
+                        "COMMITTED",
+                    )
+                else:
+                    self.assertIsNone(
+                        state["native_goal_generation_migration"]
+                    )
+                    self.assertEqual(
+                        state["native_goal_generation_migration_history"][-1][
+                            "outcome"
+                        ],
+                        "ROLLED_BACK",
+                    )
+
+    def test_rollback_rejects_any_started_create_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            self._prepare(fixture)
+            rejected = self._rollback(
+                fixture,
+                add_started_create=True,
+            )
+            self.assertEqual(
+                rejected["status"],
+                "NATIVE_GOAL_GENERATION_ROLLBACK_INVOCATION_UNCERTAIN",
+            )
+            self.assertEqual(
+                fixture["harness"].state()[
+                    "native_goal_generation_migration"
+                ]["status"],
+                "PREPARED",
+            )
+
+    def test_rollout_started_with_null_goal_is_outcome_unknown_not_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            self._prepare(fixture)
+            harness = fixture["harness"]
+            prepared = harness.state()["native_goal_generation_migration"]
+            outbox = prepared["create_outbox"]
+            fixture["rollout"].add_create_goal(
+                "phase-b-create-turn",
+                fixture["objective"],
+                self._active_goal(fixture),
+                include_output=False,
+            )
+            _, rollout_artifact = fixture["rollout"].observation_artifact(
+                root=harness.root,
+                stem="started-unknown-rollout",
+                mode="CREATE_GOAL",
+                observed_at=T4,
+                scan_start_offset=outbox["prepare_high_watermark"],
+                expected_objective_digest=outbox["payload_digest"],
+                expected_objective_bytes_digest=outbox[
+                    "objective_bytes_digest"
+                ],
+            )
+            fixture["rollout"].add_get_goal("rollback-null-one", None)
+            _, null_one = fixture["rollout"].observation_artifact(
+                root=harness.root,
+                stem="rollback-null-one",
+                mode="GET_GOAL",
+                observed_at=T4,
+                scan_start_offset=outbox["prepare_high_watermark"],
+            )
+            fixture["rollout"].add_get_goal("rollback-null-two", None)
+            _, null_two = fixture["rollout"].observation_artifact(
+                root=harness.root,
+                stem="rollback-null-two",
+                mode="GET_GOAL",
+                observed_at=T5,
+                scan_start_offset=outbox["prepare_high_watermark"],
+            )
+            acquired, _ = self._acquire_recovery(
+                fixture,
+                scope="NATIVE_GOAL_GENERATION_ROLLBACK",
+                turn_id="rollback-turn-c",
+                observed_at=T4,
+            )
+            self.assertTrue(acquired["ok"], acquired)
+            _, heartbeat_artifact = self._heartbeat_artifact(
+                harness,
+                stem="state-writer-rollback-heartbeat",
+                observed_at=T4,
+            )
+            mutation = {
+                "type": "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+                "lease_claim": acquired["result"]["lease_claim"],
+                "migration_id": fixture["migration_id"],
+                "null_observation_paths": [null_one["path"], null_two["path"]],
+                "rollout_observation_path": rollout_artifact["path"],
+                "heartbeat_observation": json.loads(
+                    heartbeat_artifact["content"]
+                ),
+                "automation_observation_path": heartbeat_artifact["path"],
+                "automation_observation_digest": heartbeat_artifact["digest"],
+                "rollback_reason": "must not be accepted",
+                "observed_at": T4,
+            }
+            rejected, _ = self._state_writer_apply(
+                harness,
+                mutation,
+                occurred_at=T4,
+                artifacts=[
+                    rollout_artifact,
+                    null_one,
+                    null_two,
+                    heartbeat_artifact,
+                ],
+            )
+            self.assertEqual(
+                rejected["status"],
+                "NATIVE_GOAL_GENERATION_ROLLBACK_INVOCATION_UNCERTAIN",
+            )
+            self.assertEqual(
+                harness.state()["native_goal_generation_migration"]["status"],
+                "PREPARED",
+            )
+
+    def test_rollout_observer_rejects_ambiguous_create_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            objective = "body\nmarker"
+            rollout.add_create_goal(
+                "ambiguous-turn",
+                objective,
+                {
+                    "createdAt": 1,
+                    "objective": objective,
+                    "status": "active",
+                    "threadId": "controller-1",
+                    "timeUsedSeconds": 0,
+                    "tokensUsed": 0,
+                    "updatedAt": 1,
+                },
+                ambiguous_source=True,
+            )
+            observed = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="CREATE_GOAL",
+                expected_objective_digest=digest("body"),
+                expected_objective_bytes_digest=digest(objective),
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            self.assertEqual(observed["invocation_state"], "AMBIGUOUS")
+
+    def test_rollout_observer_persists_started_and_completed_invocations(self) -> None:
+        for include_output, expected in (
+            (False, "STARTED_UNKNOWN"),
+            (True, "COMPLETED"),
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                rollout = NativeGoalRolloutFixture(root)
+                objective = "body\n[marker]"
+                rollout.add_create_goal(
+                    "phase-b-real-turn",
+                    objective,
+                    {
+                        "createdAt": 200,
+                        "objective": objective,
+                        "status": "active",
+                        "threadId": "controller-1",
+                        "timeUsedSeconds": 0,
+                        "tokensUsed": 0,
+                        "updatedAt": 200,
+                    },
+                    include_output=include_output,
+                )
+                observed = observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="CREATE_GOAL",
+                    expected_objective_digest=digest("body"),
+                    expected_objective_bytes_digest=digest(objective),
+                    observed_at=T4,
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+                self.assertEqual(observed["invocation_state"], expected)
+                self.assertEqual(observed["matching_invocation_count"], 1)
+                observed_again = observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="CREATE_GOAL",
+                    expected_objective_digest=digest("body"),
+                    expected_objective_bytes_digest=digest(objective),
+                    observed_at=T4,
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+                self.assertEqual(observed_again, observed)
+
+    def test_synthetic_restart_readback_and_cli_receipt_are_same_identity_and_sanitized(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            codex_home = root / "codex-home"
+            rollout_root = codex_home / "sessions"
+            rollout_root.mkdir(parents=True)
+            rollout = NativeGoalRolloutFixture(rollout_root)
+            objective = "private objective body\n[private marker]"
+            goal = {
+                "createdAt": 200,
+                "objective": objective,
+                "status": "active",
+                "threadId": "controller-1",
+                "timeUsedSeconds": 3,
+                "tokensUsed": 7,
+                "updatedAt": 201,
+            }
+            rollout.add_get_goal("post-restart-readback", goal)
+            first = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="GET_GOAL",
+                observed_at=T4,
+                trusted_rollout_roots=(rollout_root.resolve(),),
+            )
+            second = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="GET_GOAL",
+                observed_at=T4,
+                trusted_rollout_roots=(rollout_root.resolve(),),
+            )
+            self.assertEqual(first, second)
+            request = {
+                "rollout_path": str(rollout.path),
+                "controller_thread_id": "controller-1",
+                "observation_mode": "GET_GOAL",
+                "observed_at": T4,
+                "observation_path": (
+                    ".codex-loop/reports/cli-native-goal-readback.json"
+                ),
+            }
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "adaptive_state_runtime.py"),
+                    "--native-goal-observe",
+                    "--root",
+                    str(root),
+                ],
+                input=json.dumps(request, separators=(",", ":")),
+                text=True,
+                capture_output=True,
+                timeout=10,
+                check=False,
+                env={**os.environ, "CODEX_HOME": str(codex_home)},
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            response = json.loads(completed.stdout)
+            self.assertTrue(response["ok"], response)
+            receipt_bytes = (
+                root / request["observation_path"]
+            ).read_bytes()
+            self.assertNotIn(objective.encode("utf-8"), receipt_bytes)
+            self.assertNotIn(objective, completed.stdout)
+            self.assertEqual(
+                response["observation"]["goal"], first["goal"]
+            )
+
+    def test_rollout_observer_rejects_symlink_and_partial_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            symlink = root / "rollout-link.jsonl"
+            symlink.symlink_to(rollout.path)
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                observe_native_goal_rollout(
+                    rollout_path=symlink,
+                    controller_thread_id="controller-1",
+                    mode="GET_GOAL",
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+            self.assertEqual(caught.exception.code, "NATIVE_GOAL_ROLLOUT_PATH_INVALID")
+            trusted_root = root / "trusted-rollouts"
+            trusted_root.mkdir()
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="GET_GOAL",
+                    trusted_rollout_roots=(trusted_root.resolve(),),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_ROLLOUT_PATH_INVALID",
+            )
+            with rollout.path.open("ab") as handle:
+                handle.write(b'{"type":')
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="GET_GOAL",
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+            self.assertEqual(
+                caught.exception.code, "NATIVE_GOAL_ROLLOUT_PARSE_INCOMPLETE"
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

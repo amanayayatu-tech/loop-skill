@@ -497,9 +497,11 @@ class AdaptiveStateMcpServer:
                             "name": MCP_TOOL_NAME,
                             "description": (
                                 "Apply exactly one ACQUIRE_LEASE or "
-                                "TAKEOVER_LEASE using Codex host-injected turn "
-                                "metadata. Model arguments cannot supply the "
-                                "trusted identity."
+                                "TAKEOVER_LEASE, including a recovery-scoped "
+                                "lease acquisition, using Codex host-injected "
+                                "turn metadata. State-Writer mutations do not "
+                                "cross this route bridge, and model arguments "
+                                "cannot supply the trusted identity."
                             ),
                             "inputSchema": {
                                 "type": "object",

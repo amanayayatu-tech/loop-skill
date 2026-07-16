@@ -245,19 +245,28 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 self.assertEqual(before, persisted_snapshot(root))  # noqa: F405
 
     def test_non_route_mutation_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            harness = McpHarness(Path(temporary))
-            request = harness.state.make_request(
-                {
-                    "type": "SET_RUN_CONTROL",
-                    "run_control": "PAUSE",
-                    "observed_at": T1,  # noqa: F405
-                }
-            )
-            before = persisted_snapshot(Path(temporary))  # noqa: F405
-            response = harness.call(request, meta=harness.metadata())
-            self.assertEqual(response["status"], "MCP_ROUTE_MUTATION_TYPE_INVALID")
-            self.assertEqual(before, persisted_snapshot(Path(temporary)))  # noqa: F405
+        mutation_types = (
+            "SET_RUN_CONTROL",
+            "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+            "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+            "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+        )
+        for mutation_type in mutation_types:
+            with self.subTest(mutation_type=mutation_type), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = McpHarness(root)
+                request = harness.state.make_request(
+                    {
+                        "type": mutation_type,
+                        "observed_at": T1,  # noqa: F405
+                    }
+                )
+                before = persisted_snapshot(root)  # noqa: F405
+                response = harness.call(request, meta=harness.metadata())
+                self.assertEqual(
+                    response["status"], "MCP_ROUTE_MUTATION_TYPE_INVALID"
+                )
+                self.assertEqual(before, persisted_snapshot(root))  # noqa: F405
 
     def test_unattested_server_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
