@@ -17,6 +17,7 @@ from loop_architect.state_runtime import (
     AdaptiveStateRuntime,
     InjectedCrash,
     RuntimeRejection,
+    _requests_deferred_native_goal_recovery,
     materialize_dispatch_payload,
     verify_dispatch_payload_against_state,
 )
@@ -27,16 +28,6 @@ INPUT_TRANSPORT_CHUNK_BYTES = 64 * 1024
 NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE = (
     "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE"
 )
-NATIVE_GOAL_GENERATION_RECOVERY_MUTATIONS = {
-    "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
-    "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
-    "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
-}
-NATIVE_GOAL_GENERATION_RECOVERY_SCOPES = {
-    "NATIVE_GOAL_GENERATION_PREPARE",
-    "NATIVE_GOAL_GENERATION_COMMIT",
-    "NATIVE_GOAL_GENERATION_ROLLBACK",
-}
 
 
 class InputTransportError(ValueError):
@@ -259,19 +250,6 @@ def _emit(response: dict[str, Any]) -> None:
     sys.stdout.write(payload + "\n")
 
 
-def _requests_deferred_native_goal_recovery(request: Any) -> bool:
-    if not isinstance(request, dict):
-        return False
-    mutation = request.get("mutation")
-    if not isinstance(mutation, dict):
-        return False
-    return bool(
-        mutation.get("type") in NATIVE_GOAL_GENERATION_RECOVERY_MUTATIONS
-        or mutation.get("recovery_scope")
-        in NATIVE_GOAL_GENERATION_RECOVERY_SCOPES
-    )
-
-
 def _native_goal_recovery_unavailable_response() -> dict[str, Any]:
     return _response(
         NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE,
@@ -291,6 +269,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
+        if mode == "native-goal-observe":
+            _emit(_native_goal_recovery_unavailable_response())
+            return 1
         payload = "" if mode == "recover" else _read_bounded_stdin(mode)
         if mode == "payload-materialize":
             if not payload.strip():
@@ -351,8 +332,6 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 response = AdaptiveStateRuntime(root).stage_external_receipt(request)
-        elif mode == "native-goal-observe":
-            response = _native_goal_recovery_unavailable_response()
         else:
             assert root is not None
             runtime = AdaptiveStateRuntime(root, crash_at=crash_at)

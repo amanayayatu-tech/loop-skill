@@ -131,6 +131,13 @@ def validate_receipt(
     ):
         if expected is not None and actual != expected:
             raise CanaryReceiptError(code)
+    for surface in (
+        "native_goal_generation_recovery_cli",
+        "native_goal_generation_recovery_mcp",
+    ):
+        observation = receipt["checks"][surface]
+        if observation["before_state_digest"] != observation["after_state_digest"]:
+            raise CanaryReceiptError("CANARY_RECOVERY_SURFACE_SIDE_EFFECT")
     if receipt["status"] == "PASS":
         if receipt["error_classification"] is not None or not all(receipt["checks"].values()):
             raise CanaryReceiptError("CANARY_PASS_INCOMPLETE")

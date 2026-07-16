@@ -37,6 +37,20 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "lost_stdout_recovered_without_second_send": True,
             "pack_migration_same_heartbeat_reconciled": True,
             "native_goal_generation_recovery_status": "DEFERRED_UNAVAILABLE",
+            "native_goal_generation_recovery_cli": {
+                "status": "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+                "side_effects": "NONE",
+                "before_state_digest": "1" * 64,
+                "after_state_digest": "1" * 64,
+                "evidence_digest": "2" * 64,
+            },
+            "native_goal_generation_recovery_mcp": {
+                "status": "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+                "side_effects": "NONE",
+                "before_state_digest": "3" * 64,
+                "after_state_digest": "3" * 64,
+                "evidence_digest": "4" * 64,
+            },
             "finalization_acked": True,
         }
         self.receipt = {
@@ -199,9 +213,35 @@ class AppCanaryReceiptTests(unittest.TestCase):
         with self.assertRaises(jsonschema.ValidationError):
             validator.validate_receipt(self.path, SCHEMA)
 
+        self.receipt["checks"]["native_goal_generation_recovery_status"] = (
+            "DEFERRED_UNAVAILABLE"
+        )
+        self.receipt["checks"].pop("native_goal_generation_recovery_cli")
+        self._seal()
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate_receipt(self.path, SCHEMA)
+
+        self.receipt["checks"]["native_goal_generation_recovery_cli"] = {
+            "status": "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+            "side_effects": "NONE",
+            "before_state_digest": "1" * 64,
+            "after_state_digest": "1" * 64,
+            "evidence_digest": "2" * 64,
+        }
         self.receipt["checks"]["native_goal_generation_recovery_status"] = "PASS"
         self._seal()
         with self.assertRaises(jsonschema.ValidationError):
+            validator.validate_receipt(self.path, SCHEMA)
+
+    def test_recovery_surface_receipts_bind_zero_state_drift(self) -> None:
+        self.receipt["checks"]["native_goal_generation_recovery_cli"][
+            "after_state_digest"
+        ] = "9" * 64
+        self._seal()
+        with self.assertRaisesRegex(
+            validator.CanaryReceiptError,
+            "CANARY_RECOVERY_SURFACE_SIDE_EFFECT",
+        ):
             validator.validate_receipt(self.path, SCHEMA)
 
     def test_blocked_receipt_requires_precise_classification(self) -> None:

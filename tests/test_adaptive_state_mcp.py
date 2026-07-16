@@ -140,6 +140,8 @@ class AdaptiveStateMcpTests(unittest.TestCase):
         tool = listed["result"]["tools"][0]
         self.assertEqual(tool["name"], mcp.MCP_TOOL_NAME)
         self.assertEqual(tool["inputSchema"]["required"], ["root", "request"])
+        self.assertIn("recovery is unavailable", tool["description"])
+        self.assertNotIn("recovery-scoped lease acquisition", tool["description"])
 
     def test_forged_argument_metadata_cannot_cross_host_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -245,12 +247,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 self.assertEqual(before, persisted_snapshot(root))  # noqa: F405
 
     def test_non_route_mutation_is_rejected(self) -> None:
-        mutation_types = (
-            "SET_RUN_CONTROL",
-            "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
-            "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
-            "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
-        )
+        mutation_types = ("SET_RUN_CONTROL",)
         for mutation_type in mutation_types:
             with self.subTest(mutation_type=mutation_type), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -265,6 +262,31 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 response = harness.call(request, meta=harness.metadata())
                 self.assertEqual(
                     response["status"], "MCP_ROUTE_MUTATION_TYPE_INVALID"
+                )
+                self.assertEqual(before, persisted_snapshot(root))  # noqa: F405
+
+    def test_legacy_recovery_mutations_use_unavailable_contract(self) -> None:
+        mutation_types = (
+            "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+            "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+            "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+        )
+        for mutation_type in mutation_types:
+            with self.subTest(mutation_type=mutation_type), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = McpHarness(root)
+                request = harness.state.make_request(
+                    {"type": mutation_type, "observed_at": T1}  # noqa: F405
+                )
+                before = persisted_snapshot(root)  # noqa: F405
+                response = harness.call(request, meta=harness.metadata())
+                self.assertEqual(
+                    response["status"],
+                    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+                )
+                self.assertEqual(
+                    response["error"]["details"]["side_effects"],
+                    "NONE",
                 )
                 self.assertEqual(before, persisted_snapshot(root))  # noqa: F405
 

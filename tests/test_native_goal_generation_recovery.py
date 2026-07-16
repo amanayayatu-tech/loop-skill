@@ -291,6 +291,18 @@ class NativeGoalRolloutFixture:
 
 
 class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
+    """Audit the retired transaction logic behind a test-only dispatch bypass."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        patcher = mock.patch.object(  # noqa: F405
+            state_runtime_module,  # noqa: F405
+            "_requests_deferred_native_goal_recovery",
+            return_value=False,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @staticmethod
     def _rewrite_as_legacy_with_real_create_receipt(
         harness: Harness,

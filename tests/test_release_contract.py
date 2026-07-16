@@ -37,7 +37,7 @@ class ReleaseContractTests(unittest.TestCase):
         installer = (ROOT / "scripts" / "install.sh").read_text()
         self.assertIn('STATE_MCP="$SOURCE_DIR/scripts/adaptive_state_mcp.py"', installer)
         self.assertIn(
-            'NATIVE_GOAL_OBSERVER="$SOURCE_DIR/scripts/loop_architect/native_goal_observer.py"',
+            'LEGACY_NATIVE_GOAL_OBSERVER="$SOURCE_DIR/scripts/loop_architect/native_goal_observer.py"',
             installer,
         )
         self.assertIn('chmod +x "$STAGING_DIR/scripts/adaptive_state_mcp.py"', installer)

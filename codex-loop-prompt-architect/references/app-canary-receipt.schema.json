@@ -170,6 +170,8 @@
         "lost_stdout_recovered_without_second_send",
         "pack_migration_same_heartbeat_reconciled",
         "native_goal_generation_recovery_status",
+        "native_goal_generation_recovery_cli",
+        "native_goal_generation_recovery_mcp",
         "finalization_acked"
       ],
       "properties": {
@@ -186,6 +188,8 @@
         "lost_stdout_recovered_without_second_send": {"type": "boolean"},
         "pack_migration_same_heartbeat_reconciled": {"type": "boolean"},
         "native_goal_generation_recovery_status": {"const": "DEFERRED_UNAVAILABLE"},
+        "native_goal_generation_recovery_cli": {"$ref": "#/$defs/unavailableRecoverySurface"},
+        "native_goal_generation_recovery_mcp": {"$ref": "#/$defs/unavailableRecoverySurface"},
         "finalization_acked": {"type": "boolean"}
       }
     },
@@ -215,6 +219,24 @@
     "receipt_digest": {"$ref": "#/$defs/digest"}
   },
   "$defs": {
-    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "unavailableRecoverySurface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "side_effects",
+        "before_state_digest",
+        "after_state_digest",
+        "evidence_digest"
+      ],
+      "properties": {
+        "status": {"const": "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE"},
+        "side_effects": {"const": "NONE"},
+        "before_state_digest": {"$ref": "#/$defs/digest"},
+        "after_state_digest": {"$ref": "#/$defs/digest"},
+        "evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
   }
 }

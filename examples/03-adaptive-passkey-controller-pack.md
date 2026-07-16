@@ -573,7 +573,7 @@ AUTHORIZATION_ENVELOPE_JSON_BEGIN
   },
   "control_plane_limits": {
     "allowed_external_worktree_roots": [
-      "/Users/peachy/.codex/worktrees"
+      "/workspace/.codex/worktrees"
     ],
     "max_business_heartbeats": 1,
     "max_child_threads": 4

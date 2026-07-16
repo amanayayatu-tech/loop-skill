@@ -57,7 +57,9 @@ does not claim to repair app-server process reaping or metadata delivery.
    MCP tests, a Node REPL observation, source reading, or a tool-list screenshot
    are only prerequisites. The canary must record
    `native_goal_generation_recovery_status=DEFERRED_UNAVAILABLE` and prove the
-   legacy CLI and MCP recovery surfaces reject before side effects. It must not
+   legacy CLI and MCP recovery surfaces reject before side effects. Each surface
+   receipt binds the exact unavailable status, `side_effects=NONE`, equal
+   before/after state digests, and a minimized evidence digest. It must not
    create or retry a disposable or real native Goal.
 6. Bind the local complete-gate result and minimized non-secret same-SHA App receipt in
    the local release receipt for the same SHA. PASS requires

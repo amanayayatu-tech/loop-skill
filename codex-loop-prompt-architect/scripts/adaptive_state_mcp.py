@@ -48,6 +48,11 @@ NATIVE_GOAL_GENERATION_RECOVERY_SCOPES = {
     "NATIVE_GOAL_GENERATION_COMMIT",
     "NATIVE_GOAL_GENERATION_ROLLBACK",
 }
+NATIVE_GOAL_GENERATION_RECOVERY_MUTATIONS = {
+    "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+    "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+    "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+}
 CDHASH_RE = re.compile(r"^CDHash=([a-f0-9]{40,64})$", re.MULTILINE)
 IDENTIFIER_RE = re.compile(r"Identifier=([^\n]+)", re.MULTILINE)
 TEAM_ID_RE = re.compile(r"TeamIdentifier=([^\n]+)", re.MULTILINE)
@@ -426,6 +431,20 @@ class AdaptiveStateMcpServer:
                 )
             request = copy.deepcopy(request)
             mutation = request.get("mutation")
+            if isinstance(mutation, dict) and (
+                mutation.get("type")
+                in NATIVE_GOAL_GENERATION_RECOVERY_MUTATIONS
+                or mutation.get("recovery_scope")
+                in NATIVE_GOAL_GENERATION_RECOVERY_SCOPES
+            ):
+                raise McpBridgeError(
+                    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+                    "/native_goal_generation_recovery",
+                    {
+                        "availability": "DEFERRED_UNAVAILABLE",
+                        "side_effects": "NONE",
+                    },
+                )
             if not isinstance(mutation, dict) or mutation.get("type") not in {
                 "ACQUIRE_LEASE",
                 "TAKEOVER_LEASE",
@@ -433,18 +452,6 @@ class AdaptiveStateMcpServer:
                 raise McpBridgeError(
                     "MCP_ROUTE_MUTATION_TYPE_INVALID",
                     "/params/arguments/request/mutation/type",
-                )
-            if (
-                mutation.get("recovery_scope")
-                in NATIVE_GOAL_GENERATION_RECOVERY_SCOPES
-            ):
-                raise McpBridgeError(
-                    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
-                    "/params/arguments/request/mutation/recovery_scope",
-                    {
-                        "availability": "DEFERRED_UNAVAILABLE",
-                        "side_effects": "NONE",
-                    },
                 )
             claimed_turn_id = mutation.get("controller_turn_id")
             if claimed_turn_id is None:
@@ -514,11 +521,11 @@ class AdaptiveStateMcpServer:
                             "name": MCP_TOOL_NAME,
                             "description": (
                                 "Apply exactly one ACQUIRE_LEASE or "
-                                "TAKEOVER_LEASE, including a recovery-scoped "
-                                "lease acquisition, using Codex host-injected "
+                                "TAKEOVER_LEASE using Codex host-injected "
                                 "turn metadata. State-Writer mutations do not "
                                 "cross this route bridge, and model arguments "
-                                "cannot supply the trusted identity."
+                                "cannot supply the trusted identity. Native "
+                                "Goal generation recovery is unavailable."
                             ),
                             "inputSchema": {
                                 "type": "object",

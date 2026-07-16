@@ -281,12 +281,31 @@ NATIVE_GOAL_RECOVERY_SCOPES = {
     "NATIVE_GOAL_GENERATION_COMMIT",
     "NATIVE_GOAL_GENERATION_ROLLBACK",
 }
+NATIVE_GOAL_RECOVERY_MUTATIONS = {
+    "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+    "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+    "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+}
 NATIVE_GOAL_RECOVERY_SCOPE_TO_MUTATION = {
     "NATIVE_GOAL_GENERATION_PREPARE": "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
     "NATIVE_GOAL_GENERATION_COMMIT": "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
     "NATIVE_GOAL_GENERATION_ROLLBACK": "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
 }
 MAX_NATIVE_GOAL_RECOVERY_LEASE_SECONDS = 300
+
+
+def _requests_deferred_native_goal_recovery(request: Any) -> bool:
+    """Recognize legacy recovery input before schema, lock, or state access."""
+
+    if not isinstance(request, dict):
+        return False
+    mutation = request.get("mutation")
+    if not isinstance(mutation, dict):
+        return False
+    return bool(
+        mutation.get("type") in NATIVE_GOAL_RECOVERY_MUTATIONS
+        or mutation.get("recovery_scope") in NATIVE_GOAL_RECOVERY_SCOPES
+    )
 
 
 def _attempt_consumes_repair_budget(attempt: Mapping[str, Any]) -> bool:
@@ -1635,6 +1654,19 @@ class AdaptiveStateRuntime:
         trusted_turn_metadata: TrustedTurnMetadata | None = None,
     ) -> dict[str, Any]:
         """Validate and apply a request, returning structured JSON-compatible data."""
+
+        if _requests_deferred_native_goal_recovery(request):
+            return self._rejection_response(
+                RuntimeRejection(
+                    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+                    "/native_goal_generation_recovery",
+                    {
+                        "availability": "DEFERRED_UNAVAILABLE",
+                        "side_effects": "NONE",
+                    },
+                ),
+                state_version=0,
+            )
 
         try:
             mutation_validator, state_validator = self._load_validators()
