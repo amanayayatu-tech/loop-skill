@@ -130,6 +130,15 @@ def select_commits(
             raise WhitespaceRangeError(f"workflow_dispatch head is unavailable: {head}")
         return _full_history(cwd, head_commit, "workflow-dispatch")
 
+    if event_name == "schedule":
+        head = _validate_sha(github_sha, "GITHUB_SHA")
+        head_commit = _commit_oid(cwd, head)
+        if head_commit is None:
+            raise WhitespaceRangeError(f"schedule head is unavailable: {head}")
+        # A schedule introduces no new commit range.  Record that decision
+        # explicitly instead of rechecking all history or silently skipping.
+        return [], f"schedule:{head_commit}:no-new-commits"
+
     raise WhitespaceRangeError(f"unsupported GitHub event: {event_name or '<empty>'}")
 
 
