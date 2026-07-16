@@ -675,6 +675,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         readback_turn_id: str = "readback-turn-c",
         commit_turn_id: str = "commit-route-turn-d",
         create_observation_after_readback: bool = False,
+        second_create_after_observation: bool = False,
         created_at: int = 200,
         objective: str | None = None,
         runtime: AdaptiveStateRuntime | None = None,
@@ -710,6 +711,13 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 expected_objective_bytes_digest=outbox[
                     "objective_bytes_digest"
                 ],
+            )
+        if second_create_after_observation:
+            fixture["rollout"].add_create_goal(
+                "hidden-second-create-turn",
+                goal["objective"],
+                goal,
+                include_output=not lost_stdout,
             )
         fixture["rollout"].add_get_goal(readback_turn_id, goal)
         if create_observation_after_readback:
@@ -775,6 +783,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         fixture: dict[str, Any],
         *,
         add_started_create: bool = False,
+        add_create_after_observation: bool = False,
         runtime: AdaptiveStateRuntime | None = None,
         return_request: bool = False,
     ) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]]:
@@ -799,6 +808,13 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 "objective_bytes_digest"
             ],
         )
+        if add_create_after_observation:
+            fixture["rollout"].add_create_goal(
+                "rollback-hidden-create",
+                fixture["objective"],
+                self._active_goal(fixture),
+                include_output=False,
+            )
         fixture["rollout"].add_get_goal("rollback-null-one", None)
         _, null_one = fixture["rollout"].observation_artifact(
             root=harness.root,
@@ -1585,6 +1601,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             {"readback_turn_id": "commit-route-turn-d"},
             {"phase_b_turn_id": "commit-route-turn-d"},
             {"create_observation_after_readback": True},
+            {"second_create_after_observation": True},
             {"objective": "different body\n[different marker]"},
             {"created_at": 100},
         )
@@ -1886,23 +1903,27 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                     )
 
     def test_rollback_rejects_any_started_create_invocation(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            fixture = self._fixture(Path(temporary))
-            self._prepare(fixture)
-            rejected = self._rollback(
-                fixture,
-                add_started_create=True,
-            )
-            self.assertEqual(
-                rejected["status"],
-                "NATIVE_GOAL_GENERATION_ROLLBACK_INVOCATION_UNCERTAIN",
-            )
-            self.assertEqual(
-                fixture["harness"].state()[
-                    "native_goal_generation_migration"
-                ]["status"],
-                "PREPARED",
-            )
+        for options in (
+            {"add_started_create": True},
+            {"add_create_after_observation": True},
+        ):
+            with (
+                self.subTest(options=options),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                fixture = self._fixture(Path(temporary))
+                self._prepare(fixture)
+                rejected = self._rollback(fixture, **options)
+                self.assertEqual(
+                    rejected["status"],
+                    "NATIVE_GOAL_GENERATION_ROLLBACK_INVOCATION_UNCERTAIN",
+                )
+                self.assertEqual(
+                    fixture["harness"].state()[
+                        "native_goal_generation_migration"
+                    ]["status"],
+                    "PREPARED",
+                )
 
     def test_rollout_started_with_null_goal_is_outcome_unknown_not_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2115,6 +2136,78 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             )
             self.assertEqual(create_observation["invocation_state"], "COMPLETED")
             self.assertEqual(create_observation["matching_invocation_count"], 1)
+
+    def test_capture_rejects_historical_cutoff_and_replay_binds_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            objective = "body\n[marker]"
+            goal = {
+                "createdAt": 200,
+                "objective": objective,
+                "status": "active",
+                "threadId": "controller-1",
+                "timeUsedSeconds": 0,
+                "tokensUsed": 0,
+                "updatedAt": 200,
+            }
+            rollout.add_create_goal("phase-b", objective, goal)
+            captured = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="CREATE_GOAL",
+                expected_objective_digest=digest("body"),
+                expected_objective_bytes_digest=digest(objective),
+                observed_at=T4,
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            rollout.add_get_goal("phase-c", goal)
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="CREATE_GOAL",
+                    scan_end_offset=captured["scan_end_offset"],
+                    expected_objective_digest=digest("body"),
+                    expected_objective_bytes_digest=digest(objective),
+                    observed_at=T4,
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_ROLLOUT_HISTORICAL_CUTOFF_FORBIDDEN",
+            )
+            replayed = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="CREATE_GOAL",
+                scan_end_offset=captured["scan_end_offset"],
+                historical_replay_snapshot_digest=captured[
+                    "snapshot_digest"
+                ],
+                expected_objective_digest=digest("body"),
+                expected_objective_bytes_digest=digest(objective),
+                observed_at=T4,
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            self.assertEqual(replayed, captured)
+
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="CREATE_GOAL",
+                    scan_end_offset=captured["scan_end_offset"],
+                    historical_replay_snapshot_digest=digest("wrong prefix"),
+                    expected_objective_digest=digest("body"),
+                    expected_objective_bytes_digest=digest(objective),
+                    observed_at=T4,
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_ROLLOUT_APPEND_ONLY_CONTINUITY_INVALID",
+            )
 
     def test_rollout_observer_rejects_non_exact_javascript_wrappers(self) -> None:
         objective = "body\n[marker]"

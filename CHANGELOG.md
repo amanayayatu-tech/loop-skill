@@ -32,6 +32,10 @@ All notable changes to this project are documented here. The project follows
   separate readback/route identities and strict create-before-readback ordering,
   and an exact create with the wrong objective is ambiguous rather than a
   rollback-safe zero invocation.
+- Bound observer capture to the then-current stable EOF. Historical replay now
+  requires the captured prefix digest and append-only identity, while COMMIT
+  and ROLLBACK reclassify the complete window through the later readback so an
+  older cutoff cannot hide a second or ambiguous create.
 
 ### Evidence boundary
 

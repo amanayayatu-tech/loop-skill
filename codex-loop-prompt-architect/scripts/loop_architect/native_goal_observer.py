@@ -349,6 +349,7 @@ def observe_native_goal_rollout(
     mode: str,
     scan_start_offset: int = 0,
     scan_end_offset: int | None = None,
+    historical_replay_snapshot_digest: str | None = None,
     expected_objective_digest: str | None = None,
     expected_objective_bytes_digest: str | None = None,
     observed_at: str | None = None,
@@ -362,6 +363,14 @@ def observe_native_goal_rollout(
     end_offset = (
         len(snapshot.payload) if scan_end_offset is None else scan_end_offset
     )
+    if (
+        scan_end_offset is not None
+        and scan_end_offset != len(snapshot.payload)
+        and historical_replay_snapshot_digest is None
+    ):
+        raise NativeGoalObservationError(
+            "NATIVE_GOAL_ROLLOUT_HISTORICAL_CUTOFF_FORBIDDEN"
+        )
     if (
         scan_start_offset < 0
         or end_offset < scan_start_offset
@@ -380,11 +389,19 @@ def observe_native_goal_rollout(
             "NATIVE_GOAL_ROLLOUT_HIGH_WATERMARK_INVALID"
         )
     observed_payload = snapshot.payload[:end_offset]
+    observed_snapshot_digest = _sha256_bytes(observed_payload)
+    if (
+        historical_replay_snapshot_digest is not None
+        and historical_replay_snapshot_digest != observed_snapshot_digest
+    ):
+        raise NativeGoalObservationError(
+            "NATIVE_GOAL_ROLLOUT_APPEND_ONLY_CONTINUITY_INVALID"
+        )
     observed_snapshot = StableRollout(
         path=snapshot.path,
         payload=observed_payload,
         stat_result=snapshot.stat_result,
-        snapshot_digest=_sha256_bytes(observed_payload),
+        snapshot_digest=observed_snapshot_digest,
         file_identity_digest=snapshot.file_identity_digest,
     )
     events = _parse_rollout_events(observed_snapshot, controller_thread_id)
@@ -468,6 +485,7 @@ def observe_native_goal_rollout(
         "snapshot_digest": observed_snapshot.snapshot_digest,
         "scan_start_offset": scan_start_offset,
         "scan_end_offset": end_offset,
+        "capture_boundary": "CURRENT_STABLE_EOF",
         "stable_eof": True,
         "observed_at": observed_at or _safe_iso_now(),
         "runtime_manifest_digest": runtime_manifest_digest(),

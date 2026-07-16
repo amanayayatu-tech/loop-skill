@@ -178,6 +178,15 @@ ambiguous create framing. The runtime writes only a sanitized
 digests, scan offsets, stable EOF, turn and call digests, objective digests,
 count, state, and sanitized result identity.
 
+Capture always binds the then-current stable EOF; a caller-supplied historical
+cutoff cannot produce a capture receipt. Runtime may later replay that historical
+prefix only with its captured snapshot digest and unchanged file identity. The
+next observation must start from the bound PREPARE high-watermark and extend to
+a strictly later captured EOF, so the create classification covers every byte
+through the readback. A second, wrong-objective, or ambiguous create anywhere
+in that interval blocks COMMIT; the same continuous-window rule prevents a
+historical zero-call prefix from authorizing ROLLBACK.
+
 Only `matching_invocation_count=0` plus `invocation_state=NONE`, a prior
 `get_goal=null`, unchanged PREPARED identity, and PAUSED heartbeat authorizes
 Phase B. That real Controller turn contains exactly one official `create_goal`
