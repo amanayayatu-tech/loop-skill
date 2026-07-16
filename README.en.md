@@ -268,6 +268,7 @@ GitHub Actions is a compatibility mirror, not release acceptance. Historical E2E
 
 ## Learn more
 
+- [Project specification and safe-evolution rules](SPEC.md)
 - [Skill instructions](codex-loop-prompt-architect/SKILL.md)
 - [Intake Gate contract](codex-loop-prompt-architect/references/loop-intake-gate.md)
 - [Standard Loop contract](codex-loop-prompt-architect/references/loop-contract.md)
