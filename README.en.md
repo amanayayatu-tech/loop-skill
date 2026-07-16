@@ -70,8 +70,11 @@ later rollout and active same-thread readback agree.
 Immediately before runtime apply, the original State-Writer recaptures the
 final active/null readback at the target Controller's current stable EOF. The
 same stable snapshot must classify both Goal identity and the complete create
-window; runtime may not reopen the rollout between those decisions. Allowed
-post-readback control tools use a finite exact-name set, never suffix matching.
+window; runtime may not reopen the rollout between those decisions. The control
+suffix starts exactly at the readback turn boundary, while route and
+State-Writer handoff bind canonical scope, migration, lease, attested turn,
+target thread, and normalized handoff digest. Rollout paths are opened from a
+trusted root with component-wise `openat`/`O_NOFOLLOW` and read only by fd.
 Any later byte fails closed as `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`.
 
 The observer reads canonical rollouts only from `CODEX_HOME/sessions` or

@@ -44,6 +44,10 @@ All notable changes to this project are documented here. The project follows
   from one stable rollout snapshot, removing the inter-read TOCTOU. Allowed
   post-readback controls now use a finite exact-name set rather than suffix
   matching.
+- Bound the post-readback route and State-Writer handoff to the canonical
+  recovery scope, migration, lease, attested turn, target and handoff digest.
+  The observer now opens trusted rollout paths component-by-component with
+  `openat`/`O_NOFOLLOW` and reads only from the bound file descriptor.
 
 ### Evidence boundary
 

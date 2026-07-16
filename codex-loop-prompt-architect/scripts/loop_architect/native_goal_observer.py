@@ -8,6 +8,7 @@ from the same stable rollout snapshot before accepting a recovery mutation.
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 import re
@@ -39,13 +40,27 @@ CONTROL_TOOL_TEMPLATE_RE = re.compile(
     r"\(\s*result\s*\)|result)\s*\)\s*;\s*\Z",
     re.DOTALL,
 )
-ALLOWED_POST_READBACK_CONTROL_TOOLS = frozenset(
+ROUTE_CONTROL_TOOLS = frozenset(
+    {"route_state_mutation", "mcp__codex_loop_state__route_state_mutation"}
+)
+SEND_CONTROL_TOOLS = frozenset(
     {
-        "route_state_mutation",
-        "mcp__codex_loop_state__route_state_mutation",
         "send_message_to_thread",
         "codex_app__send_message_to_thread",
         "mcp__codex_app__send_message_to_thread",
+    }
+)
+ALLOWED_POST_READBACK_CONTROL_TOOLS = ROUTE_CONTROL_TOOLS | SEND_CONTROL_TOOLS
+NATIVE_GOAL_HANDOFF_FIELDS = frozenset(
+    {
+        "goal_observation_path",
+        "lease_claim",
+        "migration_id",
+        "null_observation_paths",
+        "observed_at",
+        "rollback_reason",
+        "rollout_observation_path",
+        "type",
     }
 )
 
@@ -77,6 +92,103 @@ def _canonical_bytes(value: Any) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _native_goal_handoff_payload(request: Any) -> dict[str, Any] | None:
+    if not isinstance(request, dict) or not isinstance(
+        request.get("mutation"), dict
+    ):
+        return None
+    mutation = request["mutation"]
+    identity = {
+        key: mutation[key]
+        for key in sorted(NATIVE_GOAL_HANDOFF_FIELDS)
+        if key in mutation
+    }
+    if identity.get("type") not in {
+        "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+        "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+    }:
+        return None
+    return {"mutation": identity}
+
+
+def native_goal_handoff_digest(request: Any) -> str | None:
+    """Digest the Controller-authored recovery handoff identity."""
+
+    payload = _native_goal_handoff_payload(request)
+    return _sha256_bytes(_canonical_bytes(payload)) if payload else None
+
+
+def _sanitized_control_action(
+    tool_name: str,
+    arguments: dict[str, Any],
+    turn_id: str | None,
+) -> dict[str, Any] | None:
+    if tool_name in ROUTE_CONTROL_TOOLS:
+        if set(arguments) != {"root", "request"}:
+            return None
+        root = arguments.get("root")
+        request = arguments.get("request")
+        mutation = request.get("mutation") if isinstance(request, dict) else None
+        if (
+            not isinstance(root, str)
+            or not isinstance(mutation, dict)
+            or mutation.get("type") != "ACQUIRE_LEASE"
+            or mutation.get("controller_turn_id") is not None
+        ):
+            return None
+        required = (
+            "authorization_digest",
+            "authorization_steering_id",
+            "controller_pack_digest",
+            "migration_id",
+            "recovery_scope",
+            "routing_turn_id",
+            "lease_id",
+            "state_writer_thread_id",
+        )
+        if any(not isinstance(mutation.get(key), str) for key in required):
+            return None
+        return {
+            "action_kind": "ROUTE_RECOVERY_LEASE",
+            "turn_id": turn_id,
+            "root_digest": _sha256_bytes(root.encode("utf-8")),
+            **{key: mutation[key] for key in required},
+        }
+    schemas = (
+        ("threadId", "prompt"),
+        ("target", "message"),
+    )
+    selected = next(
+        (schema for schema in schemas if set(arguments) == set(schema)),
+        None,
+    )
+    if selected is None:
+        return None
+    target = arguments.get(selected[0])
+    prompt = arguments.get(selected[1])
+    if not isinstance(target, str) or not isinstance(prompt, str):
+        return None
+    try:
+        handoff = _strict_json(prompt, "NATIVE_GOAL_CONTROL_SUFFIX_INVALID")
+    except NativeGoalObservationError:
+        return None
+    handoff_digest = native_goal_handoff_digest(handoff)
+    normalized_handoff = _native_goal_handoff_payload(handoff)
+    if (
+        handoff_digest is None
+        or normalized_handoff is None
+        or prompt.encode("utf-8") != _canonical_bytes(normalized_handoff)
+    ):
+        return None
+    return {
+        "action_kind": "SEND_STATE_WRITER_HANDOFF",
+        "turn_id": turn_id,
+        "target_thread_digest": _sha256_bytes(target.encode("utf-8")),
+        "handoff_digest": handoff_digest,
+        "prompt_bytes_digest": handoff_digest,
+    }
 
 
 def _strict_json(payload: str, code: str) -> Any:
@@ -140,78 +252,85 @@ def _stable_rollout(
         raise NativeGoalObservationError(
             "NATIVE_GOAL_ROLLOUT_PATH_INVALID", {"reason": "NOT_ABSOLUTE"}
         )
+    absolute_path = Path(os.path.abspath(os.fspath(path)))
     try:
-        absolute_path = Path(os.path.abspath(os.fspath(path)))
-        resolved_path = absolute_path.resolve(strict=True)
-        trusted_roots = tuple(
-            (
-                Path(os.path.abspath(os.fspath(root.expanduser()))),
-                root.expanduser().resolve(strict=False),
-            )
-            for root in (
-                trusted_rollout_roots
-                if trusted_rollout_roots is not None
-                else default_trusted_rollout_roots()
-            )
-        )
-        matched_root: tuple[Path, Path] | None = next(
-            (
-                roots
-                for roots in trusted_roots
-                if resolved_path.is_relative_to(roots[1])
-            ),
-            None,
-        )
-        if matched_root is None:
-            raise NativeGoalObservationError(
-                "NATIVE_GOAL_ROLLOUT_PATH_INVALID",
-                {"reason": "PATH_ESCAPE_OR_SYMLINK"},
-            )
-        raw_root, resolved_root = matched_root
-        if absolute_path.is_relative_to(raw_root):
-            lexical_root = raw_root
-            lexical_path = absolute_path
-        else:
-            lexical_root = resolved_root
-            lexical_path = resolved_path
-        cursor = lexical_root
-        for component in lexical_path.relative_to(lexical_root).parts:
-            cursor = cursor / component
-            if cursor.is_symlink():
-                raise NativeGoalObservationError(
-                    "NATIVE_GOAL_ROLLOUT_PATH_INVALID",
-                    {"reason": "PATH_ESCAPE_OR_SYMLINK"},
-                )
-        if path.is_symlink():
-            raise NativeGoalObservationError(
-                "NATIVE_GOAL_ROLLOUT_PATH_INVALID", {"reason": "SYMLINK"}
-            )
-        before = path.stat()
+        secure_path = absolute_path.parent.resolve(strict=True) / absolute_path.name
     except OSError as exc:
         raise NativeGoalObservationError(
             "NATIVE_GOAL_ROLLOUT_UNAVAILABLE"
         ) from exc
+    trusted_roots = tuple(
+        Path(os.path.abspath(os.fspath(root.expanduser()))).resolve(strict=False)
+        for root in (
+            trusted_rollout_roots
+            if trusted_rollout_roots is not None
+            else default_trusted_rollout_roots()
+        )
+    )
+    lexical_root = next(
+        (root for root in trusted_roots if secure_path.is_relative_to(root)),
+        None,
+    )
+    if lexical_root is None:
+        raise NativeGoalObservationError(
+            "NATIVE_GOAL_ROLLOUT_PATH_INVALID",
+            {"reason": "PATH_ESCAPE_OR_SYMLINK"},
+        )
+    relative_parts = secure_path.relative_to(lexical_root).parts
+    if not relative_parts:
+        raise NativeGoalObservationError(
+            "NATIVE_GOAL_ROLLOUT_PATH_INVALID", {"reason": "NOT_A_FILE"}
+        )
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    directory_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        # Walk from the filesystem root with openat-style dir_fd calls. No
+        # component is ever followed after a separate path check.
+        directory_fd = os.open("/", directory_flags)
+        for component in lexical_root.parts[1:]:
+            next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        for component in relative_parts[:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(relative_parts[-1], file_flags, dir_fd=directory_fd)
+        before = os.fstat(file_fd)
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise NativeGoalObservationError(
+                "NATIVE_GOAL_ROLLOUT_PATH_INVALID",
+                {"reason": "PATH_ESCAPE_OR_SYMLINK"},
+            ) from exc
+        raise NativeGoalObservationError(
+            "NATIVE_GOAL_ROLLOUT_UNAVAILABLE"
+        ) from exc
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
     if not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid():
+        assert file_fd is not None
+        os.close(file_fd)
+        file_fd = None
         raise NativeGoalObservationError(
             "NATIVE_GOAL_ROLLOUT_IDENTITY_INVALID",
             {"reason": "OWNER_OR_TYPE_INVALID"},
         )
     if before.st_size > MAX_ROLLOUT_BYTES:
+        assert file_fd is not None
+        os.close(file_fd)
+        file_fd = None
         raise NativeGoalObservationError(
             "NATIVE_GOAL_ROLLOUT_TOO_LARGE",
             {"max_bytes": MAX_ROLLOUT_BYTES},
         )
     try:
-        with path.open("rb", buffering=0) as handle:
-            opened = os.fstat(handle.fileno())
-            if (
-                opened.st_dev != before.st_dev
-                or opened.st_ino != before.st_ino
-                or opened.st_size != before.st_size
-            ):
-                raise NativeGoalObservationError(
-                    "NATIVE_GOAL_ROLLOUT_CONCURRENT_CHANGE"
-                )
+        assert file_fd is not None
+        with os.fdopen(file_fd, "rb", buffering=0) as handle:
+            file_fd = None
             payload = handle.read(MAX_ROLLOUT_BYTES + 1)
             if handle.read(1):
                 raise NativeGoalObservationError(
@@ -219,17 +338,18 @@ def _stable_rollout(
                     {"max_bytes": MAX_ROLLOUT_BYTES},
                 )
             after_open = os.fstat(handle.fileno())
-        after_path = path.stat()
     except NativeGoalObservationError:
         raise
     except OSError as exc:
         raise NativeGoalObservationError(
             "NATIVE_GOAL_ROLLOUT_UNAVAILABLE"
         ) from exc
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
     stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns")
     if any(
         getattr(before, field) != getattr(after_open, field)
-        or getattr(before, field) != getattr(after_path, field)
         for field in stable_fields
     ):
         raise NativeGoalObservationError(
@@ -248,10 +368,10 @@ def _stable_rollout(
         "inode": before.st_ino,
         "uid": before.st_uid,
         "mode": stat.S_IMODE(before.st_mode),
-        "path_digest": _sha256_bytes(os.fsencode(str(path))),
+        "path_digest": _sha256_bytes(os.fsencode(str(secure_path))),
     }
     return StableRollout(
-        path=path,
+        path=secure_path,
         payload=payload,
         stat_result=before,
         snapshot_digest=_sha256_bytes(payload),
@@ -434,13 +554,16 @@ def observe_native_goal_rollout(
     calls: dict[str, dict[str, Any]] = {}
     outputs: dict[str, Any] = {}
     tool_call_counts: dict[str | None, int] = {}
+    turn_start_offsets: dict[str, int] = {}
     turn_end_offsets: dict[str, int] = {}
+    control_actions: list[dict[str, Any]] = []
     ambiguous_create = False
     for offset, event in events:
         payload = event["payload"]
         event_type = payload.get("type")
         if event_type == "task_started" and isinstance(payload.get("turn_id"), str):
             current_turn = payload["turn_id"]
+            turn_start_offsets[current_turn] = offset
         elif event_type in {"task_complete", "turn_aborted"}:
             if isinstance(payload.get("turn_id"), str):
                 turn_end_offsets[payload["turn_id"]] = offset
@@ -500,8 +623,17 @@ def observe_native_goal_rollout(
                         control_match.group(2),
                         "NATIVE_GOAL_CONTROL_SUFFIX_INVALID",
                     )
-                    if not isinstance(arguments, dict):
+                    action = (
+                        _sanitized_control_action(
+                            control_match.group(1), arguments, current_turn
+                        )
+                        if isinstance(arguments, dict)
+                        else None
+                    )
+                    if action is None:
                         ambiguous_create = True
+                    else:
+                        control_actions.append(action)
                 else:
                     # The recovery window permits only exact Goal wrappers and
                     # the two strict post-readback control wrappers above.
@@ -525,8 +657,17 @@ def observe_native_goal_rollout(
                     except NativeGoalObservationError:
                         ambiguous_create = True
                         continue
-                if not isinstance(direct_arguments, dict):
+                action = (
+                    _sanitized_control_action(
+                        tool_name, direct_arguments, current_turn
+                    )
+                    if isinstance(direct_arguments, dict)
+                    else None
+                )
+                if action is None:
                     ambiguous_create = True
+                else:
+                    control_actions.append(action)
             else:
                 # Native goal calls are valid recovery evidence only when
                 # nested in an exact exec wrapper. Other calls fail closed
@@ -638,10 +779,12 @@ def observe_native_goal_rollout(
             **base,
             "observation_kind": "NATIVE_GOAL_GET_GOAL_V1",
             "turn_id": record["turn_id"],
+            "turn_start_offset": turn_start_offsets.get(record["turn_id"]),
             "turn_end_offset": turn_end_offsets.get(record["turn_id"]),
             "tool_name": "get_goal",
             "call_id_digest": _sha256_bytes(call_id.encode("utf-8")),
             "goal": _sanitized_goal(result.get("goal")),
+            "control_actions": control_actions,
         }
         if (
             expected_objective_digest is not None

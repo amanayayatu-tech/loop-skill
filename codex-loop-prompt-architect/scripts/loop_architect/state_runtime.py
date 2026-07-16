@@ -32,6 +32,7 @@ from .human_control import (
 )
 from .native_goal_observer import (
     NativeGoalObservationError,
+    native_goal_handoff_digest,
     observe_native_goal_rollout,
     runtime_manifest_digest as native_goal_runtime_manifest_digest,
 )
@@ -9000,7 +9001,12 @@ class AdaptiveStateRuntime:
             or (
                 expected_kind == "NATIVE_GOAL_GET_GOAL_V1"
                 and (
-                    not isinstance(observed.get("turn_end_offset"), int)
+                    not isinstance(observed.get("turn_start_offset"), int)
+                    or not isinstance(observed.get("turn_end_offset"), int)
+                    or observed["turn_start_offset"]
+                    >= observed["turn_end_offset"]
+                    or observed["turn_start_offset"]
+                    < observed["scan_start_offset"]
                     or observed["turn_end_offset"]
                     > observed["scan_end_offset"]
                 )
@@ -9061,6 +9067,81 @@ class AdaptiveStateRuntime:
                 {"path": path},
             )
         return copy.deepcopy(observed), digest
+
+    def _require_native_goal_control_actions(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        observation: dict[str, Any],
+        lease_claim: dict[str, Any],
+    ) -> None:
+        actions = observation.get("control_actions")
+        turn = state["routing_turn_ledger"].get(
+            lease_claim.get("routing_turn_id")
+        )
+        controller_turn_id = (
+            turn.get("controller_turn_id") if isinstance(turn, dict) else None
+        )
+        expected_handoff_digest = native_goal_handoff_digest(request)
+        expected_root_digest = _bytes_digest(
+            str(self.root).encode("utf-8")
+        )
+        expected_state_writer_digest = _bytes_digest(
+            self._registered_role_identity(state, "STATE_WRITER").encode(
+                "utf-8"
+            )
+        )
+        if (
+            observation.get("control_suffix_start_offset")
+            != observation.get("turn_end_offset")
+            or not isinstance(actions, list)
+            or len(actions) != 2
+            or not isinstance(controller_turn_id, str)
+            or expected_handoff_digest is None
+        ):
+            raise RuntimeRejection(
+                "NATIVE_GOAL_CONTROL_SUFFIX_IDENTITY_INVALID",
+                "/mutation",
+                {"reason": "BOUNDARY_OR_COUNT_INVALID"},
+            )
+        route, handoff = actions
+        expected_route = {
+            "action_kind": "ROUTE_RECOVERY_LEASE",
+            "turn_id": controller_turn_id,
+            "root_digest": expected_root_digest,
+            "authorization_digest": lease_claim["authorization_digest"],
+            "authorization_steering_id": lease_claim[
+                "authorization_steering_id"
+            ],
+            "controller_pack_digest": lease_claim[
+                "controller_pack_digest"
+            ],
+            "migration_id": lease_claim["migration_id"],
+            "recovery_scope": lease_claim["recovery_scope"],
+            "routing_turn_id": lease_claim["routing_turn_id"],
+            "lease_id": lease_claim["lease_id"],
+            "state_writer_thread_id": lease_claim[
+                "state_writer_thread_id"
+            ],
+        }
+        if route != expected_route:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_CONTROL_SUFFIX_IDENTITY_INVALID",
+                "/mutation",
+                {"reason": "ROUTE_IDENTITY_INVALID"},
+            )
+        if handoff != {
+            "action_kind": "SEND_STATE_WRITER_HANDOFF",
+            "turn_id": controller_turn_id,
+            "target_thread_digest": expected_state_writer_digest,
+            "handoff_digest": expected_handoff_digest,
+            "prompt_bytes_digest": expected_handoff_digest,
+        }:
+            raise RuntimeRejection(
+                "NATIVE_GOAL_CONTROL_SUFFIX_IDENTITY_INVALID",
+                "/mutation",
+                {"reason": "HANDOFF_IDENTITY_INVALID"},
+            )
 
 
     def _require_native_goal_recovery_state_writer_lease(
@@ -9678,6 +9759,9 @@ class AdaptiveStateRuntime:
         )
         readback = goal_observation.get("goal")
         readback_turn_id = goal_observation.get("turn_id")
+        self._require_native_goal_control_actions(
+            state, request, goal_observation, mutation["lease_claim"]
+        )
         full_create_window = goal_observation.get("create_window")
         if (
             not isinstance(full_create_window, dict)
@@ -9710,6 +9794,8 @@ class AdaptiveStateRuntime:
             != rollout_observation.get("rollout_path")
             or goal_observation.get("scan_end_offset", -1)
             <= rollout_observation.get("scan_end_offset", -1)
+            or rollout_observation.get("scan_end_offset", -1)
+            > goal_observation.get("turn_start_offset", -1)
             or not isinstance(readback, dict)
             or readback.get("thread_id")
             != prepared["target_controller_thread_id"]
@@ -9973,6 +10059,9 @@ class AdaptiveStateRuntime:
                 )[0]
             )
         final_null_observation = full_null_observations[-1]
+        self._require_native_goal_control_actions(
+            state, request, final_null_observation, mutation["lease_claim"]
+        )
         full_create_window = final_null_observation.get("create_window")
         if (
             not isinstance(full_create_window, dict)

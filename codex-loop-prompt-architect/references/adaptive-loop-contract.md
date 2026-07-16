@@ -206,9 +206,11 @@ State-Writer, that State-Writer recaptures the same readback at the Controller
 rollout's current stable EOF immediately before standalone runtime validation.
 That single stable snapshot supplies both the Goal readback and the complete
 create-window classification; runtime must not reopen the rollout between
-those decisions. Only a finite exact-name set for `route_state_mutation` and
-`send_message_to_thread` wrappers may appear after the readback; suffix matches
-are forbidden. Any other wrapper or any byte appended after final capture
+those decisions. The suffix boundary is the selected readback turn end. The
+only permitted `route_state_mutation` plus `send_message_to_thread` pair must
+bind the canonical recovery scope, migration, lease, attested Controller turn,
+State-Writer target, and exact canonical handoff digest; name-only acceptance
+is forbidden. Any other wrapper or any byte appended after final capture
 rejects `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`. Runtime requires exactly one matching rollout invocation,
 four distinct A/B/C/D turn identities, create-before-readback ordering, a
 byte-identical objective/marker, changed createdAt, consistent result identity
@@ -230,6 +232,11 @@ optional read-only Goal DB observation forbids rollback. Success restores the
 journaled pre-PREPARE generation, Controller Goal, heartbeat observation, and
 routing gate, adds one immutable ROLLED_BACK history receipt, consumes the
 lease, and remains PAUSED.
+
+The observer anchors the trusted rollout root with directory fds, opens every
+directory component using `O_DIRECTORY|O_NOFOLLOW`, opens the final regular
+file using `O_NOFOLLOW`, and reads only from that fd. Separate path checks and
+ordinary pathname reopen are not authoritative evidence.
 
 RESUME is a later independent turn and requires no PREPARED/CONFLICT/
 OUTCOME_UNKNOWN migration, one unique ACTIVE current generation, exact Pack and

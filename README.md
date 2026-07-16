@@ -37,8 +37,10 @@ rollback；stdout 丢失只能由后续 rollout + active same-thread readback ad
 ROLLBACK 都保持 canonical 和同一 heartbeat 为 PAUSED，RESUME 与 heartbeat ACTIVE 仍是
 后续独立 turn。原 State-Writer 在 runtime apply 前必须把最终 readback/null 重新 capture 到
 目标 Controller 当前稳定 EOF；同一份稳定快照必须同时给出 Goal readback 与完整 create
-窗口，runtime 禁止在两项判断之间重新打开 rollout。post-readback 控制工具只接受有限的
-精确工具名，不能用后缀匹配冒充。任何随后新增字节都以
+窗口，runtime 禁止在两项判断之间重新打开 rollout。post-readback 控制 suffix 必须从
+readback turn 的结束位置导出；route 与 State-Writer handoff 还要绑定 canonical scope、
+migration、lease、可信 turn、目标 thread 和规范化 handoff digest，不能只检查工具名。
+rollout 路径从受信根逐级以 `openat`/`O_NOFOLLOW` 打开，只从最终 fd 读取。任何随后新增字节都以
 `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED` fail closed。
 
 observer 只读 `CODEX_HOME/sessions` 与 `archived_sessions` 的 canonical rollout，拒绝

@@ -262,6 +262,7 @@ class NativeGoalRolloutFixture:
         scan_start_offset: int = 0,
         expected_objective_digest: str | None = None,
         expected_objective_bytes_digest: str | None = None,
+        control_suffix_start_offset: int | None = None,
     ) -> tuple[dict[str, Any], dict[str, str]]:
         observation = observe_native_goal_rollout(
             rollout_path=self.path,
@@ -270,6 +271,7 @@ class NativeGoalRolloutFixture:
             scan_start_offset=scan_start_offset,
             expected_objective_digest=expected_objective_digest,
             expected_objective_bytes_digest=expected_objective_bytes_digest,
+            control_suffix_start_offset=control_suffix_start_offset,
             observed_at=observed_at,
             trusted_rollout_roots=(self.root.resolve(),),
         )
@@ -665,6 +667,78 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             "updatedAt": created_at,
         }
 
+    def _append_recovery_control_suffix(
+        self,
+        fixture: dict[str, Any],
+        *,
+        scope: str,
+        turn_id: str,
+        lease_claim: dict[str, Any],
+        handoff_mutation: dict[str, Any],
+        route_scope_override: str | None = None,
+        target_override: str | None = None,
+    ) -> None:
+        route_mutation = {
+            "type": "ACQUIRE_LEASE",
+            **{
+                key: lease_claim[key]
+                for key in (
+                    "authorization_digest",
+                    "authorization_steering_id",
+                    "controller_pack_digest",
+                    "lease_id",
+                    "migration_id",
+                    "recovery_scope",
+                    "routing_turn_id",
+                    "state_writer_thread_id",
+                )
+            },
+        }
+        if route_scope_override is not None:
+            route_mutation["recovery_scope"] = route_scope_override
+        elif route_mutation["recovery_scope"] != scope:
+            self.fail("fixture recovery scope mismatch")
+        fixture["rollout"].add_raw_tool_call(
+            turn_id,
+            source=json.dumps(
+                {
+                    "root": str(fixture["harness"].runtime.root),
+                    "request": {"mutation": route_mutation},
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            tool_name="route_state_mutation",
+            complete_turn=False,
+        )
+        normalized_mutation = {
+            key: handoff_mutation[key]
+            for key in sorted(
+                native_goal_observer.NATIVE_GOAL_HANDOFF_FIELDS
+            )
+            if key in handoff_mutation
+        }
+        prompt = json.dumps(
+            {"mutation": normalized_mutation},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        fixture["rollout"].add_raw_tool_call(
+            turn_id,
+            source=json.dumps(
+                {
+                    "target": target_override or "state-writer-1",
+                    "message": prompt,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            tool_name="send_message_to_thread",
+            start_turn=False,
+        )
+
     def _commit(
         self,
         fixture: dict[str, Any],
@@ -680,6 +754,9 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         created_at: int = 200,
         objective: str | None = None,
         runtime: AdaptiveStateRuntime | None = None,
+        control_route_scope: str | None = None,
+        control_target: str | None = None,
+        control_boundary_shift: int = 0,
     ) -> dict[str, Any]:
         harness: Harness = fixture["harness"]
         prepared = harness.state()["native_goal_generation_migration"]
@@ -734,6 +811,41 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 ],
             )
         assert rollout_artifact is not None
+        readback_anchor = observe_native_goal_rollout(
+            rollout_path=fixture["rollout"].path,
+            controller_thread_id="controller-1",
+            mode="GET_GOAL",
+            scan_start_offset=outbox["prepare_high_watermark"],
+            observed_at=T4,
+            trusted_rollout_roots=(harness.root.resolve(),),
+        )
+        acquired, _ = self._acquire_recovery(
+            fixture,
+            scope="NATIVE_GOAL_GENERATION_COMMIT",
+            turn_id=commit_turn_id,
+            observed_at=T4,
+        )
+        self.assertTrue(acquired["ok"], acquired)
+        goal_observation_path = (
+            ".codex-loop/reports/native-goal-active-readback.json"
+        )
+        handoff_mutation = {
+            "type": "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+            "lease_claim": acquired["result"]["lease_claim"],
+            "migration_id": fixture["migration_id"],
+            "goal_observation_path": goal_observation_path,
+            "rollout_observation_path": rollout_artifact["path"],
+            "observed_at": T4,
+        }
+        self._append_recovery_control_suffix(
+            fixture,
+            scope="NATIVE_GOAL_GENERATION_COMMIT",
+            turn_id=commit_turn_id,
+            lease_claim=acquired["result"]["lease_claim"],
+            handoff_mutation=handoff_mutation,
+            route_scope_override=control_route_scope,
+            target_override=control_target,
+        )
         _, goal_artifact = fixture["rollout"].observation_artifact(
             root=harness.root,
             stem="native-goal-active-readback",
@@ -744,6 +856,9 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             expected_objective_bytes_digest=outbox[
                 "objective_bytes_digest"
             ],
+            control_suffix_start_offset=(
+                readback_anchor["turn_end_offset"] + control_boundary_shift
+            ),
         )
         if second_create_after_readback:
             fixture["rollout"].add_create_goal(
@@ -752,13 +867,6 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 goal,
                 include_output=False,
             )
-        acquired, _ = self._acquire_recovery(
-            fixture,
-            scope="NATIVE_GOAL_GENERATION_COMMIT",
-            turn_id=commit_turn_id,
-            observed_at=T4,
-        )
-        self.assertTrue(acquired["ok"], acquired)
         _, heartbeat_artifact = self._heartbeat_artifact(
             harness,
             stem="state-writer-commit-heartbeat",
@@ -837,6 +945,40 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             scan_start_offset=outbox["prepare_high_watermark"],
         )
         fixture["rollout"].add_get_goal("rollback-null-two", None)
+        null_anchor = observe_native_goal_rollout(
+            rollout_path=fixture["rollout"].path,
+            controller_thread_id="controller-1",
+            mode="GET_GOAL",
+            scan_start_offset=outbox["prepare_high_watermark"],
+            observed_at="2026-01-01T01:01:00Z",
+            trusted_rollout_roots=(harness.root.resolve(),),
+        )
+        acquired, _ = self._acquire_recovery(
+            fixture,
+            scope="NATIVE_GOAL_GENERATION_ROLLBACK",
+            turn_id="rollback-turn-c",
+            observed_at="2026-01-01T01:02:00Z",
+        )
+        self.assertTrue(acquired["ok"], acquired)
+        null_two_path = (
+            ".codex-loop/reports/native-goal-rollback-null-two.json"
+        )
+        handoff_mutation = {
+            "type": "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+            "lease_claim": acquired["result"]["lease_claim"],
+            "migration_id": fixture["migration_id"],
+            "null_observation_paths": [null_one["path"], null_two_path],
+            "rollout_observation_path": rollout_artifact["path"],
+            "rollback_reason": "stable evidence proves create was not invoked",
+            "observed_at": "2026-01-01T01:02:00Z",
+        }
+        self._append_recovery_control_suffix(
+            fixture,
+            scope="NATIVE_GOAL_GENERATION_ROLLBACK",
+            turn_id="rollback-turn-c",
+            lease_claim=acquired["result"]["lease_claim"],
+            handoff_mutation=handoff_mutation,
+        )
         _, null_two = fixture["rollout"].observation_artifact(
             root=harness.root,
             stem="native-goal-rollback-null-two",
@@ -847,6 +989,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             expected_objective_bytes_digest=outbox[
                 "objective_bytes_digest"
             ],
+            control_suffix_start_offset=null_anchor["turn_end_offset"],
         )
         if add_create_after_final_null:
             fixture["rollout"].add_create_goal(
@@ -855,13 +998,6 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 self._active_goal(fixture),
                 include_output=False,
             )
-        acquired, _ = self._acquire_recovery(
-            fixture,
-            scope="NATIVE_GOAL_GENERATION_ROLLBACK",
-            turn_id="rollback-turn-c",
-            observed_at="2026-01-01T01:02:00Z",
-        )
-        self.assertTrue(acquired["ok"], acquired)
         _, heartbeat_artifact = self._heartbeat_artifact(
             harness,
             stem="state-writer-rollback-success-heartbeat",
@@ -1615,6 +1751,30 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             # A third rollout open would reintroduce the inter-read TOCTOU.
             self.assertEqual(observer.call_count, 2)
 
+    def test_commit_binds_control_boundary_scope_and_state_writer_target(
+        self,
+    ) -> None:
+        cases = (
+            {"control_boundary_shift": 1},
+            {"control_route_scope": "NATIVE_GOAL_GENERATION_ROLLBACK"},
+            {"control_target": "worker-1"},
+        )
+        for options in cases:
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as temporary:
+                fixture = self._fixture(Path(temporary))
+                self._prepare(fixture)
+                rejected = self._commit(fixture, **options)
+                self.assertEqual(
+                    rejected["status"],
+                    "NATIVE_GOAL_CONTROL_SUFFIX_IDENTITY_INVALID",
+                )
+                self.assertEqual(
+                    fixture["harness"].state()[
+                        "native_goal_generation_migration"
+                    ]["status"],
+                    "PREPARED",
+                )
+
     def test_commit_rejects_zero_or_multiple_create_invocations(self) -> None:
         for create_count in (0, 2):
             with self.subTest(create_count=create_count), tempfile.TemporaryDirectory() as temporary:
@@ -1640,7 +1800,6 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         cases = (
             {"phase_b_turn_id": "prepare-turn-a"},
             {"readback_turn_id": "prepare-turn-a"},
-            {"readback_turn_id": "commit-route-turn-d"},
             {"phase_b_turn_id": "commit-route-turn-d"},
             {"create_observation_after_readback": True},
             {"second_create_after_observation": True},
@@ -1667,6 +1826,25 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                     ]["status"],
                     "PREPARED",
                 )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            self._prepare(fixture)
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                self._commit(
+                    fixture,
+                    readback_turn_id="commit-route-turn-d",
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_GET_GOAL_OBSERVATION_UNAVAILABLE",
+            )
+            self.assertEqual(
+                fixture["harness"].state()[
+                    "native_goal_generation_migration"
+                ]["status"],
+                "PREPARED",
+            )
 
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self._fixture(Path(temporary))
@@ -2186,6 +2364,22 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             self.assertEqual(create_observation["matching_invocation_count"], 1)
 
     def test_post_readback_control_tool_names_are_exact_not_suffixes(self) -> None:
+        route_arguments = {
+            "root": "/tmp/project",
+            "request": {
+                "mutation": {
+                    "type": "ACQUIRE_LEASE",
+                    "authorization_digest": digest("authorization"),
+                    "authorization_steering_id": "steering-1",
+                    "controller_pack_digest": digest("pack"),
+                    "lease_id": "lease-1",
+                    "migration_id": "migration-1",
+                    "recovery_scope": "NATIVE_GOAL_GENERATION_COMMIT",
+                    "routing_turn_id": "route-1",
+                    "state_writer_thread_id": "state-writer-1",
+                }
+            },
+        }
         for tool_name, expected_state in (
             ("route_state_mutation", "NONE"),
             ("mcp__codex_loop_state__route_state_mutation", "NONE"),
@@ -2205,7 +2399,9 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 )
                 rollout.add_raw_tool_call(
                     "control-turn",
-                    source="{}",
+                    source=json.dumps(
+                        route_arguments, sort_keys=True, separators=(",", ":")
+                    ),
                     tool_name=tool_name,
                 )
                 observed = observe_native_goal_rollout(
@@ -2609,6 +2805,16 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 trusted_rollout_roots=(rollout_root.resolve(),),
             )
             self.assertEqual(first, second)
+            with mock.patch.dict(
+                os.environ, {"CODEX_HOME": str(codex_home)}
+            ):
+                default_root_observation = observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="GET_GOAL",
+                    observed_at=T4,
+                )
+            self.assertEqual(default_root_observation, first)
             request = {
                 "rollout_path": str(rollout.path),
                 "controller_thread_id": "controller-1",
@@ -2635,7 +2841,11 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 check=False,
                 env={**os.environ, "CODEX_HOME": str(codex_home)},
             )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(
+                completed.returncode,
+                0,
+                completed.stderr or completed.stdout,
+            )
             response = json.loads(completed.stdout)
             self.assertTrue(response["ok"], response)
             receipt_bytes = (
@@ -2691,6 +2901,47 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 )
             self.assertEqual(
                 caught.exception.code, "NATIVE_GOAL_ROLLOUT_PARSE_INCOMPLETE"
+            )
+
+    def test_rollout_open_rejects_final_component_symlink_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            rollout = NativeGoalRolloutFixture(root)
+            rollout.add_get_goal("stable-get", None)
+            original = rollout.path.with_suffix(".original")
+            real_open = os.open
+            swapped = False
+
+            def swap_before_final_open(
+                path: str | bytes,
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                nonlocal swapped
+                if path == rollout.path.name and dir_fd is not None and not swapped:
+                    swapped = True
+                    rollout.path.rename(original)
+                    rollout.path.symlink_to(original.name)
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with mock.patch.object(
+                native_goal_observer.os,
+                "open",
+                side_effect=swap_before_final_open,
+            ):
+                with self.assertRaises(NativeGoalObservationError) as caught:
+                    observe_native_goal_rollout(
+                        rollout_path=rollout.path,
+                        controller_thread_id="controller-1",
+                        mode="GET_GOAL",
+                        trusted_rollout_roots=(root,),
+                    )
+            self.assertTrue(swapped)
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_ROLLOUT_PATH_INVALID",
             )
 
     def test_rollout_observer_rejects_concurrent_append_owner_and_thread_mismatch(self) -> None:
