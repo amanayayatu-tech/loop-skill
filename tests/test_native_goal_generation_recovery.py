@@ -6,6 +6,7 @@ import sys
 
 from state_runtime_support import *  # noqa: F403
 
+import loop_architect.native_goal_observer as native_goal_observer  # noqa: E402
 from loop_architect.native_goal_observer import (  # noqa: E402
     NativeGoalObservationError,
     observe_native_goal_rollout,
@@ -59,6 +60,8 @@ class NativeGoalRolloutFixture:
         self,
         turn_id: str,
         goal: dict[str, Any] | None,
+        *,
+        direct_text: bool = False,
     ) -> str:
         self.call_counter += 1
         call_id = f"call-get-{self.call_counter}"
@@ -80,7 +83,11 @@ class NativeGoalRolloutFixture:
                     "status": "completed",
                     "input": (
                         "const result = await tools.get_goal({});\n"
-                        "text(JSON.stringify(result));"
+                        + (
+                            "text(result);"
+                            if direct_text
+                            else "text(JSON.stringify(result));"
+                        )
                     ),
                 },
             }
@@ -119,6 +126,7 @@ class NativeGoalRolloutFixture:
         *,
         include_output: bool = True,
         ambiguous_source: bool = False,
+        direct_text: bool = False,
     ) -> str:
         self.call_counter += 1
         call_id = f"call-create-{self.call_counter}"
@@ -130,7 +138,11 @@ class NativeGoalRolloutFixture:
         )
         source = (
             f"const result = await tools.create_goal({arguments});\n"
-            "text(JSON.stringify(result));"
+            + (
+                "text(result);"
+                if direct_text
+                else "text(JSON.stringify(result));"
+            )
         )
         if ambiguous_source:
             source = f"const fake = 'tools.create_goal';\n{source}"
@@ -179,6 +191,65 @@ class NativeGoalRolloutFixture:
                 "payload": {"type": "task_complete", "turn_id": turn_id},
             }
         )
+        return call_id
+
+    def add_raw_tool_call(
+        self,
+        turn_id: str,
+        *,
+        source: str,
+        result: dict[str, Any] | None = None,
+        tool_name: str = "exec",
+        start_turn: bool = True,
+        complete_turn: bool = True,
+    ) -> str:
+        """Append one synthetic call without interpreting its JavaScript source."""
+
+        self.call_counter += 1
+        call_id = f"call-raw-{self.call_counter}"
+        if start_turn:
+            self._append(
+                {
+                    "timestamp": T3,
+                    "type": "event_msg",
+                    "payload": {"type": "task_started", "turn_id": turn_id},
+                }
+            )
+        call_payload: dict[str, Any] = {
+            "type": "custom_tool_call",
+            "name": tool_name,
+            "call_id": call_id,
+            "status": "completed",
+        }
+        if tool_name == "exec":
+            call_payload["input"] = source
+        self._append(
+            {
+                "timestamp": T3,
+                "type": "response_item",
+                "payload": call_payload,
+            }
+        )
+        if result is not None:
+            self._append(
+                {
+                    "timestamp": T3,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": call_id,
+                        "output": self._tool_output(result),
+                    },
+                }
+            )
+        if complete_turn:
+            self._append(
+                {
+                    "timestamp": T3,
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "turn_id": turn_id},
+                }
+            )
         return call_id
 
     def observation_artifact(
@@ -1486,7 +1557,6 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
     def test_commit_rejects_turn_objective_and_created_at_identity_drift(self) -> None:
         cases = (
             {"phase_b_turn_id": "prepare-turn-a"},
-            {"phase_b_turn_id": "commit-turn-c"},
             {"objective": "different body\n[different marker]"},
             {"created_at": 100},
         )
@@ -1508,6 +1578,22 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                     ]["status"],
                     "PREPARED",
                 )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            self._prepare(fixture)
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                self._commit(fixture, phase_b_turn_id="commit-turn-c")
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_GET_GOAL_OBSERVATION_UNAVAILABLE",
+            )
+            self.assertEqual(
+                fixture["harness"].state()[
+                    "native_goal_generation_migration"
+                ]["status"],
+                "PREPARED",
+            )
 
     def test_commit_replay_is_identity_bound_and_keeps_loop_paused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1902,6 +1988,248 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             )
             self.assertEqual(observed["invocation_state"], "AMBIGUOUS")
 
+    def test_rollout_observer_accepts_exec_text_object_for_goal_tools(self) -> None:
+        """Accept both exact result serializers emitted by Codex exec."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            rollout.add_get_goal("get-real-wrapper", None, direct_text=True)
+            get_observation = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="GET_GOAL",
+                observed_at=T4,
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            self.assertIsNone(get_observation["goal"])
+            self.assertEqual(get_observation["turn_id"], "get-real-wrapper")
+
+            objective = "body\n[marker]"
+            rollout.add_create_goal(
+                "create-real-wrapper",
+                objective,
+                {
+                    "createdAt": 200,
+                    "objective": objective,
+                    "status": "active",
+                    "threadId": "controller-1",
+                    "timeUsedSeconds": 0,
+                    "tokensUsed": 0,
+                    "updatedAt": 200,
+                },
+                direct_text=True,
+            )
+            create_observation = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="CREATE_GOAL",
+                expected_objective_digest=digest("body"),
+                expected_objective_bytes_digest=digest(objective),
+                observed_at=T4,
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            self.assertEqual(create_observation["invocation_state"], "COMPLETED")
+            self.assertEqual(create_observation["matching_invocation_count"], 1)
+
+    def test_rollout_observer_rejects_non_exact_javascript_wrappers(self) -> None:
+        objective = "body\n[marker]"
+        unsafe_sources = {
+            "promise-all": (
+                "const result = await Promise.all([tools.get_goal({}),"
+                "tools.create_goal({\"objective\":\"body\\n[marker]\"})]);\n"
+                "text(result);"
+            ),
+            "multiple-goal-calls": (
+                "const first = await tools.get_goal({});\n"
+                "const result = await tools.create_goal("
+                "{\"objective\":\"body\\n[marker]\"});\ntext(result);"
+            ),
+            "alias": (
+                "const create = tools.create_goal;\n"
+                "const result = await create("
+                "{\"objective\":\"body\\n[marker]\"});\ntext(result);"
+            ),
+            "computed-property": (
+                "const result = await tools['create_goal']("
+                "{\"objective\":\"body\\n[marker]\"});\ntext(result);"
+            ),
+            "dynamic-call": (
+                "const name = 'create_goal';\n"
+                "const result = await tools[name]("
+                "{\"objective\":\"body\\n[marker]\"});\ntext(result);"
+            ),
+            "extra-statement": (
+                "const audit = 'extra';\n"
+                "const result = await tools.create_goal("
+                "{\"objective\":\"body\\n[marker]\"});\ntext(result);"
+            ),
+            "extra-side-effect": (
+                "const result = await tools.create_goal("
+                "{\"objective\":\"body\\n[marker]\"});\n"
+                "notify('side-effect');\ntext(result);"
+            ),
+            "string-only": "text('tools.create_goal({})');",
+            "comment-only": (
+                "// tools.create_goal({})\n"
+                "const result = await tools.get_goal({});\ntext(result);"
+            ),
+        }
+        for name, source in unsafe_sources.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                rollout = NativeGoalRolloutFixture(root)
+                rollout.add_raw_tool_call(
+                    f"unsafe-{name}",
+                    source=source,
+                    result={"goal": None},
+                )
+                observed = observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="CREATE_GOAL",
+                    expected_objective_digest=digest("body"),
+                    expected_objective_bytes_digest=digest(objective),
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+                self.assertEqual(observed["invocation_state"], "AMBIGUOUS")
+                with self.assertRaises(NativeGoalObservationError) as caught:
+                    observe_native_goal_rollout(
+                        rollout_path=rollout.path,
+                        controller_thread_id="controller-1",
+                        mode="GET_GOAL",
+                        trusted_rollout_roots=(root.resolve(),),
+                    )
+                self.assertEqual(
+                    caught.exception.code,
+                    "NATIVE_GOAL_GET_GOAL_OBSERVATION_UNAVAILABLE",
+                )
+
+    def test_rollout_observer_rejects_non_strict_or_unauthorized_arguments(self) -> None:
+        objective = "body\n[marker]"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            rollout.add_raw_tool_call(
+                "non-strict-json",
+                source=(
+                    "const result = await tools.create_goal("
+                    "{objective:'body\\n[marker]'});\ntext(result);"
+                ),
+            )
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="CREATE_GOAL",
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_CREATE_INVOCATION_INVALID",
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            arguments = json.dumps(
+                {"objective": objective, "token_budget": 1},
+                separators=(",", ":"),
+            )
+            rollout.add_raw_tool_call(
+                "unauthorized-token-budget",
+                source=(
+                    f"const result = await tools.create_goal({arguments});\n"
+                    "text(result);"
+                ),
+            )
+            observed = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="CREATE_GOAL",
+                expected_objective_digest=digest("body"),
+                expected_objective_bytes_digest=digest(objective),
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            self.assertEqual(observed["invocation_state"], "AMBIGUOUS")
+
+    def test_rollout_observer_requires_one_goal_call_per_real_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            get_source = (
+                "const result = await tools.get_goal({});\n"
+                "text(JSON.stringify(result));"
+            )
+            result = {
+                "goal": None,
+                "remainingTokens": None,
+                "completionBudgetReport": None,
+            }
+            rollout.add_raw_tool_call(
+                "two-tools",
+                source=get_source,
+                result=result,
+                complete_turn=False,
+            )
+            rollout.add_raw_tool_call(
+                "two-tools",
+                source=get_source,
+                result=result,
+                start_turn=False,
+            )
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="GET_GOAL",
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_GET_GOAL_OBSERVATION_UNAVAILABLE",
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            rollout.add_raw_tool_call(
+                "missing-turn",
+                source=(
+                    "const result = await tools.get_goal({});\n"
+                    "text(result);"
+                ),
+                result={"goal": None},
+                start_turn=False,
+            )
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="GET_GOAL",
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_GET_GOAL_OBSERVATION_UNAVAILABLE",
+            )
+
+    def test_rollout_observer_rejects_direct_goal_tool_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            rollout.add_raw_tool_call(
+                "direct-create",
+                source="",
+                tool_name="create_goal",
+            )
+            observed = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="CREATE_GOAL",
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            self.assertEqual(observed["invocation_state"], "AMBIGUOUS")
+
     def test_rollout_observer_persists_started_and_completed_invocations(self) -> None:
         for include_output, expected in (
             (False, "STARTED_UNKNOWN"),
@@ -2054,6 +2382,74 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 )
             self.assertEqual(
                 caught.exception.code, "NATIVE_GOAL_ROLLOUT_PARSE_INCOMPLETE"
+            )
+
+    def test_rollout_observer_rejects_concurrent_append_owner_and_thread_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            rollout.add_get_goal("stable-get", None)
+            real_fstat = os.fstat
+            fstat_calls = 0
+
+            def append_before_second_fstat(fd: int) -> os.stat_result:
+                nonlocal fstat_calls
+                fstat_calls += 1
+                if fstat_calls == 2:
+                    with rollout.path.open("ab") as handle:
+                        handle.write(b'{"payload":{},"type":"event_msg"}\n')
+                return real_fstat(fd)
+
+            with mock.patch.object(
+                native_goal_observer.os,
+                "fstat",
+                side_effect=append_before_second_fstat,
+            ):
+                with self.assertRaises(NativeGoalObservationError) as caught:
+                    observe_native_goal_rollout(
+                        rollout_path=rollout.path,
+                        controller_thread_id="controller-1",
+                        mode="GET_GOAL",
+                        trusted_rollout_roots=(root.resolve(),),
+                    )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_ROLLOUT_CONCURRENT_CHANGE",
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            with mock.patch.object(
+                native_goal_observer.os,
+                "getuid",
+                return_value=os.getuid() + 1,
+            ):
+                with self.assertRaises(NativeGoalObservationError) as caught:
+                    observe_native_goal_rollout(
+                        rollout_path=rollout.path,
+                        controller_thread_id="controller-1",
+                        mode="GET_GOAL",
+                        trusted_rollout_roots=(root.resolve(),),
+                    )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_ROLLOUT_IDENTITY_INVALID",
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root, thread_id="controller-1")
+            with self.assertRaises(NativeGoalObservationError) as caught:
+                observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="wrong-controller",
+                    mode="GET_GOAL",
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "NATIVE_GOAL_ROLLOUT_THREAD_IDENTITY_INVALID",
             )
 
 

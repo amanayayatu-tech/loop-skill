@@ -23,14 +23,14 @@ MAX_ROLLOUT_BYTES = 128 * 1024 * 1024
 MAX_OBSERVE_SECONDS = 15.0
 CREATE_GOAL_TEMPLATE_RE = re.compile(
     r"\A\s*const\s+result\s*=\s*await\s+tools\.create_goal\s*"
-    r"\((\{.*\})\)\s*;\s*text\s*\(\s*JSON\.stringify\s*"
-    r"\(\s*result\s*\)\s*\)\s*;\s*\Z",
+    r"\((\{.*\})\)\s*;\s*text\s*\(\s*(?:JSON\.stringify\s*"
+    r"\(\s*result\s*\)|result)\s*\)\s*;\s*\Z",
     re.DOTALL,
 )
 GET_GOAL_TEMPLATE_RE = re.compile(
     r"\A\s*const\s+result\s*=\s*await\s+tools\.get_goal\s*"
-    r"\(\s*\{\s*\}\s*\)\s*;\s*text\s*\(\s*JSON\.stringify\s*"
-    r"\(\s*result\s*\)\s*\)\s*;\s*\Z",
+    r"\(\s*\{\s*\}\s*\)\s*;\s*text\s*\(\s*(?:JSON\.stringify\s*"
+    r"\(\s*result\s*\)|result)\s*\)\s*;\s*\Z",
     re.DOTALL,
 )
 
@@ -391,6 +391,7 @@ def observe_native_goal_rollout(
     current_turn: str | None = None
     calls: dict[str, dict[str, Any]] = {}
     outputs: dict[str, Any] = {}
+    tool_call_counts: dict[str | None, int] = {}
     ambiguous_create = False
     for offset, event in events:
         payload = event["payload"]
@@ -401,6 +402,12 @@ def observe_native_goal_rollout(
             current_turn = None
         if offset < scan_start_offset:
             continue
+        if event_type == "custom_tool_call" and isinstance(
+            payload.get("call_id"), str
+        ):
+            tool_call_counts[current_turn] = (
+                tool_call_counts.get(current_turn, 0) + 1
+            )
         if (
             event_type == "custom_tool_call"
             and payload.get("name") == "exec"
@@ -409,11 +416,8 @@ def observe_native_goal_rollout(
         ):
             source = payload["input"]
             call_id = payload["call_id"]
-            if "create_goal" in source:
-                match = CREATE_GOAL_TEMPLATE_RE.fullmatch(source)
-                if match is None:
-                    ambiguous_create = True
-                    continue
+            match = CREATE_GOAL_TEMPLATE_RE.fullmatch(source)
+            if match is not None:
                 arguments = _strict_json(
                     match.group(1), "NATIVE_GOAL_CREATE_INVOCATION_INVALID"
                 )
@@ -433,13 +437,21 @@ def observe_native_goal_rollout(
                     "turn_id": current_turn,
                     **identity,
                 }
-            elif "get_goal" in source:
-                if GET_GOAL_TEMPLATE_RE.fullmatch(source) is None:
-                    continue
+            elif GET_GOAL_TEMPLATE_RE.fullmatch(source) is not None:
                 calls[call_id] = {
                     "tool_name": "get_goal",
                     "turn_id": current_turn,
                 }
+            else:
+                # The recovery window permits only the two exact, side-effect-
+                # bounded wrappers above.  Arbitrary JavaScript is never parsed
+                # or treated as proof that create_goal did not run.
+                ambiguous_create = True
+        elif event_type == "custom_tool_call":
+            # Native goal calls are valid recovery evidence only when nested in
+            # one of the two exact exec wrappers above.  Every other tool call
+            # keeps CREATE_GOAL recovery fail-closed.
+            ambiguous_create = True
         elif (
             event_type == "custom_tool_call_output"
             and isinstance(payload.get("call_id"), str)
@@ -464,7 +476,10 @@ def observe_native_goal_rollout(
         candidates = [
             (call_id, record)
             for call_id, record in calls.items()
-            if record["tool_name"] == "get_goal" and call_id in outputs
+            if record["tool_name"] == "get_goal"
+            and call_id in outputs
+            and isinstance(record["turn_id"], str)
+            and tool_call_counts.get(record["turn_id"]) == 1
         ]
         if not candidates:
             raise NativeGoalObservationError(
@@ -515,6 +530,11 @@ def observe_native_goal_rollout(
                 "created_goal": created_goal,
             }
         )
+        if (
+            not isinstance(record["turn_id"], str)
+            or tool_call_counts.get(record["turn_id"]) != 1
+        ):
+            ambiguous_create = True
     if ambiguous_create:
         invocation_state = "AMBIGUOUS"
     elif any(item["status"] != "COMPLETED" for item in matching):
