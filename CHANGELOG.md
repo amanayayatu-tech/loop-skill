@@ -31,9 +31,11 @@ All notable changes to this project are documented here. The project follows
 ### Evidence boundary
 
 Repository tests prove deterministic state, receipt and crash-recovery
-semantics only. Release still requires the same exact SHA on the Mac mini and a
-real current-App disposable-fixture canary. If durable native Goal invocation
-evidence is unavailable, the release remains blocked as
+semantics only. The primary Mac owns the complete exact-SHA tests and real App
+canary; the Mac mini supplies only a lightweight root-owned/read-only identity,
+install, and security witness. The combined gate must bind both without
+inheriting historical full results. If durable native Goal invocation evidence
+is unavailable, the release remains blocked as
 `UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE`; this package does
 not claim to repair Codex App Goal persistence.
 

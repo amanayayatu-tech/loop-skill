@@ -653,9 +653,13 @@ emits a schema-validated manifest binding the installed bridge SHA, config
 readback, exact repo identity when the source is clean, and zero source/install
 drift. A dirty source is `UNVERIFIED_SOURCE`, never the current HEAD by proxy.
 
-Release acceptance requires a root-owned/read-only Mac mini exact-SHA
-attestation and then a real Codex App receipt for that same SHA,
-tracked-tree SHA-256, and installed-manifest digest.
+Release acceptance binds the primary Mac's complete exact-SHA tests, branch
+coverage, both 5000-case fuzz lanes, isolated install/security checks, and real
+Codex App receipt to a root-owned/read-only lightweight Mac mini witness for the
+same SHA, tracked-tree SHA-256, and installed-manifest digest. The witness reruns
+identity, clean checkout, compile/validator, recovery/release quick tests,
+macOS 27 installation/drift, and security; it neither repeats nor inherits the
+primary Mac's full/coverage/fuzz evidence.
 The receipt binds App version/build/bundle, app-server executable/signature/
 CDHash, MCP protocol/config/requestMeta shape, registration identity, same-turn
 second-route rejection before side effects, next-turn success, partial-frame

@@ -10,13 +10,16 @@ candidate.
 
 Keep these claims separate:
 
-1. local checks: targeted tests, compile, schema, installer syntax;
-2. Mac mini CI: exact-SHA quick, full, generator fuzz 5000, state fuzz 5000,
-   all-shipped branch coverage, isolated install/rollback, source/install
-   drift, security/risky-artifact and release lanes;
+1. primary-Mac complete gate: exact-SHA targeted and full tests, all-shipped
+   branch coverage, both 5000-case fuzz lanes, isolated install/rollback,
+   source/install drift and security/risky-artifact checks;
+2. Mac mini witness: exact commit/ref/tree, clean checkout, compile, validator,
+   recovery/release-contract quick tests, macOS 27 installer smoke, manifest
+   drift, security/risky-artifact and root-owned/read-only attestation;
 3. primary-Mac App smoke: the same exact SHA, tracked tree and installed
    manifest under one real, identified Codex App build;
-4. merge/main attestation, annotated tag and public GitHub Release.
+4. combined release gate, merge/main attestation, annotated tag and public
+   GitHub Release.
 
 The repository can mitigate and fail closed around app-server behavior. It
 does not claim to repair app-server process reaping or metadata delivery.
@@ -25,8 +28,8 @@ does not claim to repair app-server process reaping or metadata delivery.
 
 1. Update `VERSION`, `CHANGELOG.md`, both READMEs and intentionally changed
    examples. Keep the release worktree clean and scan risky artifacts.
-2. Run local targeted checks, then one full local gate at the release-candidate
-   commit:
+2. Run targeted checks on the primary Mac, then one complete primary-Mac gate
+   at the release-candidate commit:
 
    ```bash
    python3 -m pip install -r requirements-test.txt
@@ -42,14 +45,18 @@ does not claim to repair app-server process reaping or metadata delivery.
    coverage report
    ```
 
-3. Submit exactly one candidate SHA to the unattended Mac mini runner. Record
-   the exact commit, tracked-tree SHA-256, pipeline-config digest, root-owned
-   attestation path, attestation/manifest digest, start/end time and verdict.
-   Do not submit a newer candidate while any required lane for the current
-   identity is active. Do not push the candidate to Ubuntu `loop-ci`.
-4. Let every Mac mini lane not requiring an App receipt finish. A release lane
-   that remains `BLOCKED` solely because the same-SHA App receipt is absent is
-   the expected pre-canary state, not PASS.
+3. Submit exactly one candidate SHA to the unattended Mac mini witness runner.
+   It reruns only identity/clean-checkout, compile/validator, recovery and
+   release-contract quick tests, macOS 27 installer/manifest drift, and
+   security/risky-artifact checks. It must not inherit or repeat full tests,
+   coverage, or either 5000-case fuzz result. Record the exact commit,
+   tracked-tree SHA-256, pipeline-config digest, root-owned attestation path,
+   attestation/manifest digest, start/end time and verdict. Do not submit a
+   newer candidate while the current identity is active. Do not push the
+   candidate to Ubuntu `loop-ci`.
+4. Seal the Mac mini result through the pre-existing, reviewable finalizer as a
+   root-owned/read-only exact-SHA witness attestation. Missing finalizer support
+   is a CI contract gap, not permission to synthesize release authority.
 5. Install into an isolated macOS `CODEX_HOME`. `scripts/install.sh` atomically
    registers `codex-loop-state`, preserves prior config bytes, rejects a
    conflicting registration, writes an install manifest, and verifies zero
@@ -63,11 +70,14 @@ does not claim to repair app-server process reaping or metadata delivery.
    observation, restart/readback of the same Goal identity, and canonical plus
    heartbeat PAUSED throughout. Never run this recovery against the real paused
    product Loop.
-7. Bind the minimized, non-secret App receipt to the same Mac mini attestation
-   by its trusted out-of-band mechanism and finalize/re-run only the combined
-   release lane for the same SHA. If the runner lacks such an interface,
-   report the CI contract gap; do not commit raw local logs, user state or
-   secrets to bypass it.
+7. Bind the primary-Mac complete-gate receipt, minimized non-secret App receipt,
+   and Mac mini witness attestation through the trusted out-of-band mechanism,
+   then finalize/re-run only the combined release lane for the same SHA. PASS
+   requires `release_eligible == true`, `reasons == []`, exact commit/tree/
+   installed-manifest identities, real App PASS, and disposable canonical
+   `FINALIZATION_ACKED`; a standalone `verdict=PASS` is insufficient. If the
+   runner lacks the binding interface, report the CI contract gap; do not
+   commit raw local logs, user state or secrets to bypass it.
 8. Merge only after the exact candidate has Mac mini PASS plus real App PASS.
    Submit the exact merge commit to the Mac mini `main` lane and obtain a new main
    attestation. Only then create an annotated tag on that precise commit and a

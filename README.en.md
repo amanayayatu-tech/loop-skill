@@ -6,8 +6,8 @@
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
 
 The test badge is a GitHub compatibility mirror. Authoritative release evidence
-is a root-owned/read-only Mac mini attestation plus a real Codex App canary
-receipt from the primary Mac for the same exact commit.
+combines the primary Mac's complete exact-SHA gate and real Codex App canary
+with a root-owned/read-only lightweight witness attestation from the Mac mini.
 
 `codex-loop-prompt-architect` is a skill for the Codex macOS App. It quality-gates
 rough ideas and PRDs, then turns only `READY_FOR_LOOP` requirements into a
@@ -334,10 +334,13 @@ two 5000-case fuzz lanes do not repeat that suite.
 
 An isolated install also registers `codex-loop-state`, checks exact command/args
 readback, writes a schema-validated install manifest, and proves zero
-source/install drift. GitHub Actions checks compatibility only. Authoritative
-release acceptance requires the Mac mini root-owned/read-only exact-SHA
-attestation, then a real same-SHA/tracked-tree/current-App receipt from the
-primary Mac, followed by the Mac mini merge/main attestation. See the
+source/install drift. The primary Mac alone runs full tests, branch coverage,
+both 5000-case fuzz lanes, and the real App canary. The Mac mini independently
+witnesses exact identity, clean checkout, compile/validator, recovery/release
+quick tests, macOS 27 installation/drift, and security in a root-owned/read-only
+attestation. The combined gate must bind both layers for the same SHA and may
+pass only with `release_eligible=true`, no reasons, and disposable canonical
+`FINALIZATION_ACKED`. GitHub Actions checks compatibility only. See the
 [release process](docs/RELEASING.md).
 
 ## Documentation map

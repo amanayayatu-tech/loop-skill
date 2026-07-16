@@ -146,9 +146,13 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertGreaterEqual(int(match.group(1)), 80)
 
-    def test_mac_mini_attestation_and_real_app_receipt_are_release_authorities(self) -> None:
+    def test_primary_mac_and_mac_mini_witness_are_combined_authorities(self) -> None:
         releasing = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
-        self.assertIn("Mac mini attestation is the authoritative repository gate", releasing)
+        self.assertIn("primary-Mac complete gate", releasing)
+        self.assertIn("Mac mini witness", releasing)
+        self.assertIn("must not inherit or repeat full tests", releasing)
+        self.assertIn("release_eligible == true", releasing)
+        self.assertIn("reasons == []", releasing)
         self.assertIn("GitHub Actions is a\ncompatibility mirror only", releasing)
         self.assertIn("same-SHA App receipt", releasing)
         self.assertIn("tracked-tree SHA-256", releasing)
