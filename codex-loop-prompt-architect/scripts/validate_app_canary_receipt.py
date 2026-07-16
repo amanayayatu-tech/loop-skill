@@ -45,7 +45,17 @@ def compatibility_identity(receipt: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "app": receipt["app"],
         "app_server": receipt["app_server"],
-        "mcp_protocol_version": mcp["protocol_version"],
+        "mcp_protocol_observation": {
+            "negotiated_protocol_version_status": mcp[
+                "negotiated_protocol_version_status"
+            ],
+            "negotiated_protocol_version": mcp["negotiated_protocol_version"],
+            "negotiated_protocol_version_evidence_source": mcp[
+                "negotiated_protocol_version_evidence_source"
+            ],
+            "client_protocol_observation": mcp["client_protocol_observation"],
+            "server_protocol_observation": mcp["server_protocol_observation"],
+        },
         "mcp_config_schema_version": mcp["config_schema_version"],
         "request_meta_shape": mcp["request_meta_shape"],
         "registration": mcp["registration"],
@@ -138,6 +148,19 @@ def validate_receipt(
         observation = receipt["checks"][surface]
         if observation["before_state_digest"] != observation["after_state_digest"]:
             raise CanaryReceiptError("CANARY_RECOVERY_SURFACE_SIDE_EFFECT")
+    mcp = receipt["mcp"]
+    server_protocol = mcp["server_protocol_observation"]
+    if (
+        server_protocol["installed_script_sha256"]
+        != mcp["registration"]["installed_script_sha256"]
+    ):
+        raise CanaryReceiptError("CANARY_SERVER_PROTOCOL_SCRIPT_IDENTITY_MISMATCH")
+    if (
+        mcp["negotiated_protocol_version_status"] == "VERIFIED_BY_HOST_EXCHANGE"
+        and mcp["negotiated_protocol_version"]
+        not in server_protocol["supported_versions"]
+    ):
+        raise CanaryReceiptError("CANARY_NEGOTIATED_PROTOCOL_SERVER_UNSUPPORTED")
     if receipt["status"] == "PASS":
         if receipt["error_classification"] is not None or not all(receipt["checks"].values()):
             raise CanaryReceiptError("CANARY_PASS_INCOMPLETE")

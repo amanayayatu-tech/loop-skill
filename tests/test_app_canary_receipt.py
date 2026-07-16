@@ -54,7 +54,7 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "finalization_acked": True,
         }
         self.receipt = {
-            "schema_version": "app-canary-receipt-v3",
+            "schema_version": "app-canary-receipt-v4",
             "evidence_layer": "local-main-mac",
             "status": "PASS",
             "started_at": "2026-07-15T15:00:00+08:00",
@@ -86,7 +86,28 @@ class AppCanaryReceiptTests(unittest.TestCase):
                 "cdhash": "d" * 40,
             },
             "mcp": {
-                "protocol_version": "2025-11-25",
+                "negotiated_protocol_version_status": "UNAVAILABLE_BY_HOST",
+                "negotiated_protocol_version": None,
+                "negotiated_protocol_version_evidence_source": (
+                    "HOST_DOES_NOT_EXPOSE_INITIALIZE_EXCHANGE"
+                ),
+                "client_protocol_observation": {
+                    "status": "REQUESTED_VERSION_UNAVAILABLE_BY_HOST",
+                    "requested_version": None,
+                    "evidence_source": "APP_BUILD_AND_REAL_REQUEST_META",
+                    "evidence_digest": "7" * 64,
+                },
+                "server_protocol_observation": {
+                    "status": "DECLARED_BY_INSTALLED_SERVER",
+                    "supported_versions": [
+                        "2025-11-25",
+                        "2025-06-18",
+                        "2024-11-05",
+                    ],
+                    "evidence_source": "INSTALLED_SERVER_MCP_PROTOCOL_VERSIONS",
+                    "evidence_digest": "8" * 64,
+                    "installed_script_sha256": "e" * 64,
+                },
                 "config_schema_version": "codex-cli-mcp-stdio-v1",
                 "request_meta_shape": {
                     "outer_keys": ["progressToken", "threadId", "x-codex-turn-metadata"],
@@ -123,6 +144,10 @@ class AppCanaryReceiptTests(unittest.TestCase):
         self.receipt["compatibility_identity_digest"] = validator._digest(validator.compatibility_identity(self.receipt))
         self.receipt["receipt_digest"] = validator._digest(self.receipt)
         self.path.write_text(json.dumps(self.receipt), encoding="utf-8")
+
+    def _restore(self, receipt: dict[str, object]) -> None:
+        self.receipt = copy.deepcopy(receipt)
+        self._seal()
 
     def test_valid_pass_binds_exact_release_and_app_identity(self) -> None:
         result = validator.validate_receipt(
@@ -167,9 +192,165 @@ class AppCanaryReceiptTests(unittest.TestCase):
                 SCHEMA,
                 expected_compatibility_identity_digest="f" * 64,
             )
-        self.receipt["mcp"]["protocol_version"] = "changed"
+        self.receipt["mcp"]["server_protocol_observation"][
+            "supported_versions"
+        ].append("2026-01-01")
         self.path.write_text(json.dumps(self.receipt), encoding="utf-8")
         with self.assertRaisesRegex(validator.CanaryReceiptError, "CANARY_COMPATIBILITY_IDENTITY_MISMATCH"):
+            validator.validate_receipt(self.path, SCHEMA)
+
+    def test_host_unavailable_negotiated_version_is_explicit_and_can_pass(self) -> None:
+        result = validator.validate_receipt(self.path, SCHEMA)
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(
+            result["mcp"]["negotiated_protocol_version_status"],
+            "UNAVAILABLE_BY_HOST",
+        )
+        self.assertIsNone(result["mcp"]["negotiated_protocol_version"])
+
+    def test_negotiated_status_and_value_must_form_a_valid_branch(self) -> None:
+        baseline = copy.deepcopy(self.receipt)
+        cases = (
+            (
+                "unavailable-with-value",
+                {
+                    "negotiated_protocol_version_status": "UNAVAILABLE_BY_HOST",
+                    "negotiated_protocol_version": "2025-11-25",
+                    "negotiated_protocol_version_evidence_source": (
+                        "HOST_DOES_NOT_EXPOSE_INITIALIZE_EXCHANGE"
+                    ),
+                },
+            ),
+            (
+                "verified-with-null",
+                {
+                    "negotiated_protocol_version_status": "VERIFIED_BY_HOST_EXCHANGE",
+                    "negotiated_protocol_version": None,
+                    "negotiated_protocol_version_evidence_source": (
+                        "HOST_INITIALIZE_EXCHANGE"
+                    ),
+                },
+            ),
+            (
+                "verified-with-readback-source",
+                {
+                    "negotiated_protocol_version_status": "VERIFIED_BY_HOST_EXCHANGE",
+                    "negotiated_protocol_version": "2025-11-25",
+                    "negotiated_protocol_version_evidence_source": (
+                        "INSTALLED_SERVER_MCP_PROTOCOL_VERSIONS"
+                    ),
+                },
+            ),
+        )
+        for name, updates in cases:
+            with self.subTest(name=name):
+                self.receipt["mcp"].update(updates)
+                self._seal()
+                with self.assertRaises(jsonschema.ValidationError):
+                    validator.validate_receipt(self.path, SCHEMA)
+                self._restore(baseline)
+
+    def test_verified_negotiated_version_requires_host_exchange_and_server_support(self) -> None:
+        self.receipt["mcp"].update(
+            {
+                "negotiated_protocol_version_status": "VERIFIED_BY_HOST_EXCHANGE",
+                "negotiated_protocol_version": "2025-11-25",
+                "negotiated_protocol_version_evidence_source": "HOST_INITIALIZE_EXCHANGE",
+            }
+        )
+        self._seal()
+        self.assertEqual(validator.validate_receipt(self.path, SCHEMA)["status"], "PASS")
+
+        self.receipt["mcp"]["negotiated_protocol_version"] = "2026-01-01"
+        self._seal()
+        with self.assertRaisesRegex(
+            validator.CanaryReceiptError,
+            "CANARY_NEGOTIATED_PROTOCOL_SERVER_UNSUPPORTED",
+        ):
+            validator.validate_receipt(self.path, SCHEMA)
+
+    def test_client_and_server_observations_are_constrained_and_identity_bound(self) -> None:
+        baseline = copy.deepcopy(self.receipt)
+        for field, value in (
+            ("client_protocol_observation", {
+                "status": "REQUESTED_VERSION_UNAVAILABLE_BY_HOST",
+                "requested_version": None,
+                "evidence_source": "CALLER_ASSERTION",
+                "evidence_digest": "7" * 64,
+            }),
+            ("server_protocol_observation", {
+                "status": "DECLARED_BY_INSTALLED_SERVER",
+                "supported_versions": ["2025-11-25"],
+                "evidence_source": "CALLER_ASSERTION",
+                "evidence_digest": "8" * 64,
+                "installed_script_sha256": "e" * 64,
+            }),
+        ):
+            with self.subTest(field=field):
+                self.receipt["mcp"][field] = value
+                self._seal()
+                with self.assertRaises(jsonschema.ValidationError):
+                    validator.validate_receipt(self.path, SCHEMA)
+                self._restore(baseline)
+
+        self.receipt["mcp"]["server_protocol_observation"][
+            "installed_script_sha256"
+        ] = "9" * 64
+        self._seal()
+        with self.assertRaisesRegex(
+            validator.CanaryReceiptError,
+            "CANARY_SERVER_PROTOCOL_SCRIPT_IDENTITY_MISMATCH",
+        ):
+            validator.validate_receipt(self.path, SCHEMA)
+
+    def test_every_protocol_observation_is_compatibility_identity_bound(self) -> None:
+        baseline = copy.deepcopy(self.receipt)
+        mutations = (
+            ("negotiated-status", lambda receipt: receipt["mcp"].update({
+                "negotiated_protocol_version_status": "VERIFIED_BY_HOST_EXCHANGE",
+                "negotiated_protocol_version": "2025-11-25",
+                "negotiated_protocol_version_evidence_source": "HOST_INITIALIZE_EXCHANGE",
+            })),
+            ("client-observation", lambda receipt: receipt["mcp"][
+                "client_protocol_observation"
+            ].update({
+                "status": "REQUESTED_VERSION_OBSERVED",
+                "requested_version": "2025-11-25",
+                "evidence_source": "HOST_INITIALIZE_REQUEST",
+            })),
+            ("server-observation", lambda receipt: receipt["mcp"][
+                "server_protocol_observation"
+            ]["supported_versions"].append("2026-01-01")),
+        )
+        for name, mutate in mutations:
+            with self.subTest(name=name):
+                self._restore(baseline)
+                stale_digest = self.receipt["compatibility_identity_digest"]
+                mutate(self.receipt)
+                self.path.write_text(json.dumps(self.receipt), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    validator.CanaryReceiptError,
+                    "CANARY_COMPATIBILITY_IDENTITY_MISMATCH",
+                ):
+                    validator.validate_receipt(
+                        self.path,
+                        SCHEMA,
+                        expected_compatibility_identity_digest=stale_digest,
+                    )
+
+    def test_v3_receipt_is_not_silently_accepted_by_v4_schema(self) -> None:
+        self.receipt["schema_version"] = "app-canary-receipt-v3"
+        self.receipt["mcp"]["protocol_version"] = "2025-11-25"
+        for field in (
+            "negotiated_protocol_version_status",
+            "negotiated_protocol_version",
+            "negotiated_protocol_version_evidence_source",
+            "client_protocol_observation",
+            "server_protocol_observation",
+        ):
+            self.receipt["mcp"].pop(field)
+        self.path.write_text(json.dumps(self.receipt), encoding="utf-8")
+        with self.assertRaises(jsonschema.ValidationError):
             validator.validate_receipt(self.path, SCHEMA)
 
     def test_pass_requires_complete_local_main_mac_pre_canary_gate(self) -> None:
@@ -202,10 +383,23 @@ class AppCanaryReceiptTests(unittest.TestCase):
             validator.validate_receipt(self.path, SCHEMA)
 
     def test_pass_requires_every_real_canary_and_no_error(self) -> None:
-        self.receipt["checks"]["finalization_acked"] = False
-        self._seal()
-        with self.assertRaisesRegex(validator.CanaryReceiptError, "CANARY_PASS_INCOMPLETE"):
-            validator.validate_receipt(self.path, SCHEMA)
+        baseline = copy.deepcopy(self.receipt)
+        for check in (
+            "signed_direct_parent",
+            "metadata_parser_negative_cases",
+            "first_route_succeeded",
+            "same_turn_second_route_zero_effect",
+            "finalization_acked",
+        ):
+            with self.subTest(check=check):
+                self._restore(baseline)
+                self.receipt["checks"][check] = False
+                self._seal()
+                with self.assertRaisesRegex(
+                    validator.CanaryReceiptError,
+                    "CANARY_PASS_INCOMPLETE",
+                ):
+                    validator.validate_receipt(self.path, SCHEMA)
 
     def test_pass_requires_native_goal_recovery_to_be_explicitly_unavailable(self) -> None:
         self.receipt["checks"].pop("native_goal_generation_recovery_status")

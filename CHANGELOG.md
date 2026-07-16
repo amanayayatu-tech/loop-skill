@@ -12,10 +12,15 @@ All notable changes to this project are documented here. The project follows
 - Deferred lost native Goal generation recovery because the current Codex App has no create-paused, resume, restore, or rebind interface that permits the recovery transaction to commit before automatic Goal dispatch.
 - Removed the recovery procedure from generated Packs and release canaries. Standalone runtime and MCP entrypoints now return `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with zero side effects for every legacy recovery request. Historical state remains readable for audit only.
 - Preserved the real App blocker receipt and upstream requirement as BLOCKED evidence. They are not rewritten, deleted, or promoted to release PASS.
+- Replaced the ambiguous single MCP protocol-version receipt field with an
+  explicit negotiated-version status/value and separately sourced client and
+  installed-server observations. `UNAVAILABLE_BY_HOST` keeps the negotiated
+  value null and unknown; it is not a verified negotiation and is not, by
+  itself, a release blocker when every behavioral and identity gate passes.
 
 ### Evidence boundary
 
-Repository tests prove the explicit unavailable contract and the remaining deterministic control-plane behavior. Native Goal generation recovery is outside the supported release surface; this package does not claim to repair Codex App Goal persistence.
+Repository tests prove the explicit unavailable contracts and the remaining deterministic control-plane behavior. They do not infer an MCP negotiated version that the host does not expose. Native Goal generation recovery is outside the supported release surface; this package does not claim to repair Codex App Goal persistence.
 
 ## [3.2.6] - 2026-07-16
 

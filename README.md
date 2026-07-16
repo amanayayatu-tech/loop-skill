@@ -47,7 +47,10 @@ schema-validated manifest，记录 bridge SHA、registration readback 与 source
 
 发布按四层分开：本机 local checks、当前 App build 的真实 canary、本机 release gate、
 merge/main/tag/Release。App version/build/bundle、app-server signature/CDHash、MCP
-protocol/config/requestMeta shape 或安装身份变化都会让旧 canary receipt 失效。PASS 必须
+协商状态及可观察的 client/server protocol 信息、config/requestMeta shape 或安装身份变化
+都会让旧 canary receipt 失效。宿主未公开 initialize exchange 时必须记录
+`UNAVAILABLE_BY_HOST` 与 `null`，不得称为已验证的 negotiated version；它本身不覆盖或
+削弱其他身份、route、零副作用和 finalization 硬闸。PASS 必须
 覆盖 same-turn 第二 route 在副作用前拒绝、next-turn 成功、partial-frame 清理、lost-stdout
 恢复、Pack/同 heartbeat 迁移及 canonical `FINALIZATION_ACKED`；仓库不宣称修复了
 app-server 上游进程回收。receipt 还必须直接绑定 exact commit、tracked-tree SHA-256、

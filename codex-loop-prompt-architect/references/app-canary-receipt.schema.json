@@ -26,7 +26,7 @@
     "receipt_digest"
   ],
   "properties": {
-    "schema_version": {"const": "app-canary-receipt-v3"},
+    "schema_version": {"const": "app-canary-receipt-v4"},
     "evidence_layer": {"const": "local-main-mac"},
     "status": {"enum": ["PASS", "BLOCKED", "FAIL"]},
     "started_at": {"type": "string", "format": "date-time"},
@@ -91,9 +91,35 @@
     "mcp": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["protocol_version", "config_schema_version", "request_meta_shape", "identity_relations", "registration"],
+      "required": [
+        "negotiated_protocol_version_status",
+        "negotiated_protocol_version",
+        "negotiated_protocol_version_evidence_source",
+        "client_protocol_observation",
+        "server_protocol_observation",
+        "config_schema_version",
+        "request_meta_shape",
+        "identity_relations",
+        "registration"
+      ],
       "properties": {
-        "protocol_version": {"type": "string", "minLength": 1},
+        "negotiated_protocol_version_status": {
+          "enum": ["VERIFIED_BY_HOST_EXCHANGE", "UNAVAILABLE_BY_HOST"]
+        },
+        "negotiated_protocol_version": {
+          "oneOf": [
+            {"$ref": "#/$defs/protocolVersion"},
+            {"type": "null"}
+          ]
+        },
+        "negotiated_protocol_version_evidence_source": {
+          "enum": [
+            "HOST_INITIALIZE_EXCHANGE",
+            "HOST_DOES_NOT_EXPOSE_INITIALIZE_EXCHANGE"
+          ]
+        },
+        "client_protocol_observation": {"$ref": "#/$defs/clientProtocolObservation"},
+        "server_protocol_observation": {"$ref": "#/$defs/serverProtocolObservation"},
         "config_schema_version": {"const": "codex-cli-mcp-stdio-v1"},
         "request_meta_shape": {
           "type": "object",
@@ -151,7 +177,23 @@
             "app_refresh_or_restart": {"enum": ["REFRESH", "RESTART"]}
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "negotiated_protocol_version_status": {"const": "VERIFIED_BY_HOST_EXCHANGE"},
+            "negotiated_protocol_version": {"$ref": "#/$defs/protocolVersion"},
+            "negotiated_protocol_version_evidence_source": {"const": "HOST_INITIALIZE_EXCHANGE"}
+          }
+        },
+        {
+          "properties": {
+            "negotiated_protocol_version_status": {"const": "UNAVAILABLE_BY_HOST"},
+            "negotiated_protocol_version": {"type": "null"},
+            "negotiated_protocol_version_evidence_source": {"const": "HOST_DOES_NOT_EXPOSE_INITIALIZE_EXCHANGE"}
+          }
+        }
+      ]
     },
     "checks": {
       "type": "object",
@@ -220,6 +262,75 @@
   },
   "$defs": {
     "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}$"
+    },
+    "clientProtocolObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "requested_version", "evidence_source", "evidence_digest"],
+      "properties": {
+        "status": {
+          "enum": [
+            "REQUESTED_VERSION_OBSERVED",
+            "REQUESTED_VERSION_UNAVAILABLE_BY_HOST"
+          ]
+        },
+        "requested_version": {
+          "oneOf": [
+            {"$ref": "#/$defs/protocolVersion"},
+            {"type": "null"}
+          ]
+        },
+        "evidence_source": {
+          "enum": [
+            "HOST_INITIALIZE_REQUEST",
+            "APP_BUILD_AND_REAL_REQUEST_META"
+          ]
+        },
+        "evidence_digest": {"$ref": "#/$defs/digest"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "REQUESTED_VERSION_OBSERVED"},
+            "requested_version": {"$ref": "#/$defs/protocolVersion"},
+            "evidence_source": {"const": "HOST_INITIALIZE_REQUEST"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "REQUESTED_VERSION_UNAVAILABLE_BY_HOST"},
+            "requested_version": {"type": "null"},
+            "evidence_source": {"const": "APP_BUILD_AND_REAL_REQUEST_META"}
+          }
+        }
+      ]
+    },
+    "serverProtocolObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "supported_versions",
+        "evidence_source",
+        "evidence_digest",
+        "installed_script_sha256"
+      ],
+      "properties": {
+        "status": {"const": "DECLARED_BY_INSTALLED_SERVER"},
+        "supported_versions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/protocolVersion"}
+        },
+        "evidence_source": {"const": "INSTALLED_SERVER_MCP_PROTOCOL_VERSIONS"},
+        "evidence_digest": {"$ref": "#/$defs/digest"},
+        "installed_script_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
     "unavailableRecoverySurface": {
       "type": "object",
       "additionalProperties": false,

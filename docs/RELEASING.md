@@ -88,8 +88,16 @@ it with `validate_app_canary_receipt.py`. A PASS receipt binds:
 - Codex/ChatGPT App version, build and bundle identifier;
 - app-server executable path, verified signature, Identifier, TeamIdentifier
   and non-secret CDHash;
-- MCP protocol version, config schema, observed outer requestMeta keys and
-  turn-metadata key set;
+- MCP negotiated-protocol status and value, plus separately sourced client and
+  server observations. When the App host does not expose the initialize
+  exchange, record `negotiated_protocol_version_status=UNAVAILABLE_BY_HOST`,
+  `negotiated_protocol_version=null`, the client observation (or its explicit
+  host-unavailable status), and the installed server's declared supported set.
+  `UNAVAILABLE_BY_HOST` is not evidence of a verified negotiated version and
+  must never be described as one; it is not by itself a release blocker when
+  every connection, identity, route, zero-side-effect, receipt and finalization
+  check passes. Config schema, observed outer requestMeta keys and the
+  turn-metadata key set remain independently required;
 - semantic results for session/thread/turn relationships without storing raw
   ids or user content;
 - installed server name, absolute Python, installed script path/SHA, config
@@ -108,9 +116,12 @@ its A/B/C/D canary, create another Goal, or reinterpret the blocker as PASS.
 Release proof covers only the supported non-recovery surface and the explicit
 zero-effect unavailable contract.
 
-App version/build, bundle id, executable/signature/CDHash, MCP protocol/config
-schema, requestMeta shape, or registration identity changes invalidate the old
-compatibility digest. The release gate passes the currently observed
+App version/build, bundle id, executable/signature/CDHash, negotiated-protocol
+status/value, client/server protocol observations, config schema, requestMeta
+shape, or registration identity changes invalidate the old compatibility
+digest. A client-requested value or server-declared supported set is an
+observation from its named source, not proof of the negotiated result. The
+release gate passes the currently observed
 compatibility digest, exact Pack digest, repo commit, tracked-tree SHA-256 and
 install-manifest digest as validator expectations; a self-consistent old
 receipt is insufficient. The next release must obtain a new real receipt. Receipts

@@ -78,8 +78,12 @@ drift.
 
 Release evidence stays layered: local main-Mac checks, a real canary on the
 current App build, the local release gate, then merge/main/tag/Release.
-Any App version/build/bundle, app-server signature/CDHash, MCP protocol/config/
-requestMeta shape, or installation identity change invalidates the old receipt.
+Any App version/build/bundle, app-server signature/CDHash, MCP negotiation
+status or observable client/server protocol information, config/requestMeta
+shape, or installation identity change invalidates the old receipt. If the host
+does not expose its initialize exchange, the receipt records
+`UNAVAILABLE_BY_HOST` and `null`; that is not a verified negotiated version and
+does not weaken any identity, route, zero-side-effect, or finalization gate.
 PASS covers same-turn pre-side-effect rejection, next-turn success, partial-frame
 cleanup, lost-stdout recovery, Pack/same-heartbeat migration, and canonical
 `FINALIZATION_ACKED`. The repository does not claim to fix upstream app-server
