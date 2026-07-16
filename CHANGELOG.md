@@ -36,6 +36,10 @@ All notable changes to this project are documented here. The project follows
   requires the captured prefix digest and append-only identity, while COMMIT
   and ROLLBACK reclassify the complete window through the later readback so an
   older cutoff cannot hide a second or ambiguous create.
+- Required COMMIT's active readback and ROLLBACK's final null receipt to match
+  the target Controller rollout's current stable EOF at runtime apply. Only the
+  two strict post-readback control wrappers are tolerated; later bytes fail
+  closed as `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`.
 
 ### Evidence boundary
 

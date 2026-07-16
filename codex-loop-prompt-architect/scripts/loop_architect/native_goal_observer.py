@@ -33,6 +33,16 @@ GET_GOAL_TEMPLATE_RE = re.compile(
     r"\(\s*result\s*\)|result)\s*\)\s*;\s*\Z",
     re.DOTALL,
 )
+CONTROL_TOOL_TEMPLATE_RE = re.compile(
+    r"\A\s*const\s+result\s*=\s*await\s+tools\.([A-Za-z0-9_]+)\s*"
+    r"\((\{.*\})\)\s*;\s*text\s*\(\s*(?:JSON\.stringify\s*"
+    r"\(\s*result\s*\)|result)\s*\)\s*;\s*\Z",
+    re.DOTALL,
+)
+ALLOWED_POST_READBACK_CONTROL_TOOLS = (
+    "route_state_mutation",
+    "send_message_to_thread",
+)
 
 
 class NativeGoalObservationError(Exception):
@@ -350,6 +360,7 @@ def observe_native_goal_rollout(
     scan_start_offset: int = 0,
     scan_end_offset: int | None = None,
     historical_replay_snapshot_digest: str | None = None,
+    control_suffix_start_offset: int | None = None,
     expected_objective_digest: str | None = None,
     expected_objective_bytes_digest: str | None = None,
     observed_at: str | None = None,
@@ -409,6 +420,7 @@ def observe_native_goal_rollout(
     calls: dict[str, dict[str, Any]] = {}
     outputs: dict[str, Any] = {}
     tool_call_counts: dict[str | None, int] = {}
+    turn_end_offsets: dict[str, int] = {}
     ambiguous_create = False
     for offset, event in events:
         payload = event["payload"]
@@ -416,6 +428,8 @@ def observe_native_goal_rollout(
         if event_type == "task_started" and isinstance(payload.get("turn_id"), str):
             current_turn = payload["turn_id"]
         elif event_type in {"task_complete", "turn_aborted"}:
+            if isinstance(payload.get("turn_id"), str):
+                turn_end_offsets[payload["turn_id"]] = offset
             current_turn = None
         if offset < scan_start_offset:
             continue
@@ -460,15 +474,51 @@ def observe_native_goal_rollout(
                     "turn_id": current_turn,
                 }
             else:
-                # The recovery window permits only the two exact, side-effect-
-                # bounded wrappers above.  Arbitrary JavaScript is never parsed
-                # or treated as proof that create_goal did not run.
-                ambiguous_create = True
+                control_match = CONTROL_TOOL_TEMPLATE_RE.fullmatch(source)
+                if (
+                    control_suffix_start_offset is not None
+                    and offset >= control_suffix_start_offset
+                    and control_match is not None
+                    and control_match.group(1).endswith(
+                        ALLOWED_POST_READBACK_CONTROL_TOOLS
+                    )
+                ):
+                    arguments = _strict_json(
+                        control_match.group(2),
+                        "NATIVE_GOAL_CONTROL_SUFFIX_INVALID",
+                    )
+                    if not isinstance(arguments, dict):
+                        ambiguous_create = True
+                else:
+                    # The recovery window permits only exact Goal wrappers and
+                    # the two strict post-readback control wrappers above.
+                    ambiguous_create = True
         elif event_type == "custom_tool_call":
-            # Native goal calls are valid recovery evidence only when nested in
-            # one of the two exact exec wrappers above.  Every other tool call
-            # keeps CREATE_GOAL recovery fail-closed.
-            ambiguous_create = True
+            tool_name = payload.get("name")
+            allowed_control = (
+                control_suffix_start_offset is not None
+                and offset >= control_suffix_start_offset
+                and isinstance(tool_name, str)
+                and tool_name.endswith(ALLOWED_POST_READBACK_CONTROL_TOOLS)
+            )
+            if allowed_control:
+                direct_arguments = payload.get("input")
+                if isinstance(direct_arguments, str):
+                    try:
+                        direct_arguments = _strict_json(
+                            direct_arguments,
+                            "NATIVE_GOAL_CONTROL_SUFFIX_INVALID",
+                        )
+                    except NativeGoalObservationError:
+                        ambiguous_create = True
+                        continue
+                if not isinstance(direct_arguments, dict):
+                    ambiguous_create = True
+            else:
+                # Native goal calls are valid recovery evidence only when
+                # nested in an exact exec wrapper. Other calls fail closed
+                # outside the bounded post-readback control suffix.
+                ambiguous_create = True
         elif (
             event_type == "custom_tool_call_output"
             and isinstance(payload.get("call_id"), str)
@@ -497,6 +547,7 @@ def observe_native_goal_rollout(
             if record["tool_name"] == "get_goal"
             and call_id in outputs
             and isinstance(record["turn_id"], str)
+            and record["turn_id"] in turn_end_offsets
             and tool_call_counts.get(record["turn_id"]) == 1
         ]
         if not candidates:
@@ -513,6 +564,7 @@ def observe_native_goal_rollout(
             **base,
             "observation_kind": "NATIVE_GOAL_GET_GOAL_V1",
             "turn_id": record["turn_id"],
+            "turn_end_offset": turn_end_offsets.get(record["turn_id"]),
             "tool_name": "get_goal",
             "call_id_digest": _sha256_bytes(call_id.encode("utf-8")),
             "goal": _sanitized_goal(result.get("goal")),

@@ -8966,6 +8966,7 @@ class AdaptiveStateRuntime:
         path: str,
         *,
         expected_kind: str,
+        require_current_eof: bool = False,
     ) -> tuple[dict[str, Any], str]:
         observed, digest = self._native_goal_observation_artifact(
             request, path
@@ -8981,6 +8982,14 @@ class AdaptiveStateRuntime:
             or observed.get("stable_eof") is not True
             or not isinstance(observed.get("snapshot_digest"), str)
             or DIGEST_RE.fullmatch(observed["snapshot_digest"]) is None
+            or (
+                expected_kind == "NATIVE_GOAL_GET_GOAL_V1"
+                and (
+                    not isinstance(observed.get("turn_end_offset"), int)
+                    or observed["turn_end_offset"]
+                    > observed["scan_end_offset"]
+                )
+            )
             or not isinstance(observed.get("observed_at"), str)
         ):
             raise RuntimeRejection(
@@ -9002,9 +9011,15 @@ class AdaptiveStateRuntime:
                 controller_thread_id=controller_id,
                 mode=mode,
                 scan_start_offset=observed["scan_start_offset"],
-                scan_end_offset=observed["scan_end_offset"],
-                historical_replay_snapshot_digest=observed.get(
-                    "snapshot_digest"
+                scan_end_offset=(
+                    None
+                    if require_current_eof
+                    else observed["scan_end_offset"]
+                ),
+                historical_replay_snapshot_digest=(
+                    None
+                    if require_current_eof
+                    else observed.get("snapshot_digest")
                 ),
                 expected_objective_digest=observed.get(
                     "expected_objective_digest"
@@ -9019,7 +9034,11 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(exc.code, "/mutation", exc.details) from exc
         if recomputed != observed:
             raise RuntimeRejection(
-                "NATIVE_GOAL_RUNTIME_OBSERVATION_MISMATCH",
+                (
+                    "NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED"
+                    if require_current_eof
+                    else "NATIVE_GOAL_RUNTIME_OBSERVATION_MISMATCH"
+                ),
                 "/mutation",
                 {"path": path},
             )
@@ -9045,6 +9064,9 @@ class AdaptiveStateRuntime:
                 historical_replay_snapshot_digest=anchor_observation[
                     "snapshot_digest"
                 ],
+                control_suffix_start_offset=anchor_observation.get(
+                    "turn_end_offset"
+                ),
                 expected_objective_digest=create_outbox["payload_digest"],
                 expected_objective_bytes_digest=create_outbox[
                     "objective_bytes_digest"
@@ -9683,6 +9705,7 @@ class AdaptiveStateRuntime:
                 request,
                 mutation["goal_observation_path"],
                 expected_kind="NATIVE_GOAL_GET_GOAL_V1",
+                require_current_eof=True,
             )
         )
         readback = goal_observation.get("goal")
@@ -9965,15 +9988,19 @@ class AdaptiveStateRuntime:
         initial_turn_ids = {
             item["turn_id"] for item in prepared["null_observations"]
         }
-        full_null_observations = [
-            self._require_runtime_native_goal_observation(
-                state,
-                request,
-                path,
-                expected_kind="NATIVE_GOAL_GET_GOAL_V1",
-            )[0]
-            for path in mutation["null_observation_paths"]
-        ]
+        full_null_observations = []
+        for index, path in enumerate(mutation["null_observation_paths"]):
+            full_null_observations.append(
+                self._require_runtime_native_goal_observation(
+                    state,
+                    request,
+                    path,
+                    expected_kind="NATIVE_GOAL_GET_GOAL_V1",
+                    require_current_eof=(
+                        index == len(mutation["null_observation_paths"]) - 1
+                    ),
+                )[0]
+            )
         full_create_window = self._replay_native_goal_create_window(
             state, full_null_observations[-1], create_outbox
         )

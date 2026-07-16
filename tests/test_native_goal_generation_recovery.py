@@ -676,6 +676,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         commit_turn_id: str = "commit-route-turn-d",
         create_observation_after_readback: bool = False,
         second_create_after_observation: bool = False,
+        second_create_after_readback: bool = False,
         created_at: int = 200,
         objective: str | None = None,
         runtime: AdaptiveStateRuntime | None = None,
@@ -740,6 +741,13 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             observed_at=T4,
             scan_start_offset=outbox["prepare_high_watermark"],
         )
+        if second_create_after_readback:
+            fixture["rollout"].add_create_goal(
+                "post-readback-hidden-create",
+                goal["objective"],
+                goal,
+                include_output=False,
+            )
         acquired, _ = self._acquire_recovery(
             fixture,
             scope="NATIVE_GOAL_GENERATION_COMMIT",
@@ -784,6 +792,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         *,
         add_started_create: bool = False,
         add_create_after_observation: bool = False,
+        add_create_after_final_null: bool = False,
         runtime: AdaptiveStateRuntime | None = None,
         return_request: bool = False,
     ) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]]:
@@ -831,6 +840,13 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             observed_at="2026-01-01T01:01:00Z",
             scan_start_offset=outbox["prepare_high_watermark"],
         )
+        if add_create_after_final_null:
+            fixture["rollout"].add_create_goal(
+                "rollback-post-null-hidden-create",
+                fixture["objective"],
+                self._active_goal(fixture),
+                include_output=False,
+            )
         acquired, _ = self._acquire_recovery(
             fixture,
             scope="NATIVE_GOAL_GENERATION_ROLLBACK",
@@ -1602,6 +1618,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             {"phase_b_turn_id": "commit-route-turn-d"},
             {"create_observation_after_readback": True},
             {"second_create_after_observation": True},
+            {"second_create_after_readback": True},
             {"objective": "different body\n[different marker]"},
             {"created_at": 100},
         )
@@ -1615,6 +1632,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                     {
                         "NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_INVALID",
                         "NATIVE_GOAL_GENERATION_READBACK_IDENTITY_MISMATCH",
+                        "NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED",
                     },
                 )
                 self.assertEqual(
@@ -1906,6 +1924,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         for options in (
             {"add_started_create": True},
             {"add_create_after_observation": True},
+            {"add_create_after_final_null": True},
         ):
             with (
                 self.subTest(options=options),
@@ -1914,9 +1933,12 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 fixture = self._fixture(Path(temporary))
                 self._prepare(fixture)
                 rejected = self._rollback(fixture, **options)
-                self.assertEqual(
+                self.assertIn(
                     rejected["status"],
-                    "NATIVE_GOAL_GENERATION_ROLLBACK_INVOCATION_UNCERTAIN",
+                    {
+                        "NATIVE_GOAL_GENERATION_ROLLBACK_INVOCATION_UNCERTAIN",
+                        "NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED",
+                    },
                 )
                 self.assertEqual(
                     fixture["harness"].state()[

@@ -201,7 +201,12 @@ After Phase B ends, the out-of-band observer records the create at stable EOF.
 Phase C is a distinct real Controller turn containing only `get_goal`; after it
 ends, the observer records an active same-thread readback at a strictly later
 offset on the same rollout. COMMIT occurs under a new recovery lease in a
-fourth real turn. Runtime requires exactly one matching rollout invocation,
+fourth real turn. After the Controller request reaches the original
+State-Writer, that State-Writer recaptures the same readback at the Controller
+rollout's current stable EOF immediately before standalone runtime validation.
+Only strict `route_state_mutation` and `send_message_to_thread` wrappers may
+appear after the readback; any other wrapper or any byte appended after final
+capture rejects `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`. Runtime requires exactly one matching rollout invocation,
 four distinct A/B/C/D turn identities, create-before-readback ordering, a
 byte-identical objective/marker, changed createdAt, consistent result identity
 when stdout exists, unchanged Pack/roles/protected state, and PAUSED heartbeat.
@@ -213,7 +218,9 @@ same create.
 
 ROLLBACK requires its own new lease, the create record still
 `AUTHORIZED_UNUSED`, a stable zero-invocation rollout scan from the PREPARE
-high-watermark, and two newer ordered real-turn null observations. Any possible
+high-watermark, and two newer ordered real-turn null observations. The original
+State-Writer recaptures the final null observation at current stable EOF just
+before runtime apply. Any possible
 invocation, unavailable/incomplete observer, Goal readback, or contradictory
 optional read-only Goal DB observation forbids rollback. Success restores the
 journaled pre-PREPARE generation, Controller Goal, heartbeat observation, and

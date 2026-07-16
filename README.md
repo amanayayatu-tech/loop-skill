@@ -35,7 +35,9 @@ observer 必须在目标 Controller rollout 之外运行；如果没有这种 ou
 create 先于 readback。任何错误 objective、STARTED/COMPLETED/AMBIGUOUS 证据都禁止重调或
 rollback；stdout 丢失只能由后续 rollout + active same-thread readback adoption。COMMIT 与
 ROLLBACK 都保持 canonical 和同一 heartbeat 为 PAUSED，RESUME 与 heartbeat ACTIVE 仍是
-后续独立 turn。
+后续独立 turn。原 State-Writer 在 runtime apply 前必须把最终 readback/null 重新 capture 到
+目标 Controller 当前稳定 EOF；任何随后新增字节都以 `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`
+fail closed。
 
 observer 只读 `CODEX_HOME/sessions` 与 `archived_sessions` 的 canonical rollout，拒绝
 路径逃逸、symlink、不稳定/未完整 JSONL 和错误 thread identity，只持久化去敏摘要。
