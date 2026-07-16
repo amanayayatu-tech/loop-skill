@@ -2232,11 +2232,7 @@ def state_update_protocol_block(state_writer_role: str, adaptive: bool = False) 
             "- The request envelope is closed by references/adaptive-mutation.schema.json and contains "
             "controller_approved=true, state_request_id, event_id, expected_state_version, actor, "
             "thread_id, occurred_at, evidence_paths, an optional immutable artifacts bundle, and one typed mutation.\n"
-            "- Supported mutation types are INITIALIZE, ACQUIRE_LEASE, RELEASE_LEASE, RENEW_LEASE, TAKEOVER_LEASE, "
-            "PREPARE_OUTBOX, CANCEL_OUTBOX, MARK_OUTBOX_SENT, ACK_OUTBOX, RECORD_REVIEW, "
-            "ROADMAP_REVISION, FINALIZE_LOOP, STOP_LOOP, and ACK_FINALIZATION. LOOP_INITIALIZED is an "
-            "operation_status returned after INITIALIZE; it is not "
-            "a mutation type.\n"
+            "- references/adaptive-mutation.schema.json is the closed mutation authority. In addition to lease/outbox/review/roadmap/finalization operations, it includes Pack migration, heartbeat observation, Steering/Decision/run-control, failure/validation/freshness, worker-classification reconciliation, and same-Goal resume records. Lost native Goal generation recovery is unavailable in this release. LOOP_INITIALIZED is an operation_status returned after INITIALIZE; it is not a mutation type.\n"
             "- The runtime performs state_version CAS, state_request_id/event_id idempotency, path "
             "confinement, authorization-cap and Goal-digest checks, fcntl locking, atomic state/event/journal "
             "persistence, crash recovery, lease fencing, outbox transitions, assurance, roadmap revision, "
@@ -2291,6 +2287,19 @@ def state_update_protocol_block(state_writer_role: str, adaptive: bool = False) 
         "- While a State-Writer request is active, heartbeat records WAITING_STATE_ACK and does not enqueue a duplicate request."
         f"{adaptive_lines}"
     )
+
+
+def native_goal_generation_recovery_protocol_block(
+    adaptive: bool = False,
+) -> str:
+    if not adaptive:
+        return ""
+    return """
+
+Native Controller Goal Generation Recovery: DEFERRED/UNAVAILABLE
+- This release does not provide lost native Goal generation recovery. The public runtime and MCP route bridge return `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with zero side effects for every legacy recovery request.
+- If required-mode reconciliation finds `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, keep canonical state unchanged, keep the exact heartbeat PAUSED, send no business route, and do not create a replacement Goal, Controller, thread, session, or heartbeat.
+- Historical recovery state and blocker receipts are audit evidence only. They do not authorize recovery, migration, resume, release claims, or a replacement native Goal."""
 
 
 def startup_transaction_gate_block(
@@ -2503,8 +2512,8 @@ Only the mutation types declared by `adaptive-mutation.schema.json` may change c
 | Matching SENT `THREAD` outbox | Read the same returned task identity and `ACK_OUTBOX`; the ACK registers its real threadId/worktree | invent separate create/register mutations |
 | Matching PREPARED `AUTOMATION` outbox | Reconcile exact name/target/rrule/prompt digest; create once only when absent, then `MARK_OUTBOX_SENT` | create before PREPARED or create a duplicate heartbeat |
 | Matching SENT `AUTOMATION` outbox | Read the same automation and `ACK_OUTBOX` with status ACTIVE | use a separate registration mutation |
-| PREPARED native `GOAL` outbox | Reconcile/call the Goal tool once, then `MARK_OUTBOX_SENT`; if the tool is unavailable, attach one strict JSON observation and direct `ACK_OUTBOX` as emulated without SENT | report emulated after a native send |
-| SENT native `GOAL` outbox | `ACK_OUTBOX` only with the exact native Goal identity and observed status | replace the active Goal or update an unrelated Goal id |
+| PREPARED native `GOAL` outbox | Reconcile/call the Goal tool once, then `MARK_OUTBOX_SENT` with immutable archived raw native `CODEX_TOOL_RESULT` bytes; if the tool is unavailable, attach one strict JSON observation and direct `ACK_OUTBOX` as emulated without SENT | report emulated after a native send, invent createdAt/usage, or normalize the raw tool result before archival |
+| SENT native `GOAL` outbox | `ACK_OUTBOX` only with the exact native Goal identity and a distinct canonical observation receipt; runtime derives generation id, objective digest, createdAt, status, and usage from archived send bytes plus that observation | replace the active Goal, update an unrelated Goal id, or let the caller self-report generation identity |
 | PREPARED `DELEGATION` outbox | Spawn exactly once within the read-only policy, then `MARK_OUTBOX_SENT` | spawn first and backfill the ledger |
 | SENT `DELEGATION` outbox | Attach the strict JSON result and `ACK_OUTBOX`; only COMPLETED+ACKED evidence may influence routing | treat INTERRUPTED/DROPPED as success |
 | PREPARED Worker `DISPATCH` outbox | Send once; `MARK_OUTBOX_SENT` with immutable archived JSON send evidence | resend or omit evidence |
@@ -2524,7 +2533,7 @@ Only the mutation types declared by `adaptive-mutation.schema.json` may change c
 | FINAL_AUDIT pass | Submit `FINALIZE_LOOP` on a fresh lease with the exact computed final projection digest | change Goal/heartbeat before finalize ACK |
 | `FINALIZE_LOOP_APPLIED` with matching closeout capability | Apply native_goal_policy to that one-use capability, pause the exact heartbeat once, and send `ACK_FINALIZATION` with runtime-required observations | update Goal before capability, from a wait/timeout, or from inferred status |
 | `REGISTER_DECISION` returns `WAIT_DECISION` | Pause the exact heartbeat, preserve the native Goal unchanged, end the turn, and wait for one real matching `DECISION_RESPONSE` | keep heartbeat active, count repeated human-wait turns as a blocker, or call `update_goal(status=blocked)` |
-| Canonical native Goal is ACTIVE but `get_goal` returns `goal:null` or unacknowledged COMPLETE | Persist `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, pause heartbeat, stop | recreate, emulate, replace, or infer completion |
+| Canonical native Goal is ACTIVE but `get_goal` returns `goal:null` or unacknowledged COMPLETE | Persist `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, pause the exact heartbeat, and return `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with zero side effects | recover, recreate, emulate, replace, infer completion, resume, or send a business route |
 | Same-identity Goal BLOCKED after explicit resume | Fresh Goal-turn lease records pre-BLOCKED + `SAME_GOAL_RESUME` + post-BLOCKED via `RECORD_CONTROLLER_GOAL_RESUME`; require its receipt | claim ACTIVE, create/update, add attempt/milestone, or repeat |
 | Same hard blocker observed in fewer than three genuine consecutive Goal turns | Attach one immutable turn-bound observation to that turn's `RELEASE_LEASE`, wait for its artifact/state-version ACK, and remain nonterminal until a natural Goal continuation | submit STOP_LOOP, backfill observations later, fabricate a turn, or count heartbeat-only wakes |
 | Same hard blocker observed in the last three genuine consecutive Goal turns | Submit `STOP_LOOP` with the three distinct bound observations and aggregate report; only its matching one-use closeout capability may authorize Goal BLOCKED, then pause the heartbeat and `ACK_FINALIZATION` in the same turn | update Goal from wait/timeout, repeat diagnosis, leave heartbeat ACTIVE, or create another loop |
@@ -3137,7 +3146,7 @@ def worker_input_gate(worker: dict[str, Any], adaptive: bool = False) -> str:
                 f"- Execute only {ADAPTIVE_STATE_MUTATION_ENVELOPE} followed by one strict JSON request matching references/adaptive-mutation.schema.json. Pass it unchanged to adaptive_state_runtime.py; never translate it into prose or rewrite LOOP_STATE.md manually.\n"
                 "- INITIALIZE archives with `source_path` set to the frozen root-confined local Pack file; never transport the Pack as inline `content`, Base64, or wrapper text; bind controller_pack_digest. Pack change requires PAUSED_AT_SAFE_POINT, no lease or route-reserving PREPARED/SENT/ACKED outbox. PREPARE_CONTROLLER_PACK_MIGRATION binds five roles, same-id PAUSED, and confined prompt `source_path`; runtime derives path/digest from bytes, never caller digest. MIGRATE_CONTROLLER_PACK requires same-id target PAUSED and keeps ACKED history. Mismatch: converge or ROLLBACK_CONTROLLER_PACK_MIGRATION after old-prompt readback, restoring PREPARE gate; never create another heartbeat. STATUS live-only; absent=UNKNOWN_NOT_OBSERVED; resume needs target PAUSED, routing target ACTIVE.\n"
                 "- Accept only target-produced FORMAL_REPORT_STAGED from --report-stage exact report_text. Verify its outbox-bound confined regular read-only source, runtime digest/size/media/result; provided_report_digest is assertion-only. Formal report artifacts are never inline; reject Controller-written/inline REPORT bytes. BLOCKED binds execution_started and approved blocker_code; only false avoids repair. Legacy reconciliation requires safe point + exact archive. ASSURANCE RECORD_REVIEW has zero artifacts, embeds freshness_observation, reopens the ACK report, and atomically closes gate/ledger/Goal/outbox/lease.\n"
-                "- Reject ACQUIRE_LEASE and TAKEOVER_LEASE sent to State-Writer. Controller invokes those two mutations directly through the configured `route_state_mutation` MCP tool and must omit controller_turn_id; the signed bridge injects the host-owned App turn. All other mutations continue through this State-Writer and the standalone CLI remains fail-closed for route creation.\n"
+                "- Reject ACQUIRE_LEASE and TAKEOVER_LEASE sent to State-Writer. Controller invokes ordinary routing mutations directly through the configured `route_state_mutation` MCP tool and must omit controller_turn_id; the signed bridge injects the host-owned App turn. Lost native Goal generation recovery is DEFERRED/UNAVAILABLE and neither the bridge nor State-Writer may attempt it.\n"
                 "- Metered external calls require one canonical LOCAL `external_call_authorization` and immutable `.codex-loop/external-receipts/` STARTED-before-send/COMPLETED-before-stdout receipts. They bind route/Pack/Goal/lease/turn/target, provider/model, request/call, artifact path/digest, status/exit, and usage. COMPLETED replay recovers without provider retry; STARTED-only returns EXTERNAL_CALL_OUTCOME_UNKNOWN and forbids retry. Unknown tokens stay null/complete=false; receipts exclude prompts, responses, credentials, and secrets.\n"
                 "- Digest errors use provided_digest/computed_digest, ledger/file, state/mutation, or canonical_pack_digest/loaded_pack_digest; include byte metadata and side_effects=NONE, never expected/actual.\n"
                 "- Supported operations include RELEASE_LEASE for observation-only WAITING_ACTIVE/WAITING_QUOTA_RECOVERY turns. One claim reserves one route action; terminal ACK, RECORD_REVIEW, ROADMAP_REVISION, FINALIZE_LOOP, or valid RELEASE_LEASE consumes it. Reject release while a route or outbox remains reserved.\n"
@@ -3807,7 +3816,7 @@ Required Report Fields:
     )
     adaptive_materialization_lines = (
         "- Adaptive only: each Goal template is a PAYLOAD_MATERIALIZATION_SPEC strict JSON object. Parse it, replace each whole MATERIALIZE_* value with the correctly typed runtime value (integer, object, string, or null), and reject any remaining token. The claim contains lease_epoch, lease_id, owner_kind, owner_identity equal to the exact registered real Controller threadId, routing_turn_id, and intended_transition. A codex_delegation source_thread_id is parent metadata and is never valid owner identity.\n"
-        "- Universal runtime transport contract: every `adaptive_state_runtime.py` mode (`apply`, `--recover`, `--payload-materialize`, `--payload-verify`, `--report-stage`, `--fingerprint-normalize`, and `--external-receipt-stage`) uses direct argv with `tty:false`; launch the runtime itself first. Never place a stdin helper, shell wrapper, pipeline, heredoc, `dd`, `stty`, or fixed-byte reader before the runtime process. For each stdin mode, write one compact JSON frame exactly once; for `--recover`, send no stdin. A yielded session may only be polled by the same session id. Treat success only as `exit_code=0`, no remaining `session_id`, and exactly one JSON runtime response; never treat PTY echo as stdout.\n"
+        "- Universal runtime transport contract: every `adaptive_state_runtime.py` mode available in this release (`apply`, `--recover`, `--payload-materialize`, `--payload-verify`, `--report-stage`, `--fingerprint-normalize`, and `--external-receipt-stage`) uses direct argv with `tty:false`; launch the runtime itself first. Never place a stdin helper, shell wrapper, pipeline, heredoc, `dd`, `stty`, or fixed-byte reader before the runtime process. For each stdin mode, write one compact JSON frame exactly once; for `--recover`, send no stdin. A yielded session may only be polled by the same session id. Treat success only as `exit_code=0`, no remaining `session_id`, and exactly one JSON runtime response; never treat PTY echo as stdout.\n"
         "- Keep dispatch_payload_digest equal to the literal PAYLOAD_DIGEST_PLACEHOLDER in that specification. Serialize one compact JSON frame, directly invoke the installed adaptive_state_runtime.py --payload-materialize with tty:false, and write the frame once to raw stdin. Do not use dd/stty, fixed-byte readers, heredocs, or an extra shell pipeline; terminal echo is not runtime output. Success requires exit_code=0, no remaining session_id, and stdout containing one PAYLOAD_MATERIALIZED object. Poll only the same yielded session; never start a substitute materialization. If the controller deadline is reached, let the bounded runtime fail closed and report PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT. Use the successful payload_digest in PREPARE_OUTBOX and, after the PREPARE ACK, send transport_text unchanged as the exact codexDelegation.input body. Receiver passes received bytes unchanged to --payload-verify; runtime alone may normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization. Entity substitution or any field/value change still fails. Never manually replace/hash text, preserve a sha256: prefix, add angle brackets, reserialize transport_text, or hash the visible XML/UI wrapper.\n"
         "- Every Adaptive PREPARE_OUTBOX(kind=DISPATCH) record binds dispatch_id + exact payload_digest + target_thread_id + immutable Goal definition digest. Recover only when all four match, and allow only one PREPARED/SENT Worker dispatch.\n"
         if adaptive
@@ -3897,7 +3906,7 @@ Thread Topology:
 {integration_topology_block(repo_mode)}
 - Reuse one Reviewer per integration workspace/worktree across repair/review rounds when possible. After a completed task is acknowledged and no longer reusable, record its lifecycle and call set_thread_archived(threadId=..., archived=true). Do not archive State-Writer before final state ACK.
 
-    {startup_transaction_gate_block(state_writer_role, first_goal['worker_role'], audit_paths, adaptive, str(data.get('native_goal_policy', 'required')))}
+    {startup_transaction_gate_block(state_writer_role, first_goal['worker_role'], audit_paths, adaptive, str(data.get('native_goal_policy', 'required')))}{native_goal_generation_recovery_protocol_block(adaptive)}
 
 Worker Routing:
 | Role | Runtime Thread ID Template | Permission | Responsibility |

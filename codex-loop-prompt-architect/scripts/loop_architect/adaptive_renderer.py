@@ -18,6 +18,18 @@ from .validation import normalize_milestones
 from .state_runtime import ZERO_EXECUTION_BLOCKER_CODES
 
 
+_DEFERRED_NATIVE_GOAL_RECOVERY_MUTATIONS = {
+    "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+    "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+    "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+}
+_PUBLIC_ADAPTIVE_RUNTIME_MUTATIONS = tuple(
+    mutation
+    for mutation in ADAPTIVE_RUNTIME_MUTATIONS
+    if mutation not in _DEFERRED_NATIVE_GOAL_RECOVERY_MUTATIONS
+)
+
+
 def adaptive_state_schema_block() -> str:
     lines = ["Adaptive required top-level keys and types:"]
     lines.extend(f"- {key}: {value}" for key, value in ADAPTIVE_STATE_SCHEMA_TYPES.items())
@@ -290,7 +302,7 @@ Human Status Contract:
 {roadmap_projection_contract(goals_path, dashboard_path, dashboard)}
 
 Deterministic Runtime Protocol Vocabulary:
-- accepted mutation.type values: {' | '.join(ADAPTIVE_RUNTIME_MUTATIONS)}
+- accepted mutation.type values: {' | '.join(_PUBLIC_ADAPTIVE_RUNTIME_MUTATIONS)}
 - accepted outbox_kind values: {' | '.join(ADAPTIVE_OUTBOX_KINDS)}
 - persisted generic outbox states: PREPARED | SENT | ACKED | COMPLETED | CANCELLED. Follow the kind-specific lifecycle above; do not apply every state to every kind.
 - every outbox kind has only the safe cancellation branch PREPARED -> CANCELLED; SENT/ACKED/COMPLETED work cannot be cancelled.

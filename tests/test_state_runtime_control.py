@@ -973,7 +973,7 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                 target_id="controller-1",
                 result={
                     **identity,
-                    "goal_id": "native-goal-1",
+                    "goal_id": "controller-1",
                     "status": "EMULATED_SINGLE_ACTIVE_MILESTONE",
                 },
             )
@@ -990,7 +990,7 @@ class AdaptiveStateRuntimeControlTests(AdaptiveStateRuntimeTestCase):  # noqa: F
                 target_id="controller-1",
                 result={
                     **identity,
-                    "goal_id": "native-goal-1",
+                    "goal_id": "controller-1",
                     "status": "ACTIVE",
                 },
             )

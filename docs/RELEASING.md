@@ -1,22 +1,24 @@
 # Release process
 
-`VERSION` is the package version source of truth. The root-owned/read-only
-Mac mini attestation is the authoritative repository gate. GitHub Actions is a
+`VERSION` is the package version source of truth. The current main Mac is the
+only release authority. GitHub Actions is a
 compatibility mirror only: a green GitHub check is never release acceptance.
-Ubuntu `loop-ci` evidence is historical only and must not be reused for a new
-candidate.
+Historical Linux-server, Mac-mini, remote-CI, and remote-attestation results are
+superseded context and must not be reused for a new candidate.
 
 ## Evidence layers
 
 Keep these claims separate:
 
-1. local checks: targeted tests, compile, schema, installer syntax;
-2. Mac mini CI: exact-SHA quick, full, generator fuzz 5000, state fuzz 5000,
-   all-shipped branch coverage, isolated install/rollback, source/install
-   drift, security/risky-artifact and release lanes;
-3. primary-Mac App smoke: the same exact SHA, tracked tree and installed
+1. local main-Mac pre-canary gate: exact-SHA targeted and full tests, all-shipped
+   branch coverage, both 5000-case fuzz lanes, isolated install/rollback,
+   source/install drift and security/risky-artifact checks;
+2. local main-Mac App smoke: the same exact SHA, tracked tree and installed
    manifest under one real, identified Codex App build;
-4. merge/main attestation, annotated tag and public GitHub Release.
+3. local release gate, exact merge/main re-verification, annotated tag and
+   public GitHub Release;
+4. final local installation with source/install zero drift, followed separately
+   by any explicitly authorized real-Loop migration.
 
 The repository can mitigate and fail closed around app-server behavior. It
 does not claim to repair app-server process reaping or metadata delivery.
@@ -25,8 +27,8 @@ does not claim to repair app-server process reaping or metadata delivery.
 
 1. Update `VERSION`, `CHANGELOG.md`, both READMEs and intentionally changed
    examples. Keep the release worktree clean and scan risky artifacts.
-2. Run local targeted checks, then one full local gate at the release-candidate
-   commit:
+2. Run targeted checks on the current main Mac, then one complete local gate
+   at the release-candidate commit:
 
    ```bash
    python3 -m pip install -r requirements-test.txt
@@ -42,33 +44,33 @@ does not claim to repair app-server process reaping or metadata delivery.
    coverage report
    ```
 
-3. Submit exactly one candidate SHA to the unattended Mac mini runner. Record
-   the exact commit, tracked-tree SHA-256, pipeline-config digest, root-owned
-   attestation path, attestation/manifest digest, start/end time and verdict.
-   Do not submit a newer candidate while any required lane for the current
-   identity is active. Do not push the candidate to Ubuntu `loop-ci`.
-4. Let every Mac mini lane not requiring an App receipt finish. A release lane
-   that remains `BLOCKED` solely because the same-SHA App receipt is absent is
-   the expected pre-canary state, not PASS.
-5. Install into an isolated macOS `CODEX_HOME`. `scripts/install.sh` atomically
+3. Record the complete-gate result as a minimized structured local receipt with
+   `evidence_layer=local-main-mac`. It binds the exact commit and tracked-tree
+   digest and must not claim independent-host, remote, or cross-host proof.
+4. Install into an isolated macOS `CODEX_HOME`. `scripts/install.sh` atomically
    registers `codex-loop-state`, preserves prior config bytes, rejects a
    conflicting registration, writes an install manifest, and verifies zero
    source/install drift. Validate the resulting manifest with the installed
    `verify_installation.py`.
-6. On that exact SHA and installed manifest, run the real Codex App canary. The
+5. On that exact SHA and installed manifest, run the real Codex App canary. The
    receipt must reach the canary's own canonical `FINALIZATION_ACKED`; synthetic
    MCP tests, a Node REPL observation, source reading, or a tool-list screenshot
-   are only prerequisites.
-7. Bind the minimized, non-secret App receipt to the same Mac mini attestation
-   by its trusted out-of-band mechanism and finalize/re-run only the combined
-   release lane for the same SHA. If the runner lacks such an interface,
-   report the CI contract gap; do not commit raw local logs, user state or
-   secrets to bypass it.
-8. Merge only after the exact candidate has Mac mini PASS plus real App PASS.
-   Submit the exact merge commit to the Mac mini `main` lane and obtain a new main
-   attestation. Only then create an annotated tag on that precise commit and a
-   matching GitHub Release.
-9. Back up the real `CODEX_HOME`, install the exact release package, validate
+   are only prerequisites. The canary must record
+   `native_goal_generation_recovery_status=DEFERRED_UNAVAILABLE` and prove the
+   legacy CLI and MCP recovery surfaces reject before side effects. Each surface
+   receipt binds the exact unavailable status, `side_effects=NONE`, equal
+   before/after state digests, and a minimized evidence digest. It must not
+   create or retry a disposable or real native Goal.
+6. Bind the local complete-gate result and minimized non-secret same-SHA App receipt in
+   the local release receipt for the same SHA. PASS requires
+   `release_eligible == true`, `reasons == []`, exact commit/tree/
+   installed-manifest identities, real App PASS, and disposable canonical
+   `FINALIZATION_ACKED`; a standalone `verdict=PASS` is insufficient.
+7. Merge only after that exact candidate passes the local release gate. Rerun
+   the complete local gate and real App compatibility check as required on the
+   exact merge commit. Only then create an annotated tag on that precise commit
+   and a matching GitHub Release.
+8. Back up the real `CODEX_HOME`, install the exact release package, validate
    its manifest and registration readback, and re-check source/install drift.
    Pack migration and heartbeat resume are later paused-safe-point operations;
    installation alone never authorizes them.
@@ -81,23 +83,45 @@ it with `validate_app_canary_receipt.py`. A PASS receipt binds:
 
 - exact repo commit, tracked-tree SHA-256, Pack digest and
   installed-manifest digest;
+- `evidence_layer=local-main-mac` and the complete targeted/full/branch-
+  coverage/double-5000-fuzz/install-rollback/security/zero-drift pre-canary gate;
 - Codex/ChatGPT App version, build and bundle identifier;
 - app-server executable path, verified signature, Identifier, TeamIdentifier
   and non-secret CDHash;
-- MCP protocol version, config schema, observed outer requestMeta keys and
-  turn-metadata key set;
+- MCP negotiated-protocol status and value, plus separately sourced client and
+  server observations. When the App host does not expose the initialize
+  exchange, record `negotiated_protocol_version_status=UNAVAILABLE_BY_HOST`,
+  `negotiated_protocol_version=null`, the client observation (or its explicit
+  host-unavailable status), and the installed server's declared supported set.
+  `UNAVAILABLE_BY_HOST` is not evidence of a verified negotiated version and
+  must never be described as one; it is not by itself a release blocker when
+  every connection, identity, route, zero-side-effect, receipt and finalization
+  check passes. Config schema, observed outer requestMeta keys and the
+  turn-metadata key set remain independently required;
 - semantic results for session/thread/turn relationships without storing raw
   ids or user content;
 - installed server name, absolute Python, installed script path/SHA, config
   readback, zero drift, and whether an App refresh or restart occurred;
 - first route, same-turn pre-side-effect rejection, next-turn success, partial
   frame cleanup, control-plane responsiveness, lost-stdout recovery without a
-  second send, Pack/same-heartbeat reconciliation, and `FINALIZATION_ACKED`;
+  second send, Pack/same-heartbeat reconciliation, explicit
+  `DEFERRED_UNAVAILABLE` native Goal generation recovery status with zero-effect
+  CLI/MCP rejection, and `FINALIZATION_ACKED` through a supported non-recovery
+  fixture;
 - Asia/Shanghai start/end times and an exact error classification on failure.
 
-App version/build, bundle id, executable/signature/CDHash, MCP protocol/config
-schema, requestMeta shape, or registration identity changes invalidate the old
-compatibility digest. The release gate passes the currently observed
+Native Goal generation recovery is outside this release scope. Preserve the
+existing upstream blocker receipt as historical BLOCKED evidence; do not rerun
+its A/B/C/D canary, create another Goal, or reinterpret the blocker as PASS.
+Release proof covers only the supported non-recovery surface and the explicit
+zero-effect unavailable contract.
+
+App version/build, bundle id, executable/signature/CDHash, negotiated-protocol
+status/value, client/server protocol observations, config schema, requestMeta
+shape, or registration identity changes invalidate the old compatibility
+digest. A client-requested value or server-declared supported set is an
+observation from its named source, not proof of the negotiated result. The
+release gate passes the currently observed
 compatibility digest, exact Pack digest, repo commit, tracked-tree SHA-256 and
 install-manifest digest as validator expectations; a self-consistent old
 receipt is insufficient. The next release must obtain a new real receipt. Receipts
@@ -124,7 +148,7 @@ the official repositories/tags on 2026-07-15:
 - [`actions/download-artifact` v8.0.1](https://github.com/actions/download-artifact/releases/tag/v8.0.1):
   `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c`.
 
-Upgrade any pin in a separate reviewable change and rerun the authoritative
+Upgrade any pin in a separate reviewable change and rerun the local authoritative
 quick/full/fuzz/coverage/install/App gates. Floating tags, branches and
 unpinned Docker image tags are forbidden in release-required jobs.
 
@@ -134,5 +158,5 @@ Before commit, merge, tag and installation, reject unscoped validation logs,
 `REVIEW_BUNDLE`, `SMOKE_FINDINGS`, `FIX_REPORT`, run environments, API keys,
 Authorization values, `*.tar.gz`, `*.bundle`, SQLite/DB files, real
 `.codex-loop/**`, generated Controller Packs and user evidence. A clean local
-tree or compatibility workflow is not a substitute for the root-owned Mac mini
-attestation and same-SHA App receipt.
+tree or compatibility workflow is not a substitute for the complete local
+main-Mac gate and same-SHA real App receipt.

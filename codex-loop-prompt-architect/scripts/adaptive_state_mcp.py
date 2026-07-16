@@ -36,13 +36,23 @@ from loop_architect.state_runtime import (
 
 MCP_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2024-11-05")
 MCP_SERVER_NAME = "codex-loop-state"
-MCP_SERVER_VERSION = "1.0.0"
+MCP_SERVER_VERSION = "1.1.0"
 MCP_TOOL_NAME = "route_state_mutation"
 MCP_TURN_META_KEY = "x-codex-turn-metadata"
 MCP_THREAD_META_KEY = "threadId"
 MCP_INPUT_MAX_BYTES = 4_000_000
 MCP_PARTIAL_FRAME_TIMEOUT_SECONDS = 30.0
 MCP_READ_CHUNK_BYTES = 64 * 1024
+NATIVE_GOAL_GENERATION_RECOVERY_SCOPES = {
+    "NATIVE_GOAL_GENERATION_PREPARE",
+    "NATIVE_GOAL_GENERATION_COMMIT",
+    "NATIVE_GOAL_GENERATION_ROLLBACK",
+}
+NATIVE_GOAL_GENERATION_RECOVERY_MUTATIONS = {
+    "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+    "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+    "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+}
 CDHASH_RE = re.compile(r"^CDHash=([a-f0-9]{40,64})$", re.MULTILINE)
 IDENTIFIER_RE = re.compile(r"Identifier=([^\n]+)", re.MULTILINE)
 TEAM_ID_RE = re.compile(r"TeamIdentifier=([^\n]+)", re.MULTILINE)
@@ -421,6 +431,20 @@ class AdaptiveStateMcpServer:
                 )
             request = copy.deepcopy(request)
             mutation = request.get("mutation")
+            if isinstance(mutation, dict) and (
+                mutation.get("type")
+                in NATIVE_GOAL_GENERATION_RECOVERY_MUTATIONS
+                or mutation.get("recovery_scope")
+                in NATIVE_GOAL_GENERATION_RECOVERY_SCOPES
+            ):
+                raise McpBridgeError(
+                    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+                    "/native_goal_generation_recovery",
+                    {
+                        "availability": "DEFERRED_UNAVAILABLE",
+                        "side_effects": "NONE",
+                    },
+                )
             if not isinstance(mutation, dict) or mutation.get("type") not in {
                 "ACQUIRE_LEASE",
                 "TAKEOVER_LEASE",
@@ -497,9 +521,11 @@ class AdaptiveStateMcpServer:
                             "name": MCP_TOOL_NAME,
                             "description": (
                                 "Apply exactly one ACQUIRE_LEASE or "
-                                "TAKEOVER_LEASE using Codex host-injected turn "
-                                "metadata. Model arguments cannot supply the "
-                                "trusted identity."
+                                "TAKEOVER_LEASE using Codex host-injected "
+                                "turn metadata. State-Writer mutations do not "
+                                "cross this route bridge, and model arguments "
+                                "cannot supply the trusted identity. Native "
+                                "Goal generation recovery is unavailable."
                             ),
                             "inputSchema": {
                                 "type": "object",

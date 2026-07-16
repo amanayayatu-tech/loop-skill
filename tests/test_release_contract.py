@@ -36,6 +36,10 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertTrue(bridge.is_file())
         installer = (ROOT / "scripts" / "install.sh").read_text()
         self.assertIn('STATE_MCP="$SOURCE_DIR/scripts/adaptive_state_mcp.py"', installer)
+        self.assertIn(
+            'LEGACY_NATIVE_GOAL_OBSERVER="$SOURCE_DIR/scripts/loop_architect/native_goal_observer.py"',
+            installer,
+        )
         self.assertIn('chmod +x "$STAGING_DIR/scripts/adaptive_state_mcp.py"', installer)
         self.assertIn('MCP_CONFIG_HELPER="$SOURCE_DIR/scripts/configure_mcp.py"', installer)
         self.assertIn('INSTALL_VERIFY="$SOURCE_DIR/scripts/verify_installation.py"', installer)
@@ -47,6 +51,7 @@ class ReleaseContractTests(unittest.TestCase):
             "scripts/configure_mcp.py",
             "scripts/verify_installation.py",
             "scripts/validate_app_canary_receipt.py",
+            "scripts/loop_architect/native_goal_observer.py",
         ):
             self.assertTrue((ROOT / "codex-loop-prompt-architect" / relative).is_file())
         canary_validator = (
@@ -112,7 +117,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("branches:\n      - main", workflow)
         self.assertIn('tags:\n      - "v*"', workflow)
         self.assertIn("github.event.pull_request.head.ref || github.ref_name", workflow)
-        self.assertIn("Root-owned/read-only Mac mini", workflow)
+        self.assertIn("current main Mac's complete", workflow)
         self.assertIn("coverage run --parallel-mode", workflow)
         self.assertIn("coverage combine", workflow)
         self.assertNotIn("full-fuzz:", workflow)
@@ -141,15 +146,30 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertGreaterEqual(int(match.group(1)), 80)
 
-    def test_mac_mini_attestation_and_real_app_receipt_are_release_authorities(self) -> None:
+    def test_current_main_mac_is_the_only_release_authority(self) -> None:
         releasing = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
-        self.assertIn("Mac mini attestation is the authoritative repository gate", releasing)
+        self.assertIn("current main Mac is the\nonly release authority", releasing)
+        self.assertIn("local main-Mac pre-canary gate", releasing)
+        self.assertIn("evidence_layer=local-main-mac", releasing)
+        self.assertIn("release_eligible == true", releasing)
+        self.assertIn("reasons == []", releasing)
         self.assertIn("GitHub Actions is a\ncompatibility mirror only", releasing)
         self.assertIn("same-SHA App receipt", releasing)
         self.assertIn("tracked-tree SHA-256", releasing)
         self.assertIn("FINALIZATION_ACKED", releasing)
         self.assertIn("app-canary-receipt.schema.json", releasing)
+        self.assertIn("native Goal generation recovery status", releasing)
+        self.assertIn("DEFERRED_UNAVAILABLE", releasing)
+        self.assertIn("zero-effect unavailable contract", releasing)
+        self.assertIn("negotiated_protocol_version_status=UNAVAILABLE_BY_HOST", releasing)
+        self.assertIn("negotiated_protocol_version=null", releasing)
+        self.assertIn("is not evidence of a verified negotiated version", releasing)
+        self.assertIn("not by itself a release blocker", releasing)
+        self.assertIn("server-declared supported set is an\nobservation", releasing)
         self.assertNotIn("required GitHub Actions checks pass", releasing)
+        self.assertNotIn("Mac mini witness", releasing)
+        self.assertNotIn("root-owned/read-only", releasing)
+        self.assertNotIn("combined release", releasing)
 
     def test_state_runtime_tests_are_split_without_method_loss(self) -> None:
         compatibility = ROOT / "tests" / "test_adaptive_state_runtime.py"

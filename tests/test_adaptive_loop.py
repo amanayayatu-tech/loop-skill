@@ -621,6 +621,26 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         ):
             self.assertIn(marker, self.pack)
 
+    def test_pack_defers_native_goal_generation_recovery_fail_closed(self) -> None:
+        for marker in (
+            "Native Controller Goal Generation Recovery: DEFERRED/UNAVAILABLE",
+            "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+            "keep the exact heartbeat PAUSED",
+            "do not create a replacement Goal, Controller, thread, session, or heartbeat",
+        ):
+            self.assertIn(marker, self.pack)
+        for forbidden in (
+            "NATIVE_GOAL_GENERATION_RECOVERY_AUTHORIZED",
+            "NATIVE_GOAL_GENERATION_PREPARE",
+            "NATIVE_GOAL_GENERATION_COMMIT",
+            "NATIVE_GOAL_GENERATION_ROLLBACK",
+            "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION",
+            "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION",
+            "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION",
+            "--native-goal-observe",
+        ):
+            self.assertNotIn(forbidden, self.pack)
+
     def test_generated_initial_state_payload_is_accepted_by_runtime(self) -> None:
         workers = scaffold.normalize_workers(self.payload)
         goals = scaffold.normalize_goals(self.payload, workers)

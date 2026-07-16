@@ -9,6 +9,7 @@ import select
 import stat
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from loop_architect.state_runtime import (
@@ -16,15 +17,17 @@ from loop_architect.state_runtime import (
     AdaptiveStateRuntime,
     InjectedCrash,
     RuntimeRejection,
+    _requests_deferred_native_goal_recovery,
     materialize_dispatch_payload,
     verify_dispatch_payload_against_state,
 )
 from loop_architect.human_control import build_failure_fingerprint
-
-
 INPUT_TRANSPORT_TIMEOUT_SECONDS = 30.0
 INPUT_TRANSPORT_MAX_BYTES = 4_000_000
 INPUT_TRANSPORT_CHUNK_BYTES = 64 * 1024
+NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE = (
+    "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE"
+)
 
 
 class InputTransportError(ValueError):
@@ -178,6 +181,11 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
                 raise ValueError(token)
             mode = "fingerprint-normalize"
             index += 1
+        elif token == "--native-goal-observe":
+            if mode != "apply":
+                raise ValueError(token)
+            mode = "native-goal-observe"
+            index += 1
         elif token == "--crash-at" and index + 1 < len(argv):
             crash_at = argv[index + 1]
             index += 2
@@ -189,6 +197,7 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
         "payload-verify",
         "report-stage",
         "external-receipt-stage",
+        "native-goal-observe",
     } and root is None:
         raise ValueError("--root")
     if mode in {"payload-materialize", "fingerprint-normalize"} and root is not None:
@@ -201,6 +210,7 @@ def _parse_args(argv: list[str]) -> tuple[str | None, str, str | None]:
             "fingerprint-normalize",
             "report-stage",
             "external-receipt-stage",
+            "native-goal-observe",
         }
     ) and crash_at is not None:
         raise ValueError("--crash-at")
@@ -240,6 +250,17 @@ def _emit(response: dict[str, Any]) -> None:
     sys.stdout.write(payload + "\n")
 
 
+def _native_goal_recovery_unavailable_response() -> dict[str, Any]:
+    return _response(
+        NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE,
+        "/native_goal_generation_recovery",
+        {
+            "availability": "DEFERRED_UNAVAILABLE",
+            "side_effects": "NONE",
+        },
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         root, mode, crash_at = _parse_args(list(sys.argv[1:] if argv is None else argv))
@@ -248,6 +269,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
+        if mode == "native-goal-observe":
+            _emit(_native_goal_recovery_unavailable_response())
+            return 1
         payload = "" if mode == "recover" else _read_bounded_stdin(mode)
         if mode == "payload-materialize":
             if not payload.strip():
@@ -325,7 +349,10 @@ def main(argv: list[str] | None = None) -> int:
                         {"error_type": type(exc).__name__},
                     )
                 else:
-                    response = runtime.apply(request)
+                    if _requests_deferred_native_goal_recovery(request):
+                        response = _native_goal_recovery_unavailable_response()
+                    else:
+                        response = runtime.apply(request)
     except InputTransportError as exc:
         response = _response(exc.code, "/stdin", exc.details)
     except RuntimeRejection as exc:

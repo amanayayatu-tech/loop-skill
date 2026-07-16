@@ -111,10 +111,11 @@ remains blocked until the same heartbeat has a target ACTIVE readback. The
 native Controller Goal keeps its launch identity in Pack history; changed but
 unmigrated bytes have no routing authority.
 
-Human steering, STATUS projection, Decision Card, review surface, convergence,
-Validation Matrix, Context Freshness, and evidence-order rules are defined in
-[human-steering-and-convergence.md](human-steering-and-convergence.md). Runtime
-and the two schemas remain authoritative for their mutation and state shapes.
+### Native Controller Goal generation recovery — DEFERRED/UNAVAILABLE
+
+This release does not expose lost native Goal generation recovery. Generated Packs, the standalone runtime CLI, and the MCP route bridge fail closed as `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with `side_effects=NONE`. Legacy recovery fields remain readable only so historical canonical state and blocker receipts are not destroyed or reinterpreted.
+
+When required-mode reconciliation finds `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, keep canonical state unchanged, keep the exact heartbeat PAUSED, send no business route, and do not create or substitute a Goal, Controller, thread, session, State-Writer, or heartbeat. Existing BLOCKED receipts remain BLOCKED evidence; they are never a release PASS.
 
 ### Deterministic State Runtime
 
@@ -552,16 +553,20 @@ emits a schema-validated manifest binding the installed bridge SHA, config
 readback, exact repo identity when the source is clean, and zero source/install
 drift. A dirty source is `UNVERIFIED_SOURCE`, never the current HEAD by proxy.
 
-Release acceptance requires a root-owned/read-only Mac mini exact-SHA
-attestation and then a real Codex App receipt for that same SHA,
-tracked-tree SHA-256, and installed-manifest digest.
+Release acceptance is local to the current main Mac. It binds one exact SHA and
+tracked-tree digest to targeted/full tests, all-shipped branch coverage, both
+5000-case fuzz lanes, isolated install/rollback, security/risky-artifact checks,
+zero source/install drift, and the real Codex App receipt. The structured
+receipt uses `evidence_layer=local-main-mac`; it never claims independent-host,
+remote-attestation, or cross-host proof. Historical remote results are not
+inherited by a new candidate.
 The receipt binds App version/build/bundle, app-server executable/signature/
 CDHash, MCP protocol/config/requestMeta shape, registration identity, same-turn
 second-route rejection before side effects, next-turn success, partial-frame
 cleanup, lost-stdout no-retry recovery, Pack/same-heartbeat reconciliation, and
 canonical `FINALIZATION_ACKED`. Any compatibility identity change invalidates
 the old receipt. GitHub Actions and synthetic tests are compatibility evidence,
-not this release gate; the repository does not claim to repair app-server
+not this local release gate; the repository does not claim to repair app-server
 process reaping upstream.
 
 Except for initialization, counted routing-turn creation, and lease

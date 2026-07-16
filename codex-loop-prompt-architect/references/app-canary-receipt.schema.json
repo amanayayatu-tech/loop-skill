@@ -15,6 +15,7 @@
     "tracked_tree_digest",
     "pack_digest",
     "installed_manifest_digest",
+    "local_pre_canary_gate",
     "app",
     "app_server",
     "mcp",
@@ -25,8 +26,8 @@
     "receipt_digest"
   ],
   "properties": {
-    "schema_version": {"const": "app-canary-receipt-v1"},
-    "evidence_layer": {"const": "mac-app-smoke"},
+    "schema_version": {"const": "app-canary-receipt-v4"},
+    "evidence_layer": {"const": "local-main-mac"},
     "status": {"enum": ["PASS", "BLOCKED", "FAIL"]},
     "started_at": {"type": "string", "format": "date-time"},
     "finished_at": {"type": "string", "format": "date-time"},
@@ -35,6 +36,36 @@
     "tracked_tree_digest": {"$ref": "#/$defs/digest"},
     "pack_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "installed_manifest_digest": {"$ref": "#/$defs/digest"},
+    "local_pre_canary_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targeted_checks_passed",
+        "full_unittest_passed",
+        "branch_coverage_passed",
+        "branch_coverage_percent",
+        "generator_fuzz_cases",
+        "generator_fuzz_passed",
+        "state_fuzz_cases",
+        "state_fuzz_passed",
+        "isolated_install_rollback_passed",
+        "security_risky_artifact_passed",
+        "source_install_drift"
+      ],
+      "properties": {
+        "targeted_checks_passed": {"const": true},
+        "full_unittest_passed": {"const": true},
+        "branch_coverage_passed": {"const": true},
+        "branch_coverage_percent": {"type": "number", "minimum": 80, "maximum": 100},
+        "generator_fuzz_cases": {"const": 5000},
+        "generator_fuzz_passed": {"const": true},
+        "state_fuzz_cases": {"const": 5000},
+        "state_fuzz_passed": {"const": true},
+        "isolated_install_rollback_passed": {"const": true},
+        "security_risky_artifact_passed": {"const": true},
+        "source_install_drift": {"type": "array", "maxItems": 0}
+      }
+    },
     "app": {
       "type": "object",
       "additionalProperties": false,
@@ -60,9 +91,35 @@
     "mcp": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["protocol_version", "config_schema_version", "request_meta_shape", "identity_relations", "registration"],
+      "required": [
+        "negotiated_protocol_version_status",
+        "negotiated_protocol_version",
+        "negotiated_protocol_version_evidence_source",
+        "client_protocol_observation",
+        "server_protocol_observation",
+        "config_schema_version",
+        "request_meta_shape",
+        "identity_relations",
+        "registration"
+      ],
       "properties": {
-        "protocol_version": {"type": "string", "minLength": 1},
+        "negotiated_protocol_version_status": {
+          "enum": ["VERIFIED_BY_HOST_EXCHANGE", "UNAVAILABLE_BY_HOST"]
+        },
+        "negotiated_protocol_version": {
+          "oneOf": [
+            {"$ref": "#/$defs/protocolVersion"},
+            {"type": "null"}
+          ]
+        },
+        "negotiated_protocol_version_evidence_source": {
+          "enum": [
+            "HOST_INITIALIZE_EXCHANGE",
+            "HOST_DOES_NOT_EXPOSE_INITIALIZE_EXCHANGE"
+          ]
+        },
+        "client_protocol_observation": {"$ref": "#/$defs/clientProtocolObservation"},
+        "server_protocol_observation": {"$ref": "#/$defs/serverProtocolObservation"},
         "config_schema_version": {"const": "codex-cli-mcp-stdio-v1"},
         "request_meta_shape": {
           "type": "object",
@@ -120,7 +177,23 @@
             "app_refresh_or_restart": {"enum": ["REFRESH", "RESTART"]}
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "negotiated_protocol_version_status": {"const": "VERIFIED_BY_HOST_EXCHANGE"},
+            "negotiated_protocol_version": {"$ref": "#/$defs/protocolVersion"},
+            "negotiated_protocol_version_evidence_source": {"const": "HOST_INITIALIZE_EXCHANGE"}
+          }
+        },
+        {
+          "properties": {
+            "negotiated_protocol_version_status": {"const": "UNAVAILABLE_BY_HOST"},
+            "negotiated_protocol_version": {"type": "null"},
+            "negotiated_protocol_version_evidence_source": {"const": "HOST_DOES_NOT_EXPOSE_INITIALIZE_EXCHANGE"}
+          }
+        }
+      ]
     },
     "checks": {
       "type": "object",
@@ -138,6 +211,9 @@
         "control_plane_responsive_after_partial_frame",
         "lost_stdout_recovered_without_second_send",
         "pack_migration_same_heartbeat_reconciled",
+        "native_goal_generation_recovery_status",
+        "native_goal_generation_recovery_cli",
+        "native_goal_generation_recovery_mcp",
         "finalization_acked"
       ],
       "properties": {
@@ -153,6 +229,9 @@
         "control_plane_responsive_after_partial_frame": {"type": "boolean"},
         "lost_stdout_recovered_without_second_send": {"type": "boolean"},
         "pack_migration_same_heartbeat_reconciled": {"type": "boolean"},
+        "native_goal_generation_recovery_status": {"const": "DEFERRED_UNAVAILABLE"},
+        "native_goal_generation_recovery_cli": {"$ref": "#/$defs/unavailableRecoverySurface"},
+        "native_goal_generation_recovery_mcp": {"$ref": "#/$defs/unavailableRecoverySurface"},
         "finalization_acked": {"type": "boolean"}
       }
     },
@@ -168,6 +247,9 @@
             "APP_PARENT_CODE_SIGNATURE_INVALID",
             "APP_TURN_ATTESTATION_INVALID",
             "CONTROLLER_TURN_ALREADY_ROUTED",
+            "UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE",
+            "NATIVE_GOAL_CREATE_OUTCOME_UNKNOWN",
+            "NATIVE_GOAL_ROLLOUT_OBSERVATION_INVALID",
             "APP_UPSTREAM_COMPATIBILITY_BLOCKER",
             "CANARY_ASSERTION_FAILED"
           ]
@@ -179,6 +261,93 @@
     "receipt_digest": {"$ref": "#/$defs/digest"}
   },
   "$defs": {
-    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}$"
+    },
+    "clientProtocolObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "requested_version", "evidence_source", "evidence_digest"],
+      "properties": {
+        "status": {
+          "enum": [
+            "REQUESTED_VERSION_OBSERVED",
+            "REQUESTED_VERSION_UNAVAILABLE_BY_HOST"
+          ]
+        },
+        "requested_version": {
+          "oneOf": [
+            {"$ref": "#/$defs/protocolVersion"},
+            {"type": "null"}
+          ]
+        },
+        "evidence_source": {
+          "enum": [
+            "HOST_INITIALIZE_REQUEST",
+            "APP_BUILD_AND_REAL_REQUEST_META"
+          ]
+        },
+        "evidence_digest": {"$ref": "#/$defs/digest"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "REQUESTED_VERSION_OBSERVED"},
+            "requested_version": {"$ref": "#/$defs/protocolVersion"},
+            "evidence_source": {"const": "HOST_INITIALIZE_REQUEST"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "REQUESTED_VERSION_UNAVAILABLE_BY_HOST"},
+            "requested_version": {"type": "null"},
+            "evidence_source": {"const": "APP_BUILD_AND_REAL_REQUEST_META"}
+          }
+        }
+      ]
+    },
+    "serverProtocolObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "supported_versions",
+        "evidence_source",
+        "evidence_digest",
+        "installed_script_sha256"
+      ],
+      "properties": {
+        "status": {"const": "DECLARED_BY_INSTALLED_SERVER"},
+        "supported_versions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/protocolVersion"}
+        },
+        "evidence_source": {"const": "INSTALLED_SERVER_MCP_PROTOCOL_VERSIONS"},
+        "evidence_digest": {"$ref": "#/$defs/digest"},
+        "installed_script_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "unavailableRecoverySurface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "side_effects",
+        "before_state_digest",
+        "after_state_digest",
+        "evidence_digest"
+      ],
+      "properties": {
+        "status": {"const": "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE"},
+        "side_effects": {"const": "NONE"},
+        "before_state_digest": {"$ref": "#/$defs/digest"},
+        "after_state_digest": {"$ref": "#/$defs/digest"},
+        "evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
   }
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
@@ -9,6 +10,7 @@ SOURCE_DIR="$ROOT_DIR/codex-loop-prompt-architect"
 TARGET_DIR="$SKILLS_DIR/codex-loop-prompt-architect"
 STATE_RUNTIME="$SOURCE_DIR/scripts/adaptive_state_runtime.py"
 STATE_MCP="$SOURCE_DIR/scripts/adaptive_state_mcp.py"
+LEGACY_NATIVE_GOAL_OBSERVER="$SOURCE_DIR/scripts/loop_architect/native_goal_observer.py"
 MCP_CONFIG_HELPER="$SOURCE_DIR/scripts/configure_mcp.py"
 INSTALL_VERIFY="$SOURCE_DIR/scripts/verify_installation.py"
 APP_CANARY_VERIFY="$SOURCE_DIR/scripts/validate_app_canary_receipt.py"
@@ -60,7 +62,7 @@ if [[ ! -f "$SOURCE_DIR/SKILL.md" ]]; then
   exit 1
 fi
 
-for required_file in "$STATE_RUNTIME" "$STATE_MCP" "$MCP_CONFIG_HELPER" "$INSTALL_VERIFY" "$APP_CANARY_VERIFY" "$STATE_SCHEMA" "$MUTATION_SCHEMA" "$INSTALL_SCHEMA" "$APP_CANARY_SCHEMA"; do
+for required_file in "$STATE_RUNTIME" "$STATE_MCP" "$LEGACY_NATIVE_GOAL_OBSERVER" "$MCP_CONFIG_HELPER" "$INSTALL_VERIFY" "$APP_CANARY_VERIFY" "$STATE_SCHEMA" "$MUTATION_SCHEMA" "$INSTALL_SCHEMA" "$APP_CANARY_SCHEMA"; do
   if [[ ! -f "$required_file" ]]; then
     echo "Missing Adaptive state runtime artifact: $required_file" >&2
     exit 1

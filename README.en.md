@@ -6,8 +6,8 @@
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
 
 The test badge is a GitHub compatibility mirror. Authoritative release evidence
-is a root-owned/read-only Mac mini attestation plus a real Codex App canary
-receipt from the primary Mac for the same exact commit.
+comes only from the current main Mac's complete exact-SHA gate, real Codex App
+canary, local release gate, and merge/main re-verification.
 
 `codex-loop-prompt-architect` is a skill for the Codex macOS App. It quality-gates
 rough ideas and PRDs, then turns only `READY_FOR_LOOP` requirements into a
@@ -46,6 +46,12 @@ The skill creates one self-contained Controller Pack Markdown file plus separate
 Simplified Chinese usage instructions. It never silently authorizes push, merge,
 deploy, destructive operations, external writes, secrets, or paid runtime.
 
+### v3.2.7 native Goal generation recovery deferred
+
+This release does not provide lost native Goal generation recovery. Generated Packs no longer contain recovery steps; the standalone runtime CLI and MCP route bridge return `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with `side_effects=NONE` for legacy recovery requests. Historical canonical fields and existing BLOCKED receipts remain audit evidence and cannot be promoted to PASS.
+
+When required mode detects `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, canonical state remains unchanged, the same heartbeat remains PAUSED, business routing stops, and no replacement Goal, Controller, thread, session, State-Writer, or heartbeat may be created.
+
 ### v3.2.6 interpreter identity hotfix
 
 Generated Adaptive Packs now resolve `RUNTIME_PYTHON` and the sibling runtime
@@ -70,10 +76,14 @@ execution semantics, rolls back skill/config on failure, and writes a
 schema-validated manifest proving registration readback and zero source/install
 drift.
 
-Release evidence stays layered: local checks, authoritative exact-SHA Mac mini
-attestation, a real canary on the current App build, then merge/main/tag/Release.
-Any App version/build/bundle, app-server signature/CDHash, MCP protocol/config/
-requestMeta shape, or installation identity change invalidates the old receipt.
+Release evidence stays layered: local main-Mac checks, a real canary on the
+current App build, the local release gate, then merge/main/tag/Release.
+Any App version/build/bundle, app-server signature/CDHash, MCP negotiation
+status or observable client/server protocol information, config/requestMeta
+shape, or installation identity change invalidates the old receipt. If the host
+does not expose its initialize exchange, the receipt records
+`UNAVAILABLE_BY_HOST` and `null`; that is not a verified negotiated version and
+does not weaken any identity, route, zero-side-effect, or finalization gate.
 PASS covers same-turn pre-side-effect rejection, next-turn success, partial-frame
 cleanup, lost-stdout recovery, Pack/same-heartbeat migration, and canonical
 `FINALIZATION_ACKED`. The repository does not claim to fix upstream app-server
@@ -307,10 +317,12 @@ two 5000-case fuzz lanes do not repeat that suite.
 
 An isolated install also registers `codex-loop-state`, checks exact command/args
 readback, writes a schema-validated install manifest, and proves zero
-source/install drift. GitHub Actions checks compatibility only. Authoritative
-release acceptance requires the Mac mini root-owned/read-only exact-SHA
-attestation, then a real same-SHA/tracked-tree/current-App receipt from the
-primary Mac, followed by the Mac mini merge/main attestation. See the
+source/install drift. The current main Mac runs full tests, branch coverage,
+both 5000-case fuzz lanes, security checks, and the real App canary. Its
+structured receipt uses `evidence_layer=local-main-mac` and must not claim
+independent-host, remote, or cross-host proof. The local release gate binds the
+same SHA and may pass only with `release_eligible=true`, no reasons, and
+disposable canonical `FINALIZATION_ACKED`. GitHub Actions checks compatibility only. See the
 [release process](docs/RELEASING.md).
 
 ## Documentation map

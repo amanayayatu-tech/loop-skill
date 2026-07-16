@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openai.local/codex-loop/adaptive-mutation.schema.json",
   "title": "Deterministic Adaptive State Mutation Request",
+  "$comment": "Native Goal generation recovery definitions are retained only to validate historical audit data and legacy unavailable requests. The core runtime, convenience API, CLI, and MCP entrypoint reject them as NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE before state access with zero side effects.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -37,6 +38,9 @@
         {"$ref": "#/$defs/prepareControllerPackMigration"},
         {"$ref": "#/$defs/migrateControllerPack"},
         {"$ref": "#/$defs/rollbackControllerPackMigration"},
+        {"$ref": "#/$defs/prepareNativeGoalGenerationMigration"},
+        {"$ref": "#/$defs/commitNativeGoalGenerationMigration"},
+        {"$ref": "#/$defs/rollbackNativeGoalGenerationMigration"},
         {"$ref": "#/$defs/recordHeartbeatObservation"},
         {"$ref": "#/$defs/reconcileWorkerExecutionClassification"},
         {"$ref": "#/$defs/recordSteering"},
@@ -153,8 +157,43 @@
         "routing_turn_id": {"$ref": "#/$defs/safeId"},
         "owner_kind": {"enum": ["GOAL_TURN", "HEARTBEAT"]},
         "owner_identity": {"$ref": "#/$defs/safeId"},
-        "intended_transition": {"const": "ROUTE_ONE_TRANSITION"}
-      }
+        "intended_transition": {"const": "ROUTE_ONE_TRANSITION"},
+        "recovery_scope": {
+          "enum": [
+            "NATIVE_GOAL_GENERATION_PREPARE",
+            "NATIVE_GOAL_GENERATION_COMMIT",
+            "NATIVE_GOAL_GENERATION_ROLLBACK"
+          ]
+        },
+        "migration_id": {"$ref": "#/$defs/safeId"},
+        "state_writer_thread_id": {"$ref": "#/$defs/safeId"},
+        "controller_pack_digest": {"$ref": "#/$defs/digest"},
+        "authorization_steering_id": {"$ref": "#/$defs/safeId"},
+        "authorization_digest": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [
+        {
+          "if": {"required": ["recovery_scope"]},
+          "then": {
+            "required": [
+              "migration_id", "state_writer_thread_id",
+              "controller_pack_digest", "authorization_steering_id",
+              "authorization_digest"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {"required": ["migration_id"]},
+                {"required": ["state_writer_thread_id"]},
+                {"required": ["controller_pack_digest"]},
+                {"required": ["authorization_steering_id"]},
+                {"required": ["authorization_digest"]}
+              ]
+            }
+          }
+        }
+      ]
     },
     "milestone": {
       "type": "object",
@@ -530,6 +569,93 @@
         "rollback_reason": {"$ref": "#/$defs/boundedText"}
       }
     },
+    "nativeGoalNullObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "thread_id", "turn_id", "observed_at", "observation_path",
+        "observation_digest"
+      ],
+      "properties": {
+        "thread_id": {"$ref": "#/$defs/safeId"},
+        "turn_id": {"$ref": "#/$defs/safeId"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "observation_path": {"type": "string", "minLength": 1},
+        "observation_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "prepareNativeGoalGenerationMigration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type", "lease_claim", "migration_id", "target_controller_thread_id",
+        "null_observation_paths", "heartbeat_observation",
+        "automation_observation_path", "automation_observation_digest",
+        "create_outbox_id", "expires_at", "observed_at"
+      ],
+      "properties": {
+        "type": {"const": "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "migration_id": {"$ref": "#/$defs/safeId"},
+        "target_controller_thread_id": {"$ref": "#/$defs/safeId"},
+        "null_observation_paths": {
+          "type": "array", "minItems": 2, "maxItems": 8, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "heartbeat_observation": {"$ref": "#/$defs/heartbeatObservation"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"},
+        "create_outbox_id": {"$ref": "#/$defs/safeId"},
+        "expires_at": {"$ref": "#/$defs/timestamp"},
+        "observed_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "commitNativeGoalGenerationMigration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type", "lease_claim", "migration_id", "goal_observation_path",
+        "rollout_observation_path", "heartbeat_observation",
+        "automation_observation_path", "automation_observation_digest",
+        "observed_at"
+      ],
+      "properties": {
+        "type": {"const": "COMMIT_NATIVE_GOAL_GENERATION_MIGRATION"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "migration_id": {"$ref": "#/$defs/safeId"},
+        "goal_observation_path": {"type": "string", "minLength": 1},
+        "rollout_observation_path": {"type": "string", "minLength": 1},
+        "heartbeat_observation": {"$ref": "#/$defs/heartbeatObservation"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"},
+        "observed_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "rollbackNativeGoalGenerationMigration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type", "lease_claim", "migration_id", "null_observation_paths",
+        "rollout_observation_path",
+        "heartbeat_observation", "automation_observation_path",
+        "automation_observation_digest", "rollback_reason", "observed_at"
+      ],
+      "properties": {
+        "type": {"const": "ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION"},
+        "lease_claim": {"$ref": "#/$defs/leaseClaim"},
+        "migration_id": {"$ref": "#/$defs/safeId"},
+        "null_observation_paths": {
+          "type": "array", "minItems": 2, "maxItems": 8, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "rollout_observation_path": {"type": "string", "minLength": 1},
+        "heartbeat_observation": {"$ref": "#/$defs/heartbeatObservation"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"},
+        "rollback_reason": {"$ref": "#/$defs/boundedText"},
+        "observed_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
     "recordHeartbeatObservation": {
       "type": "object",
       "additionalProperties": false,
@@ -744,8 +870,50 @@
           "$ref": "#/$defs/safeId",
           "description": "Bridge-owned field injected from Codex MCP params._meta x-codex-turn-metadata. Model-authored route arguments omit it; direct CLI or mismatched claims fail closed."
         },
-        "intended_transition": {"const": "ROUTE_ONE_TRANSITION"}
-      }
+        "intended_transition": {"const": "ROUTE_ONE_TRANSITION"},
+        "recovery_scope": {
+          "enum": [
+            "NATIVE_GOAL_GENERATION_PREPARE",
+            "NATIVE_GOAL_GENERATION_COMMIT",
+            "NATIVE_GOAL_GENERATION_ROLLBACK"
+          ]
+        },
+        "migration_id": {"$ref": "#/$defs/safeId"},
+        "state_writer_thread_id": {"$ref": "#/$defs/safeId"},
+        "controller_pack_digest": {"$ref": "#/$defs/digest"},
+        "authorization_steering_id": {"$ref": "#/$defs/safeId"},
+        "authorization_digest": {"$ref": "#/$defs/digest"},
+        "heartbeat_observation": {"$ref": "#/$defs/heartbeatObservation"},
+        "automation_observation_path": {"type": "string", "minLength": 1},
+        "automation_observation_digest": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [
+        {
+          "if": {"required": ["recovery_scope"]},
+          "then": {
+            "required": [
+              "migration_id", "state_writer_thread_id",
+              "controller_pack_digest", "authorization_steering_id",
+              "authorization_digest", "heartbeat_observation",
+              "automation_observation_path", "automation_observation_digest"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {"required": ["migration_id"]},
+                {"required": ["state_writer_thread_id"]},
+                {"required": ["controller_pack_digest"]},
+                {"required": ["authorization_steering_id"]},
+                {"required": ["authorization_digest"]},
+                {"required": ["heartbeat_observation"]},
+                {"required": ["automation_observation_path"]},
+                {"required": ["automation_observation_digest"]}
+              ]
+            }
+          }
+        }
+      ]
     },
     "releaseLease": {
       "type": "object",

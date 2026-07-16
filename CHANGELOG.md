@@ -5,6 +5,23 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.2.7] - 2026-07-16
+
+### Changed
+
+- Deferred lost native Goal generation recovery because the current Codex App has no create-paused, resume, restore, or rebind interface that permits the recovery transaction to commit before automatic Goal dispatch.
+- Removed the recovery procedure from generated Packs and release canaries. Standalone runtime and MCP entrypoints now return `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with zero side effects for every legacy recovery request. Historical state remains readable for audit only.
+- Preserved the real App blocker receipt and upstream requirement as BLOCKED evidence. They are not rewritten, deleted, or promoted to release PASS.
+- Replaced the ambiguous single MCP protocol-version receipt field with an
+  explicit negotiated-version status/value and separately sourced client and
+  installed-server observations. `UNAVAILABLE_BY_HOST` keeps the negotiated
+  value null and unknown; it is not a verified negotiation and is not, by
+  itself, a release blocker when every behavioral and identity gate passes.
+
+### Evidence boundary
+
+Repository tests prove the explicit unavailable contracts and the remaining deterministic control-plane behavior. They do not infer an MCP negotiated version that the host does not expose. Native Goal generation recovery is outside the supported release surface; this package does not claim to repair Codex App Goal persistence.
+
 ## [3.2.6] - 2026-07-16
 
 ### Fixed
@@ -49,16 +66,16 @@ All notable changes to this project are documented here. The project follows
   least 80%, separates full tests from the two 5000-case fuzz lanes, checks the
   complete reviewed whitespace range, pins every Action to a full commit, and
   verifies exact protected-main tag identity.
-- Mac mini root-owned/read-only CI attestation is authoritative. Ubuntu CI and
-  GitHub Actions are non-authoritative. Every release candidate additionally
-  requires a privacy-bounded real Codex App receipt for the same exact commit,
-  tracked-tree SHA-256, installed manifest and current App/MCP/signature
-  identity, ending at canonical `FINALIZATION_ACKED`.
+- The v3.2.5 process used a Mac mini attestation while Ubuntu CI and GitHub
+  Actions were non-authoritative. That historical cross-host policy is
+  superseded for v3.2.7 and later. The real Codex App receipt still binds the
+  same exact commit, tracked-tree SHA-256, installed manifest and current
+  App/MCP/signature identity, ending at canonical `FINALIZATION_ACKED`.
 
 ### Evidence boundary
 
-Repository tests and Mac mini attestation remain separate from the real macOS App
-canary. This release validates, mitigates and fails closed around app-server
+Repository tests and the then-current historical CI record remained separate
+from the real macOS App canary. This release validates, mitigates and fails closed around app-server
 behavior; it does not claim to fix app-server process-group cleanup upstream.
 
 ## [3.2.4] - 2026-07-14
@@ -213,7 +230,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.6...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.7...HEAD
+[3.2.7]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.7
 [3.2.6]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.6
 [3.2.5]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.5
 [3.2.4]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.4
