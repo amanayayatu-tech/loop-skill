@@ -28,12 +28,54 @@ PATH_FIELDS = {
 }
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate mapping keys."""
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeyLoader,
+    node: yaml.nodes.MappingNode,
+    deep: bool = False,
+) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
 def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
 def _repo_path(root: Path, reference: str) -> Path:
     return root / reference.split("#", 1)[0]
+
+
+def _adr_replacement(root: Path, relative: str) -> str | None:
+    try:
+        content = (root / relative).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(
+        r"^- Superseded by: (docs/adr/[a-z0-9-]+\.md)$",
+        content,
+        re.MULTILINE,
+    )
+    return match.group(1) if match is not None else None
 
 
 def validate_adr(root: Path, relative: str) -> list[str]:
@@ -84,7 +126,10 @@ def validate(root: Path, index_path: Path | None = None) -> list[str]:
     index_path = index_path or root / "docs/spec/invariants.yaml"
     errors: list[str] = []
     try:
-        document = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+        document = yaml.load(
+            index_path.read_text(encoding="utf-8"),
+            Loader=_UniqueKeyLoader,
+        )
     except (OSError, yaml.YAMLError) as exc:
         return [f"index:unreadable:{exc}"]
     if not isinstance(document, dict) or document.get("schema_version") != 1:
@@ -133,6 +178,9 @@ def validate(root: Path, index_path: Path | None = None) -> list[str]:
                     errors.append(f"{prefix}:{field}_invalid_reference")
                     continue
                 path_text = reference.split("#", 1)[0]
+                if not path_text:
+                    errors.append(f"{prefix}:{field}_invalid_reference:{reference}")
+                    continue
                 if path_text.startswith("/") or ".." in Path(path_text).parts:
                     errors.append(f"{prefix}:{field}_unsafe_reference:{reference}")
                     continue
@@ -143,12 +191,20 @@ def validate(root: Path, index_path: Path | None = None) -> list[str]:
                 seen_refs.add(reference)
                 if field == "adr":
                     referenced_adrs.add(path_text)
-        if entry.get("level") == "CORE_INVARIANT" and entry.get("status") == "ACTIVE":
+        if entry.get("level") in {"CORE_INVARIANT", "PUBLIC_CONTRACT"} and entry.get("status") == "ACTIVE":
             if not _as_list(entry.get("authoritative_sources")):
-                errors.append(f"{prefix}:core_requires_authoritative_source")
+                errors.append(f"{prefix}:active_contract_requires_authoritative_source")
             if not _as_list(entry.get("test_surfaces")):
-                errors.append(f"{prefix}:core_requires_test_surface")
-        dependencies[invariant_id] = _as_list(entry.get("depends_on"))
+                errors.append(f"{prefix}:active_contract_requires_test_surface")
+        depends_on = entry.get("depends_on", [])
+        if (
+            not isinstance(depends_on, list)
+            or any(not isinstance(item, str) or not item for item in depends_on)
+        ):
+            errors.append(f"{prefix}:depends_on_must_be_list_of_ids")
+            dependencies[invariant_id] = []
+        else:
+            dependencies[invariant_id] = depends_on
 
     for invariant_id, refs in dependencies.items():
         for ref in refs:
@@ -167,6 +223,30 @@ def validate(root: Path, index_path: Path | None = None) -> list[str]:
         if previous is not None and previous != relative:
             errors.append(f"adr:duplicate_number:{number}:{previous}:{relative}")
         seen_adr_numbers[number] = relative
+
+    adr_replacements = {
+        relative: replacement
+        for relative in referenced_adrs
+        if (replacement := _adr_replacement(root, relative)) is not None
+    }
+    adr_visiting: set[str] = set()
+    adr_visited: set[str] = set()
+
+    def visit_adr(node: str) -> None:
+        if node in adr_visiting:
+            errors.append(f"adr:supersession_cycle:{node}")
+            return
+        if node in adr_visited:
+            return
+        adr_visiting.add(node)
+        replacement = adr_replacements.get(node)
+        if replacement in adr_replacements:
+            visit_adr(replacement)
+        adr_visiting.remove(node)
+        adr_visited.add(node)
+
+    for relative in adr_replacements:
+        visit_adr(relative)
 
     visiting: set[str] = set()
     visited: set[str] = set()
