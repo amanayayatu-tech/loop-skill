@@ -16,8 +16,8 @@ concurrency:
   group: compatibility-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
-# This workflow is a compatibility mirror. Root-owned/read-only Mac mini
-# attestation, followed by the same-SHA real Codex App canary, is authoritative.
+# This workflow is a compatibility mirror. The current main Mac's complete
+# exact-SHA gate and same-SHA real Codex App canary are authoritative.
 jobs:
   quick:
     name: Quick semantic regression (Python 3.9)

@@ -15,6 +15,7 @@
     "tracked_tree_digest",
     "pack_digest",
     "installed_manifest_digest",
+    "local_pre_canary_gate",
     "app",
     "app_server",
     "mcp",
@@ -25,8 +26,8 @@
     "receipt_digest"
   ],
   "properties": {
-    "schema_version": {"const": "app-canary-receipt-v2"},
-    "evidence_layer": {"const": "mac-app-smoke"},
+    "schema_version": {"const": "app-canary-receipt-v3"},
+    "evidence_layer": {"const": "local-main-mac"},
     "status": {"enum": ["PASS", "BLOCKED", "FAIL"]},
     "started_at": {"type": "string", "format": "date-time"},
     "finished_at": {"type": "string", "format": "date-time"},
@@ -35,6 +36,36 @@
     "tracked_tree_digest": {"$ref": "#/$defs/digest"},
     "pack_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "installed_manifest_digest": {"$ref": "#/$defs/digest"},
+    "local_pre_canary_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targeted_checks_passed",
+        "full_unittest_passed",
+        "branch_coverage_passed",
+        "branch_coverage_percent",
+        "generator_fuzz_cases",
+        "generator_fuzz_passed",
+        "state_fuzz_cases",
+        "state_fuzz_passed",
+        "isolated_install_rollback_passed",
+        "security_risky_artifact_passed",
+        "source_install_drift"
+      ],
+      "properties": {
+        "targeted_checks_passed": {"const": true},
+        "full_unittest_passed": {"const": true},
+        "branch_coverage_passed": {"const": true},
+        "branch_coverage_percent": {"type": "number", "minimum": 80, "maximum": 100},
+        "generator_fuzz_cases": {"const": 5000},
+        "generator_fuzz_passed": {"const": true},
+        "state_fuzz_cases": {"const": 5000},
+        "state_fuzz_passed": {"const": true},
+        "isolated_install_rollback_passed": {"const": true},
+        "security_risky_artifact_passed": {"const": true},
+        "source_install_drift": {"type": "array", "maxItems": 0}
+      }
+    },
     "app": {
       "type": "object",
       "additionalProperties": false,

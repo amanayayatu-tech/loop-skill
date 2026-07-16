@@ -36,10 +36,10 @@ All notable changes to this project are documented here. The project follows
 ### Evidence boundary
 
 Repository tests prove deterministic state, receipt and crash-recovery
-semantics only. The primary Mac owns the complete exact-SHA tests and real App
-canary; the Mac mini supplies only a lightweight root-owned/read-only identity,
-install, and security witness. The combined gate must bind both without
-inheriting historical full results. If durable native Goal invocation evidence
+semantics only. The current main Mac owns the complete exact-SHA tests, real App
+canary and local release gate. Structured receipts use
+`evidence_layer=local-main-mac`; historical remote results are superseded and
+cannot be inherited by a new candidate. If durable native Goal invocation evidence
 is unavailable, the release remains blocked as
 `UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE`; this package does
 not claim to repair Codex App Goal persistence.
@@ -88,16 +88,16 @@ not claim to repair Codex App Goal persistence.
   least 80%, separates full tests from the two 5000-case fuzz lanes, checks the
   complete reviewed whitespace range, pins every Action to a full commit, and
   verifies exact protected-main tag identity.
-- Mac mini root-owned/read-only CI attestation is authoritative. Ubuntu CI and
-  GitHub Actions are non-authoritative. Every release candidate additionally
-  requires a privacy-bounded real Codex App receipt for the same exact commit,
-  tracked-tree SHA-256, installed manifest and current App/MCP/signature
-  identity, ending at canonical `FINALIZATION_ACKED`.
+- The v3.2.5 process used a Mac mini attestation while Ubuntu CI and GitHub
+  Actions were non-authoritative. That historical cross-host policy is
+  superseded for v3.2.7 and later. The real Codex App receipt still binds the
+  same exact commit, tracked-tree SHA-256, installed manifest and current
+  App/MCP/signature identity, ending at canonical `FINALIZATION_ACKED`.
 
 ### Evidence boundary
 
-Repository tests and Mac mini attestation remain separate from the real macOS App
-canary. This release validates, mitigates and fails closed around app-server
+Repository tests and the then-current historical CI record remained separate
+from the real macOS App canary. This release validates, mitigates and fails closed around app-server
 behavior; it does not claim to fix app-server process-group cleanup upstream.
 
 ## [3.2.4] - 2026-07-14

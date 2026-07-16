@@ -43,8 +43,8 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "finalization_acked": True,
         }
         self.receipt = {
-            "schema_version": "app-canary-receipt-v2",
-            "evidence_layer": "mac-app-smoke",
+            "schema_version": "app-canary-receipt-v3",
+            "evidence_layer": "local-main-mac",
             "status": "PASS",
             "started_at": "2026-07-15T15:00:00+08:00",
             "finished_at": "2026-07-15T15:03:00+08:00",
@@ -53,6 +53,19 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "tracked_tree_digest": "f" * 64,
             "pack_digest": "sha256:" + "b" * 64,
             "installed_manifest_digest": "c" * 64,
+            "local_pre_canary_gate": {
+                "targeted_checks_passed": True,
+                "full_unittest_passed": True,
+                "branch_coverage_passed": True,
+                "branch_coverage_percent": 81.25,
+                "generator_fuzz_cases": 5000,
+                "generator_fuzz_passed": True,
+                "state_fuzz_cases": 5000,
+                "state_fuzz_passed": True,
+                "isolated_install_rollback_passed": True,
+                "security_risky_artifact_passed": True,
+                "source_install_drift": [],
+            },
             "app": {"version": "1.2.3", "build": "456", "bundle_identifier": "com.openai.chat"},
             "app_server": {
                 "executable_path": "/Applications/ChatGPT.app/Contents/Resources/codex",
@@ -147,6 +160,28 @@ class AppCanaryReceiptTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.receipt), encoding="utf-8")
         with self.assertRaisesRegex(validator.CanaryReceiptError, "CANARY_COMPATIBILITY_IDENTITY_MISMATCH"):
             validator.validate_receipt(self.path, SCHEMA)
+
+    def test_pass_requires_complete_local_main_mac_pre_canary_gate(self) -> None:
+        self.receipt["local_pre_canary_gate"]["generator_fuzz_cases"] = 4999
+        self._seal()
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate_receipt(self.path, SCHEMA)
+
+        self.receipt["local_pre_canary_gate"]["generator_fuzz_cases"] = 5000
+        self.receipt["local_pre_canary_gate"]["source_install_drift"] = [
+            "unexpected.py"
+        ]
+        self._seal()
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate_receipt(self.path, SCHEMA)
+
+    def test_remote_or_legacy_evidence_layer_is_rejected(self) -> None:
+        for layer in ("mac-app-smoke", "independent-host", "remote-attestation"):
+            with self.subTest(layer=layer):
+                self.receipt["evidence_layer"] = layer
+                self._seal()
+                with self.assertRaises(jsonschema.ValidationError):
+                    validator.validate_receipt(self.path, SCHEMA)
 
     def test_session_and_thread_may_differ_but_raw_identities_are_forbidden(self) -> None:
         self.assertFalse(self.receipt["mcp"]["identity_relations"]["session_equals_thread"])

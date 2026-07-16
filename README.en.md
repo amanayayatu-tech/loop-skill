@@ -6,8 +6,8 @@
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
 
 The test badge is a GitHub compatibility mirror. Authoritative release evidence
-combines the primary Mac's complete exact-SHA gate and real Codex App canary
-with a root-owned/read-only lightweight witness attestation from the Mac mini.
+comes only from the current main Mac's complete exact-SHA gate, real Codex App
+canary, local release gate, and merge/main re-verification.
 
 `codex-loop-prompt-architect` is a skill for the Codex macOS App. It quality-gates
 rough ideas and PRDs, then turns only `READY_FOR_LOOP` requirements into a
@@ -100,8 +100,8 @@ execution semantics, rolls back skill/config on failure, and writes a
 schema-validated manifest proving registration readback and zero source/install
 drift.
 
-Release evidence stays layered: local checks, authoritative exact-SHA Mac mini
-attestation, a real canary on the current App build, then merge/main/tag/Release.
+Release evidence stays layered: local main-Mac checks, a real canary on the
+current App build, the local release gate, then merge/main/tag/Release.
 Any App version/build/bundle, app-server signature/CDHash, MCP protocol/config/
 requestMeta shape, or installation identity change invalidates the old receipt.
 PASS covers same-turn pre-side-effect rejection, next-turn success, partial-frame
@@ -337,13 +337,12 @@ two 5000-case fuzz lanes do not repeat that suite.
 
 An isolated install also registers `codex-loop-state`, checks exact command/args
 readback, writes a schema-validated install manifest, and proves zero
-source/install drift. The primary Mac alone runs full tests, branch coverage,
-both 5000-case fuzz lanes, and the real App canary. The Mac mini independently
-witnesses exact identity, clean checkout, compile/validator, recovery/release
-quick tests, macOS 27 installation/drift, and security in a root-owned/read-only
-attestation. The combined gate must bind both layers for the same SHA and may
-pass only with `release_eligible=true`, no reasons, and disposable canonical
-`FINALIZATION_ACKED`. GitHub Actions checks compatibility only. See the
+source/install drift. The current main Mac runs full tests, branch coverage,
+both 5000-case fuzz lanes, security checks, and the real App canary. Its
+structured receipt uses `evidence_layer=local-main-mac` and must not claim
+independent-host, remote, or cross-host proof. The local release gate binds the
+same SHA and may pass only with `release_eligible=true`, no reasons, and
+disposable canonical `FINALIZATION_ACKED`. GitHub Actions checks compatibility only. See the
 [release process](docs/RELEASING.md).
 
 ## Documentation map

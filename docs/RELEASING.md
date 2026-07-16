@@ -1,25 +1,24 @@
 # Release process
 
-`VERSION` is the package version source of truth. The root-owned/read-only
-Mac mini attestation is the authoritative repository gate. GitHub Actions is a
+`VERSION` is the package version source of truth. The current main Mac is the
+only release authority. GitHub Actions is a
 compatibility mirror only: a green GitHub check is never release acceptance.
-Ubuntu `loop-ci` evidence is historical only and must not be reused for a new
-candidate.
+Historical Linux-server, Mac-mini, remote-CI, and remote-attestation results are
+superseded context and must not be reused for a new candidate.
 
 ## Evidence layers
 
 Keep these claims separate:
 
-1. primary-Mac complete gate: exact-SHA targeted and full tests, all-shipped
+1. local main-Mac pre-canary gate: exact-SHA targeted and full tests, all-shipped
    branch coverage, both 5000-case fuzz lanes, isolated install/rollback,
    source/install drift and security/risky-artifact checks;
-2. Mac mini witness: exact commit/ref/tree, clean checkout, compile, validator,
-   recovery/release-contract quick tests, macOS 27 installer smoke, manifest
-   drift, security/risky-artifact and root-owned/read-only attestation;
-3. primary-Mac App smoke: the same exact SHA, tracked tree and installed
+2. local main-Mac App smoke: the same exact SHA, tracked tree and installed
    manifest under one real, identified Codex App build;
-4. combined release gate, merge/main attestation, annotated tag and public
-   GitHub Release.
+3. local release gate, exact merge/main re-verification, annotated tag and
+   public GitHub Release;
+4. final local installation with source/install zero drift, followed separately
+   by any explicitly authorized real-Loop migration.
 
 The repository can mitigate and fail closed around app-server behavior. It
 does not claim to repair app-server process reaping or metadata delivery.
@@ -28,7 +27,7 @@ does not claim to repair app-server process reaping or metadata delivery.
 
 1. Update `VERSION`, `CHANGELOG.md`, both READMEs and intentionally changed
    examples. Keep the release worktree clean and scan risky artifacts.
-2. Run targeted checks on the primary Mac, then one complete primary-Mac gate
+2. Run targeted checks on the current main Mac, then one complete local gate
    at the release-candidate commit:
 
    ```bash
@@ -45,24 +44,15 @@ does not claim to repair app-server process reaping or metadata delivery.
    coverage report
    ```
 
-3. Submit exactly one candidate SHA to the unattended Mac mini witness runner.
-   It reruns only identity/clean-checkout, compile/validator, recovery and
-   release-contract quick tests, macOS 27 installer/manifest drift, and
-   security/risky-artifact checks. It must not inherit or repeat full tests,
-   coverage, or either 5000-case fuzz result. Record the exact commit,
-   tracked-tree SHA-256, pipeline-config digest, root-owned attestation path,
-   attestation/manifest digest, start/end time and verdict. Do not submit a
-   newer candidate while the current identity is active. Do not push the
-   candidate to Ubuntu `loop-ci`.
-4. Seal the Mac mini result through the pre-existing, reviewable finalizer as a
-   root-owned/read-only exact-SHA witness attestation. Missing finalizer support
-   is a CI contract gap, not permission to synthesize release authority.
-5. Install into an isolated macOS `CODEX_HOME`. `scripts/install.sh` atomically
+3. Record the complete-gate result as a minimized structured local receipt with
+   `evidence_layer=local-main-mac`. It binds the exact commit and tracked-tree
+   digest and must not claim independent-host, remote, or cross-host proof.
+4. Install into an isolated macOS `CODEX_HOME`. `scripts/install.sh` atomically
    registers `codex-loop-state`, preserves prior config bytes, rejects a
    conflicting registration, writes an install manifest, and verifies zero
    source/install drift. Validate the resulting manifest with the installed
    `verify_installation.py`.
-6. On that exact SHA and installed manifest, run the real Codex App canary. The
+5. On that exact SHA and installed manifest, run the real Codex App canary. The
    receipt must reach the canary's own canonical `FINALIZATION_ACKED`; synthetic
    MCP tests, a Node REPL observation, source reading, or a tool-list screenshot
    are only prerequisites. In its disposable fixture, recover one deliberately
@@ -70,19 +60,16 @@ does not claim to repair app-server process reaping or metadata delivery.
    observation, restart/readback of the same Goal identity, and canonical plus
    heartbeat PAUSED throughout. Never run this recovery against the real paused
    product Loop.
-7. Bind the primary-Mac complete-gate receipt, minimized non-secret App receipt,
-   and Mac mini witness attestation through the trusted out-of-band mechanism,
-   then finalize/re-run only the combined release lane for the same SHA. PASS
-   requires `release_eligible == true`, `reasons == []`, exact commit/tree/
+6. Bind the local complete-gate result and minimized non-secret same-SHA App receipt in
+   the local release receipt for the same SHA. PASS requires
+   `release_eligible == true`, `reasons == []`, exact commit/tree/
    installed-manifest identities, real App PASS, and disposable canonical
-   `FINALIZATION_ACKED`; a standalone `verdict=PASS` is insufficient. If the
-   runner lacks the binding interface, report the CI contract gap; do not
-   commit raw local logs, user state or secrets to bypass it.
-8. Merge only after the exact candidate has Mac mini PASS plus real App PASS.
-   Submit the exact merge commit to the Mac mini `main` lane and obtain a new main
-   attestation. Only then create an annotated tag on that precise commit and a
-   matching GitHub Release.
-9. Back up the real `CODEX_HOME`, install the exact release package, validate
+   `FINALIZATION_ACKED`; a standalone `verdict=PASS` is insufficient.
+7. Merge only after that exact candidate passes the local release gate. Rerun
+   the complete local gate and real App compatibility check as required on the
+   exact merge commit. Only then create an annotated tag on that precise commit
+   and a matching GitHub Release.
+8. Back up the real `CODEX_HOME`, install the exact release package, validate
    its manifest and registration readback, and re-check source/install drift.
    Pack migration and heartbeat resume are later paused-safe-point operations;
    installation alone never authorizes them.
@@ -95,6 +82,8 @@ it with `validate_app_canary_receipt.py`. A PASS receipt binds:
 
 - exact repo commit, tracked-tree SHA-256, Pack digest and
   installed-manifest digest;
+- `evidence_layer=local-main-mac` and the complete targeted/full/branch-
+  coverage/double-5000-fuzz/install-rollback/security/zero-drift pre-canary gate;
 - Codex/ChatGPT App version, build and bundle identifier;
 - app-server executable path, verified signature, Identifier, TeamIdentifier
   and non-secret CDHash;
@@ -147,7 +136,7 @@ the official repositories/tags on 2026-07-15:
 - [`actions/download-artifact` v8.0.1](https://github.com/actions/download-artifact/releases/tag/v8.0.1):
   `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c`.
 
-Upgrade any pin in a separate reviewable change and rerun the authoritative
+Upgrade any pin in a separate reviewable change and rerun the local authoritative
 quick/full/fuzz/coverage/install/App gates. Floating tags, branches and
 unpinned Docker image tags are forbidden in release-required jobs.
 
@@ -157,5 +146,5 @@ Before commit, merge, tag and installation, reject unscoped validation logs,
 `REVIEW_BUNDLE`, `SMOKE_FINDINGS`, `FIX_REPORT`, run environments, API keys,
 Authorization values, `*.tar.gz`, `*.bundle`, SQLite/DB files, real
 `.codex-loop/**`, generated Controller Packs and user evidence. A clean local
-tree or compatibility workflow is not a substitute for the root-owned Mac mini
-attestation and same-SHA App receipt.
+tree or compatibility workflow is not a substitute for the complete local
+main-Mac gate and same-SHA real App receipt.

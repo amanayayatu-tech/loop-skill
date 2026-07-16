@@ -117,7 +117,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("branches:\n      - main", workflow)
         self.assertIn('tags:\n      - "v*"', workflow)
         self.assertIn("github.event.pull_request.head.ref || github.ref_name", workflow)
-        self.assertIn("Root-owned/read-only Mac mini", workflow)
+        self.assertIn("current main Mac's complete", workflow)
         self.assertIn("coverage run --parallel-mode", workflow)
         self.assertIn("coverage combine", workflow)
         self.assertNotIn("full-fuzz:", workflow)
@@ -146,11 +146,11 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertGreaterEqual(int(match.group(1)), 80)
 
-    def test_primary_mac_and_mac_mini_witness_are_combined_authorities(self) -> None:
+    def test_current_main_mac_is_the_only_release_authority(self) -> None:
         releasing = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
-        self.assertIn("primary-Mac complete gate", releasing)
-        self.assertIn("Mac mini witness", releasing)
-        self.assertIn("must not inherit or repeat full tests", releasing)
+        self.assertIn("current main Mac is the\nonly release authority", releasing)
+        self.assertIn("local main-Mac pre-canary gate", releasing)
+        self.assertIn("evidence_layer=local-main-mac", releasing)
         self.assertIn("release_eligible == true", releasing)
         self.assertIn("reasons == []", releasing)
         self.assertIn("GitHub Actions is a\ncompatibility mirror only", releasing)
@@ -161,6 +161,9 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("native Goal generation", releasing)
         self.assertIn("UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE", releasing)
         self.assertNotIn("required GitHub Actions checks pass", releasing)
+        self.assertNotIn("Mac mini witness", releasing)
+        self.assertNotIn("root-owned/read-only", releasing)
+        self.assertNotIn("combined release", releasing)
 
     def test_state_runtime_tests_are_split_without_method_loss(self) -> None:
         compatibility = ROOT / "tests" / "test_adaptive_state_runtime.py"

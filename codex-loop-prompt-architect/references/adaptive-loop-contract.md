@@ -661,20 +661,20 @@ emits a schema-validated manifest binding the installed bridge SHA, config
 readback, exact repo identity when the source is clean, and zero source/install
 drift. A dirty source is `UNVERIFIED_SOURCE`, never the current HEAD by proxy.
 
-Release acceptance binds the primary Mac's complete exact-SHA tests, branch
-coverage, both 5000-case fuzz lanes, isolated install/security checks, and real
-Codex App receipt to a root-owned/read-only lightweight Mac mini witness for the
-same SHA, tracked-tree SHA-256, and installed-manifest digest. The witness reruns
-identity, clean checkout, compile/validator, recovery/release quick tests,
-macOS 27 installation/drift, and security; it neither repeats nor inherits the
-primary Mac's full/coverage/fuzz evidence.
+Release acceptance is local to the current main Mac. It binds one exact SHA and
+tracked-tree digest to targeted/full tests, all-shipped branch coverage, both
+5000-case fuzz lanes, isolated install/rollback, security/risky-artifact checks,
+zero source/install drift, and the real Codex App receipt. The structured
+receipt uses `evidence_layer=local-main-mac`; it never claims independent-host,
+remote-attestation, or cross-host proof. Historical remote results are not
+inherited by a new candidate.
 The receipt binds App version/build/bundle, app-server executable/signature/
 CDHash, MCP protocol/config/requestMeta shape, registration identity, same-turn
 second-route rejection before side effects, next-turn success, partial-frame
 cleanup, lost-stdout no-retry recovery, Pack/same-heartbeat reconciliation, and
 canonical `FINALIZATION_ACKED`. Any compatibility identity change invalidates
 the old receipt. GitHub Actions and synthetic tests are compatibility evidence,
-not this release gate; the repository does not claim to repair app-server
+not this local release gate; the repository does not claim to repair app-server
 process reaping upstream.
 
 Except for initialization, counted routing-turn creation, and lease
