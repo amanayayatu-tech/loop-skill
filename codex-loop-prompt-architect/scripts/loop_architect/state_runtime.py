@@ -9096,6 +9096,7 @@ class AdaptiveStateRuntime:
             != observation.get("turn_end_offset")
             or not isinstance(actions, list)
             or len(actions) != 2
+            or observation.get("control_turn_tool_call_count") != 2
             or not isinstance(controller_turn_id, str)
             or expected_handoff_digest is None
         ):

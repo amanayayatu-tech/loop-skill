@@ -78,8 +78,10 @@ trusted root with component-wise `openat`/`O_NOFOLLOW` and read only by fd.
 Any later byte fails closed as `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`.
 
 The observer reads canonical rollouts only from `CODEX_HOME/sessions` or
-`archived_sessions`, rejects path escape, symlinks, unstable/incomplete JSONL,
-and wrong thread identity, and persists only sanitized receipts. COMMIT and
+`archived_sessions`, rejects path escape, final-file symlinks and symlinks in
+the canonical fd walk, unstable/incomplete JSONL,
+and wrong thread identity, and persists only sanitized receipts. A system-level
+lexical parent alias is canonicalized before the fd walk. COMMIT and
 ROLLBACK keep canonical state and the same heartbeat PAUSED; RESUME and
 heartbeat activation remain later independent turns. If the current App lacks
 durable invocation evidence, release fails closed as

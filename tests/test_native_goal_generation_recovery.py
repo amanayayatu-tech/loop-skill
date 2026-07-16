@@ -677,6 +677,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         handoff_mutation: dict[str, Any],
         route_scope_override: str | None = None,
         target_override: str | None = None,
+        extra_get_goal: bool = False,
     ) -> None:
         route_mutation = {
             "type": "ACQUIRE_LEASE",
@@ -711,6 +712,17 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             tool_name="route_state_mutation",
             complete_turn=False,
         )
+        if extra_get_goal:
+            fixture["rollout"].add_raw_tool_call(
+                turn_id,
+                source=(
+                    "const result = await tools.get_goal({});\n"
+                    "text(JSON.stringify(result));"
+                ),
+                result={"goal": None},
+                start_turn=False,
+                complete_turn=False,
+            )
         normalized_mutation = {
             key: handoff_mutation[key]
             for key in sorted(
@@ -757,6 +769,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         control_route_scope: str | None = None,
         control_target: str | None = None,
         control_boundary_shift: int = 0,
+        extra_control_get_goal: bool = False,
     ) -> dict[str, Any]:
         harness: Harness = fixture["harness"]
         prepared = harness.state()["native_goal_generation_migration"]
@@ -845,6 +858,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             handoff_mutation=handoff_mutation,
             route_scope_override=control_route_scope,
             target_override=control_target,
+            extra_get_goal=extra_control_get_goal,
         )
         _, goal_artifact = fixture["rollout"].observation_artifact(
             root=harness.root,
@@ -1758,6 +1772,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             {"control_boundary_shift": 1},
             {"control_route_scope": "NATIVE_GOAL_GENERATION_ROLLBACK"},
             {"control_target": "worker-1"},
+            {"extra_control_get_goal": True},
         )
         for options in cases:
             with self.subTest(options=options), tempfile.TemporaryDirectory() as temporary:

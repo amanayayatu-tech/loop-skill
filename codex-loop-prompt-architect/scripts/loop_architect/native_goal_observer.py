@@ -300,6 +300,9 @@ def _stable_rollout(
         file_fd = os.open(relative_parts[-1], file_flags, dir_fd=directory_fd)
         before = os.fstat(file_fd)
     except OSError as exc:
+        if file_fd is not None:
+            os.close(file_fd)
+            file_fd = None
         if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
             raise NativeGoalObservationError(
                 "NATIVE_GOAL_ROLLOUT_PATH_INVALID",
@@ -785,6 +788,11 @@ def observe_native_goal_rollout(
             "call_id_digest": _sha256_bytes(call_id.encode("utf-8")),
             "goal": _sanitized_goal(result.get("goal")),
             "control_actions": control_actions,
+            "control_turn_tool_call_count": (
+                tool_call_counts.get(control_actions[0].get("turn_id"))
+                if control_actions
+                else 0
+            ),
         }
         if (
             expected_objective_digest is not None

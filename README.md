@@ -44,7 +44,8 @@ rollout 路径从受信根逐级以 `openat`/`O_NOFOLLOW` 打开，只从最终 
 `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED` fail closed。
 
 observer 只读 `CODEX_HOME/sessions` 与 `archived_sessions` 的 canonical rollout，拒绝
-路径逃逸、symlink、不稳定/未完整 JSONL 和错误 thread identity，只持久化去敏摘要。
+路径逃逸、final-file symlink、canonical fd 路径中的 symlink、不稳定/未完整 JSONL 和错误
+thread identity，只持久化去敏摘要；父目录的系统级 lexical alias 会先规范化。
 如果当前 App 没有 durable invocation evidence，精确分类为
 `UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE`，不得发布、安装或迁移真实
 Loop；本仓库不宣称修复 Codex App 的 native Goal 持久化。

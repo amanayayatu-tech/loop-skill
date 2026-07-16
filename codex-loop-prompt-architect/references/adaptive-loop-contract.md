@@ -171,7 +171,8 @@ only while the target turn is complete and idle; its own invocation may not be
 written into the target rollout. If no trusted out-of-band observation path is
 available, recovery stops as an upstream blocker. Production observation is confined to
 `CODEX_HOME/sessions` and `CODEX_HOME/archived_sessions`; it rejects path
-escape, symlinks, wrong owner/thread, oversize input, unstable inode/size/mtime,
+escape, final-file symlinks, symlinks in the canonical fd walk, wrong
+owner/thread, oversize input, unstable inode/size/mtime,
 incomplete or invalid UTF-8 JSONL, truncation, invalid high-watermarks, and
 ambiguous create framing. The runtime writes only a sanitized
 `.codex-loop/reports/*.json` receipt binding file/snapshot/runtime-manifest
