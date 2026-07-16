@@ -68,8 +68,11 @@ forbids another create and rollback. Lost stdout can only be adopted when the
 later rollout and active same-thread readback agree.
 
 Immediately before runtime apply, the original State-Writer recaptures the
-final active/null readback at the target Controller's current stable EOF. Any
-later byte fails closed as `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`.
+final active/null readback at the target Controller's current stable EOF. The
+same stable snapshot must classify both Goal identity and the complete create
+window; runtime may not reopen the rollout between those decisions. Allowed
+post-readback control tools use a finite exact-name set, never suffix matching.
+Any later byte fails closed as `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`.
 
 The observer reads canonical rollouts only from `CODEX_HOME/sessions` or
 `archived_sessions`, rejects path escape, symlinks, unstable/incomplete JSONL,

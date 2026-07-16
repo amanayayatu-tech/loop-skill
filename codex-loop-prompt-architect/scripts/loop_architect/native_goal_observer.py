@@ -39,9 +39,14 @@ CONTROL_TOOL_TEMPLATE_RE = re.compile(
     r"\(\s*result\s*\)|result)\s*\)\s*;\s*\Z",
     re.DOTALL,
 )
-ALLOWED_POST_READBACK_CONTROL_TOOLS = (
-    "route_state_mutation",
-    "send_message_to_thread",
+ALLOWED_POST_READBACK_CONTROL_TOOLS = frozenset(
+    {
+        "route_state_mutation",
+        "mcp__codex_loop_state__route_state_mutation",
+        "send_message_to_thread",
+        "codex_app__send_message_to_thread",
+        "mcp__codex_app__send_message_to_thread",
+    }
 )
 
 
@@ -387,6 +392,15 @@ def observe_native_goal_rollout(
         or end_offset < scan_start_offset
         or end_offset > len(snapshot.payload)
         or (
+            control_suffix_start_offset is not None
+            and (
+                not isinstance(control_suffix_start_offset, int)
+                or isinstance(control_suffix_start_offset, bool)
+                or control_suffix_start_offset < scan_start_offset
+                or control_suffix_start_offset > end_offset
+            )
+        )
+        or (
             scan_start_offset > 0
             and snapshot.payload[scan_start_offset - 1 : scan_start_offset]
             != b"\n"
@@ -479,9 +493,8 @@ def observe_native_goal_rollout(
                     control_suffix_start_offset is not None
                     and offset >= control_suffix_start_offset
                     and control_match is not None
-                    and control_match.group(1).endswith(
-                        ALLOWED_POST_READBACK_CONTROL_TOOLS
-                    )
+                    and control_match.group(1)
+                    in ALLOWED_POST_READBACK_CONTROL_TOOLS
                 ):
                     arguments = _strict_json(
                         control_match.group(2),
@@ -499,7 +512,7 @@ def observe_native_goal_rollout(
                 control_suffix_start_offset is not None
                 and offset >= control_suffix_start_offset
                 and isinstance(tool_name, str)
-                and tool_name.endswith(ALLOWED_POST_READBACK_CONTROL_TOOLS)
+                and tool_name in ALLOWED_POST_READBACK_CONTROL_TOOLS
             )
             if allowed_control:
                 direct_arguments = payload.get("input")
@@ -540,6 +553,67 @@ def observe_native_goal_rollout(
         "observed_at": observed_at or _safe_iso_now(),
         "runtime_manifest_digest": runtime_manifest_digest(),
     }
+    if control_suffix_start_offset is not None:
+        base["control_suffix_start_offset"] = control_suffix_start_offset
+
+    def create_window() -> dict[str, Any]:
+        matching: list[dict[str, Any]] = []
+        window_ambiguous = ambiguous_create
+        for call_id, record in calls.items():
+            if record["tool_name"] != "create_goal":
+                continue
+            if (
+                expected_objective_digest is not None
+                and record["objective_digest"] != expected_objective_digest
+            ) or (
+                expected_objective_bytes_digest is not None
+                and record["objective_bytes_digest"]
+                != expected_objective_bytes_digest
+            ):
+                # An exact create_goal wrapper with the wrong objective is
+                # still a create attempt. It must never collapse to NONE.
+                window_ambiguous = True
+                continue
+            output = outputs.get(call_id)
+            result = _tool_output_object(output) if output is not None else None
+            status = "STARTED_UNKNOWN"
+            created_goal = None
+            if isinstance(result, dict) and "goal" in result:
+                created_goal = _sanitized_goal(result.get("goal"))
+                status = "COMPLETED"
+            matching.append(
+                {
+                    "turn_id": record["turn_id"],
+                    "call_id_digest": _sha256_bytes(call_id.encode("utf-8")),
+                    "status": status,
+                    "objective_digest": record["objective_digest"],
+                    "objective_bytes_digest": record[
+                        "objective_bytes_digest"
+                    ],
+                    "created_goal": created_goal,
+                }
+            )
+            if (
+                not isinstance(record["turn_id"], str)
+                or tool_call_counts.get(record["turn_id"]) != 1
+            ):
+                window_ambiguous = True
+        if window_ambiguous:
+            invocation_state = "AMBIGUOUS"
+        elif any(item["status"] != "COMPLETED" for item in matching):
+            invocation_state = "STARTED_UNKNOWN"
+        elif matching:
+            invocation_state = "COMPLETED"
+        else:
+            invocation_state = "NONE"
+        return {
+            "expected_objective_digest": expected_objective_digest,
+            "expected_objective_bytes_digest": expected_objective_bytes_digest,
+            "matching_invocation_count": len(matching),
+            "invocation_state": invocation_state,
+            "invocations": matching,
+        }
+
     if mode == "GET_GOAL":
         candidates = [
             (call_id, record)
@@ -560,7 +634,7 @@ def observe_native_goal_rollout(
             raise NativeGoalObservationError(
                 "NATIVE_GOAL_TOOL_RESULT_INVALID"
             )
-        return {
+        result_receipt = {
             **base,
             "observation_kind": "NATIVE_GOAL_GET_GOAL_V1",
             "turn_id": record["turn_id"],
@@ -569,63 +643,27 @@ def observe_native_goal_rollout(
             "call_id_digest": _sha256_bytes(call_id.encode("utf-8")),
             "goal": _sanitized_goal(result.get("goal")),
         }
-
-    matching: list[dict[str, Any]] = []
-    for call_id, record in calls.items():
-        if record["tool_name"] != "create_goal":
-            continue
         if (
             expected_objective_digest is not None
-            and record["objective_digest"] != expected_objective_digest
-        ) or (
-            expected_objective_bytes_digest is not None
-            and record["objective_bytes_digest"]
-            != expected_objective_bytes_digest
+            and expected_objective_bytes_digest is not None
         ):
-            # An exact create_goal wrapper with the wrong objective is still a
-            # create attempt.  It must never collapse to NONE and authorize a
-            # rollback or a second create.
-            ambiguous_create = True
-            continue
-        output = outputs.get(call_id)
-        result = _tool_output_object(output) if output is not None else None
-        status = "STARTED_UNKNOWN"
-        created_goal = None
-        if isinstance(result, dict) and "goal" in result:
-            created_goal = _sanitized_goal(result.get("goal"))
-            status = "COMPLETED"
-        matching.append(
-            {
-                "turn_id": record["turn_id"],
-                "call_id_digest": _sha256_bytes(call_id.encode("utf-8")),
-                "status": status,
-                "objective_digest": record["objective_digest"],
-                "objective_bytes_digest": record["objective_bytes_digest"],
-                "created_goal": created_goal,
-            }
-        )
-        if (
-            not isinstance(record["turn_id"], str)
-            or tool_call_counts.get(record["turn_id"]) != 1
-        ):
-            ambiguous_create = True
-    if ambiguous_create:
-        invocation_state = "AMBIGUOUS"
-    elif any(item["status"] != "COMPLETED" for item in matching):
-        invocation_state = "STARTED_UNKNOWN"
-    elif matching:
-        invocation_state = "COMPLETED"
-    else:
-        invocation_state = "NONE"
+            # Goal readback and the full create window are derived from the
+            # same stable bytes. The runtime must not reopen the rollout
+            # between identity readback and exactly-once classification.
+            result_receipt["expected_objective_digest"] = (
+                expected_objective_digest
+            )
+            result_receipt["expected_objective_bytes_digest"] = (
+                expected_objective_bytes_digest
+            )
+            result_receipt["create_window"] = create_window()
+        return result_receipt
+
     return {
         **base,
         "observation_kind": "NATIVE_GOAL_CREATE_ROLLOUT_V1",
         "tool_name": "create_goal",
-        "expected_objective_digest": expected_objective_digest,
-        "expected_objective_bytes_digest": expected_objective_bytes_digest,
-        "matching_invocation_count": len(matching),
-        "invocation_state": invocation_state,
-        "invocations": matching,
+        **create_window(),
     }
 
 

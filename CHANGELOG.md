@@ -40,6 +40,10 @@ All notable changes to this project are documented here. The project follows
   the target Controller rollout's current stable EOF at runtime apply. Only the
   two strict post-readback control wrappers are tolerated; later bytes fail
   closed as `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`.
+- Derived the final Goal readback and complete create-window classification
+  from one stable rollout snapshot, removing the inter-read TOCTOU. Allowed
+  post-readback controls now use a finite exact-name set rather than suffix
+  matching.
 
 ### Evidence boundary
 

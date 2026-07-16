@@ -221,7 +221,7 @@ class NativeGoalRolloutFixture:
             "call_id": call_id,
             "status": "completed",
         }
-        if tool_name == "exec":
+        if tool_name == "exec" or source:
             call_payload["input"] = source
         self._append(
             {
@@ -740,6 +740,10 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             mode="GET_GOAL",
             observed_at=T4,
             scan_start_offset=outbox["prepare_high_watermark"],
+            expected_objective_digest=outbox["payload_digest"],
+            expected_objective_bytes_digest=outbox[
+                "objective_bytes_digest"
+            ],
         )
         if second_create_after_readback:
             fixture["rollout"].add_create_goal(
@@ -839,6 +843,10 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             mode="GET_GOAL",
             observed_at="2026-01-01T01:01:00Z",
             scan_start_offset=outbox["prepare_high_watermark"],
+            expected_objective_digest=outbox["payload_digest"],
+            expected_objective_bytes_digest=outbox[
+                "objective_bytes_digest"
+            ],
         )
         if add_create_after_final_null:
             fixture["rollout"].add_create_goal(
@@ -1589,6 +1597,24 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             ]["create_outbox"]
             self.assertEqual(outbox["create_attempt_count"], 1)
 
+    def test_commit_validates_readback_and_create_window_from_one_snapshot(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            self._prepare(fixture)
+            with mock.patch.object(
+                state_runtime_module,
+                "observe_native_goal_rollout",
+                wraps=state_runtime_module.observe_native_goal_rollout,
+            ) as observer:
+                committed = self._commit(fixture)
+            self.assertTrue(committed["ok"], committed)
+            # One replay validates the Phase B receipt. One current-EOF read
+            # atomically validates both the Goal readback and create window.
+            # A third rollout open would reintroduce the inter-read TOCTOU.
+            self.assertEqual(observer.call_count, 2)
+
     def test_commit_rejects_zero_or_multiple_create_invocations(self) -> None:
         for create_count in (0, 2):
             with self.subTest(create_count=create_count), tempfile.TemporaryDirectory() as temporary:
@@ -2159,6 +2185,81 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             self.assertEqual(create_observation["invocation_state"], "COMPLETED")
             self.assertEqual(create_observation["matching_invocation_count"], 1)
 
+    def test_post_readback_control_tool_names_are_exact_not_suffixes(self) -> None:
+        for tool_name, expected_state in (
+            ("route_state_mutation", "NONE"),
+            ("mcp__codex_loop_state__route_state_mutation", "NONE"),
+            ("arbitrary_route_state_mutation", "AMBIGUOUS"),
+        ):
+            with self.subTest(tool_name=tool_name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                rollout = NativeGoalRolloutFixture(root)
+                objective = "body\n[marker]"
+                rollout.add_get_goal("readback-turn", None)
+                readback = observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="GET_GOAL",
+                    observed_at=T4,
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+                rollout.add_raw_tool_call(
+                    "control-turn",
+                    source="{}",
+                    tool_name=tool_name,
+                )
+                observed = observe_native_goal_rollout(
+                    rollout_path=rollout.path,
+                    controller_thread_id="controller-1",
+                    mode="GET_GOAL",
+                    scan_start_offset=0,
+                    control_suffix_start_offset=readback["turn_end_offset"],
+                    expected_objective_digest=digest("body"),
+                    expected_objective_bytes_digest=digest(objective),
+                    observed_at=T4,
+                    trusted_rollout_roots=(root.resolve(),),
+                )
+                self.assertEqual(
+                    observed["create_window"]["invocation_state"],
+                    expected_state,
+                )
+
+    def test_post_readback_exec_wrapper_tool_name_is_exact_not_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            objective = "body\n[marker]"
+            rollout.add_get_goal("readback-turn", None)
+            readback = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="GET_GOAL",
+                observed_at=T4,
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            rollout.add_raw_tool_call(
+                "control-turn",
+                source=(
+                    "const result = await "
+                    "tools.arbitrary_route_state_mutation({});\n"
+                    "text(JSON.stringify(result));"
+                ),
+            )
+            observed = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="GET_GOAL",
+                control_suffix_start_offset=readback["turn_end_offset"],
+                expected_objective_digest=digest("body"),
+                expected_objective_bytes_digest=digest(objective),
+                observed_at=T4,
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            self.assertEqual(
+                observed["create_window"]["invocation_state"],
+                "AMBIGUOUS",
+            )
+
     def test_capture_rejects_historical_cutoff_and_replay_binds_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2512,6 +2613,8 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 "rollout_path": str(rollout.path),
                 "controller_thread_id": "controller-1",
                 "observation_mode": "GET_GOAL",
+                "expected_objective_digest": digest("private objective body"),
+                "expected_objective_bytes_digest": digest(objective),
                 "observed_at": T4,
                 "observation_path": (
                     ".codex-loop/reports/cli-native-goal-readback.json"
@@ -2542,6 +2645,12 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             self.assertNotIn(objective, completed.stdout)
             self.assertEqual(
                 response["observation"]["goal"], first["goal"]
+            )
+            self.assertEqual(
+                response["observation"]["create_window"][
+                    "invocation_state"
+                ],
+                "NONE",
             )
 
     def test_rollout_observer_rejects_symlink_and_partial_jsonl(self) -> None:

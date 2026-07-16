@@ -8983,6 +8983,21 @@ class AdaptiveStateRuntime:
             or not isinstance(observed.get("snapshot_digest"), str)
             or DIGEST_RE.fullmatch(observed["snapshot_digest"]) is None
             or (
+                observed.get("control_suffix_start_offset") is not None
+                and (
+                    not isinstance(
+                        observed.get("control_suffix_start_offset"), int
+                    )
+                    or isinstance(
+                        observed.get("control_suffix_start_offset"), bool
+                    )
+                    or observed["control_suffix_start_offset"]
+                    < observed["scan_start_offset"]
+                    or observed["control_suffix_start_offset"]
+                    > observed["scan_end_offset"]
+                )
+            )
+            or (
                 expected_kind == "NATIVE_GOAL_GET_GOAL_V1"
                 and (
                     not isinstance(observed.get("turn_end_offset"), int)
@@ -9021,6 +9036,9 @@ class AdaptiveStateRuntime:
                     if require_current_eof
                     else observed.get("snapshot_digest")
                 ),
+                control_suffix_start_offset=observed.get(
+                    "control_suffix_start_offset"
+                ),
                 expected_objective_digest=observed.get(
                     "expected_objective_digest"
                 ),
@@ -9043,56 +9061,6 @@ class AdaptiveStateRuntime:
                 {"path": path},
             )
         return copy.deepcopy(observed), digest
-
-    def _replay_native_goal_create_window(
-        self,
-        state: dict[str, Any],
-        anchor_observation: dict[str, Any],
-        create_outbox: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Recheck every rollout byte through a later captured EOF."""
-
-        try:
-            replayed = observe_native_goal_rollout(
-                rollout_path=Path(anchor_observation["rollout_path"]),
-                controller_thread_id=self._registered_role_identity(
-                    state, "CONTROLLER"
-                ),
-                mode="CREATE_GOAL",
-                scan_start_offset=create_outbox["prepare_high_watermark"],
-                scan_end_offset=anchor_observation["scan_end_offset"],
-                historical_replay_snapshot_digest=anchor_observation[
-                    "snapshot_digest"
-                ],
-                control_suffix_start_offset=anchor_observation.get(
-                    "turn_end_offset"
-                ),
-                expected_objective_digest=create_outbox["payload_digest"],
-                expected_objective_bytes_digest=create_outbox[
-                    "objective_bytes_digest"
-                ],
-                observed_at=anchor_observation["observed_at"],
-                trusted_rollout_roots=self.native_goal_rollout_roots,
-            )
-        except NativeGoalObservationError as exc:
-            raise RuntimeRejection(
-                exc.code, "/mutation", exc.details
-            ) from exc
-        if (
-            replayed.get("rollout_path")
-            != anchor_observation.get("rollout_path")
-            or replayed.get("rollout_file_identity_digest")
-            != anchor_observation.get("rollout_file_identity_digest")
-            or replayed.get("snapshot_digest")
-            != anchor_observation.get("snapshot_digest")
-            or replayed.get("scan_end_offset")
-            != anchor_observation.get("scan_end_offset")
-        ):
-            raise RuntimeRejection(
-                "NATIVE_GOAL_ROLLOUT_APPEND_ONLY_CONTINUITY_INVALID",
-                "/mutation",
-            )
-        return replayed
 
 
     def _require_native_goal_recovery_state_writer_lease(
@@ -9710,11 +9678,14 @@ class AdaptiveStateRuntime:
         )
         readback = goal_observation.get("goal")
         readback_turn_id = goal_observation.get("turn_id")
-        full_create_window = self._replay_native_goal_create_window(
-            state, goal_observation, create_outbox
-        )
+        full_create_window = goal_observation.get("create_window")
         if (
-            full_create_window.get("matching_invocation_count") != 1
+            not isinstance(full_create_window, dict)
+            or goal_observation.get("expected_objective_digest")
+            != create_outbox["payload_digest"]
+            or goal_observation.get("expected_objective_bytes_digest")
+            != create_outbox["objective_bytes_digest"]
+            or full_create_window.get("matching_invocation_count") != 1
             or full_create_window.get("invocation_state")
             != rollout_observation.get("invocation_state")
             or full_create_window.get("invocations")
@@ -10001,11 +9972,17 @@ class AdaptiveStateRuntime:
                     ),
                 )[0]
             )
-        full_create_window = self._replay_native_goal_create_window(
-            state, full_null_observations[-1], create_outbox
-        )
+        final_null_observation = full_null_observations[-1]
+        full_create_window = final_null_observation.get("create_window")
         if (
-            full_create_window.get("matching_invocation_count") != 0
+            not isinstance(full_create_window, dict)
+            or final_null_observation.get("expected_objective_digest")
+            != create_outbox["payload_digest"]
+            or final_null_observation.get(
+                "expected_objective_bytes_digest"
+            )
+            != create_outbox["objective_bytes_digest"]
+            or full_create_window.get("matching_invocation_count") != 0
             or full_create_window.get("invocation_state") != "NONE"
             or full_create_window.get("invocations") != []
         ):

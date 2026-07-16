@@ -332,6 +332,9 @@ def main(argv: list[str] | None = None) -> int:
                     "controller_thread_id",
                     "observation_mode",
                     "scan_start_offset",
+                    "scan_end_offset",
+                    "historical_replay_snapshot_digest",
+                    "control_suffix_start_offset",
                     "expected_objective_digest",
                     "expected_objective_bytes_digest",
                     "observed_at",
@@ -352,6 +355,13 @@ def main(argv: list[str] | None = None) -> int:
                     controller_thread_id=request["controller_thread_id"],
                     mode=request["observation_mode"],
                     scan_start_offset=request.get("scan_start_offset", 0),
+                    scan_end_offset=request.get("scan_end_offset"),
+                    historical_replay_snapshot_digest=request.get(
+                        "historical_replay_snapshot_digest"
+                    ),
+                    control_suffix_start_offset=request.get(
+                        "control_suffix_start_offset"
+                    ),
                     expected_objective_digest=request.get(
                         "expected_objective_digest"
                     ),

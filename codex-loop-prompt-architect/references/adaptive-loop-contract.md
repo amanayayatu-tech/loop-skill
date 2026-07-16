@@ -204,9 +204,12 @@ offset on the same rollout. COMMIT occurs under a new recovery lease in a
 fourth real turn. After the Controller request reaches the original
 State-Writer, that State-Writer recaptures the same readback at the Controller
 rollout's current stable EOF immediately before standalone runtime validation.
-Only strict `route_state_mutation` and `send_message_to_thread` wrappers may
-appear after the readback; any other wrapper or any byte appended after final
-capture rejects `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`. Runtime requires exactly one matching rollout invocation,
+That single stable snapshot supplies both the Goal readback and the complete
+create-window classification; runtime must not reopen the rollout between
+those decisions. Only a finite exact-name set for `route_state_mutation` and
+`send_message_to_thread` wrappers may appear after the readback; suffix matches
+are forbidden. Any other wrapper or any byte appended after final capture
+rejects `NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED`. Runtime requires exactly one matching rollout invocation,
 four distinct A/B/C/D turn identities, create-before-readback ordering, a
 byte-identical objective/marker, changed createdAt, consistent result identity
 when stdout exists, unchanged Pack/roles/protected state, and PAUSED heartbeat.
@@ -220,7 +223,8 @@ ROLLBACK requires its own new lease, the create record still
 `AUTHORIZED_UNUSED`, a stable zero-invocation rollout scan from the PREPARE
 high-watermark, and two newer ordered real-turn null observations. The original
 State-Writer recaptures the final null observation at current stable EOF just
-before runtime apply. Any possible
+before runtime apply, and that same snapshot must prove the full create window
+remains `NONE`. Any possible
 invocation, unavailable/incomplete observer, Goal readback, or contradictory
 optional read-only Goal DB observation forbids rollback. Success restores the
 journaled pre-PREPARE generation, Controller Goal, heartbeat observation, and
