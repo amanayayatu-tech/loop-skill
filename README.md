@@ -27,12 +27,15 @@ generation 只能由 runtime 重新读取唯一 ACKED GOAL CREATE 的原始 crea
 evidence 推导；调用方不能自报 objective、createdAt、usage、digest 或 generation id。
 
 恢复使用三个短时 scope：Controller 只能通过带 host turn attestation 的 MCP 获取一次
-recovery lease，原 State-Writer 再执行 journaled PREPARE、COMMIT 或 ROLLBACK。Phase B
-必须是另一个真实 App turn，只允许在 bounded rollout observer 证明 PREPARE
-high-watermark 之后零次匹配调用时，以历史 objective bytes 调用一次官方 `create_goal`。
-任何 STARTED/COMPLETED/AMBIGUOUS 证据都禁止重调；stdout 丢失只能在后续 turn 由
-rollout + active same-thread `get_goal` adoption。COMMIT 与 ROLLBACK 都保持 canonical
-和同一 heartbeat 为 PAUSED，RESUME 与 heartbeat ACTIVE 仍是后续独立 turn。
+recovery lease，原 State-Writer 再执行 journaled PREPARE、COMMIT 或 ROLLBACK。可信只读
+observer 必须在目标 Controller rollout 之外运行；如果没有这种 out-of-band 路径就阻断，
+不能让 observer 自己污染目标 turn。Phase B 只允许一个官方 `create_goal`，不带
+`token_budget`，也不混入 `get_goal` 或其他工具。Phase C 单独执行一次 `get_goal`，Phase D
+再取得 COMMIT lease；runtime 要求 A/B/C/D 四个 turn 身份互异，并验证同一 rollout 上
+create 先于 readback。任何错误 objective、STARTED/COMPLETED/AMBIGUOUS 证据都禁止重调或
+rollback；stdout 丢失只能由后续 rollout + active same-thread readback adoption。COMMIT 与
+ROLLBACK 都保持 canonical 和同一 heartbeat 为 PAUSED，RESUME 与 heartbeat ACTIVE 仍是
+后续独立 turn。
 
 observer 只读 `CODEX_HOME/sessions` 与 `archived_sessions` 的 canonical rollout，拒绝
 路径逃逸、symlink、不稳定/未完整 JSONL 和错误 thread identity，只持久化去敏摘要。

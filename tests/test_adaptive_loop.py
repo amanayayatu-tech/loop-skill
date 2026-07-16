@@ -634,7 +634,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             "matching_invocation_count=0",
             "invocation_state=NONE",
             'tools.create_goal({"objective":<JSON_STRING_OF_EXACT_BYTES>})',
-            "Turn C is a third real App turn",
+            "Turn D is a fourth real App turn",
             "NATIVE_GOAL_CREATE_OUTCOME_UNKNOWN",
             "COMMIT keeps canonical and heartbeat PAUSED",
             "SET_RUN_CONTROL(RESUME) and same-heartbeat ACTIVE readback occur in separate turns",

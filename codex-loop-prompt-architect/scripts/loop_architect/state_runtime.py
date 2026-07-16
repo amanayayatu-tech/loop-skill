@@ -9427,6 +9427,7 @@ class AdaptiveStateRuntime:
                 "result_observation_digest": None,
             },
             "completed_state_version": None,
+            "readback_controller_turn_id": None,
             "commit_controller_turn_id": None,
             "source_heartbeat_live_observation": (
                 source_heartbeat_live_observation
@@ -9631,11 +9632,22 @@ class AdaptiveStateRuntime:
             )
         )
         readback = goal_observation.get("goal")
+        readback_turn_id = goal_observation.get("turn_id")
         if (
             not isinstance(phase_b_turn_id, str)
             or phase_b_turn_id
             in {prepared["prepared_controller_turn_id"], commit_turn_id}
-            or goal_observation.get("turn_id") != commit_turn_id
+            or not isinstance(readback_turn_id, str)
+            or readback_turn_id
+            in {
+                prepared["prepared_controller_turn_id"],
+                phase_b_turn_id,
+                commit_turn_id,
+            }
+            or goal_observation.get("rollout_path")
+            != rollout_observation.get("rollout_path")
+            or goal_observation.get("scan_end_offset", -1)
+            <= rollout_observation.get("scan_end_offset", -1)
             or not isinstance(readback, dict)
             or readback.get("thread_id")
             != prepared["target_controller_thread_id"]
@@ -9718,6 +9730,7 @@ class AdaptiveStateRuntime:
         )
         prepared["status"] = "COMMITTED"
         prepared["completed_state_version"] = after_version
+        prepared["readback_controller_turn_id"] = readback_turn_id
         prepared["commit_controller_turn_id"] = commit_turn_id
         self._project_heartbeat_observation(
             state,
@@ -9736,6 +9749,8 @@ class AdaptiveStateRuntime:
                 "source_generation_id": prepared["source_generation_id"],
                 "target_generation_id": target_generation_id,
                 "phase_b_turn_id": phase_b_turn_id,
+                "readback_controller_turn_id": readback_turn_id,
+                "commit_controller_turn_id": commit_turn_id,
                 "lost_stdout_adopted": created_goal is None,
                 "heartbeat_status": "PAUSED",
             },

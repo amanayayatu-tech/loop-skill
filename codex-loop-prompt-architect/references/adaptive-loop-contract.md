@@ -164,9 +164,12 @@ ends with no lease and the same PAUSED heartbeat. Exact request replay is
 idempotent; semantic replay returns ALREADY_PREPARED; a reused migration id with
 changed identity is a zero-effect conflict.
 
-Phase B is a later real Controller App turn. The installed runtime executes
-`--native-goal-observe` with direct argv, `tty:false`, one compact frame, and a
-canonical Controller rollout path. Production observation is confined to
+Before Phase B, a trusted read-only observer outside the target Controller
+rollout executes `--native-goal-observe` with direct argv, `tty:false`, one
+compact frame, and a canonical Controller rollout path. The observer must run
+only while the target turn is complete and idle; its own invocation may not be
+written into the target rollout. If no trusted out-of-band observation path is
+available, recovery stops as an upstream blocker. Production observation is confined to
 `CODEX_HOME/sessions` and `CODEX_HOME/archived_sessions`; it rejects path
 escape, symlinks, wrong owner/thread, oversize input, unstable inode/size/mtime,
 incomplete or invalid UTF-8 JSONL, truncation, invalid high-watermarks, and
@@ -175,20 +178,25 @@ ambiguous create framing. The runtime writes only a sanitized
 digests, scan offsets, stable EOF, turn and call digests, objective digests,
 count, state, and sanitized result identity.
 
-Only `matching_invocation_count=0` plus `invocation_state=NONE`, current
+Only `matching_invocation_count=0` plus `invocation_state=NONE`, a prior
 `get_goal=null`, unchanged PREPARED identity, and PAUSED heartbeat authorizes
-one official `create_goal` call with the exact historical objective bytes.
-Phase B sends no State-Writer mutation, business route, provider call, or second
-create. Any STARTED, COMPLETED, UNKNOWN, or AMBIGUOUS matching invocation
-forbids another create. Lost stdout advances only to later adoption; a started
-invocation plus null readback is `NATIVE_GOAL_CREATE_OUTCOME_UNKNOWN` and
-forbids retry and rollback.
+Phase B. That real Controller turn contains exactly one official `create_goal`
+call with the exact historical objective bytes and no `token_budget`; it sends
+no get_goal, observer, State-Writer mutation, business route, provider call, or
+second create. Any exact create with a different objective and any STARTED,
+COMPLETED, UNKNOWN, or AMBIGUOUS invocation forbids another create and rollback.
+Lost stdout advances only to later adoption; a started invocation plus null
+readback is `NATIVE_GOAL_CREATE_OUTCOME_UNKNOWN` and forbids retry and rollback.
 
-COMMIT occurs under a new recovery lease in a third real turn. Runtime requires
-exactly one matching rollout invocation, A/B/C turn separation, an active
-same-thread `get_goal` readback with byte-identical objective/marker, changed
-createdAt, consistent result identity when stdout exists, unchanged Pack/roles/
-protected state, and PAUSED heartbeat. It preserves the source receipt/usage as
+After Phase B ends, the out-of-band observer records the create at stable EOF.
+Phase C is a distinct real Controller turn containing only `get_goal`; after it
+ends, the observer records an active same-thread readback at a strictly later
+offset on the same rollout. COMMIT occurs under a new recovery lease in a
+fourth real turn. Runtime requires exactly one matching rollout invocation,
+four distinct A/B/C/D turn identities, create-before-readback ordering, a
+byte-identical objective/marker, changed createdAt, consistent result identity
+when stdout exists, unchanged Pack/roles/protected state, and PAUSED heartbeat.
+It persists both readback and COMMIT-route turn identities, preserves the source receipt/usage as
 `LOST_UPSTREAM`, records one ACTIVE target generation, ACKs the dedicated create
 record with count one, switches only `current_generation_id`, and remains
 PAUSED. Lost stdout is adopted only when rollout and readback jointly prove the

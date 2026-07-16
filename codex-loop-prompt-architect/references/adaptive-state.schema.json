@@ -870,7 +870,8 @@
         "prepare_heartbeat_observation_digest", "role_registry_digest",
         "protected_state_digest", "prepared_state_version",
         "prepared_controller_turn_id", "expires_at", "create_outbox",
-        "completed_state_version", "commit_controller_turn_id",
+        "completed_state_version", "readback_controller_turn_id",
+        "commit_controller_turn_id",
         "source_heartbeat_live_observation",
         "source_heartbeat_routing_gate_enforced"
       ],
@@ -904,6 +905,9 @@
         "create_outbox": {"$ref": "#/$defs/nativeGoalCreateOutbox"},
         "completed_state_version": {
           "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]
+        },
+        "readback_controller_turn_id": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
         },
         "commit_controller_turn_id": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]

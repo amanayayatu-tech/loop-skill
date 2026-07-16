@@ -57,12 +57,15 @@ call count, or generation identity.
 
 Recovery uses three short-lived scopes. The Controller acquires one
 host-attested recovery lease through MCP, while the original State-Writer alone
-applies journaled PREPARE, COMMIT, or ROLLBACK. Phase B is a different real App
-turn and may call official `create_goal` once with the historical objective
-bytes only after the bounded rollout observer proves zero matching invocation
-since the PREPARE high-watermark. Any STARTED, COMPLETED, or AMBIGUOUS evidence
-forbids another create. Lost stdout can only be adopted in a later turn when the
-rollout and active same-thread `get_goal` readback agree.
+applies journaled PREPARE, COMMIT, or ROLLBACK. A trusted read-only observer must
+run outside the target Controller rollout; recovery blocks when no such
+out-of-band path exists. Phase B contains only one official `create_goal` with
+the historical objective bytes and no `token_budget`. Phase C contains only one
+`get_goal`, and Phase D later acquires the COMMIT lease. Runtime requires four
+distinct A/B/C/D turn identities and create-before-readback ordering on the same
+rollout. A wrong objective or any STARTED, COMPLETED, or AMBIGUOUS evidence
+forbids another create and rollback. Lost stdout can only be adopted when the
+later rollout and active same-thread readback agree.
 
 The observer reads canonical rollouts only from `CODEX_HOME/sessions` or
 `archived_sessions`, rejects path escape, symlinks, unstable/incomplete JSONL,

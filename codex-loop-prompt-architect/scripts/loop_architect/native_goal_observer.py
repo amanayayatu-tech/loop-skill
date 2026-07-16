@@ -512,6 +512,10 @@ def observe_native_goal_rollout(
             and record["objective_bytes_digest"]
             != expected_objective_bytes_digest
         ):
+            # An exact create_goal wrapper with the wrong objective is still a
+            # create attempt.  It must never collapse to NONE and authorize a
+            # rollback or a second create.
+            ambiguous_create = True
             continue
         output = outputs.get(call_id)
         result = _tool_output_object(output) if output is not None else None

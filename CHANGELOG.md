@@ -27,6 +27,11 @@ All notable changes to this project are documented here. The project follows
   stable zero-invocation interval plus two newer null observations. Both paths
   preserve the paused safe point, protected business state and immutable
   historical outboxes.
+- Split create, active readback and COMMIT routing into distinct real App turns.
+  The observer now runs outside the target Controller rollout, COMMIT persists
+  separate readback/route identities and strict create-before-readback ordering,
+  and an exact create with the wrong objective is ambiguous rather than a
+  rollback-safe zero invocation.
 
 ### Evidence boundary
 

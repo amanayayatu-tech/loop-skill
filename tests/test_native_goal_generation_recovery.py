@@ -672,7 +672,9 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
         lost_stdout: bool = False,
         create_count: int = 1,
         phase_b_turn_id: str = "phase-b-create-turn",
-        commit_turn_id: str = "commit-turn-c",
+        readback_turn_id: str = "readback-turn-c",
+        commit_turn_id: str = "commit-route-turn-d",
+        create_observation_after_readback: bool = False,
         created_at: int = 200,
         objective: str | None = None,
         runtime: AdaptiveStateRuntime | None = None,
@@ -696,18 +698,33 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 goal,
                 include_output=not lost_stdout,
             )
-        _, rollout_artifact = fixture["rollout"].observation_artifact(
-            root=harness.root,
-            stem="native-goal-create-rollout",
-            mode="CREATE_GOAL",
-            observed_at=T4,
-            scan_start_offset=outbox["prepare_high_watermark"],
-            expected_objective_digest=outbox["payload_digest"],
-            expected_objective_bytes_digest=outbox[
-                "objective_bytes_digest"
-            ],
-        )
-        fixture["rollout"].add_get_goal(commit_turn_id, goal)
+        rollout_artifact = None
+        if not create_observation_after_readback:
+            _, rollout_artifact = fixture["rollout"].observation_artifact(
+                root=harness.root,
+                stem="native-goal-create-rollout",
+                mode="CREATE_GOAL",
+                observed_at=T4,
+                scan_start_offset=outbox["prepare_high_watermark"],
+                expected_objective_digest=outbox["payload_digest"],
+                expected_objective_bytes_digest=outbox[
+                    "objective_bytes_digest"
+                ],
+            )
+        fixture["rollout"].add_get_goal(readback_turn_id, goal)
+        if create_observation_after_readback:
+            _, rollout_artifact = fixture["rollout"].observation_artifact(
+                root=harness.root,
+                stem="native-goal-create-rollout",
+                mode="CREATE_GOAL",
+                observed_at=T4,
+                scan_start_offset=outbox["prepare_high_watermark"],
+                expected_objective_digest=outbox["payload_digest"],
+                expected_objective_bytes_digest=outbox[
+                    "objective_bytes_digest"
+                ],
+            )
+        assert rollout_artifact is not None
         _, goal_artifact = fixture["rollout"].observation_artifact(
             root=harness.root,
             stem="native-goal-active-readback",
@@ -1222,6 +1239,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             self.assertEqual(
                 prepared["prepared_controller_turn_id"], "prepare-turn-a"
             )
+            self.assertIsNone(prepared["readback_controller_turn_id"])
 
     def test_prepare_replay_is_exact_identity_bound(self) -> None:
         for wrong_paths in (False, True):
@@ -1510,6 +1528,12 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             migration = state["native_goal_generation_migration"]
             target_id = migration["target_generation_id"]
             self.assertEqual(migration["status"], "COMMITTED")
+            self.assertEqual(
+                migration["readback_controller_turn_id"], "readback-turn-c"
+            )
+            self.assertEqual(
+                migration["commit_controller_turn_id"], "commit-route-turn-d"
+            )
             self.assertEqual(state["controller_goal"]["current_generation_id"], target_id)
             self.assertEqual(
                 state["native_goal_generation_ledger"][source_id]["status"],
@@ -1557,6 +1581,10 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
     def test_commit_rejects_turn_objective_and_created_at_identity_drift(self) -> None:
         cases = (
             {"phase_b_turn_id": "prepare-turn-a"},
+            {"readback_turn_id": "prepare-turn-a"},
+            {"readback_turn_id": "commit-route-turn-d"},
+            {"phase_b_turn_id": "commit-route-turn-d"},
+            {"create_observation_after_readback": True},
             {"objective": "different body\n[different marker]"},
             {"created_at": 100},
         )
@@ -1583,7 +1611,10 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             fixture = self._fixture(Path(temporary))
             self._prepare(fixture)
             with self.assertRaises(NativeGoalObservationError) as caught:
-                self._commit(fixture, phase_b_turn_id="commit-turn-c")
+                self._commit(
+                    fixture,
+                    readback_turn_id="phase-b-create-turn",
+                )
             self.assertEqual(
                 caught.exception.code,
                 "NATIVE_GOAL_GET_GOAL_OBSERVATION_UNAVAILABLE",
@@ -1987,6 +2018,60 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 trusted_rollout_roots=(root.resolve(),),
             )
             self.assertEqual(observed["invocation_state"], "AMBIGUOUS")
+
+    def test_rollout_observer_treats_exact_wrong_objective_as_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = NativeGoalRolloutFixture(root)
+            wrong_objective = "wrong body\n[wrong marker]"
+            rollout.add_create_goal(
+                "wrong-objective-turn",
+                wrong_objective,
+                {
+                    "createdAt": 2,
+                    "objective": wrong_objective,
+                    "status": "active",
+                    "threadId": "controller-1",
+                    "timeUsedSeconds": 0,
+                    "tokensUsed": 0,
+                    "updatedAt": 2,
+                },
+            )
+            observed = observe_native_goal_rollout(
+                rollout_path=rollout.path,
+                controller_thread_id="controller-1",
+                mode="CREATE_GOAL",
+                expected_objective_digest=digest("expected body"),
+                expected_objective_bytes_digest=digest(
+                    "expected body\n[expected marker]"
+                ),
+                trusted_rollout_roots=(root.resolve(),),
+            )
+            self.assertEqual(observed["matching_invocation_count"], 0)
+            self.assertEqual(observed["invocation_state"], "AMBIGUOUS")
+            self.assertEqual(observed["invocations"], [])
+
+    def test_rollback_refuses_exact_create_with_wrong_objective(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            self._prepare(fixture)
+            wrong_objective = "wrong body\n[wrong marker]"
+            fixture["rollout"].add_create_goal(
+                "wrong-objective-create",
+                wrong_objective,
+                self._active_goal(fixture, objective=wrong_objective),
+            )
+            rejected = self._rollback(fixture)
+            self.assertEqual(
+                rejected["status"],
+                "NATIVE_GOAL_GENERATION_ROLLBACK_INVOCATION_UNCERTAIN",
+            )
+            self.assertEqual(
+                fixture["harness"].state()[
+                    "native_goal_generation_migration"
+                ]["status"],
+                "PREPARED",
+            )
 
     def test_rollout_observer_accepts_exec_text_object_for_goal_tools(self) -> None:
         """Accept both exact result serializers emitted by Codex exec."""
