@@ -5,6 +5,38 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.2.7] - 2026-07-16
+
+### Fixed
+
+- Added a fail-closed, generation-aware recovery protocol for an original
+  Controller whose Codex native Goal disappeared after an App restart. Recovery
+  reuses the same Controller, State-Writer and heartbeat, derives the legacy
+  generation only from canonical ACKED create evidence, and never writes the
+  Goal database or invents a proxy Goal.
+- Added three short-lived recovery lease scopes bound to host-attested real App
+  turns. The original State-Writer alone performs journaled PREPARE, COMMIT and
+  ROLLBACK; the Controller can acquire a scope only through the signed MCP
+  bridge, and a second route in the same real turn remains forbidden.
+- Added a bounded, read-only rollout observer restricted to canonical Codex
+  session roots. It rejects path escape, symlinks, unstable/incomplete input and
+  ambiguous invocation framing, persists only sanitized receipts, and prevents
+  another `create_goal` after any matching started or completed invocation.
+- Made COMMIT adopt a lost-stdout create only when exact one-invocation rollout
+  evidence and active same-thread `get_goal` readback agree. ROLLBACK requires a
+  stable zero-invocation interval plus two newer null observations. Both paths
+  preserve the paused safe point, protected business state and immutable
+  historical outboxes.
+
+### Evidence boundary
+
+Repository tests prove deterministic state, receipt and crash-recovery
+semantics only. Release still requires the same exact SHA on the Mac mini and a
+real current-App disposable-fixture canary. If durable native Goal invocation
+evidence is unavailable, the release remains blocked as
+`UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE`; this package does
+not claim to repair Codex App Goal persistence.
+
 ## [3.2.6] - 2026-07-16
 
 ### Fixed
@@ -213,7 +245,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.6...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.7...HEAD
+[3.2.7]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.7
 [3.2.6]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.6
 [3.2.5]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.5
 [3.2.4]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.4

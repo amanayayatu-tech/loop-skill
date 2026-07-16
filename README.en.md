@@ -46,6 +46,33 @@ The skill creates one self-contained Controller Pack Markdown file plus separate
 Simplified Chinese usage instructions. It never silently authorizes push, merge,
 deploy, destructive operations, external writes, secrets, or paid runtime.
 
+### v3.2.7 native Goal generation recovery protocol
+
+If an App restart leaves the original Controller task, heartbeat, and canonical
+Loop intact but `get_goal` can no longer read the original native Goal, the new
+protocol keeps product routing paused and fails closed. The runtime derives the
+legacy generation only by reopening the unique canonical ACKED GOAL CREATE
+create/ACK evidence; callers cannot supply objective, createdAt, usage, digest,
+call count, or generation identity.
+
+Recovery uses three short-lived scopes. The Controller acquires one
+host-attested recovery lease through MCP, while the original State-Writer alone
+applies journaled PREPARE, COMMIT, or ROLLBACK. Phase B is a different real App
+turn and may call official `create_goal` once with the historical objective
+bytes only after the bounded rollout observer proves zero matching invocation
+since the PREPARE high-watermark. Any STARTED, COMPLETED, or AMBIGUOUS evidence
+forbids another create. Lost stdout can only be adopted in a later turn when the
+rollout and active same-thread `get_goal` readback agree.
+
+The observer reads canonical rollouts only from `CODEX_HOME/sessions` or
+`archived_sessions`, rejects path escape, symlinks, unstable/incomplete JSONL,
+and wrong thread identity, and persists only sanitized receipts. COMMIT and
+ROLLBACK keep canonical state and the same heartbeat PAUSED; RESUME and
+heartbeat activation remain later independent turns. If the current App lacks
+durable invocation evidence, release fails closed as
+`UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE`. This repository
+does not claim to repair Codex App native Goal persistence.
+
 ### v3.2.6 interpreter identity hotfix
 
 Generated Adaptive Packs now resolve `RUNTIME_PYTHON` and the sibling runtime

@@ -25,7 +25,7 @@
     "receipt_digest"
   ],
   "properties": {
-    "schema_version": {"const": "app-canary-receipt-v1"},
+    "schema_version": {"const": "app-canary-receipt-v2"},
     "evidence_layer": {"const": "mac-app-smoke"},
     "status": {"enum": ["PASS", "BLOCKED", "FAIL"]},
     "started_at": {"type": "string", "format": "date-time"},
@@ -138,6 +138,10 @@
         "control_plane_responsive_after_partial_frame",
         "lost_stdout_recovered_without_second_send",
         "pack_migration_same_heartbeat_reconciled",
+        "native_goal_generation_rollout_receipt_durable",
+        "native_goal_generation_committed_once",
+        "native_goal_generation_restart_readback",
+        "native_goal_generation_kept_paused",
         "finalization_acked"
       ],
       "properties": {
@@ -153,6 +157,10 @@
         "control_plane_responsive_after_partial_frame": {"type": "boolean"},
         "lost_stdout_recovered_without_second_send": {"type": "boolean"},
         "pack_migration_same_heartbeat_reconciled": {"type": "boolean"},
+        "native_goal_generation_rollout_receipt_durable": {"type": "boolean"},
+        "native_goal_generation_committed_once": {"type": "boolean"},
+        "native_goal_generation_restart_readback": {"type": "boolean"},
+        "native_goal_generation_kept_paused": {"type": "boolean"},
         "finalization_acked": {"type": "boolean"}
       }
     },
@@ -168,6 +176,9 @@
             "APP_PARENT_CODE_SIGNATURE_INVALID",
             "APP_TURN_ATTESTATION_INVALID",
             "CONTROLLER_TURN_ALREADY_ROUTED",
+            "UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE",
+            "NATIVE_GOAL_CREATE_OUTCOME_UNKNOWN",
+            "NATIVE_GOAL_ROLLOUT_OBSERVATION_INVALID",
             "APP_UPSTREAM_COMPATIBILITY_BLOCKER",
             "CANARY_ASSERTION_FAILED"
           ]

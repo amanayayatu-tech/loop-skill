@@ -36,10 +36,14 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "control_plane_responsive_after_partial_frame": True,
             "lost_stdout_recovered_without_second_send": True,
             "pack_migration_same_heartbeat_reconciled": True,
+            "native_goal_generation_rollout_receipt_durable": True,
+            "native_goal_generation_committed_once": True,
+            "native_goal_generation_restart_readback": True,
+            "native_goal_generation_kept_paused": True,
             "finalization_acked": True,
         }
         self.receipt = {
-            "schema_version": "app-canary-receipt-v1",
+            "schema_version": "app-canary-receipt-v2",
             "evidence_layer": "mac-app-smoke",
             "status": "PASS",
             "started_at": "2026-07-15T15:00:00+08:00",
@@ -153,6 +157,18 @@ class AppCanaryReceiptTests(unittest.TestCase):
 
     def test_pass_requires_every_real_canary_and_no_error(self) -> None:
         self.receipt["checks"]["finalization_acked"] = False
+        self._seal()
+        with self.assertRaisesRegex(validator.CanaryReceiptError, "CANARY_PASS_INCOMPLETE"):
+            validator.validate_receipt(self.path, SCHEMA)
+
+    def test_pass_requires_native_goal_recovery_and_durable_rollout_evidence(self) -> None:
+        self.receipt["checks"].pop("native_goal_generation_rollout_receipt_durable")
+        self._seal()
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate_receipt(self.path, SCHEMA)
+
+        self.receipt["checks"]["native_goal_generation_rollout_receipt_durable"] = True
+        self.receipt["checks"]["native_goal_generation_committed_once"] = False
         self._seal()
         with self.assertRaisesRegex(validator.CanaryReceiptError, "CANARY_PASS_INCOMPLETE"):
             validator.validate_receipt(self.path, SCHEMA)

@@ -58,7 +58,11 @@ does not claim to repair app-server process reaping or metadata delivery.
 6. On that exact SHA and installed manifest, run the real Codex App canary. The
    receipt must reach the canary's own canonical `FINALIZATION_ACKED`; synthetic
    MCP tests, a Node REPL observation, source reading, or a tool-list screenshot
-   are only prerequisites.
+   are only prerequisites. In its disposable fixture, recover one deliberately
+   lost native Goal generation with exactly one official create, durable rollout
+   observation, restart/readback of the same Goal identity, and canonical plus
+   heartbeat PAUSED throughout. Never run this recovery against the real paused
+   product Loop.
 7. Bind the minimized, non-secret App receipt to the same Mac mini attestation
    by its trusted out-of-band mechanism and finalize/re-run only the combined
    release lane for the same SHA. If the runner lacks such an interface,
@@ -92,8 +96,17 @@ it with `validate_app_canary_receipt.py`. A PASS receipt binds:
   readback, zero drift, and whether an App refresh or restart occurred;
 - first route, same-turn pre-side-effect rejection, next-turn success, partial
   frame cleanup, control-plane responsiveness, lost-stdout recovery without a
-  second send, Pack/same-heartbeat reconciliation, and `FINALIZATION_ACKED`;
+  second send, Pack/same-heartbeat reconciliation, one native Goal generation
+  recovery with a durable rollout receipt, exactly one create, restart/readback,
+  canonical and heartbeat remaining PAUSED, and `FINALIZATION_ACKED`;
 - Asia/Shanghai start/end times and an exact error classification on failure.
+
+The native Goal generation canary uses only a disposable same-SHA fixture. If
+the current App cannot expose a stable, complete rollout record that proves the
+official create invocation count, classify
+`UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE` and block release;
+source inspection, a synthetic call, an active Goal readback without invocation
+evidence, or recreation in another thread/session is not a substitute.
 
 App version/build, bundle id, executable/signature/CDHash, MCP protocol/config
 schema, requestMeta shape, or registration identity changes invalidate the old

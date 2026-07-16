@@ -111,6 +111,107 @@ remains blocked until the same heartbeat has a target ACTIVE readback. The
 native Controller Goal keeps its launch identity in Pack history; changed but
 unmigrated bytes have no routing authority.
 
+### Native Controller Goal generation recovery
+
+Native Goal recovery is a scoped repair for an upstream persistence loss, not
+a general create path. It is available only after an explicit applied
+`NATIVE_GOAL_GENERATION_RECOVERY_AUTHORIZED` Correction, a completed Pack
+migration, canonical `PAUSED_AT_SAFE_POINT`, the same heartbeat PAUSED, the same
+five registered roles, no active lease, and no route-reserving outbox.
+
+The v3.2.7 Pack migration derives a legacy generation from the unique matching
+canonical ACKED GOAL CREATE record. Runtime reopens the immutable SENT create
+bytes and ACK bytes, recomputes their digests, and validates exact thread,
+objective body, final marker, createdAt, usage, Pack, milestone, and Goal
+identity. The caller cannot provide the generation id or any duplicate
+historical field. The id is exactly:
+
+```text
+ngen- + first32(hex(sha256(
+  UTF8("native-goal-generation-v1\0")
+  + UTF8(controller_thread_id) + NUL
+  + ASCII(decimal_createdAt) + NUL
+  + ASCII(objective_digest)
+)))
+```
+
+Missing, ambiguous, non-UTF-8, digest-mismatched, or identity-mismatched
+evidence rejects the Pack migration with zero canonical side effects. Baseline
+derivation never rewrites historical ACKED GOAL/AUTOMATION identity, usage,
+repair counters, routes, roadmap, Goal progress, or role identity.
+
+Exactly three recovery lease scopes exist:
+
+- `NATIVE_GOAL_GENERATION_PREPARE`
+- `NATIVE_GOAL_GENERATION_COMMIT`
+- `NATIVE_GOAL_GENERATION_ROLLBACK`
+
+Controller acquires one scope through `route_state_mutation`; host metadata
+injects the real Controller App turn. The claim binds migration, original
+Controller and State-Writer, active Pack, applied authorization, short expiry,
+and one route. Ordinary leases remain forbidden while paused. PREPARE, COMMIT,
+and ROLLBACK are not MCP bridge mutations: only the original State-Writer may
+pass them to the standalone runtime and atomically consume that exact claim.
+The same real turn cannot acquire or consume a second ordinary or recovery
+route.
+
+PREPARE binds two ordered runtime-native `get_goal=null` observations from
+different real turns, the source generation and exact historical objective,
+the deterministic target generation, role/protected-state digests, rollout
+path and high-watermark, and a PAUSED heartbeat observation. It creates one
+dedicated `AUTHORIZED_UNUSED` create record with `create_attempt_count=0`, then
+ends with no lease and the same PAUSED heartbeat. Exact request replay is
+idempotent; semantic replay returns ALREADY_PREPARED; a reused migration id with
+changed identity is a zero-effect conflict.
+
+Phase B is a later real Controller App turn. The installed runtime executes
+`--native-goal-observe` with direct argv, `tty:false`, one compact frame, and a
+canonical Controller rollout path. Production observation is confined to
+`CODEX_HOME/sessions` and `CODEX_HOME/archived_sessions`; it rejects path
+escape, symlinks, wrong owner/thread, oversize input, unstable inode/size/mtime,
+incomplete or invalid UTF-8 JSONL, truncation, invalid high-watermarks, and
+ambiguous create framing. The runtime writes only a sanitized
+`.codex-loop/reports/*.json` receipt binding file/snapshot/runtime-manifest
+digests, scan offsets, stable EOF, turn and call digests, objective digests,
+count, state, and sanitized result identity.
+
+Only `matching_invocation_count=0` plus `invocation_state=NONE`, current
+`get_goal=null`, unchanged PREPARED identity, and PAUSED heartbeat authorizes
+one official `create_goal` call with the exact historical objective bytes.
+Phase B sends no State-Writer mutation, business route, provider call, or second
+create. Any STARTED, COMPLETED, UNKNOWN, or AMBIGUOUS matching invocation
+forbids another create. Lost stdout advances only to later adoption; a started
+invocation plus null readback is `NATIVE_GOAL_CREATE_OUTCOME_UNKNOWN` and
+forbids retry and rollback.
+
+COMMIT occurs under a new recovery lease in a third real turn. Runtime requires
+exactly one matching rollout invocation, A/B/C turn separation, an active
+same-thread `get_goal` readback with byte-identical objective/marker, changed
+createdAt, consistent result identity when stdout exists, unchanged Pack/roles/
+protected state, and PAUSED heartbeat. It preserves the source receipt/usage as
+`LOST_UPSTREAM`, records one ACTIVE target generation, ACKs the dedicated create
+record with count one, switches only `current_generation_id`, and remains
+PAUSED. Lost stdout is adopted only when rollout and readback jointly prove the
+same create.
+
+ROLLBACK requires its own new lease, the create record still
+`AUTHORIZED_UNUSED`, a stable zero-invocation rollout scan from the PREPARE
+high-watermark, and two newer ordered real-turn null observations. Any possible
+invocation, unavailable/incomplete observer, Goal readback, or contradictory
+optional read-only Goal DB observation forbids rollback. Success restores the
+journaled pre-PREPARE generation, Controller Goal, heartbeat observation, and
+routing gate, adds one immutable ROLLED_BACK history receipt, consumes the
+lease, and remains PAUSED.
+
+RESUME is a later independent turn and requires no PREPARED/CONFLICT/
+OUTCOME_UNKNOWN migration, one unique ACTIVE current generation, exact Pack and
+heartbeat PAUSED reconciliation, no lease/outbox, and current projections.
+Activating the same heartbeat and reading it back is another later turn; only a
+subsequent turn may resume product routing. If durable App invocation evidence
+is unavailable, classify
+`UPSTREAM_NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_UNAVAILABLE` and do not release,
+install, migrate, or create a substitute Goal/thread/session/heartbeat.
+
 Human steering, STATUS projection, Decision Card, review surface, convergence,
 Validation Matrix, Context Freshness, and evidence-order rules are defined in
 [human-steering-and-convergence.md](human-steering-and-convergence.md). Runtime

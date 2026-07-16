@@ -621,6 +621,38 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         ):
             self.assertIn(marker, self.pack)
 
+    def test_pack_closes_native_goal_generation_recovery_protocol(self) -> None:
+        for marker in (
+            "Native Controller Goal Generation Recovery Protocol",
+            "NATIVE_GOAL_GENERATION_RECOVERY_AUTHORIZED",
+            "runtime-derived legacy generation baseline",
+            "NATIVE_GOAL_GENERATION_PREPARE",
+            "NATIVE_GOAL_GENERATION_COMMIT",
+            "NATIVE_GOAL_GENERATION_ROLLBACK",
+            "AUTHORIZED_UNUSED",
+            "--native-goal-observe",
+            "matching_invocation_count=0",
+            "invocation_state=NONE",
+            'tools.create_goal({"objective":<JSON_STRING_OF_EXACT_BYTES>})',
+            "Turn C is a third real App turn",
+            "NATIVE_GOAL_CREATE_OUTCOME_UNKNOWN",
+            "COMMIT keeps canonical and heartbeat PAUSED",
+            "SET_RUN_CONTROL(RESUME) and same-heartbeat ACTIVE readback occur in separate turns",
+        ):
+            self.assertIn(marker, self.pack)
+        self.assertIn(
+            "PREPARE_NATIVE_GOAL_GENERATION_MIGRATION, COMMIT_NATIVE_GOAL_GENERATION_MIGRATION, and ROLLBACK_NATIVE_GOAL_GENERATION_MIGRATION are never MCP bridge calls",
+            self.pack,
+        )
+        self.assertIn(
+            "Controller invokes those two mutations, including the exact native-Goal recovery scopes, directly through the configured `route_state_mutation` MCP tool",
+            self.pack,
+        )
+        self.assertIn(
+            "Any matching or ambiguous create, including STARTED_UNKNOWN, forbids another create",
+            self.pack,
+        )
+
     def test_generated_initial_state_payload_is_accepted_by_runtime(self) -> None:
         workers = scaffold.normalize_workers(self.payload)
         goals = scaffold.normalize_goals(self.payload, workers)

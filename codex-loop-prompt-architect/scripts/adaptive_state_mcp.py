@@ -36,7 +36,7 @@ from loop_architect.state_runtime import (
 
 MCP_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2024-11-05")
 MCP_SERVER_NAME = "codex-loop-state"
-MCP_SERVER_VERSION = "1.0.0"
+MCP_SERVER_VERSION = "1.1.0"
 MCP_TOOL_NAME = "route_state_mutation"
 MCP_TURN_META_KEY = "x-codex-turn-metadata"
 MCP_THREAD_META_KEY = "threadId"
