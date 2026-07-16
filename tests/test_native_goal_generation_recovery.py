@@ -1831,6 +1831,7 @@ class NativeGoalGenerationRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                     rejected["status"],
                     {
                         "NATIVE_GOAL_CREATE_INVOCATION_RECEIPT_INVALID",
+                        "NATIVE_GOAL_CONTROL_SUFFIX_IDENTITY_INVALID",
                         "NATIVE_GOAL_GENERATION_READBACK_IDENTITY_MISMATCH",
                         "NATIVE_GOAL_ROLLOUT_FINAL_EOF_CHANGED",
                     },
