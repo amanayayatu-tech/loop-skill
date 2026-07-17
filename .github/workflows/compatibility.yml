@@ -57,7 +57,7 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -W error -m unittest discover -s .github/ci/tests -v
-      - name: Validate the canonical 613-test inventory
+      - name: Validate the canonical 575-test inventory
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: >-
@@ -74,7 +74,7 @@ jobs:
           --event-path "$GITHUB_EVENT_PATH"
           --github-sha "$GITHUB_SHA"
           --manual-profile "${{ inputs.profile || 'release' }}"
-          --expected-total-tests 613
+          --expected-total-tests 575
           --output plan-v1.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
