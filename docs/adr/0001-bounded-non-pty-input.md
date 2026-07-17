@@ -1,6 +1,7 @@
 # ADR 0001: Use bounded direct non-PTY input
 
-- Status: Accepted
+- Status: Superseded
+- Superseded by: docs/adr/0009-typed-mcp-runtime-codec.md
 - Date: 2026-07-16
 
 ## Context
@@ -27,3 +28,6 @@ runtime can still support closed-pipe EOF for compatibility.
 
 The parser, process library, and numeric bounds may change. A replacement must
 preserve bounded completion, exact framing, cleanup, and fail-closed behavior.
+v3.2.8 adopts that allowed evolution through the typed MCP runtime codec in
+[ADR 0009](0009-typed-mcp-runtime-codec.md). Direct stdin remains a legacy CLI
+compatibility mechanism, not a generated-Pack requirement.

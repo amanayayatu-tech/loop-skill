@@ -1,20 +1,20 @@
 schema_version: 1
 invariants:
   - id: INV-INPUT-001
-    title: Bounded direct non-PTY input
+    title: Bounded single-frame runtime input
     level: CORE_INVARIANT
     status: ACTIVE
-    scope: [adaptive runtime stdin modes, payload codec, report staging]
+    scope: [adaptive runtime stdin compatibility modes, MCP payload codec, report staging]
     rationale: An incomplete or adversarial frame must not hang a controller turn or retain a child process.
-    normative_statement: Runtime input uses direct argv and a writable non-PTY pipe, accepts one bounded strict UTF-8 JSON frame, and fails closed on timeout, excess bytes, invalid encoding, duplicate keys, non-finite values, extra frames, or trailing garbage.
-    non_goals: [freezing a subprocess library, requiring one internal parser function]
-    allowed_evolution: [replace the parser or process API while preserving bounds and structured failures, tighten limits through a reviewed public-contract change]
+    normative_statement: Runtime input uses a bounded single-frame channel with strict UTF-8 and no PTY pollution, and fails closed on missing transport, EOF before a frame, timeout, excess bytes, invalid encoding, duplicate keys, non-finite values, extra frames, or trailing garbage. Generated Packs must not require a writable shell-session stdin when a typed installed MCP codec is available.
+    non_goals: [freezing a subprocess library, requiring one internal parser function, removing the legacy CLI adapter]
+    allowed_evolution: [replace the parser, MCP SDK, or process API while preserving bounds and structured failures, tighten limits through a reviewed public-contract change]
     authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
-    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py, codex-loop-prompt-architect/scripts/adaptive_state_mcp.py]
     schema_surfaces: [codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
-    test_surfaces: [tests/test_adaptive_runtime_transport.py]
+    test_surfaces: [tests/test_adaptive_runtime_transport.py, tests/test_adaptive_state_mcp.py, tests/test_adaptive_payload_codec.py]
     evidence_surfaces: [docs/RELEASING.md]
-    adr: [docs/adr/0001-bounded-non-pty-input.md]
+    adr: [docs/adr/0009-typed-mcp-runtime-codec.md, docs/adr/0001-bounded-non-pty-input.md]
     introduced_version: 3.2.1
 
   - id: INV-ROUTE-001
@@ -214,7 +214,7 @@ invariants:
     non_goals: [claiming the capability works, deleting legacy audit fields, blocking unrelated supported work]
     allowed_evolution: [promote through a new reviewed ADR only after same-identity host support and exact-SHA evidence exist]
     authoritative_sources: [codex-loop-prompt-architect/references/adaptive-loop-contract.md, docs/RELEASING.md]
-    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py, codex-loop-prompt-architect/scripts/adaptive_state_mcp.py, codex-loop-prompt-architect/scripts/loop_architect/native_goal_observer.py]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py, codex-loop-prompt-architect/scripts/adaptive_state_mcp.py]
     schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json, codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
     test_surfaces: [tests/test_native_goal_recovery_unavailable.py]
     evidence_surfaces: [CHANGELOG.md, docs/RELEASING.md]

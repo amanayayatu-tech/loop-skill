@@ -133,23 +133,22 @@ conditional dashboard, immutable Pack/report artifacts, `ROADMAP_REVISION`,
 Controller performs a prepared external action only after an applied runtime
 response and returns the observation through a new typed mutation.
 
-Every stdin mode uses one bounded frame reader: 30 seconds of wall-clock time,
+Every legacy CLI stdin mode uses one bounded frame reader: 30 seconds of wall-clock time,
 a 4 MB byte ceiling, and strict UTF-8. JSON/state/report modes return as soon as
 one complete top-level object is available, without waiting for EOF; payload
-verification accepts its existing envelope-plus-JSON framing. Closed-pipe EOF
-remains compatible. Strict JSON rejects duplicate keys, non-finite numbers,
+verification accepts its existing envelope-plus-JSON framing. EOF after a
+complete frame remains compatible; EOF before any frame returns
+`INPUT_TRANSPORT_EOF_BEFORE_FRAME`. Strict JSON rejects duplicate keys, non-finite numbers,
 multiple frames, and trailing garbage. Timeout, size, and encoding failures return structured
-`INPUT_TRANSPORT_TIMEOUT`, `INPUT_TRANSPORT_TOO_LARGE`, and
+`INPUT_TRANSPORT_EOF_BEFORE_FRAME`, `INPUT_TRANSPORT_TIMEOUT`, `INPUT_TRANSPORT_TOO_LARGE`, and
 `INPUT_TRANSPORT_UTF8_INVALID` responses with nonzero exit status.
 
-The App invocation contract applies to every mode, not only materialization:
-launch the runtime itself by direct argv with `tty:false`, then write one compact
-JSON frame exactly once (or no stdin for `--recover`). Never start a stdin
-helper, PTY configurator, fixed-byte reader, heredoc, or shell pipeline first.
-A yielded session may only be polled by its same id; success requires process
-exit, no live session, and one JSON response. Pack validation evaluates each
-executable clause: a negative phrase cannot mask a later affirmative unsafe
-command, and only an explicitly `non-executable` code fence is excluded.
+Generated Packs do not invoke codec modes through a shell process. They use the
+installed `codex-loop-state` MCP `runtime_codec` tool with one closed typed
+operation. The legacy CLI remains compatible for direct integrations, but no
+Pack may assume that a `tty:false` child retains writable stdin or returns a
+session id. Missing MCP codec capability stops as
+`RUNTIME_CODEC_TOOL_UNAVAILABLE` with zero side effects.
 
 #### Resource-bounded observation and validation
 
@@ -175,33 +174,24 @@ Narrow changes run narrow tests. Full fuzz, coverage, and install run once for
 the final artifact; an equivalent full local gate is not duplicated while CI
 is already running for the same commit.
 
-Runtime and external processes retain the direct non-PTY, same-session
-contract. Stdin modes must use an exposed process API that launches direct argv
-and supplies a writable non-PTY stdin pipe; a native child-process spawn meets
-that requirement. A shell execution API that closes stdin before the same-session
-write is ineligible, and temporary-file redirection is not a substitute. A local
-child owned by the current turn is cleaned up with bounded
-TERM, wait, KILL, and waitpid steps, followed by a residual-process check. A
-completed external result whose stdout was lost is recovered from its durable
-receipt; stdout loss never authorizes another external call. These constraints
-change no storage, schema, state, migration, repair-limit, or public completion
-semantics.
+Runtime input preserves a bounded single-frame, strict UTF-8, no-PTY-pollution
+contract. MCP codec calls satisfy it without exposing a child-process stdin.
+Any optional external child owned by the current turn still requires bounded
+cleanup and a residual-process check. A completed external result whose stdout
+was lost is recovered from its durable receipt; stdout loss never authorizes
+another external call. These constraints change no storage, schema, state,
+migration, repair-limit, or public completion semantics.
 
-The same runtime is also the only dispatch payload codec. Controller submits one
-strict JSON object with exactly `envelope_type` and `payload` to
-`adaptive_state_runtime.py --payload-materialize`; the payload contains one
+The same installed runtime is also the only dispatch payload codec. Controller
+submits one strict JSON object with exactly `envelope_type` and `payload` to
+`runtime_codec` operation `MATERIALIZE_DISPATCH`; the payload contains one
 `dispatch_payload_digest` whose value is the literal
-`PAYLOAD_DIGEST_PLACEHOLDER`. Invoke the runtime directly with `tty:false`,
-write one compact JSON frame once, and never interpose `dd`, `stty`, a fixed-byte
-reader, heredoc, or shell pipeline. Success requires `exit_code=0`, no remaining
-`session_id`, and stdout containing exactly one `PAYLOAD_MATERIALIZED` object.
-If a session is yielded, poll only that session until completion; never start a
-substitute. At deadline, wait for the bounded runtime to fail closed and map the
-result to `PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT`. Only a successful
+`PAYLOAD_DIGEST_PLACEHOLDER`. Success requires exactly one structured
+`PAYLOAD_MATERIALIZED` result. Only a successful
 `PAYLOAD_MATERIALIZED` may be persisted and sent. Its `transport_text` is the
 exact task-message body. A receiver passes the
-exact received `codexDelegation.input` unchanged to
-`--root <absolute repo root> --payload-verify` and acts only on
+exact received `codexDelegation.input` string plus the absolute repo root to
+`runtime_codec` operation `VERIFY_DISPATCH` and acts only on
 `PAYLOAD_VERIFIED`. Runtime alone may normalize CRLF to LF and remove at most
 one trailing newline before strict JSON parsing and semantic canonicalization.
 The digest survives those transport-framing differences, while HTML/XML entity
@@ -248,7 +238,7 @@ non-UTF-8 data, or digest mismatch. Never transport the Pack as inline artifact
 formal report artifacts must not use inline `content`. The exact specification
 `{"outbox_id":ID,"result":{"status":STATUS,"artifact_digest":DIGEST},"report_text":EXACT_JSON_TEXT}`
 is constructed and sent by Worker/Reviewer/Local inside its own target task to
-installed `adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage`
+installed MCP `runtime_codec` operation `STAGE_REPORT` with CANONICAL_ROOT
 before its final App reply. Only
 `FORMAL_REPORT_STAGED` is usable. Runtime infers the canonical SENT outbox,
 validates strict UTF-8/JSON framing without reserialization, and returns the
@@ -767,10 +757,11 @@ stable event/request/dispatch/proposal ids and never increment or apply twice.
 
 Every Worker, Reviewer, and Local Verifier envelope carries a canonical
 `payload_digest` plus the full claim including `routing_turn_id`. After every
-other runtime field is typed and materialized, Controller invokes
-`--payload-materialize`, persists the returned digest, and sends the returned
-`transport_text` unchanged. The receiver invokes
-`--root <absolute repo root> --payload-verify` on the exact received body. The
+other runtime field is typed and materialized, Controller invokes runtime_codec
+operation `MATERIALIZE_DISPATCH`, persists the returned digest, and sends the
+returned `transport_text` unchanged. The receiver invokes runtime_codec
+operation `VERIFY_DISPATCH` with the absolute repo root and exact received
+string. The
 runtime alone may normalize CRLF to LF and remove at most one trailing newline
 before strict JSON semantic canonicalization; entity or field changes still fail.
 The byte-only helper status is not execution permission. Outbox, sent envelope, receiver report, and assurance identity
@@ -805,8 +796,8 @@ a root-confined regular non-symlink diff artifact whose bytes hash to
 review handoff so a zero-effect failure can still close a SENT outbox.
 Worker, Reviewer, and Local Verifier build one strict JSON `report_text` inside the
 target task, without fences or trailing prose, whose `report_digest` value is
-the literal `PENDING_CONTROLLER_ARCHIVE`. That same role invokes
-`--report-stage` before replying and returns only the ASCII-safe
+the literal `PENDING_CONTROLLER_ARCHIVE`. That same role invokes runtime_codec
+operation `STAGE_REPORT` before replying and returns only the ASCII-safe
 `FORMAL_REPORT_STAGED` handle. Only its helper-produced
 `.codex-loop/report-staging/` source path, digest, media type, and ACK-ready
 result may be supplied to State-Writer. Controller never reads or transports
@@ -901,6 +892,7 @@ against runtime plus both public schemas:
 <!-- ZERO_EXECUTION_BLOCKER_CODES_START -->
 - `DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH`
 - `DISPATCH_VALIDATION_MATRIX_MISMATCH`
+- `INPUT_TRANSPORT_EOF_BEFORE_FRAME`
 - `INPUT_TRANSPORT_TIMEOUT`
 - `INPUT_TRANSPORT_TOO_LARGE`
 - `INPUT_TRANSPORT_UTF8_INVALID`
