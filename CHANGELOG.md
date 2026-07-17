@@ -5,6 +5,52 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.2.8] - 2026-07-17
+
+### Fixed
+
+- Replaced generated Pack dependence on a long-lived non-PTY process stdin with
+  the installed MCP `runtime_codec` tool for dispatch materialization and
+  verification, formal-report and external-receipt staging, and failure
+  fingerprint normalization. The retained CLI is a compatibility surface, not
+  the generated Pack's only legal transport.
+- Classified an empty transport before the first frame as
+  `INPUT_TRANSPORT_EOF_BEFORE_FRAME`, distinct from malformed JSON and payload
+  content errors. A missing codec fails closed as
+  `RUNTIME_CODEC_TOOL_UNAVAILABLE` with no side effects.
+- Made terminal projections agree on lifecycle, heartbeat, validation, blocked
+  Goal, remaining Goal count, and next action. A finalized blocked Loop now
+  renders `TERMINAL_BLOCKED`, `PAUSED`,
+  `NOT_APPLICABLE_TERMINAL_BLOCKED`, and `NONE_TERMINAL`; `RESUME` clears the
+  resolved transient reason while history remains in the event ledger.
+
+### Changed
+
+- Retired the dormant executable native Goal generation recovery implementation,
+  observer, and positive recovery suite. Historical schema fields remain
+  readable, while every legacy recovery request continues to return
+  `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with `side_effects=NONE`.
+- Rebased the compatibility shadow-coverage identity to 80.06% after that
+  intentional suite and implementation retirement. The independent all-shipped
+  branch-coverage release floor remains unchanged at 80%.
+- Reframed `INV-INPUT-001` around one bounded, strict-UTF-8, single-frame,
+  non-PTY-safe, fail-closed transport contract rather than a host-specific
+  promise that a non-PTY stdin pipe stays writable after process launch.
+
+### Release lineage
+
+v3.2.7 was merged into repository `main` through PR #11, but it never received
+a Git tag or GitHub Release. Its supported unavailable contract is preserved;
+its deferred executable recovery code is superseded and closed by v3.2.8. Git
+history is not rewritten and v3.2.7 must not be represented as a formal release.
+
+### Evidence boundary
+
+Repository checks establish the codec, EOF classification, terminal projection,
+and unavailable-recovery contracts. Formal release still requires the exact
+protected-main merge SHA to pass the real Codex App codec canary before its
+annotated tag and GitHub Release are created.
+
 ## [3.2.7] - 2026-07-16
 
 ### Changed
@@ -230,8 +276,9 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.7...HEAD
-[3.2.7]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.7
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.8...HEAD
+[3.2.8]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.8
+[3.2.7]: https://github.com/amanayayatu-tech/loop-skill/pull/11
 [3.2.6]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.6
 [3.2.5]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.5
 [3.2.4]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.4

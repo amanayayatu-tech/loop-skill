@@ -27,8 +27,8 @@ class RuntimePythonBindingTests(unittest.TestCase):
             "`[mcp_servers.codex-loop-state]`",
             "never fall back to ambient `python3`",
             '[RUNTIME_PYTHON, RUNTIME_PATH, "--root"',
-            '[RUNTIME_PYTHON, RUNTIME_PATH, "--payload-materialize"]',
             "bridge and `RUNTIME_PATH` to share the installed skill root",
+            "runtime_codec",
             "STATE_RUNTIME_UNAVAILABLE",
         ):
             self.assertIn(marker, pack)
@@ -38,8 +38,8 @@ class RuntimePythonBindingTests(unittest.TestCase):
     def test_semantic_validator_rejects_ambient_python_regression(self) -> None:
         pack = self.pack()
         weakened = pack.replace(
-            '[RUNTIME_PYTHON, RUNTIME_PATH, "--payload-materialize"]',
-            '["python3", RUNTIME_PATH, "--payload-materialize"]',
+            '[RUNTIME_PYTHON, RUNTIME_PATH, "--root"',
+            '["python3", RUNTIME_PATH, "--root"',
             1,
         )
         errors = scaffold.validate_adaptive_pack_transport_contract(weakened)

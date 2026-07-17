@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "expected_total_tests": 613,
+  "expected_total_tests": 580,
   "expected_shard_counts": {
     "1": 172,
-    "2": 207,
-    "3": 98,
-    "4": 136
+    "2": 166,
+    "3": 105,
+    "4": 137
   },
   "shards": {
     "1": [
@@ -19,7 +19,6 @@
       "tests.test_install_manifest"
     ],
     "2": [
-      "tests.test_native_goal_generation_recovery",
       "tests.test_state_runtime_finalization",
       "tests.test_loop_prompt_scaffold",
       "tests.test_adaptive_payload_codec",

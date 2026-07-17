@@ -416,7 +416,6 @@ class Harness:
         self.root = Path(root)
         self.runtime = AdaptiveStateRuntime(
             self.root,
-            native_goal_rollout_roots=(self.root.resolve(),),
         )
         self.counter = 0
         self.identity_counter = 0

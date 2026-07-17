@@ -65,7 +65,7 @@ must be resolved explicitly in the change that discovers it.
 The active contract is organized by invariant family rather than by current
 module:
 
-- bounded direct non-PTY input and strict framing;
+- bounded single-frame structured transport and strict UTF-8 framing;
 - one business route per real host turn with host attestation;
 - durable outboxes, receipts, replay, and lost-output recovery;
 - fenced leases and identity-preserving Pack migration;

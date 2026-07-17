@@ -173,9 +173,15 @@ Old evidence cannot unlock a new artifact. When the artifact, code, configuratio
 
 ### Native Goal generation recovery: `DEFERRED_UNAVAILABLE`
 
-v3.2.7 does not recover a lost native Goal identity. The current Codex App has no public create-paused, resume, restore, or rebind interface that can preserve the same identity, so generated Packs do not include this recovery path.
+v3.2.8 does not recover a lost native Goal identity. The current Codex App has no public create-paused, resume, restore, or rebind interface that can preserve the same identity, so generated Packs do not include this recovery path. v3.2.7 reached repository `main` but never received a tag or GitHub Release; v3.2.8 formally closes that deferred work without rewriting history.
 
 Legacy CLI and MCP recovery surfaces reject with `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` and `side_effects=NONE`. If required mode observes `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, canonical state stays unchanged, the same heartbeat stays paused, and no substitute Goal, Controller, thread, session, or heartbeat is created. Historical BLOCKED receipts remain BLOCKED evidence; they cannot become PASS.
+
+### App messaging and process transport
+
+New Adaptive Packs pass structured parameters through the installed MCP `runtime_codec` for dispatch materialization and verification, formal-report and external-receipt staging, and fingerprint normalization. They no longer assume that a `tty:false` process exposes a session stdin that remains available for a later `write_stdin` call.
+
+CLI stdin remains only for legacy State-Writer and compatibility calls. EOF before the first frame returns `INPUT_TRANSPORT_EOF_BEFORE_FRAME`; an unavailable codec returns `RUNTIME_CODEC_TOOL_UNAVAILABLE`. Both stop with zero side effects and must not be bypassed with a PTY, heredoc, pipeline, or hand-built digest.
 
 ### App and protocol identity
 

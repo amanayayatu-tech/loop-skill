@@ -36,10 +36,6 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertTrue(bridge.is_file())
         installer = (ROOT / "scripts" / "install.sh").read_text()
         self.assertIn('STATE_MCP="$SOURCE_DIR/scripts/adaptive_state_mcp.py"', installer)
-        self.assertIn(
-            'LEGACY_NATIVE_GOAL_OBSERVER="$SOURCE_DIR/scripts/loop_architect/native_goal_observer.py"',
-            installer,
-        )
         self.assertIn('chmod +x "$STAGING_DIR/scripts/adaptive_state_mcp.py"', installer)
         self.assertIn('MCP_CONFIG_HELPER="$SOURCE_DIR/scripts/configure_mcp.py"', installer)
         self.assertIn('INSTALL_VERIFY="$SOURCE_DIR/scripts/verify_installation.py"', installer)
@@ -51,7 +47,6 @@ class ReleaseContractTests(unittest.TestCase):
             "scripts/configure_mcp.py",
             "scripts/verify_installation.py",
             "scripts/validate_app_canary_receipt.py",
-            "scripts/loop_architect/native_goal_observer.py",
         ):
             self.assertTrue((ROOT / "codex-loop-prompt-architect" / relative).is_file())
         canary_validator = (

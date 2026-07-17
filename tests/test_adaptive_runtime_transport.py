@@ -38,6 +38,29 @@ def stdin_from_fd(fd: int):
 
 
 class AdaptiveRuntimeTransportTests(unittest.TestCase):
+    def test_empty_stdin_is_transport_eof_not_payload_content_error(self) -> None:
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        with stdin_from_fd(read_fd):
+            with self.assertRaises(InputTransportError) as raised:
+                _read_bounded_stdin("payload-materialize", timeout_seconds=0.2)
+        self.assertEqual(raised.exception.code, "INPUT_TRANSPORT_EOF_BEFORE_FRAME")
+        self.assertEqual(raised.exception.details, {"bytes_received": 0})
+
+    def test_cli_empty_stdin_emits_transport_eof_response(self) -> None:
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        output = StringIO()
+        with stdin_from_fd(read_fd), redirect_stdout(output):
+            exit_code = runtime.main(["--payload-materialize"])
+        response = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(response["status"], "INPUT_TRANSPORT_EOF_BEFORE_FRAME")
+        self.assertEqual(response["error"]["path"], "/stdin")
+        self.assertEqual(
+            response["error"]["details"], {"bytes_received": 0}
+        )
+
     def test_complete_json_returns_without_eof(self) -> None:
         read_fd, write_fd = os.pipe()
         try:

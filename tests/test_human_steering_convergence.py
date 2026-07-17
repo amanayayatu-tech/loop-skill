@@ -527,7 +527,7 @@ class HumanControlRuntimeTests(unittest.TestCase):
         self.assertEqual(state["schema_version"], 2)
         self.assertEqual(
             state["status_projection_target"]["render_contract_version"],
-            "status-v3",
+            "status-v4",
         )
         status = (Path(self.temp.name) / ".codex-loop" / "STATUS.md").read_text()
         self.assertIn("## What's done", status)
@@ -628,7 +628,7 @@ class HumanControlRuntimeTests(unittest.TestCase):
         current = runtime.read_state()
         self.assertEqual(
             current["status_projection_target"]["render_contract_version"],
-            "status-v3",
+            "status-v4",
         )
         self.assertIn("Control phase", runtime.status_path.read_text())
 
@@ -688,8 +688,79 @@ class HumanControlRuntimeTests(unittest.TestCase):
             runtime.read_state()["status_projection_target"][
                 "render_contract_version"
             ],
-            "status-v3",
+            "status-v4",
         )
+
+    def test_historical_status_v3_recover_preserves_bytes_then_mutation_upgrades(self) -> None:
+        initialized, _ = self.harness.initialize()
+        self.assertTrue(initialized["ok"], initialized)
+        runtime = self.harness.runtime
+        state = runtime.read_state()
+        historical_payload = b"# Historical status-v3 fixture\n\nstate_version: 1\n"
+        historical_digest = digest(historical_payload.decode("utf-8"))
+        state["status_projection_target"] = {
+            "path": ".codex-loop/STATUS.md",
+            "target_state_version": state["state_version"],
+            "target_digest": historical_digest,
+            "render_contract_version": "status-v3",
+        }
+        runtime.state_path.write_bytes(runtime._render_state(state))
+        runtime.status_path.write_bytes(historical_payload)
+        journal_path = (
+            runtime.projection_transactions_dir
+            / f"status-v{state['state_version']}.json"
+        )
+        journal_path.write_text(
+            json.dumps(
+                {
+                    "journal_version": 1,
+                    "status": "APPLIED",
+                    "target_state_version": state["state_version"],
+                    "target_digest": historical_digest,
+                    "render_contract_version": "status-v3",
+                    "projected_digest": historical_digest,
+                    "readback_digest": historical_digest,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        before_recover = persisted_snapshot(Path(self.temp.name))
+        recovered = runtime.recover()
+        self.assertTrue(recovered["ok"], recovered)
+        self.assertEqual(persisted_snapshot(Path(self.temp.name)), before_recover)
+
+        journal_path.unlink()
+        status_before_journal_repair = runtime.status_path.read_bytes()
+        repaired = runtime.recover()
+        self.assertTrue(repaired["ok"], repaired)
+        self.assertTrue(journal_path.is_file())
+        self.assertEqual(
+            runtime.status_path.read_bytes(), status_before_journal_repair
+        )
+        self.assertFalse(runtime._projections_need_recovery_locked(runtime.read_state()))
+
+        upgraded = self.request(
+            {
+                "type": "RECORD_STEERING",
+                "steering_id": "upgrade-status-v3",
+                "steering_type": "CORRECTION",
+                "normalized_digest": digest("upgrade status v3 projection"),
+                "identity_algorithm": "message-item-v1",
+                "message_item_id": "upgrade-status-v3-message",
+                "summary": "upgrade status v3 projection",
+                "classification_reason": "preserve exact historical bytes",
+            }
+        )
+        self.assertTrue(upgraded["ok"], upgraded)
+        current = runtime.read_state()
+        self.assertEqual(
+            current["status_projection_target"]["render_contract_version"],
+            "status-v4",
+        )
+        self.assertNotEqual(runtime.status_path.read_bytes(), historical_payload)
 
     def test_tampered_legacy_status_v1_projection_is_rejected_without_side_effects(self) -> None:
         initialized, _ = self.harness.initialize()
@@ -787,7 +858,7 @@ class HumanControlRuntimeTests(unittest.TestCase):
         self.assertEqual(
             bypass["error"]["code"], "STEERING_REQUIRES_SPECIALIZED_RESOLVER"
         )
-        paused = self.request({"type": "SET_RUN_CONTROL", "steering_id": "steer-1", "requested_status": "PAUSE"})
+        paused = self.request({"type": "SET_RUN_CONTROL", "steering_id": "steer-1", "requested_status": "PAUSE", "reason": "temporary maintenance"})
         self.assertEqual(paused["operation_status"], "PAUSED_AT_SAFE_POINT")
         blocked_lease = self.harness.apply(
             {
@@ -811,8 +882,9 @@ class HumanControlRuntimeTests(unittest.TestCase):
             "classification_reason": "explicit resume request",
         }
         self.assertTrue(self.request(resume_steering)["ok"])
-        resumed = self.request({"type": "SET_RUN_CONTROL", "steering_id": "steer-2", "requested_status": "RESUME"})
+        resumed = self.request({"type": "SET_RUN_CONTROL", "steering_id": "steer-2", "requested_status": "RESUME", "reason": "historical pause reason must clear"})
         self.assertEqual(resumed["operation_status"], "RUNNING")
+        self.assertIsNone(self.harness.state()["run_control"]["reason"])
 
     def test_steering_fallback_identity_and_algorithm_are_closed(self) -> None:
         self.harness.initialize()

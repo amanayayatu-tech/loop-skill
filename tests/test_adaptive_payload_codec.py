@@ -19,6 +19,7 @@ from loop_architect.state_runtime import (  # noqa: E402
     materialize_dispatch_payload,
     verify_dispatch_payload,
 )
+from adaptive_state_runtime import execute_runtime_codec  # noqa: E402
 
 
 CLI = SCRIPTS / "adaptive_state_runtime.py"
@@ -142,6 +143,13 @@ class AdaptivePayloadCodecTests(unittest.TestCase):
         self.assertEqual(
             verified["canonical_byte_count"], result["canonical_byte_count"]
         )
+
+    def test_runtime_codec_materializes_same_canonical_payload(self) -> None:
+        direct = materialize_dispatch_payload(self.specification())
+        codec = execute_runtime_codec(
+            "MATERIALIZE_DISPATCH", request=self.specification()
+        )
+        self.assertEqual(codec, direct)
 
     def test_local_payload_binds_closed_external_call_authorization(self) -> None:
         result = materialize_dispatch_payload(self.local_specification())
