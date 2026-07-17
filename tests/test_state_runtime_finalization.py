@@ -503,6 +503,15 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
             self.assertIn("Next action: `NONE_TERMINAL`", status)
             self.assertIn("heartbeat-1:PAUSED:FINALIZATION_RECEIPT", status)
             self.assertNotIn("HEARTBEAT_ACTIVE_WHILE_CANONICAL_PAUSED", status)
+            goals = (root / ".codex-loop" / "GOALS.md").read_text()
+            self.assertIn('blocked_at_goal: "g1"', goals)
+            self.assertIn("remaining_goal_count: 2", goals)
+            dashboard_state = copy.deepcopy(state)
+            dashboard_state["dashboard_required"] = True
+            dashboard = harness.runtime._render_dashboard(dashboard_state).decode()
+            self.assertIn("Blocked at Goal:</strong> g1", dashboard)
+            self.assertIn("Remaining Goals:</strong> 2", dashboard)
+            self.assertIn("Remaining Goals: `2`", status)
             state_path = root / ".codex-loop" / "LOOP_STATE.md"
             for name, mutate in (
                 (

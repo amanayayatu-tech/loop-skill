@@ -691,6 +691,67 @@ class HumanControlRuntimeTests(unittest.TestCase):
             "status-v4",
         )
 
+    def test_historical_status_v3_recover_preserves_bytes_then_mutation_upgrades(self) -> None:
+        initialized, _ = self.harness.initialize()
+        self.assertTrue(initialized["ok"], initialized)
+        runtime = self.harness.runtime
+        state = runtime.read_state()
+        historical_payload = b"# Historical status-v3 fixture\n\nstate_version: 1\n"
+        historical_digest = digest(historical_payload.decode("utf-8"))
+        state["status_projection_target"] = {
+            "path": ".codex-loop/STATUS.md",
+            "target_state_version": state["state_version"],
+            "target_digest": historical_digest,
+            "render_contract_version": "status-v3",
+        }
+        runtime.state_path.write_bytes(runtime._render_state(state))
+        runtime.status_path.write_bytes(historical_payload)
+        journal_path = (
+            runtime.projection_transactions_dir
+            / f"status-v{state['state_version']}.json"
+        )
+        journal_path.write_text(
+            json.dumps(
+                {
+                    "journal_version": 1,
+                    "status": "APPLIED",
+                    "target_state_version": state["state_version"],
+                    "target_digest": historical_digest,
+                    "render_contract_version": "status-v3",
+                    "projected_digest": historical_digest,
+                    "readback_digest": historical_digest,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        before_recover = persisted_snapshot(Path(self.temp.name))
+        recovered = runtime.recover()
+        self.assertTrue(recovered["ok"], recovered)
+        self.assertEqual(persisted_snapshot(Path(self.temp.name)), before_recover)
+
+        upgraded = self.request(
+            {
+                "type": "RECORD_STEERING",
+                "steering_id": "upgrade-status-v3",
+                "steering_type": "CORRECTION",
+                "normalized_digest": digest("upgrade status v3 projection"),
+                "identity_algorithm": "message-item-v1",
+                "message_item_id": "upgrade-status-v3-message",
+                "summary": "upgrade status v3 projection",
+                "classification_reason": "preserve exact historical bytes",
+            }
+        )
+        self.assertTrue(upgraded["ok"], upgraded)
+        current = runtime.read_state()
+        self.assertEqual(
+            current["status_projection_target"]["render_contract_version"],
+            "status-v4",
+        )
+        self.assertNotEqual(runtime.status_path.read_bytes(), historical_payload)
+
     def test_tampered_legacy_status_v1_projection_is_rejected_without_side_effects(self) -> None:
         initialized, _ = self.harness.initialize()
         self.assertTrue(initialized["ok"], initialized)

@@ -1939,7 +1939,13 @@ class AdaptiveStateRuntime:
                 state = self._read_state_locked(state_validator)
                 if state is not None:
                     self._ensure_projections_locked(state)
-                    self._write_status_projection_locked(state)
+                    target = state.get("status_projection_target")
+                    if not (
+                        isinstance(target, dict)
+                        and target.get("render_contract_version")
+                        == HISTORICAL_STATUS_RENDER_CONTRACT
+                    ):
+                        self._write_status_projection_locked(state)
                 self._cleanup_temps_locked()
             version = state["state_version"] if state is not None else 0
             return {
@@ -3297,15 +3303,66 @@ class AdaptiveStateRuntime:
             "projection_digest": _digest(self._roadmap_digest_payload(state)),
         }
 
+    @staticmethod
+    def _terminal_projection_context(
+        state: dict[str, Any],
+    ) -> tuple[dict[str, Any], str | None, int]:
+        terminal = state.get("terminal_status") is not None
+        receipt = state.get("finalization_receipt")
+        outbox = state.get("finalization_outbox")
+        record = (
+            receipt
+            if isinstance(receipt, dict)
+            else outbox
+            if isinstance(outbox, dict)
+            else {}
+        )
+        if not terminal:
+            return record, None, len(state.get("goal_queue", []))
+        if state.get("terminal_status") != "LOOP_BLOCKED":
+            return record, record.get("blocked_goal_id"), 0
+
+        blocked_goal_id = record.get("blocked_goal_id")
+        predecessor_queue: list[dict[str, Any]] = []
+        history = state.get("goal_queue_history", [])
+        if history and isinstance(history[-1], dict):
+            candidate = history[-1].get("goal_queue", [])
+            if isinstance(candidate, list):
+                predecessor_queue = [
+                    item for item in candidate if isinstance(item, dict)
+                ]
+        if blocked_goal_id is None:
+            predecessor_goal = next(
+                (
+                    item
+                    for item in predecessor_queue
+                    if item.get("status") == "READY"
+                ),
+                next(iter(predecessor_queue), None),
+            )
+            if predecessor_goal is not None:
+                blocked_goal_id = predecessor_goal.get("goal_id")
+        if predecessor_queue:
+            start = next(
+                (
+                    index
+                    for index, item in enumerate(predecessor_queue)
+                    if item.get("goal_id") == blocked_goal_id
+                ),
+                0,
+            )
+            return record, blocked_goal_id, len(predecessor_queue[start:])
+        remaining = sum(
+            1
+            for item in state.get("goal_execution_ledger", {}).values()
+            if item.get("status") not in {"COMPLETE", "RETIRED"}
+        )
+        return record, blocked_goal_id, remaining
+
     def _render_goals(self, state: dict[str, Any]) -> bytes:
         projection = state["roadmap_projection"]
-        terminal_record = state.get("finalization_receipt") or state.get(
-            "finalization_outbox"
-        ) or {}
-        unfinished_goal_count = sum(
-            1
-            for record in state["goal_execution_ledger"].values()
-            if record.get("status") != "COMPLETE"
+        _, blocked_goal_id, remaining_goal_count = self._terminal_projection_context(
+            state
         )
         lines = [
             "# Adaptive Loop Goals",
@@ -3315,8 +3372,8 @@ class AdaptiveStateRuntime:
             f"roadmap_sha256: {projection['projection_digest']}",
             f"generated_at: {state['logical_time']}",
             f"terminal_status: {_canonical_json(state['terminal_status'])}",
-            f"blocked_at_goal: {_canonical_json(terminal_record.get('blocked_goal_id'))}",
-            f"remaining_goal_count: {unfinished_goal_count if state['terminal_status'] else len(state['goal_queue'])}",
+            f"blocked_at_goal: {_canonical_json(blocked_goal_id)}",
+            f"remaining_goal_count: {remaining_goal_count}",
             "",
             "## Active Milestone",
             "",
@@ -3356,18 +3413,13 @@ class AdaptiveStateRuntime:
         if not state["dashboard_required"]:
             return None
         projection = state["roadmap_projection"]
-        terminal_record = state.get("finalization_receipt") or state.get(
-            "finalization_outbox"
-        ) or {}
+        terminal_record, blocked_goal_id, remaining_goal_count = (
+            self._terminal_projection_context(state)
+        )
         terminal_heartbeat = (
             terminal_record.get("automation_status")
             if state["terminal_status"] is not None
             else None
-        )
-        unfinished_goal_count = sum(
-            1
-            for record in state["goal_execution_ledger"].values()
-            if record.get("status") != "COMPLETE"
         )
         rows = "".join(
             "<tr>"
@@ -3420,8 +3472,8 @@ class AdaptiveStateRuntime:
 <div class="status"><p><strong>State version</strong><br>{state['state_version']}</p><p><strong>Roadmap version</strong><br>{state['roadmap_version']}</p><p><strong>Active milestone</strong><br>{html.escape(str(state['active_milestone_id']))}</p></div>
 <p><strong>Terminal status:</strong> {html.escape(str(state['terminal_status']))}</p>
 <p><strong>Terminal heartbeat:</strong> {html.escape(str(terminal_heartbeat or 'NOT_TERMINAL'))}</p>
-<p><strong>Blocked at Goal:</strong> {html.escape(str(terminal_record.get('blocked_goal_id') or 'NONE'))}</p>
-<p><strong>Remaining Goals:</strong> {unfinished_goal_count if state['terminal_status'] else len(state['goal_queue'])}</p>
+<p><strong>Blocked at Goal:</strong> {html.escape(str(blocked_goal_id or 'NONE'))}</p>
+<p><strong>Remaining Goals:</strong> {remaining_goal_count}</p>
 <table><thead><tr><th>Milestone</th><th>Status</th><th>Outcome</th><th>Decisions</th><th>Blockers</th><th>Required evidence</th></tr></thead><tbody>{rows}</tbody></table>
 <h2>Goal queue</h2><pre><code>{html.escape(_canonical_json(state['goal_queue'], indent=2))}</code></pre>
 <h2>Estimate history</h2><pre><code>{html.escape(_canonical_json(state['estimate_history'], indent=2))}</code></pre>
@@ -3681,33 +3733,8 @@ class AdaptiveStateRuntime:
         terminal = state["terminal_status"] is not None
         run_status = state["run_control"]["status"]
         finalization_receipt = state.get("finalization_receipt")
-        finalization_outbox = state.get("finalization_outbox")
-        terminal_record = (
-            finalization_receipt
-            if isinstance(finalization_receipt, dict)
-            else finalization_outbox
-            if isinstance(finalization_outbox, dict)
-            else {}
-        )
-        blocked_goal_id = terminal_record.get("blocked_goal_id")
-        if terminal and blocked_goal_id is None and state["goal_queue_history"]:
-            predecessor_queue = state["goal_queue_history"][-1].get(
-                "goal_queue", []
-            )
-            predecessor_goal = next(
-                (
-                    item
-                    for item in predecessor_queue
-                    if item.get("status") == "READY"
-                ),
-                next(iter(predecessor_queue), None),
-            )
-            if isinstance(predecessor_goal, dict):
-                blocked_goal_id = predecessor_goal.get("goal_id")
-        unfinished_goal_count = sum(
-            1
-            for record in state["goal_execution_ledger"].values()
-            if record.get("status") != "COMPLETE"
+        terminal_record, blocked_goal_id, remaining_goal_count = (
+            self._terminal_projection_context(state)
         )
         if terminal:
             human_status = "COMPLETE" if "COMPLETE" in state["terminal_status"] else "BLOCKED"
@@ -3894,7 +3921,7 @@ class AdaptiveStateRuntime:
             "",
             f"- Active Goal: `{active_goal_id_display}`",
             f"- Goal objective: `{active_goal_objective}`",
-            f"- Remaining Goals: `{unfinished_goal_count if terminal else len(state['goal_queue'])}`",
+            f"- Remaining Goals: `{remaining_goal_count}`",
             f"- Blocked at Goal: `{blocked_goal_id or 'NONE'}`",
             f"- Run control: `{'TERMINAL_BLOCKED' if terminal and state['terminal_status'] == 'LOOP_BLOCKED' else 'TERMINAL_COMPLETE' if terminal else run_status}`",
             f"- Lease: `{state['controller_lease']['claim']['lease_id'] if state['controller_lease'] else 'NONE'}`",
@@ -3933,6 +3960,17 @@ class AdaptiveStateRuntime:
         payload = self._render_status(state, contract_version=contract_version)
         if payload is None:
             return
+        projected_digest = _bytes_digest(payload)
+        if projected_digest != target["target_digest"]:
+            raise RuntimeRejection(
+                "STATUS_PROJECTION_RENDER_DIGEST_MISMATCH",
+                "/status_projection_target/target_digest",
+                {
+                    "target_digest": target["target_digest"],
+                    "projected_digest": projected_digest,
+                    "render_contract_version": contract_version,
+                },
+            )
         journal_path = self.projection_transactions_dir / (
             f"status-v{state['state_version']}.json"
         )
@@ -3942,7 +3980,7 @@ class AdaptiveStateRuntime:
             "target_state_version": state["state_version"],
             "target_digest": target["target_digest"],
             "render_contract_version": contract_version,
-            "projected_digest": _bytes_digest(payload),
+            "projected_digest": projected_digest,
         }
         self._atomic_replace_bytes(
             journal_path,
@@ -5739,6 +5777,17 @@ class AdaptiveStateRuntime:
         )
 
     def _ensure_projections_locked(self, state: dict[str, Any]) -> None:
+        target = state.get("status_projection_target")
+        if (
+            isinstance(target, dict)
+            and target.get("render_contract_version")
+            == HISTORICAL_STATUS_RENDER_CONTRACT
+        ):
+            if not self.goals_path.is_file():
+                raise RuntimeRejection("RECOVERY_REQUIRED", "/GOALS.md")
+            if state.get("dashboard_required") and not self.dashboard_path.is_file():
+                raise RuntimeRejection("RECOVERY_REQUIRED", "/dashboard")
+            return
         expected = self._render_goals(state)
         if not self.goals_path.exists() or self.goals_path.read_bytes() != expected:
             self._write_goals_locked(state, "projection-recovery")
@@ -5957,17 +6006,29 @@ class AdaptiveStateRuntime:
     ) -> bool:
         if state is None:
             return False
-        if (
-            not self.goals_path.exists()
-            or self.goals_path.read_bytes() != self._render_goals(state)
-        ):
-            return True
         target = state.get("status_projection_target")
         contract_version = (
             target.get("render_contract_version")
             if isinstance(target, dict)
             else CURRENT_STATUS_RENDER_CONTRACT
         )
+        if contract_version == HISTORICAL_STATUS_RENDER_CONTRACT:
+            if not self.goals_path.is_file() or not self.status_path.is_file():
+                return True
+            status = self.status_path.read_bytes()
+            if not isinstance(target, dict) or _bytes_digest(status) != target.get(
+                "target_digest"
+            ):
+                return True
+            if self._status_projection_journal_needs_recovery_locked(state, status):
+                return True
+            dashboard_required = bool(state.get("dashboard_required"))
+            return dashboard_required != self.dashboard_path.is_file()
+        if (
+            not self.goals_path.exists()
+            or self.goals_path.read_bytes() != self._render_goals(state)
+        ):
+            return True
         status = self._render_status(state, contract_version=contract_version)
         if status is None:
             if self.status_path.exists():
