@@ -4,6 +4,158 @@ from state_runtime_support import *  # noqa: F403
 
 
 class AdaptiveStateRuntimeRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
+    def test_schema_v3_gateway_send_artifact_crash_recovers_without_duplicate_route(self) -> None:
+        """Gateway-owned App-observation artifacts share the transaction journal."""
+
+        for stage in ARTIFACT_STAGES:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = Harness(root)
+                initialized, _ = harness.initialize(
+                    state_gateway=True,
+                    dashboard_required=True,
+                    bootstrap_threads=[{
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),
+                        "worktree_path": str(root.resolve()),
+                    }],
+                )
+                self.assertTrue(initialized["ok"], initialized)
+                prepare = harness.make_request({
+                    "type": "STATE_GATEWAY",
+                    "operation": "PREPARE_ROUTE",
+                    "gateway_request": {
+                        "route_id": "gateway-artifact-route",
+                        "goal_id": "g1",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T1,
+                    },
+                }, request_id="gateway-artifact-prepare", event_id="gateway-artifact-prepare-event")
+                prepare_metadata = trusted_metadata_for_request(prepare, turn_id="gateway-artifact-prepare-turn")
+                prepared = harness.runtime.apply(prepare, trusted_turn_metadata=prepare_metadata)
+                self.assertTrue(prepared["ok"], prepared)
+                route = harness.state()["gateway_route_ledger"]["gateway-artifact-route"]
+                observation = {
+                    "observation_kind": "APP_SEND_OBSERVATION",
+                    "outbox_id": "gateway-artifact-route",
+                    "payload_digest": route["payload_digest"],
+                    "target_thread_id": "worker-1",
+                    "message_id": "gateway-artifact-message",
+                    "observed_at": T2,
+                    "source_thread_id": "controller-1",
+                    "source_turn_id": "gateway-artifact-send-turn",
+                }
+                content = json.dumps(observation, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+                evidence_path = ".codex-loop/reports/gateway-artifact-route-send.json"
+                send = harness.make_request({
+                    "type": "STATE_GATEWAY",
+                    "operation": "RECORD_ROUTE_SENT",
+                    "gateway_request": {
+                        "route_id": "gateway-artifact-route",
+                        "send_observation": {
+                            "message_id": observation["message_id"],
+                            "target_thread_id": observation["target_thread_id"],
+                            "payload_digest": observation["payload_digest"],
+                            "observed_at": observation["observed_at"],
+                            "source_thread_id": observation["source_thread_id"],
+                            "source_turn_id": observation["source_turn_id"],
+                            "evidence_path": evidence_path,
+                            "evidence_digest": digest(content),
+                        },
+                    },
+                }, request_id="gateway-artifact-send", event_id="gateway-artifact-send-event", evidence_paths=[evidence_path], artifacts=[{
+                    "path": evidence_path,
+                    "content": content,
+                    "digest": digest(content),
+                    "media_type": "application/json",
+                }])
+                send_metadata = trusted_metadata_for_request(send, turn_id="gateway-artifact-send-turn")
+                crashing = AdaptiveStateRuntime(root, crash_at=stage)
+                with self.assertRaises(InjectedCrash):
+                    crashing.apply(send, trusted_turn_metadata=send_metadata)
+                recovered = AdaptiveStateRuntime(root)
+                recovery = recovered.recover()
+                self.assertTrue(recovery["ok"], recovery)
+                current = recovered.read_state()
+                assert current is not None
+                if current["gateway_route_ledger"]["gateway-artifact-route"]["status"] != "SENT":
+                    replay = recovered.apply(send, trusted_turn_metadata=send_metadata)
+                    self.assertTrue(replay["ok"], replay)
+                    current = recovered.read_state()
+                    assert current is not None
+                self.assertEqual(current["gateway_route_ledger"]["gateway-artifact-route"]["status"], "SENT")
+                self.assertEqual(current["dispatch_outbox"]["gateway-artifact-route"]["status"], "SENT")
+                self.assertEqual(
+                    (root / evidence_path).read_text(encoding="utf-8"), content
+                )
+
+    def test_schema_v3_gateway_route_crash_recovers_all_canonical_and_metrics_writes(self) -> None:
+        """Every persistent v3 route-write boundary recovers one route exactly.
+
+        The route includes the schema-v3 ledger/outbox/derived metrics path,
+        rather than reusing the legacy State-Writer initialization fixture.
+        """
+
+        for stage in (*PERSISTENT_STAGES, *state_runtime_module.METRICS_STAGES):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = Harness(root)
+                initialized, _ = harness.initialize(
+                    state_gateway=True,
+                    dashboard_required=True,
+                    bootstrap_threads=[{
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),
+                        "worktree_path": str(root.resolve()),
+                    }],
+                )
+                self.assertTrue(initialized["ok"], initialized)
+                request = harness.make_request({
+                    "type": "STATE_GATEWAY",
+                    "operation": "PREPARE_ROUTE",
+                    "gateway_request": {
+                        "route_id": "gateway-crash-route",
+                        "goal_id": "g1",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T1,
+                    },
+                }, request_id="gateway-crash-request", event_id="gateway-crash-event")
+                metadata = trusted_metadata_for_request(request, turn_id="gateway-crash-turn")
+                crashing = AdaptiveStateRuntime(root, crash_at=stage)
+                with self.assertRaises(InjectedCrash):
+                    crashing.apply(request, trusted_turn_metadata=metadata)
+                recovered = AdaptiveStateRuntime(root)
+                recovery = recovered.recover()
+                self.assertTrue(recovery["ok"], recovery)
+                current = recovered.read_state()
+                assert current is not None
+                if "gateway-crash-route" not in current["gateway_route_ledger"]:
+                    replay = recovered.apply(request, trusted_turn_metadata=metadata)
+                    self.assertTrue(replay["ok"], replay)
+                    current = recovered.read_state()
+                    assert current is not None
+                self.assertEqual(
+                    current["gateway_route_ledger"]["gateway-crash-route"]["status"],
+                    "PREPARED",
+                )
+                self.assertEqual(
+                    current["dispatch_outbox"]["gateway-crash-route"]["status"],
+                    "PREPARED",
+                )
+                self.assertTrue((root / ".codex-loop" / "LOOP_METRICS.json").is_file())
+                journal = json.loads(
+                    (root / ".codex-loop" / "transactions" / "gateway-crash-request.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(journal["status"], "APPLIED")
+
     def test_crash_injection_every_persistent_stage_recovers_once(self) -> None:
         for stage in PERSISTENT_STAGES:
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:

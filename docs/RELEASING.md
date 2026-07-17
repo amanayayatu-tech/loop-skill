@@ -23,6 +23,61 @@ Keep these claims separate:
 The repository can mitigate and fail closed around app-server behavior. It
 does not claim to repair app-server process reaping or metadata delivery.
 
+## v3 State Gateway release additions
+
+For a v3.3+ candidate, the normal evidence layers remain mandatory and the
+following checks are additional, not substitutes:
+
+0. Before any runnable App canary, the exact App/app-server build must inject
+   a non-argument, Gateway-verifiable action-result receipt for completed
+   `create_thread`/task readback (`THREAD_CREATE_OR_READ`), automation
+   create/readback (`AUTOMATION_OBSERVATION`), `send_message_to_thread`
+   (`SEND_MESSAGE_TO_THREAD`), transport failure/natural-heartbeat observation
+   (`APP_TRANSPORT_OBSERVATION`), and automation pause (`AUTOMATION_UPDATE`). A
+   host-attested MCP turn,
+   transcript, Controller JSON field, or manual observation is not that
+   receipt. If this capability is absent, record
+   `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE` with zero side effects and stop:
+   there is no v3 canary PASS, Release, tag, or successor authorization.
+1. A fresh v3 Pack must initialize through `state_gateway` and must not create
+   a session State-Writer task. Schema v1/v2 compatibility and explicit
+   `MIGRATE_V2_TO_V3` need separate regression evidence.
+2. The real App canary must exercise bootstrap-only `REGISTER_TASK` with a
+   `THREAD_CREATE_OR_READ` receipt, `REGISTER_HEARTBEAT` and
+   `RECORD_HEARTBEAT_OBSERVATION` with `AUTOMATION_OBSERVATION`,
+   `PREPARE_ROUTE`, one real App send with `SEND_MESSAGE_TO_THREAD`,
+   `RECORD_ROUTE_SENT`, role-owned `runtime_codec` materialize/verify/stage,
+   and `ACK_ROUTE_RESULT` on the same exact SHA. It must prove that a staged
+   report with lost stdout/index uses `REPORT_RECOVERY` on the original outbox
+   without another product dispatch.
+   The App send result must include its exact materialized `payload_digest`,
+   and the Gateway must reject a deliberately mismatched digest without moving
+   the PREPARED outbox to `SENT`.
+3. The canary must reject a BLOCKED/stale-artifact/stale-dispatch report from a
+   PASS projection, capture and reverse-check a binary complete diff when the
+   fixture contains one, stage a Worker PASS with its digest-only
+   `CAPTURED_GIT_DIFF_V1` reference, and emit derived `LOOP_METRICS.json`
+   without treating it as canonical.
+4. It must record one App-attested matching transport failure, then the bounded
+   two-natural-heartbeat or fifteen-minute transition to
+   `WAITING_TRANSPORT_RECOVERY`, an App-attested pause receipt before projecting
+   a paused business heartbeat, and one user notification requirement. Never manufacture repeated samples merely to
+   reach the threshold.
+5. A nonfinal ROADMAP_AUDIT PASS must prove `ADVANCE_ROADMAP` derives the next
+   existing Goal without a Controller-copied queue or matrix. Finalization must
+   use `PREPARE_FINALIZATION` and a real paused-heartbeat `ACK_FINALIZATION`.
+   The PREPARED intermediate state must keep `terminal_status=null` and render
+   `WAITING_FINALIZATION_ACK`; only the receipt-bound ACK may become terminal,
+   recording the local `GATEWAY_NO_NATIVE_GOAL` sentinel rather than claiming a
+   synthetic external Goal outcome.
+6. A disposable terminal predecessor must remain byte-identical while a fresh
+   root is initialized by `INITIALIZE_SUCCESSOR`; only the successor may route
+   further. The canary itself reaches `FINALIZATION_ACKED`.
+
+The v3 canary is still disposable. It never authorizes reviving an incident
+loop, modifying a predecessor `.codex-loop/**`, or treating an outer
+Supervisor as a routing dependency.
+
 ## Candidate sequence
 
 1. Update `VERSION`, `CHANGELOG.md`, both READMEs and intentionally changed

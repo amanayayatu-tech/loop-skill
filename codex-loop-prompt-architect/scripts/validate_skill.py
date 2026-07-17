@@ -356,6 +356,38 @@ def validate(skill_dir: Path) -> list[str]:
             "LF_NORMALIZED_NO_TRAILING_NEWLINE",
             "excluding the LF adjacent to each delimiter",
         )
+        if adaptive_payload.get("state_gateway_mode", "MCP_CANONICAL_WRITER") == "MCP_CANONICAL_WRITER":
+            adaptive_markers = (
+                "Adaptive v3 Controller Routing Protocol",
+                "Adaptive v3 MCP State Gateway Protocol",
+                "state_gateway({root, request})",
+                "INITIALIZE",
+                "REGISTER_TASK",
+                "REGISTER_HEARTBEAT",
+                "RECORD_HEARTBEAT_OBSERVATION",
+                "PREPARE_ROUTE",
+                "RECORD_ROUTE_SENT",
+                "ACK_ROUTE_RESULT",
+                "REPORT_RECOVERY",
+                "INITIALIZE_SUCCESSOR",
+                "MIGRATE_V2_TO_V3",
+                "MATERIALIZE_DISPATCH",
+                "VERIFY_DISPATCH",
+                "STAGE_REPORT",
+                "CAPTURE_COMPLETE_DIFF",
+                "RUNTIME_CODEC_TOOL_UNAVAILABLE",
+                "current Goal artifact, current Worker dispatch, and a PASS formal report",
+                "WAITING_TRANSPORT_RECOVERY",
+                "LOOP_METRICS.json",
+                "ADVANCE_ROADMAP",
+                "PREPARE_FINALIZATION",
+                "ACK_FINALIZATION",
+                "FINALIZATION_ACKED",
+                "GATEWAY_NO_NATIVE_GOAL",
+                "Worker Prompt - local-verifier",
+                "Native Controller Goal Generation Recovery: DEFERRED/UNAVAILABLE",
+                "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
+            )
         if adaptive_result.returncode or any(marker not in adaptive_result.stdout for marker in adaptive_markers):
             errors.append("scaffold Adaptive Mode smoke did not produce all required protocol markers")
         try:

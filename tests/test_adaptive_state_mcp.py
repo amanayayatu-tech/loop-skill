@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from state_runtime_support import *  # noqa: F403
 
@@ -27,6 +28,161 @@ def synthetic_host_attestation() -> TrustedHostAttestation:  # noqa: F405
         parent_team_id=OPENAI_CODE_SIGN_TEAM_ID,  # noqa: F405
         parent_cdhash="b" * 64,
     )
+
+
+def call_state_gateway(
+    server: mcp.AdaptiveStateMcpServer,
+    root: Path,
+    request: dict[str, object],
+) -> dict[str, object]:
+    request = copy.deepcopy(request)
+    meta = McpHarness.metadata()
+
+    def attach_app_result(action: str, result: dict[str, object]) -> None:
+        # This is a synthetic stand-in for a future App-owned top-level receipt
+        # injection.  Production App calls without this reserved metadata must
+        # fail closed; no request argument can substitute for it.
+        meta[mcp.MCP_APP_ACTION_RECEIPT_META_KEY] = {
+            "schema_version": 1,
+            "action": action,
+            "source_thread_id": "controller-1",
+            "source_turn_id": "real-app-turn-1",
+            "result": result,
+        }
+
+    # Keep route fixtures readable while ensuring the result comes from the
+    # synthetic App metadata carrier, not the public Gateway arguments.
+    if request.get("operation") == "RECORD_ROUTE_SENT":
+        parameters = request.get("parameters")
+        if isinstance(parameters, dict) and set(parameters) == {
+            "route_id", "message_id", "target_thread_id", "observed_at"
+        }:
+            state = AdaptiveStateRuntime(root).read_state()  # noqa: F405
+            route = (
+                state.get("gateway_route_ledger", {}).get(parameters["route_id"], {})
+                if isinstance(state, dict)
+                else {}
+            )
+            outbox_field = {
+                "DISPATCH": "dispatch_outbox",
+                "ASSURANCE": "assurance_dispatch_outbox",
+                "LOCAL": "local_verification_outbox",
+            }.get(route.get("outbox_kind"))
+            outbox = (
+                state.get(outbox_field, {}).get(parameters["route_id"], {})
+                if isinstance(state, dict) and outbox_field is not None
+                else {}
+            )
+            request["parameters"] = {"route_id": parameters["route_id"]}
+            attach_app_result("SEND_MESSAGE_TO_THREAD", {
+                "message_id": parameters["message_id"],
+                "target_thread_id": parameters["target_thread_id"],
+                "observed_at": parameters["observed_at"],
+                "payload_digest": outbox.get("payload_digest"),
+            })
+    if request.get("operation") == "REGISTER_TASK":
+        parameters = request.get("parameters")
+        if isinstance(parameters, dict) and set(parameters) == {
+            "thread_id", "role_kind", "bootstrap_role_kind",
+            "bootstrap_prompt_digest", "worktree_path",
+        }:
+            request["parameters"] = {}
+            attach_app_result("THREAD_CREATE_OR_READ", parameters)
+    if request.get("operation") == "REGISTER_HEARTBEAT":
+        parameters = request.get("parameters")
+        if isinstance(parameters, dict) and set(parameters) == {
+            "automation_id", "automation_name", "rrule", "prompt_digest",
+            "status", "observed_at",
+        }:
+            request["parameters"] = {}
+            attach_app_result("AUTOMATION_OBSERVATION", {
+                "automation_id": parameters["automation_id"],
+                "status": parameters["status"],
+                "automation_name": parameters["automation_name"],
+                "kind": "HEARTBEAT",
+                "target_thread_id": "controller-1",
+                "rrule": parameters["rrule"],
+                "prompt_digest": parameters["prompt_digest"],
+                "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+                "observed_at": parameters["observed_at"],
+            })
+    if request.get("operation") == "RECORD_HEARTBEAT_OBSERVATION":
+        parameters = request.get("parameters")
+        if isinstance(parameters, dict) and set(parameters) == {
+            "automation_id", "status", "observed_at",
+        }:
+            state = AdaptiveStateRuntime(root).read_state()  # noqa: F405
+            identity = state.get("heartbeat_prompt_identity") if isinstance(state, dict) else None
+            if isinstance(identity, dict):
+                request["parameters"] = {}
+                attach_app_result("AUTOMATION_OBSERVATION", {
+                    **copy.deepcopy(identity),
+                    "automation_id": parameters["automation_id"],
+                    "status": parameters["status"],
+                    "observed_at": parameters["observed_at"],
+                })
+    if request.get("operation") == "RECORD_TRANSPORT_OBSERVATION":
+        parameters = request.get("parameters")
+        if isinstance(parameters, dict) and set(parameters) == {
+            "fingerprint", "outbox_id", "observed_at", "natural_heartbeat",
+        }:
+            request["parameters"] = {}
+            attach_app_result("APP_TRANSPORT_OBSERVATION", {
+                **copy.deepcopy(parameters),
+                "heartbeat_automation_id": (
+                    "transport-heartbeat-1" if parameters["natural_heartbeat"] else None
+                ),
+            })
+    if request.get("operation") in {"ACK_TRANSPORT_PAUSE", "ACK_FINALIZATION"}:
+        parameters = request.get("parameters")
+        if isinstance(parameters, dict) and isinstance(parameters.get("paused_automation_receipt"), dict):
+            receipt = copy.deepcopy(parameters["paused_automation_receipt"])
+            receipt.pop("source_turn_id", None)
+            attach_app_result("AUTOMATION_UPDATE", receipt)
+            request["parameters"] = (
+                {"finalization_id": parameters["finalization_id"]}
+                if request["operation"] == "ACK_FINALIZATION"
+                else {}
+            )
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": f"gateway-{request['request_id']}",
+            "method": "tools/call",
+            "params": {
+                "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                "_meta": meta,
+                "arguments": {"root": str(root), "request": request},
+            },
+        }
+    )
+    if response is None:
+        raise AssertionError("missing MCP response")
+    return response["result"]["structuredContent"]
+
+
+def call_runtime_codec(
+    server: mcp.AdaptiveStateMcpServer,
+    arguments: dict[str, object],
+    *,
+    thread_id: str = "controller-1",
+    turn_id: str = "real-app-turn-1",
+) -> dict[str, object]:
+    response = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": "codec-role-bound",
+            "method": "tools/call",
+            "params": {
+                "name": mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                "_meta": McpHarness.metadata(thread_id=thread_id, turn_id=turn_id),
+                "arguments": arguments,
+            },
+        }
+    )
+    if response is None:
+        raise AssertionError("missing MCP response")
+    return response["result"]["structuredContent"]
 
 
 class McpHarness:
@@ -53,12 +209,13 @@ class McpHarness:
         *,
         turn_id: str = "real-app-turn-1",
         session_id: str = "controller-1",
+        thread_id: str = "controller-1",
     ) -> dict[str, object]:
         return {
-            "threadId": "controller-1",
+            "threadId": thread_id,
             "x-codex-turn-metadata": {
                 "session_id": session_id,
-                "thread_id": "controller-1",
+                "thread_id": thread_id,
                 "turn_id": turn_id,
             },
         }
@@ -115,7 +272,12 @@ class McpHarness:
             raise AssertionError("missing MCP response")
         return response["result"]["structuredContent"]
 
-    def codec_call(self, arguments: dict[str, object]) -> dict[str, object]:
+    def codec_call(
+        self,
+        arguments: dict[str, object],
+        *,
+        meta: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         response = self.server.handle(
             {
                 "jsonrpc": "2.0",
@@ -123,6 +285,7 @@ class McpHarness:
                 "method": "tools/call",
                 "params": {
                     "name": mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                    "_meta": self.metadata() if meta is None else meta,
                     "arguments": arguments,
                 },
             }
@@ -161,7 +324,1613 @@ class AdaptiveStateMcpTests(unittest.TestCase):
         self.assertNotIn("recovery-scoped lease acquisition", tool["description"])
         codec = listed["result"]["tools"][1]
         self.assertEqual(codec["name"], mcp.MCP_RUNTIME_CODEC_TOOL_NAME)
-        self.assertEqual(len(codec["inputSchema"]["oneOf"]), 5)
+        self.assertEqual(len(codec["inputSchema"]["oneOf"]), 6)
+        gateway = listed["result"]["tools"][2]
+        self.assertEqual(gateway["name"], mcp.MCP_STATE_GATEWAY_TOOL_NAME)
+        self.assertEqual(gateway["inputSchema"]["required"], ["root", "request"])
+        self.assertIn("canonical writer", gateway["description"])
+
+    def test_state_gateway_requires_host_turn_metadata_before_state_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = McpHarness(Path(temporary))
+            before = harness.state.state()
+            response = harness.server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "gateway-no-meta",
+                    "method": "tools/call",
+                    "params": {
+                        "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                        "arguments": {
+                            "root": str(harness.root),
+                            "request": {
+                                "request_id": "gateway-no-meta",
+                                "operation": "PREPARE_ROUTE",
+                                "occurred_at": T1,
+                                "parameters": {
+                                    "route_id": "gateway-route-1",
+                                    "goal_id": "g1",
+                                    "route_kind": "WORKER",
+                                    "target_thread_id": "worker-1",
+                                    "observed_at": T1,
+                                },
+                            },
+                        },
+                    },
+                }
+            )
+            self.assertIsNotNone(response)
+            payload = response["result"]["structuredContent"]
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["status"], "BLOCKED_BY_APP_ATTESTATION")
+            self.assertEqual(harness.state.state(), before)
+
+    def test_state_gateway_initializes_a_fresh_v3_loop_without_a_state_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "CONTROLLER_PACK.md"
+            source_content = "# Gateway initialization fixture\n"
+            source.write_text(source_content, encoding="utf-8")
+            source_digest = digest(source_content)  # noqa: F405
+            template = Harness(root / "template")  # noqa: F405
+            _, template_request = template.initialize(state_gateway=True)
+            initialize_mutation = copy.deepcopy(template_request["mutation"])
+            initialize_mutation["controller_pack_digest"] = source_digest
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            initialized = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-initialize",
+                    "operation": "INITIALIZE",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "initialize_mutation": initialize_mutation,
+                        "controller_pack_source_path": str(source),
+                    },
+                },
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            self.assertEqual(initialized["operation_status"], "GATEWAY_LOOP_INITIALIZED")
+            current = AdaptiveStateRuntime(root).read_state()  # noqa: F405
+            self.assertEqual(current["schema_version"], 3)
+            self.assertEqual(current["state_gateway_mode"], "MCP_CANONICAL_WRITER")
+            self.assertNotIn("state-writer-1", current["thread_registry"])
+
+    def test_state_gateway_registers_only_attested_tasks_and_one_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(state_gateway=True)
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            before_unattested = copy.deepcopy(state.state())
+            for operation in (
+                "REGISTER_TASK",
+                "REGISTER_HEARTBEAT",
+                "RECORD_HEARTBEAT_OBSERVATION",
+            ):
+                response = server.handle(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": f"gateway-{operation.lower()}-missing-receipt",
+                        "method": "tools/call",
+                        "params": {
+                            "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                            "_meta": McpHarness.metadata(),
+                            "arguments": {
+                                "root": str(root),
+                                "request": {
+                                    "request_id": f"gateway-{operation.lower()}-missing-receipt",
+                                    "operation": operation,
+                                    "occurred_at": T1,  # noqa: F405
+                                    "parameters": {},
+                                },
+                            },
+                        },
+                    }
+                )
+                self.assertIsNotNone(response)
+                payload = response["result"]["structuredContent"]
+                self.assertFalse(payload["ok"], payload)
+                self.assertEqual(
+                    payload["status"], "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE"
+                )
+                self.assertEqual(state.state(), before_unattested)
+            registered = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-register-reviewer",
+                    "operation": "REGISTER_TASK",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "thread_id": "reviewer-1",
+                        "role_kind": "REVIEWER",
+                        "bootstrap_role_kind": "code_reviewer",
+                        "bootstrap_prompt_digest": digest("reviewer-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    },
+                },
+            )
+            self.assertTrue(registered["ok"], registered)
+            heartbeat = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-register-heartbeat",
+                    "operation": "REGISTER_HEARTBEAT",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "automation_id": "heartbeat-1",
+                        "automation_name": "test gateway heartbeat",
+                        "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                        "prompt_digest": digest("heartbeat-prompt"),  # noqa: F405
+                        "status": "ACTIVE",
+                        "observed_at": T2,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(heartbeat["ok"], heartbeat)
+            current = state.state()
+            self.assertEqual(current["thread_registry"]["reviewer-1"]["role_kind"], "REVIEWER")
+            self.assertEqual(current["heartbeat_live_observation"]["status"], "ACTIVE")
+            self.assertTrue(current["heartbeat_routing_gate_enforced"])
+            duplicate = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-register-heartbeat-again",
+                    "operation": "REGISTER_HEARTBEAT",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "automation_id": "heartbeat-2",
+                        "automation_name": "test gateway heartbeat",
+                        "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                        "prompt_digest": digest("heartbeat-prompt"),  # noqa: F405
+                        "status": "ACTIVE",
+                        "observed_at": T3,  # noqa: F405
+                    },
+                },
+            )
+            self.assertFalse(duplicate["ok"], duplicate)
+            self.assertEqual(duplicate["status"], "BUSINESS_HEARTBEAT_ALREADY_REGISTERED")
+
+    def test_state_gateway_prepares_worker_route_from_schema_v3_canonical_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(
+                state_gateway=True,
+                bootstrap_threads=[
+                    {
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    }
+                ],
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            response = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "gateway-prepare",
+                    "method": "tools/call",
+                    "params": {
+                        "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                        "_meta": McpHarness.metadata(),
+                        "arguments": {
+                            "root": str(root),
+                            "request": {
+                                "request_id": "gateway-prepare-1",
+                                "operation": "PREPARE_ROUTE",
+                                "occurred_at": T1,  # noqa: F405
+                                "parameters": {
+                                    "route_id": "gateway-dispatch-1",
+                                    "goal_id": "g1",
+                                    "route_kind": "WORKER",
+                                    "target_thread_id": "worker-1",
+                                    "observed_at": T1,  # noqa: F405
+                                },
+                            },
+                        },
+                    },
+                }
+            )
+            self.assertIsNotNone(response)
+            payload = response["result"]["structuredContent"]
+            self.assertTrue(payload["ok"], payload)
+            self.assertEqual(payload["operation_status"], "GATEWAY_ROUTE_PREPARED")
+            current = state.state()
+            outbox = current["dispatch_outbox"]["gateway-dispatch-1"]
+            self.assertEqual(outbox["status"], "PREPARED")
+            self.assertEqual(
+                current["gateway_route_ledger"]["gateway-dispatch-1"]["status"],
+                "PREPARED",
+            )
+            specification = payload["result"]["payload_specification"]
+            materialized = mcp.execute_runtime_codec("MATERIALIZE_DISPATCH", request=specification)
+            self.assertTrue(materialized["ok"], materialized)
+            self.assertEqual(materialized["payload_digest"], outbox["payload_digest"])
+
+            # Current Codex does not inject a signed completed-send receipt.
+            # A caller's route id alone must not turn the outbox into SENT.
+            before_missing_receipt = copy.deepcopy(state.state())
+            missing_receipt = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "gateway-send-missing-receipt",
+                    "method": "tools/call",
+                    "params": {
+                        "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                        "_meta": McpHarness.metadata(),
+                        "arguments": {
+                            "root": str(root),
+                            "request": {
+                                "request_id": "gateway-send-missing-receipt",
+                                "operation": "RECORD_ROUTE_SENT",
+                                "occurred_at": T2,  # noqa: F405
+                                "parameters": {"route_id": "gateway-dispatch-1"},
+                            },
+                        },
+                    },
+                }
+            )
+            self.assertIsNotNone(missing_receipt)
+            missing_payload = missing_receipt["result"]["structuredContent"]
+            self.assertFalse(missing_payload["ok"], missing_payload)
+            self.assertEqual(
+                missing_payload["status"], "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE"
+            )
+            self.assertEqual(state.state(), before_missing_receipt)
+            controller_supplied_receipt = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "gateway-send-controller-receipt",
+                    "method": "tools/call",
+                    "params": {
+                        "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                        "_meta": McpHarness.metadata(),
+                        "arguments": {
+                            "root": str(root),
+                            "request": {
+                                "request_id": "gateway-send-controller-receipt",
+                                "operation": "RECORD_ROUTE_SENT",
+                                "occurred_at": T2,  # noqa: F405
+                                "parameters": {
+                                    "route_id": "gateway-dispatch-1",
+                                    "app_send_receipt": {"message_id": "forged"},
+                                },
+                            },
+                        },
+                    },
+                }
+            )
+            self.assertIsNotNone(controller_supplied_receipt)
+            supplied_payload = controller_supplied_receipt["result"]["structuredContent"]
+            self.assertFalse(supplied_payload["ok"], supplied_payload)
+            self.assertEqual(supplied_payload["status"], "STATE_GATEWAY_REQUEST_INVALID")
+            self.assertEqual(state.state(), before_missing_receipt)
+
+            # A real send receipt must bind the bytes that the App actually
+            # materialized, not merely prove a message id and target.  A
+            # receipt for another payload must leave the PREPARED route intact.
+            wrong_payload_meta = McpHarness.metadata()
+            wrong_payload_meta[mcp.MCP_APP_ACTION_RECEIPT_META_KEY] = {
+                "schema_version": 1,
+                "action": "SEND_MESSAGE_TO_THREAD",
+                "source_thread_id": "controller-1",
+                "source_turn_id": "real-app-turn-1",
+                "result": {
+                    "message_id": "app-message-wrong-payload",
+                    "target_thread_id": "worker-1",
+                    "observed_at": T2,  # noqa: F405
+                    "payload_digest": digest("wrong-materialized-payload"),  # noqa: F405
+                },
+            }
+            wrong_payload_receipt = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "gateway-send-wrong-payload",
+                    "method": "tools/call",
+                    "params": {
+                        "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                        "_meta": wrong_payload_meta,
+                        "arguments": {
+                            "root": str(root),
+                            "request": {
+                                "request_id": "gateway-send-wrong-payload",
+                                "operation": "RECORD_ROUTE_SENT",
+                                "occurred_at": T2,  # noqa: F405
+                                "parameters": {"route_id": "gateway-dispatch-1"},
+                            },
+                        },
+                    },
+                }
+            )
+            self.assertIsNotNone(wrong_payload_receipt)
+            wrong_payload = wrong_payload_receipt["result"]["structuredContent"]
+            self.assertFalse(wrong_payload["ok"], wrong_payload)
+            self.assertEqual(
+                wrong_payload["status"], "APP_SEND_RECEIPT_PAYLOAD_MISMATCH"
+            )
+            self.assertEqual(state.state(), before_missing_receipt)
+
+            sent = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-send-1",
+                    "operation": "RECORD_ROUTE_SENT",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "route_id": "gateway-dispatch-1",
+                        "message_id": "app-message-1",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T2,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(sent["ok"], sent)
+            self.assertEqual(sent["operation_status"], "GATEWAY_ROUTE_SENT")
+            verified = mcp.execute_runtime_codec(
+                "VERIFY_DISPATCH",
+                root=str(root),
+                transport_text=materialized["transport_text"],
+            )
+            self.assertTrue(verified["ok"], verified)
+            self.assertEqual(verified["status"], "PAYLOAD_VERIFIED")
+
+            report_result = {
+                "status": "BLOCKED",
+                "artifact_digest": digest("gateway-blocked-artifact"),  # noqa: F405
+                "execution_started": False,
+                "blocker_code": "PAYLOAD_VERIFY_FAILED",
+            }
+            report_text = state.formal_report_content(
+                "DISPATCH", "gateway-dispatch-1", report_result
+            )
+            # A Controller owns the route transaction but is not the target
+            # Worker.  It cannot stage a self-authored report for that route.
+            forged = call_runtime_codec(
+                server,
+                {
+                    "operation": "STAGE_REPORT",
+                    "root": str(root),
+                    "request": {
+                        "outbox_id": "gateway-dispatch-1",
+                        "result": report_result,
+                        "report_text": report_text,
+                    },
+                },
+                thread_id="controller-1",
+            )
+            self.assertFalse(forged["ok"], forged)
+            self.assertEqual(
+                forged["status"], "CODEC_REPORT_TARGET_ATTESTATION_MISMATCH"
+            )
+            staging_dir = root / ".codex-loop" / "report-staging"
+            self.assertFalse(staging_dir.exists() and any(staging_dir.iterdir()))
+            staged = call_runtime_codec(
+                server,
+                {
+                    "operation": "STAGE_REPORT",
+                    "root": str(root),
+                    "request": {
+                    "outbox_id": "gateway-dispatch-1",
+                    "result": report_result,
+                    "report_text": report_text,
+                },
+                },
+                thread_id="worker-1",
+            )
+            self.assertTrue(staged["ok"], staged)
+            acked = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-ack-1",
+                    "operation": "ACK_ROUTE_RESULT",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "route_id": "gateway-dispatch-1",
+                        "staged_report": {
+                            **staged["artifact"],
+                            "result": staged["result"],
+                        },
+                    },
+                },
+            )
+            self.assertTrue(acked["ok"], acked)
+            self.assertEqual(acked["operation_status"], "GATEWAY_ROUTE_ACKED")
+            completed = state.state()
+            self.assertEqual(
+                completed["dispatch_outbox"]["gateway-dispatch-1"]["status"],
+                "COMPLETED",
+            )
+            self.assertEqual(
+                completed["gateway_route_ledger"]["gateway-dispatch-1"]["status"],
+                "ACKED",
+            )
+            self.assertNotIn("g1", completed["validation_results"])
+
+    def test_state_gateway_completes_finalization_without_a_native_goal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(
+                state_gateway=True,
+                dashboard_required=True,
+                bootstrap_threads=[
+                    {
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    },
+                    {
+                        "thread_id": "reviewer-1",
+                        "role_kind": "REVIEWER",
+                        "bootstrap_role_kind": "code_reviewer",
+                        "bootstrap_prompt_digest": digest("reviewer-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    },
+                ],
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            heartbeat = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "final-heartbeat",
+                    "operation": "REGISTER_HEARTBEAT",
+                    "occurred_at": "2026-01-01T00:01:00Z",
+                    "parameters": {
+                        "automation_id": "heartbeat-1",
+                        "automation_name": "finalization heartbeat",
+                        "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                        "prompt_digest": digest("final-heartbeat-prompt"),  # noqa: F405
+                        "status": "ACTIVE",
+                        "observed_at": "2026-01-01T00:01:00Z",
+                    },
+                },
+            )
+            self.assertTrue(heartbeat["ok"], heartbeat)
+
+            def route_and_ack(
+                route_id: str,
+                route_kind: str,
+                target_thread_id: str,
+                result: dict[str, str],
+                moment: str,
+                *,
+                extra_fields: dict[str, object] | None = None,
+            ) -> dict[str, object]:
+                prepared = call_state_gateway(
+                    server,
+                    root,
+                    {
+                        "request_id": f"{route_id}-prepare",
+                        "operation": "PREPARE_ROUTE",
+                        "occurred_at": moment,
+                        "parameters": {
+                            "route_id": route_id,
+                            "goal_id": "g1",
+                            "route_kind": route_kind,
+                            "target_thread_id": target_thread_id,
+                            "observed_at": moment,
+                        },
+                    },
+                )
+                self.assertTrue(prepared["ok"], prepared)
+                materialized = mcp.execute_runtime_codec(
+                    "MATERIALIZE_DISPATCH",
+                    request=prepared["result"]["payload_specification"],
+                )
+                self.assertTrue(materialized["ok"], materialized)
+                sent_at = moment.replace(":00Z", ":10Z")
+                sent = call_state_gateway(
+                    server,
+                    root,
+                    {
+                        "request_id": f"{route_id}-sent",
+                        "operation": "RECORD_ROUTE_SENT",
+                        "occurred_at": sent_at,
+                        "parameters": {
+                            "route_id": route_id,
+                            "message_id": f"message-{route_id}",
+                            "target_thread_id": target_thread_id,
+                            "observed_at": sent_at,
+                        },
+                    },
+                )
+                self.assertTrue(sent["ok"], sent)
+                kind = "DISPATCH" if route_kind == "WORKER" else "ASSURANCE"
+                staged = call_runtime_codec(
+                    server,
+                    {
+                        "operation": "STAGE_REPORT",
+                        "root": str(root),
+                        "request": {
+                        "outbox_id": route_id,
+                        "result": result,
+                        "report_text": state.formal_report_content(
+                            kind, route_id, result, extra_fields=extra_fields
+                        ),
+                    },
+                    },
+                    thread_id=target_thread_id,
+                )
+                self.assertTrue(staged["ok"], staged)
+                ack_at = moment.replace(":00Z", ":20Z")
+                acked = call_state_gateway(
+                    server,
+                    root,
+                    {
+                        "request_id": f"{route_id}-ack",
+                        "operation": "ACK_ROUTE_RESULT",
+                        "occurred_at": ack_at,
+                        "parameters": {
+                            "route_id": route_id,
+                            "staged_report": {
+                                **staged["artifact"],
+                                "result": staged["result"],
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(acked["ok"], acked)
+                return acked
+
+            artifact_digest = digest("final-artifact")  # noqa: F405
+            route_and_ack(
+                "final-worker", "WORKER", "worker-1",
+                {"status": "PASS", "artifact_digest": artifact_digest},
+                "2026-01-01T00:02:00Z",
+            )
+            route_and_ack(
+                "final-code-review", "CODE_REVIEW", "reviewer-1",
+                {"status": "REVIEW_PASS", "artifact_digest": artifact_digest},
+                "2026-01-01T00:03:00Z",
+            )
+            estimate = {
+                "min_minutes": 1,
+                "typical_minutes": 2,
+                "max_minutes": 3,
+                "confidence": "HIGH",
+                "assumptions": ["no additional changes"],
+                "excludes": "external waiting",
+            }
+            route_and_ack(
+                "final-roadmap-audit", "ROADMAP_AUDIT", "reviewer-1",
+                {
+                    "status": "ROADMAP_AUDIT_PASS_FINAL_CANDIDATE",
+                    "artifact_digest": artifact_digest,
+                },
+                "2026-01-01T00:04:00Z",
+                extra_fields={"estimate_revision": estimate},
+            )
+            route_and_ack(
+                "final-audit", "FINAL_AUDIT", "reviewer-1",
+                {"status": "FINAL_REVIEW_PASS", "artifact_digest": artifact_digest},
+                "2026-01-01T00:05:00Z",
+            )
+            prepared_finalization = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-finalize",
+                    "operation": "PREPARE_FINALIZATION",
+                    "occurred_at": "2026-01-01T00:06:00Z",
+                    "parameters": {
+                        "finalization_id": "gateway-finalization-1",
+                        "goal_id": "g1",
+                        "final_audit_id": "final-audit",
+                        "observed_at": "2026-01-01T00:06:00Z",
+                    },
+                },
+            )
+            self.assertTrue(prepared_finalization["ok"], prepared_finalization)
+            self.assertEqual(
+                prepared_finalization["operation_status"], "GATEWAY_FINALIZATION_PREPARED"
+            )
+            prepared_state = state.state()
+            self.assertIsNone(prepared_state["terminal_status"])
+            self.assertEqual(
+                prepared_state["finalization_outbox"]["status"], "PREPARED"
+            )
+            self.assertEqual(
+                prepared_state["finalization_outbox"]["completion_terminal_status"],
+                "LOOP_COMPLETE",
+            )
+            self.assertIsNone(prepared_state["finalization_receipt"])
+            status = (root / ".codex-loop" / "STATUS.md").read_text(encoding="utf-8")
+            self.assertIn("Status: `WAITING_FINALIZATION_ACK`", status)
+            self.assertIn("Control phase: `FINALIZATION_PREPARED`", status)
+            self.assertIn(
+                "Next action: `PAUSE_HEARTBEAT_AND_ACK_FINALIZATION`", status
+            )
+            self.assertNotIn("Run control: `TERMINAL_COMPLETE`", status)
+            dashboard = (
+                root / ".codex-loop" / "progress-dashboard.html"
+            ).read_text(encoding="utf-8")
+            self.assertIn("Terminal status:</strong> None", dashboard)
+            self.assertIn(
+                "Finalization phase:</strong> PREPARED_WAITING_FOR_PAUSED_RECEIPT",
+                dashboard,
+            )
+            blocked_until_ack = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-finalize-route-lock",
+                    "operation": "RECORD_HEARTBEAT_OBSERVATION",
+                    "occurred_at": "2026-01-01T00:06:30Z",
+                    "parameters": {
+                        "automation_id": "heartbeat-1",
+                        "status": "ACTIVE",
+                        "observed_at": "2026-01-01T00:06:30Z",
+                    },
+                },
+            )
+            self.assertFalse(blocked_until_ack["ok"])
+            self.assertEqual(
+                blocked_until_ack["error"]["code"], "FINALIZATION_ACK_REQUIRED"
+            )
+            self.assertEqual(state.state(), prepared_state)
+            finalized = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-finalize-ack",
+                    "operation": "ACK_FINALIZATION",
+                    "occurred_at": "2026-01-01T00:07:00Z",
+                    "parameters": {
+                        "finalization_id": "gateway-finalization-1",
+                        "paused_automation_receipt": {
+                            "automation_id": "heartbeat-1",
+                            "status": "PAUSED",
+                            "automation_name": "finalization heartbeat",
+                            "kind": "HEARTBEAT",
+                            "target_thread_id": "controller-1",
+                            "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                            "prompt_digest": digest("final-heartbeat-prompt"),  # noqa: F405
+                            "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+                            "observed_at": "2026-01-01T00:07:00Z",
+                            "source_turn_id": "real-app-turn-1",
+                        },
+                    },
+                },
+            )
+            self.assertTrue(finalized["ok"], finalized)
+            self.assertEqual(finalized["operation_status"], "FINALIZATION_ACKED")
+            current = state.state()
+            self.assertEqual(current["terminal_status"], "LOOP_COMPLETE")
+            self.assertIsNone(current["controller_goal"])
+            self.assertTrue(current["finalization_receipt"]["gateway_finalization"])
+            self.assertEqual(current["finalization_receipt"]["automation_status"], "PAUSED")
+
+    def test_state_gateway_advances_only_the_static_next_goal_after_current_audit(self) -> None:
+        """A nonfinal audit advances G06-like work without a copied roadmap mutation.
+
+        The review report still has the normal complete proposal evidence, but
+        schema v3 derives the actual queue/milestone change from canonical
+        state.  This is the regression for controller-built G06 -> G07 data.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            definitions = {
+                "g1": goal("g1", "m1"),  # noqa: F405
+                "g2": goal("g2", "m2", depends_on=["g1"]),  # noqa: F405
+            }
+            milestones = [
+                milestone("m1", "ACTIVE"),  # noqa: F405
+                milestone("m2", "PLANNED", depends_on=["m1"]),  # noqa: F405
+            ]
+            queue = [
+                queue_entry("g1", "m1", "READY", 1),  # noqa: F405
+                queue_entry("g2", "m2", "PLANNED", 1, depends_on=["g1"]),  # noqa: F405
+            ]
+            initialized, _ = state.initialize(
+                milestones=milestones,
+                definitions=definitions,
+                queue=queue,
+                state_gateway=True,
+                bootstrap_threads=[
+                    {
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    },
+                    {
+                        "thread_id": "reviewer-1",
+                        "role_kind": "REVIEWER",
+                        "bootstrap_role_kind": "code_reviewer",
+                        "bootstrap_prompt_digest": digest("reviewer-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    },
+                ],
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            heartbeat = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "advance-heartbeat",
+                    "operation": "REGISTER_HEARTBEAT",
+                    "occurred_at": "2026-01-01T00:01:00Z",
+                    "parameters": {
+                        "automation_id": "heartbeat-1",
+                        "automation_name": "advance heartbeat",
+                        "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                        "prompt_digest": digest("advance-heartbeat-prompt"),  # noqa: F405
+                        "status": "ACTIVE",
+                        "observed_at": "2026-01-01T00:01:00Z",
+                    },
+                },
+            )
+            self.assertTrue(heartbeat["ok"], heartbeat)
+
+            def route_and_ack(
+                route_id: str,
+                route_kind: str,
+                result: dict[str, str],
+                moment: str,
+                *,
+                extra_fields: dict[str, object] | None = None,
+            ) -> None:
+                target_thread_id = "worker-1" if route_kind == "WORKER" else "reviewer-1"
+                prepared = call_state_gateway(
+                    server,
+                    root,
+                    {
+                        "request_id": f"{route_id}-prepare",
+                        "operation": "PREPARE_ROUTE",
+                        "occurred_at": moment,
+                        "parameters": {
+                            "route_id": route_id,
+                            "goal_id": "g1",
+                            "route_kind": route_kind,
+                            "target_thread_id": target_thread_id,
+                            "observed_at": moment,
+                        },
+                    },
+                )
+                self.assertTrue(prepared["ok"], prepared)
+                materialized = mcp.execute_runtime_codec(
+                    "MATERIALIZE_DISPATCH",
+                    request=prepared["result"]["payload_specification"],
+                )
+                self.assertTrue(materialized["ok"], materialized)
+                sent_at = moment.replace(":00Z", ":10Z")
+                sent = call_state_gateway(
+                    server,
+                    root,
+                    {
+                        "request_id": f"{route_id}-sent",
+                        "operation": "RECORD_ROUTE_SENT",
+                        "occurred_at": sent_at,
+                        "parameters": {
+                            "route_id": route_id,
+                            "message_id": f"message-{route_id}",
+                            "target_thread_id": target_thread_id,
+                            "observed_at": sent_at,
+                        },
+                    },
+                )
+                self.assertTrue(sent["ok"], sent)
+                kind = "DISPATCH" if route_kind == "WORKER" else "ASSURANCE"
+                staged = call_runtime_codec(
+                    server,
+                    {
+                        "operation": "STAGE_REPORT",
+                        "root": str(root),
+                        "request": {
+                        "outbox_id": route_id,
+                        "result": result,
+                        "report_text": state.formal_report_content(
+                            kind, route_id, result, extra_fields=extra_fields
+                        ),
+                    },
+                    },
+                    thread_id=target_thread_id,
+                )
+                self.assertTrue(staged["ok"], staged)
+                acked = call_state_gateway(
+                    server,
+                    root,
+                    {
+                        "request_id": f"{route_id}-ack",
+                        "operation": "ACK_ROUTE_RESULT",
+                        "occurred_at": moment.replace(":00Z", ":20Z"),
+                        "parameters": {
+                            "route_id": route_id,
+                            "staged_report": {**staged["artifact"], "result": staged["result"]},
+                        },
+                    },
+                )
+                self.assertTrue(acked["ok"], acked)
+
+            artifact_digest = digest("advance-artifact")  # noqa: F405
+            route_and_ack(
+                "advance-worker", "WORKER",
+                {"status": "PASS", "artifact_digest": artifact_digest},
+                "2026-01-01T00:02:00Z",
+            )
+            route_and_ack(
+                "advance-code-review", "CODE_REVIEW",
+                {"status": "REVIEW_PASS", "artifact_digest": artifact_digest},
+                "2026-01-01T00:03:00Z",
+            )
+            next_milestones = [
+                milestone("m1", "COMPLETE"),  # noqa: F405
+                milestone("m2", "ACTIVE", depends_on=["m1"]),  # noqa: F405
+            ]
+            next_queue = [queue_entry("g2", "m2", "READY", 2, depends_on=["g1"])]  # noqa: F405
+            estimate = {
+                "min_minutes": 1,
+                "typical_minutes": 2,
+                "max_minutes": 3,
+                "confidence": "HIGH",
+                "assumptions": ["static canonical transition"],
+                "excludes": "external waiting",
+            }
+            proposal = {
+                "proposal_id": "proposal-advance-g1",
+                "roadmap_audit_dispatch_id": "advance-roadmap-audit",
+                "base_roadmap_version": 1,
+                "operations": [
+                    {"operation": "UPDATE_MILESTONE", "milestone_id": "m1", "reason": "complete g1"},
+                    {"operation": "UPDATE_MILESTONE", "milestone_id": "m2", "reason": "activate g2"},
+                ],
+                "milestones_digest": json_digest(next_milestones),  # noqa: F405
+                "goal_queue_digest": json_digest(next_queue),  # noqa: F405
+                "goal_definition_registry_digest": json_digest(definitions),  # noqa: F405
+                "authorization_envelope_digest": json_digest(state.authorization),  # noqa: F405
+                "estimate_digest": json_digest(estimate),  # noqa: F405
+                "next_goal_id": "g2",
+                "reason_code": "STATIC_CANONICAL_ADVANCE",
+                "within_authorized_envelope": True,
+            }
+            route_and_ack(
+                "advance-roadmap-audit", "ROADMAP_AUDIT",
+                {"status": "ROADMAP_AUDIT_PASS", "artifact_digest": artifact_digest},
+                "2026-01-01T00:04:00Z",
+                extra_fields={
+                    "estimate_revision": estimate,
+                    "roadmap_proposal": proposal,
+                    "roadmap_proposal_digest": json_digest(proposal),  # noqa: F405
+                },
+            )
+            advanced = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "advance-roadmap",
+                    "operation": "ADVANCE_ROADMAP",
+                    "occurred_at": "2026-01-01T00:05:00Z",
+                    "parameters": {
+                        "goal_id": "g1",
+                        "roadmap_audit_id": "advance-roadmap-audit",
+                        "observed_at": "2026-01-01T00:05:00Z",
+                    },
+                },
+            )
+            self.assertTrue(advanced["ok"], advanced)
+            self.assertEqual(advanced["operation_status"], "GATEWAY_ROADMAP_ADVANCED")
+            current = state.state()
+            self.assertEqual(current["roadmap_version"], 2)
+            self.assertEqual(current["active_milestone_id"], "m2")
+            self.assertEqual(current["goal_execution_ledger"]["g1"]["status"], "COMPLETE")
+            self.assertEqual(current["goal_queue"], next_queue)
+
+    def test_schema_v3_rejects_legacy_canonical_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Harness(Path(temporary))  # noqa: F405
+            initialized, _ = state.initialize(state_gateway=True)
+            self.assertTrue(initialized["ok"], initialized)
+            legacy = state.apply(
+                {
+                    "type": "RECORD_STEERING",
+                    "steering_id": "legacy-v3-bypass",
+                    "steering_type": "PAUSE",
+                    "normalized_digest": digest("legacy-v3-bypass"),  # noqa: F405
+                    "identity_algorithm": "message-item-v1",
+                    "message_item_id": "legacy-v3-message",
+                    "summary": "must not bypass gateway",
+                    "classification_reason": "test",
+                }
+            )
+            self.assertFalse(legacy["ok"])
+            self.assertEqual(legacy["status"], "STATE_GATEWAY_REQUIRED")
+
+    def test_state_gateway_migrates_only_a_quiescent_paused_v2_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = McpHarness(root)
+            pause_id = "gateway-migration-pause"
+            recorded = harness.state.apply(
+                {
+                    "type": "RECORD_STEERING",
+                    "steering_id": pause_id,
+                    "steering_type": "PAUSE",
+                    "normalized_digest": digest(pause_id),  # noqa: F405
+                    "identity_algorithm": "message-item-v1",
+                    "message_item_id": "gateway-migration-message",
+                    "summary": "safe point for explicit state gateway migration",
+                    "classification_reason": "schema migration fixture",
+                }
+            )
+            self.assertTrue(recorded["ok"], recorded)
+            paused = harness.state.apply(
+                {
+                    "type": "SET_RUN_CONTROL",
+                    "steering_id": pause_id,
+                    "requested_status": "PAUSE",
+                    "reason": "state gateway migration",
+                }
+            )
+            self.assertTrue(paused["ok"], paused)
+            source_digest = "sha256:" + hashlib.sha256(
+                harness.state.runtime._render_state(harness.state.state())  # noqa: SLF001
+            ).hexdigest()
+            migrated = call_state_gateway(
+                harness.server,
+                root,
+                {
+                    "request_id": "gateway-migrate-v2-v3",
+                    "operation": "MIGRATE_V2_TO_V3",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {"source_state_digest": source_digest},
+                },
+            )
+            self.assertTrue(migrated["ok"], migrated)
+            self.assertEqual(migrated["operation_status"], "SCHEMA_V3_MIGRATED")
+            state = harness.state.state()
+            self.assertEqual(state["schema_version"], 3)
+            self.assertEqual(state["thread_registry"]["state-writer-1"]["status"], "ARCHIVED")
+            self.assertEqual(state["run_control"]["status"], "PAUSED_AT_SAFE_POINT")
+
+            # Even an apparently idempotent raw replay would append a v3
+            # journal/event and bump state_version.  Only the attested MCP
+            # Gateway may write schema-v3 canonical state.
+            before_raw = persisted_snapshot(root)  # noqa: F405
+            raw = harness.state.apply(
+                {
+                    "type": "MIGRATE_V2_TO_V3",
+                    "source_state_digest": digest("raw-v3-replay"),  # noqa: F405
+                }
+            )
+            self.assertFalse(raw["ok"], raw)
+            self.assertEqual(raw["status"], "STATE_GATEWAY_REQUIRED")
+            self.assertEqual(before_raw, persisted_snapshot(root))  # noqa: F405
+
+            before_repeat = persisted_snapshot(root)  # noqa: F405
+            repeated = call_state_gateway(
+                harness.server,
+                root,
+                {
+                    "request_id": "gateway-migrate-v2-v3-repeat",
+                    "operation": "MIGRATE_V2_TO_V3",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {"source_state_digest": digest("ignored-after-v3")},  # noqa: F405
+                },
+            )
+            self.assertFalse(repeated["ok"], repeated)
+            self.assertEqual(repeated["status"], "STATE_GATEWAY_REQUIRED")
+            self.assertEqual(before_repeat, persisted_snapshot(root))  # noqa: F405
+
+    def test_report_recovery_acks_the_original_gateway_outbox_without_a_new_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(
+                state_gateway=True,
+                bootstrap_threads=[
+                    {
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    }
+                ],
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            prepared = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "recovery-prepare",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "route_id": "recovery-dispatch-1",
+                        "goal_id": "g1",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T1,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(prepared["ok"], prepared)
+            sent = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "recovery-send",
+                    "operation": "RECORD_ROUTE_SENT",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "route_id": "recovery-dispatch-1",
+                        "message_id": "recovery-message-1",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T2,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(sent["ok"], sent)
+            result = {
+                "status": "BLOCKED",
+                "artifact_digest": digest("recovery-artifact"),  # noqa: F405
+                "execution_started": False,
+                "blocker_code": "REPORT_STAGING_FAILED",
+            }
+            staged = call_runtime_codec(
+                server,
+                {
+                    "operation": "STAGE_REPORT",
+                    "root": str(root),
+                    "request": {
+                    "outbox_id": "recovery-dispatch-1",
+                    "result": result,
+                    "report_text": state.formal_report_content(
+                        "DISPATCH", "recovery-dispatch-1", result
+                    ),
+                },
+                },
+                thread_id="worker-1",
+            )
+            self.assertTrue(staged["ok"], staged)
+            recovered = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "recovery-ack",
+                    "operation": "REPORT_RECOVERY",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "outbox_id": "recovery-dispatch-1",
+                        "staged_report": {**staged["artifact"], "result": staged["result"]},
+                    },
+                },
+            )
+            self.assertTrue(recovered["ok"], recovered)
+            self.assertEqual(recovered["operation_status"], "GATEWAY_REPORT_RECOVERY_ACKED")
+            current = state.state()
+            self.assertEqual(len(current["dispatch_outbox"]), 1)
+            self.assertEqual(len(current["goal_execution_ledger"]["g1"]["attempts"]), 1)
+            self.assertEqual(
+                current["gateway_route_ledger"]["recovery-dispatch-1"]["status"],
+                "RECOVERED",
+            )
+
+    def test_gateway_routes_and_closes_an_independent_code_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(
+                state_gateway=True,
+                local_required_goal_ids=["g1"],
+                bootstrap_threads=[
+                    {
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    },
+                    {
+                        "thread_id": "reviewer-1",
+                        "role_kind": "REVIEWER",
+                        "bootstrap_role_kind": "code_reviewer",
+                        "bootstrap_prompt_digest": digest("reviewer-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    },
+                    {
+                        "thread_id": "local-verifier-1",
+                        "role_kind": "LOCAL_VERIFIER",
+                        "bootstrap_role_kind": "local_verifier",
+                        "bootstrap_prompt_digest": digest("local-verifier-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    },
+                ],
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            worker_prepared = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "review-worker-prepare",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "route_id": "review-worker-route",
+                        "goal_id": "g1",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T1,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(worker_prepared["ok"], worker_prepared)
+            worker_sent = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "review-worker-send",
+                    "operation": "RECORD_ROUTE_SENT",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "route_id": "review-worker-route",
+                        "message_id": "review-worker-message",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T2,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(worker_sent["ok"], worker_sent)
+            worker_result = {"status": "PASS", "artifact_digest": digest("review-worker-artifact")}  # noqa: F405
+            worker_stage = call_runtime_codec(
+                server,
+                {
+                    "operation": "STAGE_REPORT",
+                    "root": str(root),
+                    "request": {
+                    "outbox_id": "review-worker-route",
+                    "result": worker_result,
+                    "report_text": state.formal_report_content(
+                        "DISPATCH", "review-worker-route", worker_result
+                    ),
+                },
+                },
+                thread_id="worker-1",
+            )
+            self.assertTrue(worker_stage["ok"], worker_stage)
+            worker_acked = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "review-worker-ack",
+                    "operation": "ACK_ROUTE_RESULT",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "route_id": "review-worker-route",
+                        "staged_report": {**worker_stage["artifact"], "result": worker_stage["result"]},
+                    },
+                },
+            )
+            self.assertTrue(worker_acked["ok"], worker_acked)
+
+            review_prepared = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "code-review-prepare",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": T4,  # noqa: F405
+                    "parameters": {
+                        "route_id": "code-review-route",
+                        "goal_id": "g1",
+                        "route_kind": "CODE_REVIEW",
+                        "target_thread_id": "reviewer-1",
+                        "observed_at": T4,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(review_prepared["ok"], review_prepared)
+            review_materialized = mcp.execute_runtime_codec(
+                "MATERIALIZE_DISPATCH",
+                request=review_prepared["result"]["payload_specification"],
+            )
+            self.assertTrue(review_materialized["ok"], review_materialized)
+            review_sent = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "code-review-send",
+                    "operation": "RECORD_ROUTE_SENT",
+                    "occurred_at": "2026-01-01T01:01:00Z",
+                    "parameters": {
+                        "route_id": "code-review-route",
+                        "message_id": "code-review-message",
+                        "target_thread_id": "reviewer-1",
+                        "observed_at": "2026-01-01T01:01:00Z",
+                    },
+                },
+            )
+            self.assertTrue(review_sent["ok"], review_sent)
+            verified = mcp.execute_runtime_codec(
+                "VERIFY_DISPATCH",
+                root=str(root),
+                transport_text=review_materialized["transport_text"],
+            )
+            self.assertTrue(verified["ok"], verified)
+            review_result = {
+                "status": "REVIEW_PASS",
+                "artifact_digest": worker_result["artifact_digest"],
+            }
+            review_stage = call_runtime_codec(
+                server,
+                {
+                    "operation": "STAGE_REPORT",
+                    "root": str(root),
+                    "request": {
+                    "outbox_id": "code-review-route",
+                    "result": review_result,
+                    "report_text": state.formal_report_content(
+                        "ASSURANCE", "code-review-route", review_result
+                    ),
+                },
+                },
+                thread_id="reviewer-1",
+            )
+            self.assertTrue(review_stage["ok"], review_stage)
+            review_acked = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "code-review-ack",
+                    "operation": "ACK_ROUTE_RESULT",
+                    "occurred_at": "2026-01-01T01:02:00Z",
+                    "parameters": {
+                        "route_id": "code-review-route",
+                        "staged_report": {**review_stage["artifact"], "result": review_stage["result"]},
+                    },
+                },
+            )
+            self.assertTrue(review_acked["ok"], review_acked)
+            current = state.state()
+            self.assertEqual(current["goal_execution_ledger"]["g1"]["status"], "CODE_REVIEW_PASS")
+            self.assertEqual(current["assurance_ledger"]["code-review-route"]["decision"], "REVIEW_PASS")
+            self.assertEqual(current["gateway_route_ledger"]["code-review-route"]["status"], "ACKED")
+            self.assertIsNone(current["controller_lease"])
+
+            local_prepared = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "local-verify-prepare",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": "2026-01-01T01:03:00Z",
+                    "parameters": {
+                        "route_id": "local-verify-route",
+                        "goal_id": "g1",
+                        "route_kind": "LOCAL_VERIFICATION",
+                        "target_thread_id": "local-verifier-1",
+                        "observed_at": "2026-01-01T01:03:00Z",
+                    },
+                },
+            )
+            self.assertTrue(local_prepared["ok"], local_prepared)
+            local_materialized = mcp.execute_runtime_codec(
+                "MATERIALIZE_DISPATCH",
+                request=local_prepared["result"]["payload_specification"],
+            )
+            self.assertTrue(local_materialized["ok"], local_materialized)
+            local_sent = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "local-verify-send",
+                    "operation": "RECORD_ROUTE_SENT",
+                    "occurred_at": "2026-01-01T01:04:00Z",
+                    "parameters": {
+                        "route_id": "local-verify-route",
+                        "message_id": "local-verify-message",
+                        "target_thread_id": "local-verifier-1",
+                        "observed_at": "2026-01-01T01:04:00Z",
+                    },
+                },
+            )
+            self.assertTrue(local_sent["ok"], local_sent)
+            local_result = {"status": "PASS", "artifact_digest": worker_result["artifact_digest"]}
+            local_stage = call_runtime_codec(
+                server,
+                {
+                    "operation": "STAGE_REPORT",
+                    "root": str(root),
+                    "request": {
+                    "outbox_id": "local-verify-route",
+                    "result": local_result,
+                    "report_text": state.formal_report_content(
+                        "LOCAL", "local-verify-route", local_result
+                    ),
+                },
+                },
+                thread_id="local-verifier-1",
+            )
+            self.assertTrue(local_stage["ok"], local_stage)
+            local_acked = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "local-verify-ack",
+                    "operation": "ACK_ROUTE_RESULT",
+                    "occurred_at": "2026-01-01T01:05:00Z",
+                    "parameters": {
+                        "route_id": "local-verify-route",
+                        "staged_report": {**local_stage["artifact"], "result": local_stage["result"]},
+                    },
+                },
+            )
+            self.assertTrue(local_acked["ok"], local_acked)
+
+            roadmap_prepared = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "roadmap-audit-prepare",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": "2026-01-01T01:06:00Z",
+                    "parameters": {
+                        "route_id": "roadmap-audit-route",
+                        "goal_id": "g1",
+                        "route_kind": "ROADMAP_AUDIT",
+                        "target_thread_id": "reviewer-1",
+                        "observed_at": "2026-01-01T01:06:00Z",
+                    },
+                },
+            )
+            self.assertTrue(roadmap_prepared["ok"], roadmap_prepared)
+            local_ack = roadmap_prepared["result"]["payload_specification"]["payload"][
+                "local_verification_ack_identity"
+            ]
+            self.assertEqual(local_ack["local_dispatch_id"], "local-verify-route")
+            self.assertEqual(local_ack["artifact_digest"], worker_result["artifact_digest"])
+
+    def test_same_transport_fault_pauses_after_two_natural_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(
+                state_gateway=True,
+                definitions={
+                    "g1": goal("g1", "m1"),  # noqa: F405
+                    "g2": goal("g2", "m1"),  # noqa: F405
+                },
+                queue=[
+                    queue_entry("g1", "m1", "READY", 1),  # noqa: F405
+                    queue_entry("g2", "m1", "READY", 1),  # noqa: F405
+                ],
+                bootstrap_threads=[
+                    {
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    }
+                ],
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            heartbeat = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-heartbeat",
+                    "operation": "REGISTER_HEARTBEAT",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "automation_id": "transport-heartbeat-1",
+                        "automation_name": "transport heartbeat",
+                        "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                        "prompt_digest": digest("transport-heartbeat-prompt"),  # noqa: F405
+                        "status": "ACTIVE",
+                        "observed_at": T1,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(heartbeat["ok"], heartbeat)
+            prepared = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-prepare",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "route_id": "transport-dispatch-1",
+                        "goal_id": "g1",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T1,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(prepared["ok"], prepared)
+            fingerprint = digest("app-message-failure")  # noqa: F405
+            before_unattested_transport = copy.deepcopy(state.state())
+            missing_transport_receipt = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "gateway-transport-missing-receipt",
+                    "method": "tools/call",
+                    "params": {
+                        "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                        "_meta": McpHarness.metadata(),
+                        "arguments": {
+                            "root": str(root),
+                            "request": {
+                                "request_id": "gateway-transport-missing-receipt",
+                                "operation": "RECORD_TRANSPORT_OBSERVATION",
+                                "occurred_at": T2,  # noqa: F405
+                                "parameters": {},
+                            },
+                        },
+                    },
+                }
+            )
+            self.assertIsNotNone(missing_transport_receipt)
+            missing_payload = missing_transport_receipt["result"]["structuredContent"]
+            self.assertFalse(missing_payload["ok"], missing_payload)
+            self.assertEqual(
+                missing_payload["status"], "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE"
+            )
+            self.assertEqual(state.state(), before_unattested_transport)
+            first = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-first",
+                    "operation": "RECORD_TRANSPORT_OBSERVATION",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "fingerprint": fingerprint,
+                        "outbox_id": "transport-dispatch-1",
+                        "observed_at": T2,  # noqa: F405
+                        "natural_heartbeat": True,
+                    },
+                },
+            )
+            self.assertTrue(first["ok"], first)
+            self.assertEqual(first["operation_status"], "TRANSPORT_FAILURE_RECORDED")
+            second = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-second",
+                    "operation": "RECORD_TRANSPORT_OBSERVATION",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "fingerprint": fingerprint,
+                        "outbox_id": "transport-dispatch-1",
+                        "observed_at": T3,  # noqa: F405
+                        "natural_heartbeat": True,
+                    },
+                },
+            )
+            self.assertTrue(second["ok"], second)
+            self.assertEqual(second["operation_status"], "WAITING_TRANSPORT_RECOVERY")
+            recovery = state.state()["transport_recovery"]
+            self.assertEqual(recovery["status"], "WAITING_TRANSPORT_RECOVERY")
+            self.assertEqual(recovery["failure_count"], 2)
+            self.assertTrue(recovery["notification_required"])
+            self.assertTrue(recovery["heartbeat_pause_required"])
+            self.assertIsNone(recovery["notified_at"])
+            self.assertEqual(state.state()["run_control"]["status"], "PAUSED_AT_SAFE_POINT")
+            before_route_after_threshold = copy.deepcopy(state.state())
+            route_after_threshold = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-route-after-threshold",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "route_id": "transport-dispatch-after-threshold",
+                        "goal_id": "g2",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T3,  # noqa: F405
+                    },
+                },
+            )
+            self.assertFalse(route_after_threshold["ok"], route_after_threshold)
+            self.assertEqual(route_after_threshold["status"], "LOOP_PAUSED")
+            self.assertEqual(state.state(), before_route_after_threshold)
+            paused = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-pause-ack",
+                    "operation": "ACK_TRANSPORT_PAUSE",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "paused_automation_receipt": {
+                            "automation_id": "transport-heartbeat-1",
+                            "status": "PAUSED",
+                            "automation_name": "transport heartbeat",
+                            "kind": "HEARTBEAT",
+                            "target_thread_id": "controller-1",
+                            "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                            "prompt_digest": digest("transport-heartbeat-prompt"),  # noqa: F405
+                            "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+                            "observed_at": T3,  # noqa: F405
+                            "source_turn_id": "real-app-turn-1",
+                        },
+                    },
+                },
+            )
+            self.assertTrue(paused["ok"], paused)
+            recovery = state.state()["transport_recovery"]
+            self.assertFalse(recovery["heartbeat_pause_required"])
+            self.assertIsNotNone(recovery["heartbeat_pause_receipt_path"])
+            self.assertEqual(
+                state.state()["heartbeat_live_observation"]["status"], "PAUSED"
+            )
+            repeated = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-third",
+                    "operation": "RECORD_TRANSPORT_OBSERVATION",
+                    "occurred_at": T4,  # noqa: F405
+                    "parameters": {
+                        "fingerprint": fingerprint,
+                        "outbox_id": "transport-dispatch-1",
+                        "observed_at": T4,  # noqa: F405
+                        "natural_heartbeat": True,
+                    },
+                },
+            )
+            self.assertFalse(repeated["ok"], repeated)
+            self.assertEqual(repeated["status"], "TRANSPORT_RECOVERY_ALREADY_WAITING")
 
     def test_runtime_codec_normalizes_without_shell_stdin(self) -> None:
         server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
@@ -191,6 +1960,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "method": "tools/call",
                 "params": {
                     "name": mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                    "_meta": McpHarness.metadata(),
                     "arguments": {
                         "operation": "NORMALIZE_FINGERPRINT",
                         "request": request,
@@ -219,6 +1989,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "method": "tools/call",
                 "params": {
                     "name": mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                    "_meta": McpHarness.metadata(),
                     "arguments": {
                         "operation": "MATERIALIZE_DISPATCH",
                         "request": {},
@@ -743,6 +2514,32 @@ class McpFrameReaderTests(unittest.TestCase):
             mcp.McpFrameReader(io.BytesIO(b"x" * 9 + b"\n"), max_bytes=8).read()
         self.assertEqual(context.exception.code, "MCP_INPUT_TOO_LARGE")
 
+    def test_buffered_empty_and_nonobject_frames_fail_closed(self) -> None:
+        reader = mcp.McpFrameReader(io.BytesIO())
+        reader.buffer.extend(b"\n")
+        with self.assertRaises(mcp.McpBridgeError) as context:
+            reader.read()
+        self.assertEqual(context.exception.code, "MCP_INPUT_JSON_INVALID")
+
+        reader.buffer.extend(b"[]\n")
+        with self.assertRaises(mcp.McpBridgeError) as context:
+            reader.read()
+        self.assertEqual(context.exception.code, "MCP_INPUT_JSON_INVALID")
+
+    def test_fd_pipe_eof_and_oversized_complete_frame_are_bounded(self) -> None:
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        with os.fdopen(read_fd, "rb", closefd=True) as stream:
+            self.assertIsNone(mcp.McpFrameReader(stream).read())
+
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, b"x" * 9 + b"\n")
+        os.close(write_fd)
+        with os.fdopen(read_fd, "rb", closefd=True) as stream:
+            with self.assertRaises(mcp.McpBridgeError) as context:
+                mcp.McpFrameReader(stream, max_bytes=8).read()
+        self.assertEqual(context.exception.code, "MCP_INPUT_TOO_LARGE")
+
     def test_partial_pipe_times_out_and_leaves_no_reader_process(self) -> None:
         read_fd, write_fd = os.pipe()
         try:
@@ -759,6 +2556,410 @@ class McpFrameReaderTests(unittest.TestCase):
         finally:
             os.close(read_fd)
             os.close(write_fd)
+
+
+class McpBridgeBoundaryTests(unittest.TestCase):
+    def test_parent_attestation_accepts_the_expected_signed_app_server(self) -> None:
+        cdhash = "a" * 40
+        signed_details = "\n".join(
+            (
+                f"Identifier={OPENAI_CODE_SIGN_IDENTIFIER}",  # noqa: F405
+                f"TeamIdentifier={OPENAI_CODE_SIGN_TEAM_ID}",  # noqa: F405
+                f"CDHash={cdhash}",
+            )
+        )
+        results = [
+            subprocess.CompletedProcess([], 0, stdout="app-server --mcp\n", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout=signed_details, stderr=""),
+        ]
+        with (
+            mock.patch.object(mcp.sys, "platform", "darwin"),
+            mock.patch.object(mcp.os, "getppid", return_value=42),
+            mock.patch.object(
+                mcp,
+                "_macos_process_path",
+                return_value="/Applications/Codex.app/Contents/MacOS/app-server",
+            ),
+            mock.patch.object(mcp.subprocess, "run", side_effect=results),
+        ):
+            attestation = mcp.attest_codex_mcp_parent()
+        self.assertEqual(attestation.parent_pid, 42)
+        self.assertEqual(attestation.parent_identifier, OPENAI_CODE_SIGN_IDENTIFIER)  # noqa: F405
+        self.assertEqual(attestation.parent_team_id, OPENAI_CODE_SIGN_TEAM_ID)  # noqa: F405
+        self.assertEqual(len(attestation.parent_cdhash), 64)
+
+    def test_parent_attestation_rejects_unsupported_and_bad_parent_states(self) -> None:
+        with mock.patch.object(mcp.sys, "platform", "linux"):
+            with self.assertRaisesRegex(mcp.McpBridgeError, "APP_PARENT_ATTESTATION_UNSUPPORTED"):
+                mcp.attest_codex_mcp_parent()
+        with (
+            mock.patch.object(mcp.sys, "platform", "darwin"),
+            mock.patch.object(mcp.os, "getppid", return_value=1),
+        ):
+            with self.assertRaisesRegex(mcp.McpBridgeError, "APP_PARENT_ATTESTATION_INVALID"):
+                mcp.attest_codex_mcp_parent()
+
+        with (
+            mock.patch.object(mcp.sys, "platform", "darwin"),
+            mock.patch.object(mcp.os, "getppid", return_value=42),
+            mock.patch.object(mcp, "_macos_process_path", return_value="/tmp/app-server"),
+            mock.patch.object(
+                mcp.subprocess,
+                "run",
+                side_effect=(
+                    subprocess.CompletedProcess([], 0, stdout="app-server\n", stderr=""),
+                    subprocess.CompletedProcess([], 1, stdout="", stderr=""),
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                mcp.McpBridgeError, "APP_PARENT_CODE_SIGNATURE_INVALID"
+            ):
+                mcp.attest_codex_mcp_parent()
+
+    def test_macos_process_path_uses_proc_pidpath_and_rejects_empty_result(self) -> None:
+        class ProcPidPath:
+            def __init__(self, result: int) -> None:
+                self.result = result
+
+            def __call__(self, _pid: int, buffer: object, _size: int) -> int:
+                if self.result > 0:
+                    buffer.value = b"/Applications/Codex.app/Contents/MacOS/app-server"
+                return self.result
+
+        success = ProcPidPath(1)
+        with mock.patch.object(
+            mcp.ctypes, "CDLL", return_value=type("Libproc", (), {"proc_pidpath": success})()
+        ):
+            self.assertEqual(
+                mcp._macos_process_path(42),
+                "/Applications/Codex.app/Contents/MacOS/app-server",
+            )
+        failure = ProcPidPath(0)
+        with mock.patch.object(
+            mcp.ctypes, "CDLL", return_value=type("Libproc", (), {"proc_pidpath": failure})()
+        ):
+            with self.assertRaisesRegex(
+                mcp.McpBridgeError, "APP_PARENT_ATTESTATION_UNAVAILABLE"
+            ):
+                mcp._macos_process_path(42)
+        with (
+            mock.patch.object(mcp.sys, "platform", "darwin"),
+            mock.patch.object(mcp.os, "getppid", return_value=42),
+            mock.patch.object(mcp, "_macos_process_path", return_value="/tmp/app-server"),
+            mock.patch.object(
+                mcp.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 1, stdout="", stderr=""),
+            ),
+        ):
+            with self.assertRaisesRegex(mcp.McpBridgeError, "APP_PARENT_ATTESTATION_INVALID"):
+                mcp.attest_codex_mcp_parent()
+
+    def test_current_process_and_metadata_receipts_fail_closed_without_exact_attestation(self) -> None:
+        unavailable = mcp.McpBridgeError("APP_PARENT_ATTESTATION_UNAVAILABLE")
+        with mock.patch.object(mcp, "attest_codex_mcp_parent", side_effect=unavailable):
+            server = mcp.AdaptiveStateMcpServer.from_current_process()
+        self.assertIsNone(server.host_attestation)
+        self.assertEqual(server.host_error.code, unavailable.code)
+
+        host = synthetic_host_attestation()
+        raw_turn = json.dumps(
+            {"session_id": "s1", "thread_id": "t1", "turn_id": "turn-1"}
+        )
+        metadata = mcp._extract_turn_metadata(
+            {"_meta": {"threadId": "t1", mcp.MCP_TURN_META_KEY: raw_turn}}, host
+        )
+        self.assertEqual(metadata.turn_id, "turn-1")
+        with self.assertRaisesRegex(mcp.McpBridgeError, "APP_TURN_ATTESTATION_INVALID"):
+            mcp._extract_turn_metadata(
+                {"_meta": {"threadId": "t1", mcp.MCP_TURN_META_KEY: "{"}}, host
+            )
+
+        receipt = {
+            "schema_version": 1,
+            "action": "SEND_MESSAGE_TO_THREAD",
+            "source_thread_id": "t1",
+            "source_turn_id": "turn-1",
+            "result": {"message_id": "m1"},
+        }
+        returned = mcp._extract_app_action_result(
+            {"_meta": {mcp.MCP_APP_ACTION_RECEIPT_META_KEY: json.dumps(receipt)}},
+            metadata,
+            action="SEND_MESSAGE_TO_THREAD",
+            result_fields={"message_id"},
+        )
+        self.assertEqual(returned, {"message_id": "m1"})
+        with self.assertRaisesRegex(
+            mcp.McpBridgeError, "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE"
+        ):
+            mcp._extract_app_action_result(
+                {"_meta": {}}, metadata, action="SEND_MESSAGE_TO_THREAD", result_fields={"message_id"}
+            )
+        with self.assertRaisesRegex(
+            mcp.McpBridgeError, "APP_ACTION_RECEIPT_ATTESTATION_INVALID"
+        ):
+            mcp._extract_app_action_result(
+                {"_meta": {mcp.MCP_APP_ACTION_RECEIPT_META_KEY: "{"}},
+                metadata,
+                action="SEND_MESSAGE_TO_THREAD",
+                result_fields={"message_id"},
+            )
+
+    def test_jsonrpc_server_loop_returns_protocol_and_parse_errors(self) -> None:
+        server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+        frames = b"\n".join(
+            (
+                b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"unknown"}}',
+                b'{"jsonrpc":"2.0","method":"notifications/initialized"}',
+                b'{"jsonrpc":"2.0","id":2,"method":"ping"}',
+                b'{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"unknown","arguments":{}}}',
+                b'{"jsonrpc":"2.0","id":4,"method":"unknown"}',
+            )
+        )
+        output = io.BytesIO()
+        self.assertEqual(mcp.serve(io.BytesIO(frames), output, server=server), 0)
+        responses = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(responses[0]["result"]["protocolVersion"], mcp.MCP_PROTOCOL_VERSIONS[0])
+        self.assertEqual(responses[1]["result"], {})
+        self.assertEqual(responses[2]["error"]["code"], -32602)
+        self.assertEqual(responses[3]["error"]["code"], -32601)
+
+        output = io.BytesIO()
+        self.assertEqual(mcp.serve(io.BytesIO(b"{\n"), output, server=server), 1)
+        self.assertEqual(json.loads(output.getvalue())["error"]["code"], -32700)
+
+    def test_gateway_rejects_malformed_public_requests_before_runtime_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = McpHarness(Path(temporary))
+            before = harness.state.state()
+
+            def invoke(arguments: object) -> dict[str, object]:
+                response = harness.server.handle(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "gateway-invalid",
+                        "method": "tools/call",
+                        "params": {
+                            "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                            "_meta": McpHarness.metadata(),
+                            "arguments": arguments,
+                        },
+                    }
+                )
+                self.assertIsNotNone(response)
+                return response["result"]["structuredContent"]
+
+            cases = (
+                ({}, "STATE_GATEWAY_ARGUMENTS_INVALID"),
+                (
+                    {"root": "relative", "request": {}},
+                    "MCP_ROOT_INVALID",
+                ),
+                (
+                    {"root": str(harness.root), "request": {}},
+                    "STATE_GATEWAY_REQUEST_INVALID",
+                ),
+                (
+                    {
+                        "root": str(harness.root),
+                        "request": {
+                            "request_id": "",
+                            "operation": "PREPARE_ROUTE",
+                            "occurred_at": T1,  # noqa: F405
+                            "parameters": {},
+                        },
+                    },
+                    "STATE_GATEWAY_REQUEST_INVALID",
+                ),
+                (
+                    {
+                        "root": str(harness.root),
+                        "request": {
+                            "request_id": "invalid-parameters",
+                            "operation": "PREPARE_ROUTE",
+                            "occurred_at": T1,  # noqa: F405
+                            "parameters": [],
+                        },
+                    },
+                    "STATE_GATEWAY_REQUEST_INVALID",
+                ),
+            )
+            for arguments, code in cases:
+                with self.subTest(code=code):
+                    result = invoke(arguments)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["error"]["code"], code)
+                    self.assertEqual(harness.state.state(), before)
+
+            operation_cases = (
+                ("MIGRATE_V2_TO_V3", {}, "STATE_GATEWAY_REQUEST_INVALID"),
+                ("PREPARE_ROUTE", {}, "STATE_GATEWAY_REQUEST_INVALID"),
+                ("REGISTER_TASK", {"forged": True}, "STATE_GATEWAY_REQUEST_INVALID"),
+                (
+                    "REGISTER_HEARTBEAT",
+                    {"forged": True},
+                    "STATE_GATEWAY_REQUEST_INVALID",
+                ),
+                ("INITIALIZE", {}, "STATE_GATEWAY_ROOT_NOT_EMPTY"),
+            )
+            for operation, parameters, code in operation_cases:
+                with self.subTest(operation=operation):
+                    result = invoke(
+                        {
+                            "root": str(harness.root),
+                            "request": {
+                                "request_id": f"invalid-{operation}",
+                                "operation": operation,
+                                "occurred_at": T1,  # noqa: F405
+                                "parameters": parameters,
+                            },
+                        }
+                    )
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["error"]["code"], code)
+                    self.assertEqual(harness.state.state(), before)
+
+    def test_route_and_codec_tools_reject_invalid_arguments_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = McpHarness(Path(temporary))
+            before = harness.state.state()
+
+            def route(arguments: object) -> dict[str, object]:
+                response = harness.server.handle(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "route-invalid",
+                        "method": "tools/call",
+                        "params": {
+                            "name": mcp.MCP_TOOL_NAME,
+                            "_meta": McpHarness.metadata(),
+                            "arguments": arguments,
+                        },
+                    }
+                )
+                self.assertIsNotNone(response)
+                return response["result"]["structuredContent"]
+
+            for arguments, code in (
+                (None, "MCP_ARGUMENTS_INVALID"),
+                ({"root": "relative", "request": {}}, "MCP_ROOT_INVALID"),
+                ({"root": str(harness.root), "request": None}, "MCP_ARGUMENTS_INVALID"),
+                (
+                    {
+                        "root": str(harness.root),
+                        "request": harness.state.make_request({"type": "UNSAFE"}),
+                    },
+                    "MCP_ROUTE_MUTATION_TYPE_INVALID",
+                ),
+            ):
+                with self.subTest(code=code):
+                    result = route(arguments)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["error"]["code"], code)
+                    self.assertEqual(harness.state.state(), before)
+
+            for arguments in (
+                {"operation": "UNKNOWN"},
+                {
+                    "operation": "VERIFY_DISPATCH",
+                    "root": "relative",
+                    "transport_text": "{}",
+                },
+                {"operation": "MATERIALIZE_DISPATCH", "request": "not-an-object"},
+                {
+                    "operation": "VERIFY_DISPATCH",
+                    "root": str(harness.root),
+                    "transport_text": 1,
+                },
+            ):
+                with self.subTest(arguments=arguments):
+                    result = harness.codec_call(arguments)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(harness.state.state(), before)
+
+    def test_successor_gateway_rejects_unfinalized_predecessor_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "successor"
+            root.mkdir()
+            source = root / "CONTROLLER_PACK.md"
+            source_content = "# successor gateway fixture\n"
+            source.write_text(source_content, encoding="utf-8")
+            predecessor = root / "unfinalized-predecessor"
+            predecessor.mkdir()
+            template = Harness(root / "template")  # noqa: F405
+            _, template_request = template.initialize(state_gateway=True)
+            initialize_mutation = copy.deepcopy(template_request["mutation"])
+            initialize_mutation["controller_pack_digest"] = digest(source_content)  # noqa: F405
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "init",
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18"},
+                }
+            )
+            result = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-successor-invalid-predecessor",
+                    "operation": "INITIALIZE_SUCCESSOR",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "predecessor_root": str(predecessor),
+                        "predecessor_finalization_digest": digest("missing-finalization"),  # noqa: F405
+                        "predecessor_root_digest": digest("missing-root"),  # noqa: F405
+                        "successor_context": {},
+                        "initialize_mutation": initialize_mutation,
+                        "controller_pack_source_path": str(source),
+                    },
+                },
+            )
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["error"]["code"], "STATE_GATEWAY_PREDECESSOR_NOT_FINALIZED"
+            )
+            self.assertFalse((root / ".codex-loop").exists())
+
+    def test_paused_automation_artifacts_require_matching_heartbeat_identity(self) -> None:
+        server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+        metadata = mcp._extract_turn_metadata(
+            {"_meta": McpHarness.metadata()}, synthetic_host_attestation()
+        )
+        state = {
+            "heartbeat_prompt_identity": {
+                "automation_name": "heartbeat",
+                "kind": "HEARTBEAT",
+                "target_thread_id": "controller-1",
+                "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                "prompt_digest": digest("heartbeat"),  # noqa: F405
+                "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+            }
+        }
+        receipt = {
+            **state["heartbeat_prompt_identity"],
+            "automation_id": "heartbeat-1",
+            "status": "PAUSED",
+            "observed_at": T1,  # noqa: F405
+            "source_turn_id": metadata.turn_id,
+        }
+        observation, artifacts, paths = server._gateway_paused_automation_artifacts(
+            state, receipt, metadata, stem="unit"
+        )
+        self.assertEqual(observation["status"], "PAUSED")
+        self.assertEqual(len(artifacts), 2)
+        self.assertIn("app_automation_receipt_digest", paths)
+
+        mismatched = {**receipt, "status": "ACTIVE"}
+        with self.assertRaisesRegex(
+            mcp.McpBridgeError, "APP_AUTOMATION_RECEIPT_IDENTITY_MISMATCH"
+        ):
+            server._gateway_paused_automation_artifacts(
+                state, mismatched, metadata, stem="unit"
+            )
 
 
 if __name__ == "__main__":

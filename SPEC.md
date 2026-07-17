@@ -67,7 +67,11 @@ module:
 
 - bounded single-frame structured transport and strict UTF-8 framing;
 - one business route per real host turn with host attestation;
+- schema-v3 MCP State Gateway as the sole canonical writer for new Adaptive
+  Packs, with explicit-only v1/v2 migration;
 - durable outboxes, receipts, replay, and lost-output recovery;
+- current-artifact, current-dispatch, PASS-report evidence binding;
+- bounded transport degradation and immutable successor handoff;
 - fenced leases and identity-preserving Pack migration;
 - bounded repair and fail-closed rejection with zero side effects;
 - evidence claims bound to the exact artifact and environment;
@@ -131,3 +135,56 @@ noncritical documentation.
 
 Behavioral correctness remains the responsibility of focused tests, exact
 artifact review, and the evidence process in [`docs/RELEASING.md`](docs/RELEASING.md).
+
+## Schema-v3 State Gateway boundary
+
+For a new Adaptive Pack, the installed MCP `state_gateway` is the only writer
+of canonical control-plane state. Controller, Worker, Reviewer, Local Verifier,
+and any external Supervisor have no authority to patch `.codex-loop/**` or
+create a session State-Writer. The public route sequence is `INITIALIZE` or
+`INITIALIZE_SUCCESSOR`, narrow App-receipt-bound bootstrap `REGISTER_TASK` /
+`REGISTER_HEARTBEAT`,
+`PREPARE_ROUTE`, `RECORD_ROUTE_SENT`, and `ACK_ROUTE_RESULT`; `REPORT_RECOVERY`
+may ACK the same existing outbox after a lost task index or stdout, but cannot
+create another product dispatch. `ADVANCE_ROADMAP` derives a nonfinal next Goal
+from the unchanged canonical registry. `PREPARE_FINALIZATION` followed by an
+App-owned, externally attested `automation_update` pause receipt and
+`ACK_FINALIZATION` is the schema-v3 finalization path. `PREPARE_FINALIZATION`
+leaves `terminal_status` null and creates only a PREPARED finalization outbox;
+only the receipt-bound ACK creates the terminal projection. The Gateway neither
+manufactures nor accepts a Controller-provided receipt. Current Codex MCP turn
+metadata does not expose that receipt, so `REGISTER_TASK` (task create/read),
+`REGISTER_HEARTBEAT` / `RECORD_HEARTBEAT_OBSERVATION` (automation observation),
+`RECORD_ROUTE_SENT` (message send), and pause/finalization (automation update)
+operations fail closed with
+`APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE`; manual canary observation cannot
+upgrade into canonical evidence.
+For `RECORD_ROUTE_SENT`, the App-owned `SEND_MESSAGE_TO_THREAD` result must
+also include the exact materialized `payload_digest` computed from the real
+send input. Gateway compares it to the PREPARED outbox before it records
+`SENT`; a Gateway-derived digest, a message id alone, or a digest for another
+payload is not a route-send receipt.
+`RECORD_TRANSPORT_OBSERVATION` likewise consumes only an App-owned transport
+failure receipt that binds its fingerprint, outbox, observed time and whether
+the trigger was the registered business heartbeat; Controller parameters cannot
+manufacture a natural observation or the fifteen-minute threshold.
+Once that threshold reaches `WAITING_TRANSPORT_RECOVERY`, every
+`PREPARE_ROUTE` rejects with zero side effects. Existing staged reports and the
+original failed outbox remain available only to their bounded recovery/ACK
+operations; no new product or report-only dispatch is created.
+Target role reports likewise require the target's MCP-attested `STAGE_REPORT`
+call before the Controller can ACK them. v3 disables native Goal adapters and
+records `GATEWAY_NO_NATIVE_GOAL` as a local sentinel, never an external
+Goal-tool receipt.
+
+The Gateway, rather than Controller-assembled payloads, derives current
+freshness, validation, review handoff, artifact identity, route lease and
+outbox. A PASS projection is valid only for the same Goal's current artifact,
+current Worker dispatch and PASS formal report. `BLOCKED`, stale artifact, or
+stale dispatch evidence is non-PASS.
+
+Schema v1/v2 State-Writer state remains readable for audit and can move to v3
+only by an explicit paused/quiescent `MIGRATE_V2_TO_V3`. A terminal predecessor
+is immutable evidence; a continuation has a new root and uses
+`INITIALIZE_SUCCESSOR`. The exact additional invariants and their executable
+surfaces are in the index and ADR 0010.

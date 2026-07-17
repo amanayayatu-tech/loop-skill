@@ -3,6 +3,85 @@
 Use this reference only when `coordination_mode=adaptive`. Standard Mode keeps
 the existing fixed Goal Queue contract and generated fixture behavior.
 
+## Schema v3 State Gateway (current new-Pack contract)
+
+New Adaptive Packs use `state_gateway_mode=MCP_CANONICAL_WRITER` and
+`schema_version: 3`. The installed MCP `state_gateway({root, request})` is the
+only canonical writer. No session State-Writer task exists in a v3 thread
+registry, and Controller, Worker, Reviewer, Local Verifier, and an outer
+Supervisor are forbidden from hand-writing `.codex-loop/**`.
+
+The public request is closed to `request_id`, `operation`, `occurred_at`, and
+`parameters`, under an attested real Controller turn. Its supported operations
+are `INITIALIZE`, `INITIALIZE_SUCCESSOR`, `MIGRATE_V2_TO_V3`, bootstrap-only
+`REGISTER_TASK` and `REGISTER_HEARTBEAT`, `RECORD_HEARTBEAT_OBSERVATION`,
+`PREPARE_ROUTE`, `RECORD_ROUTE_SENT`, `ACK_ROUTE_RESULT`, `REPORT_RECOVERY`,
+`ADVANCE_ROADMAP`, `PREPARE_FINALIZATION`, `ACK_FINALIZATION`,
+`ACK_TRANSPORT_PAUSE`, and bounded transport observation. `INITIALIZE` requires
+an exact Pack source in a fresh root. `INITIALIZE_SUCCESSOR` additionally binds
+the terminal predecessor's receipt/root digest, product snapshot/base, exact
+ACK evidence and a repair backlog; it never changes that predecessor.
+
+`PREPARE_ROUTE` atomically derives host-turn identity, virtual route lease,
+repository snapshot/freshness, Goal definition, validation matrix, review
+handoff, current artifact and one PREPARED outbox. Controller sends the
+`runtime_codec` materialized payload once, then records an App-owned verified
+message receipt through `RECORD_ROUTE_SENT`. The receipt must contain the
+App-computed exact materialized `payload_digest` and it must equal the PREPARED
+outbox; Gateway never derives this receipt binding from its own state. A same-turn MCP identity alone is
+not enough: the receipt must arrive in the reserved App metadata carrier and
+cannot be reconstructed from Controller arguments. The exact
+target role stages report bytes through `runtime_codec(STAGE_REPORT)` under its
+MCP-attested task identity; Gateway ACKs that exact original outbox.
+`REGISTER_TASK`, `REGISTER_HEARTBEAT`, and
+`RECORD_HEARTBEAT_OBSERVATION` use that same non-argument App-owned carrier:
+the Controller cannot register a task, claim an ACTIVE heartbeat, or write a
+heartbeat readback from request parameters or transcript prose.
+The exact receipt actions are `THREAD_CREATE_OR_READ` for task registration,
+`AUTOMATION_OBSERVATION` for heartbeat register/readback,
+`SEND_MESSAGE_TO_THREAD` for route sending, and `AUTOMATION_UPDATE` for pause
+and finalization. Without this carrier the Controller stops before any external
+task/automation create/read or send; it does not create an unrecordable task as
+a workaround.
+When a role has completed/staged a report but task stdout or indexing is lost,
+`REPORT_RECOVERY` ACKs that same outbox and never adds a report-only product
+dispatch or repair attempt.
+
+A v3 PASS projection requires the same Goal's current artifact, current Worker
+dispatch and a matching PASS formal report. `BLOCKED`, stale dispatch, stale
+artifact and foreign outbox reports have no PASS side effect. Review routes are
+CODE_REVIEW -> required LOCAL_VERIFICATION -> ROADMAP_AUDIT. A nonfinal current
+`ROADMAP_AUDIT_PASS` can only use `ADVANCE_ROADMAP`, which derives the next
+ready Goal from the unchanged canonical registry; it cannot add, delete,
+reorder, or copy a roadmap payload. A final candidate requires FINAL_AUDIT,
+`PREPARE_FINALIZATION`, an App-owned verified heartbeat-pause receipt, and
+`ACK_FINALIZATION`. `PREPARE_FINALIZATION` is nonterminal: it creates a
+PREPARED finalization outbox while `terminal_status` remains null. Only the
+receipt-bound ACK creates the terminal projection.
+Schema v3 disables native Goal adapters and records `GATEWAY_NO_NATIVE_GOAL` as
+a local sentinel, never as an external Goal-tool outcome.
+`CAPTURE_COMPLETE_DIFF` captures raw Git binary bytes, allows only confined
+untracked paths, reverse-checks the patch and emits a manifest; no model
+transports binary patch text.
+
+For a matching transport fingerprint/outbox, the first App-owned
+`APP_TRANSPORT_OBSERVATION` retains the outbox. Its fingerprint, time, and
+registered-heartbeat identity are all receipt fields, not Controller claims.
+Two natural heartbeat observations or fifteen minutes enter
+`WAITING_TRANSPORT_RECOVERY`, stop canonical routing and request one user
+notification. The Controller must pause the one business heartbeat in the App
+and submit `ACK_TRANSPORT_PAUSE`; until its App-owned verified receipt exists the
+runtime never claims PAUSED. Later matching observations are zero-side-effect
+until an authorized recovery. `LOOP_METRICS.json` is derived observation only.
+
+Schema v1/v2 State-Writer state remains readable for history. Its only route to
+v3 is explicit `MIGRATE_V2_TO_V3` while PAUSED with no lease or active outbox;
+there is no automatic migration. A schema-v3 runtime rejects every legacy
+mutation type as `STATE_GATEWAY_REQUIRED`, including raw migration replay, so
+the compatibility path cannot bypass Gateway ownership. The remainder of
+this file describes the legacy v1/v2 compatibility protocol unless a section
+explicitly says schema v3.
+
 ## Contents
 
 1. Mode boundary
@@ -30,7 +109,7 @@ Adaptive input requires:
 - at least one dependency-free Goal for the initial `ACTIVE` milestone
 - Local Verifier, subagent, and dashboard policies
 
-Role kinds are `implementation`, `code_reviewer`, `state_writer`,
+Legacy role kinds are `implementation`, `code_reviewer`, `state_writer`,
 `local_verifier`, `triage`, and `explorer`. A Local Verifier or generic Auditor
 must never accidentally satisfy the code-review gate.
 Auto-injected formal roles use deterministic collision-free names. Revalidate
@@ -76,7 +155,7 @@ both normalized role names and thread placeholder slugs after injection.
 - `validation_requirements`, `validation_results`, and exact evidence identity
 - `validation_gate_status` and `status_projection_target`
 
-`schema_version: 2` is the current format. Existing v1 state changes only
+For legacy compatibility, `schema_version: 2` remains readable. Existing v1 state changes only
 through `MIGRATE_V1_TO_V2` with its exact source digest. The migration is a
 locked, journaled, CAS-protected transaction with no external actions; ordinary
 reads do not migrate. Repeating an applied migration is idempotent, while an
@@ -792,7 +871,11 @@ must equal `diff_sha256`, and every non-deleted file entry must match the
 current regular non-symlink file. `NO_DIFF` uses the SHA-256 of empty bytes,
 empty `changed_files`, and equal before/after snapshots. `PATCH_FILE_V1` names
 a root-confined regular non-symlink diff artifact whose bytes hash to
-`diff_sha256`. `FAIL` and `BLOCKED` reports remain archivable without this
+`diff_sha256`. `CAPTURED_GIT_DIFF_V1` instead names only the SHA-256 returned
+by runtime `CAPTURE_COMPLETE_DIFF`; runtime derives the digest-addressed
+`.codex-loop/diff-captures/<sha256>.patch` path and rechecks its raw bytes, so
+the Worker report never transports patch content or a model-selected control
+plane path. `FAIL` and `BLOCKED` reports remain archivable without this
 review handoff so a zero-effect failure can still close a SENT outbox.
 Worker, Reviewer, and Local Verifier build one strict JSON `report_text` inside the
 target task, without fences or trailing prose, whose `report_digest` value is

@@ -19,7 +19,7 @@ import select
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -38,11 +38,18 @@ from loop_architect.state_runtime import (
 
 MCP_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2024-11-05")
 MCP_SERVER_NAME = "codex-loop-state"
-MCP_SERVER_VERSION = "1.2.0"
+MCP_SERVER_VERSION = "1.4.0"
 MCP_TOOL_NAME = "route_state_mutation"
 MCP_RUNTIME_CODEC_TOOL_NAME = "runtime_codec"
+MCP_STATE_GATEWAY_TOOL_NAME = "state_gateway"
 MCP_TURN_META_KEY = "x-codex-turn-metadata"
 MCP_THREAD_META_KEY = "threadId"
+# This reserved top-level metadata field is intentionally not an MCP tool
+# argument.  Only a future Codex App/app-server integration that can attest a
+# completed subtool call may provide it.  Current App versions do not provide
+# it, so result-consuming Gateway operations fail closed instead of treating a
+# Controller's retelling of a tool result as evidence.
+MCP_APP_ACTION_RECEIPT_META_KEY = "x-codex-app-action-receipt-v1"
 MCP_INPUT_MAX_BYTES = 4_000_000
 MCP_PARTIAL_FRAME_TIMEOUT_SECONDS = 30.0
 MCP_READ_CHUNK_BYTES = 64 * 1024
@@ -379,11 +386,71 @@ def _extract_turn_metadata(
     )
 
 
+def _extract_app_action_result(
+    params: dict[str, Any],
+    metadata: TrustedTurnMetadata,
+    *,
+    action: str,
+    result_fields: set[str],
+) -> dict[str, Any]:
+    """Read an App-owned completed-action receipt, never a tool argument.
+
+    Turn metadata establishes who is calling this MCP tool.  It does not
+    establish that a different App subtool completed earlier in the turn.  The
+    latter requires a separately App-injected receipt.  Until the desktop
+    protocol supplies one, missing metadata is an explicit, zero-side-effect
+    capability block rather than an invitation to accept model-provided JSON.
+    """
+
+    meta = params.get("_meta")
+    if not isinstance(meta, dict):
+        raise McpBridgeError("BLOCKED_BY_APP_ATTESTATION", "/params/_meta")
+    raw = meta.get(MCP_APP_ACTION_RECEIPT_META_KEY)
+    if raw is None:
+        raise McpBridgeError(
+            "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE",
+            f"/params/_meta/{MCP_APP_ACTION_RECEIPT_META_KEY}",
+            {"required_action": action, "side_effects": "NONE"},
+        )
+    if isinstance(raw, str):
+        try:
+            raw = _strict_json_loads(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise McpBridgeError(
+                "APP_ACTION_RECEIPT_ATTESTATION_INVALID",
+                f"/params/_meta/{MCP_APP_ACTION_RECEIPT_META_KEY}",
+            ) from exc
+    required = {
+        "schema_version", "action", "source_thread_id", "source_turn_id", "result",
+    }
+    if (
+        not isinstance(raw, dict)
+        or set(raw) != required
+        or raw.get("schema_version") != 1
+        or raw.get("action") != action
+        or raw.get("source_thread_id") != metadata.thread_id
+        or raw.get("source_turn_id") != metadata.turn_id
+        or not isinstance(raw.get("result"), dict)
+        or set(raw["result"]) != result_fields
+    ):
+        raise McpBridgeError(
+            "APP_ACTION_RECEIPT_ATTESTATION_INVALID",
+            f"/params/_meta/{MCP_APP_ACTION_RECEIPT_META_KEY}",
+        )
+    return copy.deepcopy(raw["result"])
+
+
 @dataclass
 class AdaptiveStateMcpServer:
     host_attestation: TrustedHostAttestation | None
     host_error: McpBridgeError | None = None
     initialized: bool = False
+    # This is intentionally process-local.  A report may be staged again by
+    # its attested target after a server restart, but a raw CLI-staged file or
+    # a Controller-authored report can never be ACKed as target work.
+    codec_report_attestations: dict[tuple[str, str, str], dict[str, str]] = field(
+        default_factory=dict
+    )
 
     @classmethod
     def from_current_process(cls) -> "AdaptiveStateMcpServer":
@@ -485,6 +552,7 @@ class AdaptiveStateMcpServer:
                 _runtime_error(error.code, error.path, error.details)
             )
         try:
+            metadata = _extract_turn_metadata(params, self.host_attestation)
             arguments = params.get("arguments")
             if not isinstance(arguments, dict):
                 raise McpBridgeError("MCP_ARGUMENTS_INVALID", "/params/arguments")
@@ -495,6 +563,7 @@ class AdaptiveStateMcpServer:
                 "STAGE_REPORT": {"operation", "root", "request"},
                 "STAGE_EXTERNAL_RECEIPT": {"operation", "root", "request"},
                 "NORMALIZE_FINGERPRINT": {"operation", "request"},
+                "CAPTURE_COMPLETE_DIFF": {"operation", "root", "request"},
             }
             if operation not in allowed_keys or set(arguments) != allowed_keys[operation]:
                 raise McpBridgeError(
@@ -518,12 +587,679 @@ class AdaptiveStateMcpServer:
                     "RUNTIME_CODEC_ARGUMENTS_INVALID",
                     "/params/arguments/transport_text",
                 )
+            # Authorization that protects a persistent codec operation must
+            # happen before the codec runs.  Binding a caller after staging a
+            # report or receipt would still leave attacker-controlled bytes in
+            # the control plane when the later check rejects the request.
+            if root is not None:
+                self._authorize_codec_caller(
+                    operation,
+                    root,
+                    request=request,
+                    metadata=metadata,
+                )
             response = execute_runtime_codec(
                 operation,
                 root=root,
                 request=request,
                 transport_text=transport_text,
             )
+            if response.get("ok") and root is not None:
+                self._bind_codec_caller(
+                    operation,
+                    root,
+                    request=request,
+                    transport_text=transport_text,
+                    response=response,
+                    metadata=metadata,
+                )
+        except McpBridgeError as exc:
+            response = _runtime_error(exc.code, exc.path, exc.details)
+        return self._tool_result(response)
+
+    @staticmethod
+    def _codec_outbox_record(
+        state: dict[str, Any], outbox_id: str
+    ) -> tuple[str, dict[str, Any]]:
+        matches = [
+            (kind, state[field][outbox_id])
+            for kind, field in (
+                ("DISPATCH", "dispatch_outbox"),
+                ("ASSURANCE", "assurance_dispatch_outbox"),
+                ("LOCAL", "local_verification_outbox"),
+            )
+            if outbox_id in state.get(field, {})
+        ]
+        if len(matches) != 1:
+            raise McpBridgeError("CODEC_OUTBOX_NOT_FOUND", "/request/outbox_id")
+        return matches[0]
+
+    def _bind_codec_caller(
+        self,
+        operation: str,
+        root: str,
+        *,
+        request: dict[str, Any] | None,
+        transport_text: str | None,
+        response: dict[str, Any],
+        metadata: TrustedTurnMetadata,
+    ) -> None:
+        """Bind role-authored codec operations to an App-attested task.
+
+        The Controller may route and ACK, but cannot stage a Worker/Reviewer
+        report itself.  The attestation is deliberately in-memory: after a
+        lost MCP server, the same target re-stages the already-produced report
+        and the original outbox is recovered without a product redispatch.
+        """
+
+        state = AdaptiveStateRuntime(root).read_state()
+        if state is None or state.get("schema_version") != 3:
+            return
+        registry = state.get("thread_registry", {})
+        caller = registry.get(metadata.thread_id)
+        if not isinstance(caller, dict) or caller.get("status") != "REGISTERED":
+            raise McpBridgeError("CODEC_CALLER_THREAD_UNREGISTERED", "/params/_meta")
+        if operation == "VERIFY_DISPATCH":
+            target_id = response.get("target_thread_id")
+            expected_role = response.get("target_role")
+            if (
+                target_id != metadata.thread_id
+                or caller.get("role_kind") != expected_role
+            ):
+                raise McpBridgeError("CODEC_DISPATCH_TARGET_ATTESTATION_MISMATCH", "/params/_meta")
+            return
+        if operation == "STAGE_REPORT":
+            if not isinstance(request, dict) or not isinstance(request.get("outbox_id"), str):
+                raise McpBridgeError("CODEC_REPORT_REQUEST_INVALID", "/request/outbox_id")
+            kind, record = self._codec_outbox_record(state, request["outbox_id"])
+            expected_role = {
+                "DISPATCH": "WORKER", "ASSURANCE": "REVIEWER", "LOCAL": "LOCAL_VERIFIER",
+            }[kind]
+            if (
+                record.get("status") != "SENT"
+                or record.get("target_id") != metadata.thread_id
+                or caller.get("role_kind") != expected_role
+            ):
+                raise McpBridgeError("CODEC_REPORT_TARGET_ATTESTATION_MISMATCH", "/params/_meta")
+            report_digest = response.get("report_digest")
+            if not isinstance(report_digest, str):
+                raise McpBridgeError("CODEC_REPORT_STAGE_INVALID", "/result/report_digest")
+            attestation = {
+                "thread_id": metadata.thread_id,
+                "turn_id": metadata.turn_id,
+                "role_kind": expected_role,
+                "outbox_id": request["outbox_id"],
+                "report_digest": report_digest,
+            }
+            self.codec_report_attestations[(str(Path(root).resolve()), request["outbox_id"], report_digest)] = attestation
+            response["codec_report_attestation"] = copy.deepcopy(attestation)
+            return
+        if operation == "STAGE_EXTERNAL_RECEIPT":
+            if (
+                not isinstance(request, dict)
+                or request.get("target_thread_id") != metadata.thread_id
+                or caller.get("role_kind") != "LOCAL_VERIFIER"
+            ):
+                raise McpBridgeError("CODEC_EXTERNAL_RECEIPT_TARGET_ATTESTATION_MISMATCH", "/params/_meta")
+            return
+        if operation == "CAPTURE_COMPLETE_DIFF" and caller.get("role_kind") not in {"CONTROLLER", "WORKER"}:
+            raise McpBridgeError("CODEC_DIFF_CALLER_ROLE_INVALID", "/params/_meta")
+
+    def _authorize_codec_caller(
+        self,
+        operation: str,
+        root: str,
+        *,
+        request: dict[str, Any] | None,
+        metadata: TrustedTurnMetadata,
+    ) -> None:
+        """Reject an unauthorized persistent codec call before it can write.
+
+        ``VERIFY_DISPATCH`` is read-only and needs its decoded payload to
+        learn the route target, so its target check stays in the post-execute
+        binder.  Every operation that can create a spool file, report stage or
+        diff capture is authorized here first.
+        """
+
+        if operation not in {
+            "STAGE_REPORT", "STAGE_EXTERNAL_RECEIPT", "CAPTURE_COMPLETE_DIFF"
+        }:
+            return
+        state = AdaptiveStateRuntime(root).read_state()
+        if state is None or state.get("schema_version") != 3:
+            return
+        registry = state.get("thread_registry", {})
+        caller = registry.get(metadata.thread_id)
+        if not isinstance(caller, dict) or caller.get("status") != "REGISTERED":
+            raise McpBridgeError("CODEC_CALLER_THREAD_UNREGISTERED", "/params/_meta")
+        if operation == "STAGE_REPORT":
+            if not isinstance(request, dict) or not isinstance(request.get("outbox_id"), str):
+                raise McpBridgeError("CODEC_REPORT_REQUEST_INVALID", "/request/outbox_id")
+            kind, record = self._codec_outbox_record(state, request["outbox_id"])
+            expected_role = {
+                "DISPATCH": "WORKER", "ASSURANCE": "REVIEWER", "LOCAL": "LOCAL_VERIFIER",
+            }[kind]
+            if (
+                record.get("status") != "SENT"
+                or record.get("target_id") != metadata.thread_id
+                or caller.get("role_kind") != expected_role
+            ):
+                raise McpBridgeError("CODEC_REPORT_TARGET_ATTESTATION_MISMATCH", "/params/_meta")
+            return
+        if operation == "STAGE_EXTERNAL_RECEIPT":
+            if (
+                not isinstance(request, dict)
+                or request.get("target_thread_id") != metadata.thread_id
+                or caller.get("role_kind") != "LOCAL_VERIFIER"
+            ):
+                raise McpBridgeError("CODEC_EXTERNAL_RECEIPT_TARGET_ATTESTATION_MISMATCH", "/params/_meta")
+            return
+        if caller.get("role_kind") not in {"CONTROLLER", "WORKER"}:
+            raise McpBridgeError("CODEC_DIFF_CALLER_ROLE_INVALID", "/params/_meta")
+
+    @staticmethod
+    def _gateway_error(code: str, path: str = "/") -> None:
+        raise McpBridgeError(code, path)
+
+    def _gateway_paused_automation_artifacts(
+        self,
+        state: dict[str, Any],
+        paused_receipt: Any,
+        metadata: TrustedTurnMetadata,
+        *,
+        stem: str,
+    ) -> tuple[dict[str, Any], list[dict[str, str]], dict[str, str]]:
+        required = {
+            "automation_id", "status", "automation_name", "kind",
+            "target_thread_id", "rrule", "prompt_digest",
+            "prompt_normalization", "observed_at", "source_turn_id",
+        }
+        if not isinstance(paused_receipt, dict) or set(paused_receipt) != required:
+            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/paused_automation_receipt")
+        if paused_receipt.get("source_turn_id") != metadata.turn_id:
+            self._gateway_error("APP_AUTOMATION_RECEIPT_TURN_MISMATCH", "/params/arguments/request/parameters/paused_automation_receipt/source_turn_id")
+        identity = state.get("heartbeat_prompt_identity")
+        if not isinstance(identity, dict):
+            self._gateway_error("STATE_GATEWAY_HEARTBEAT_UNREGISTERED", "/params/arguments/request")
+        heartbeat_observation = {
+            **copy.deepcopy(identity),
+            "automation_id": paused_receipt["automation_id"],
+            "status": paused_receipt["status"],
+            "observed_at": paused_receipt["observed_at"],
+        }
+        if (
+            paused_receipt.get("status") != "PAUSED"
+            or any(
+                paused_receipt.get(key) != heartbeat_observation.get(key)
+                for key in (
+                    "automation_id", "automation_name", "kind", "target_thread_id",
+                    "rrule", "prompt_digest", "prompt_normalization", "observed_at",
+                )
+            )
+        ):
+            self._gateway_error("APP_AUTOMATION_RECEIPT_IDENTITY_MISMATCH", "/params/arguments/request/parameters/paused_automation_receipt")
+        heartbeat_content = json.dumps(heartbeat_observation, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        heartbeat_digest = "sha256:" + hashlib.sha256(heartbeat_content.encode("utf-8")).hexdigest()
+        heartbeat_path = f".codex-loop/reports/{stem}-heartbeat-{heartbeat_digest.removeprefix('sha256:')}.json"
+        app_receipt = {
+            "observation_kind": "APP_AUTOMATION_UPDATE_OBSERVATION",
+            "controller_thread_id": metadata.thread_id,
+            "controller_turn_id": metadata.turn_id,
+            "automation": copy.deepcopy(paused_receipt),
+        }
+        app_content = json.dumps(app_receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        app_digest = "sha256:" + hashlib.sha256(app_content.encode("utf-8")).hexdigest()
+        app_path = f".codex-loop/reports/{stem}-app-automation-{app_digest.removeprefix('sha256:')}.json"
+        return heartbeat_observation, [
+            {"path": heartbeat_path, "content": heartbeat_content, "digest": heartbeat_digest, "media_type": "application/json"},
+            {"path": app_path, "content": app_content, "digest": app_digest, "media_type": "application/json"},
+        ], {
+            "automation_observation_path": heartbeat_path,
+            "automation_observation_digest": heartbeat_digest,
+            "app_automation_receipt_path": app_path,
+            "app_automation_receipt_digest": app_digest,
+        }
+
+    def _call_state_gateway(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Translate a strict public gateway request into one runtime CAS.
+
+        The public shape deliberately excludes leases, freshness objects, and
+        outbox identities.  Those values are created from canonical state in
+        the runtime, so Controller cannot copy a stale matrix or handoff.
+        """
+
+        if self.host_attestation is None:
+            error = self.host_error or McpBridgeError("BLOCKED_BY_APP_ATTESTATION")
+            return self._tool_result(_runtime_error(error.code, error.path, error.details))
+        try:
+            metadata = _extract_turn_metadata(params, self.host_attestation)
+            arguments = params.get("arguments")
+            if not isinstance(arguments, dict) or set(arguments) != {"root", "request"}:
+                self._gateway_error("STATE_GATEWAY_ARGUMENTS_INVALID", "/params/arguments")
+            root = arguments["root"]
+            public = arguments["request"]
+            if not isinstance(root, str) or not Path(root).is_absolute():
+                self._gateway_error("MCP_ROOT_INVALID", "/params/arguments/root")
+            if not isinstance(public, dict) or set(public) != {"request_id", "operation", "occurred_at", "parameters"}:
+                self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request")
+            request_id = public["request_id"]
+            operation = public["operation"]
+            occurred_at = public["occurred_at"]
+            payload = public["parameters"]
+            if not isinstance(request_id, str) or not request_id:
+                self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/request_id")
+            if not isinstance(occurred_at, str) or not occurred_at:
+                self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/occurred_at")
+            if not isinstance(payload, dict):
+                self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+            runtime = AdaptiveStateRuntime(root)
+            state = runtime.read_state()
+            if operation == "MIGRATE_V2_TO_V3":
+                if set(payload) != {"source_state_digest"}:
+                    self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                mutation: dict[str, Any] = {
+                    "type": "MIGRATE_V2_TO_V3",
+                    "source_state_digest": payload["source_state_digest"],
+                }
+                artifacts: list[dict[str, Any]] = []
+            elif operation == "INITIALIZE":
+                if state is not None:
+                    self._gateway_error("STATE_GATEWAY_ROOT_NOT_EMPTY", "/params/arguments/root")
+                required = {"initialize_mutation", "controller_pack_source_path"}
+                if set(payload) != required or not isinstance(payload["initialize_mutation"], dict):
+                    self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                source = payload["controller_pack_source_path"]
+                if not isinstance(source, str) or not Path(source).is_absolute():
+                    self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/controller_pack_source_path")
+                source_path = Path(source).resolve(strict=False)
+                try:
+                    source_path.relative_to(Path(root).resolve(strict=False))
+                    content = source_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError, ValueError):
+                    self._gateway_error("STATE_GATEWAY_PACK_SOURCE_INVALID", "/params/arguments/request/parameters/controller_pack_source_path")
+                digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+                initialize_mutation = copy.deepcopy(payload["initialize_mutation"])
+                if initialize_mutation.get("controller_pack_digest") != digest:
+                    self._gateway_error("STATE_GATEWAY_PACK_SOURCE_DIGEST_MISMATCH", "/params/arguments/request/parameters/initialize_mutation/controller_pack_digest")
+                artifacts = [{
+                    "path": ".codex-loop/sources/CONTROLLER_PACK.md",
+                    "source_path": str(source_path), "digest": digest,
+                    "media_type": "text/markdown",
+                }]
+                mutation = {
+                    "type": "STATE_GATEWAY",
+                    "operation": operation,
+                    "gateway_request": {"initialize_mutation": initialize_mutation},
+                }
+            elif operation == "INITIALIZE_SUCCESSOR":
+                if state is not None:
+                    self._gateway_error("STATE_GATEWAY_SUCCESSOR_ROOT_NOT_EMPTY", "/params/arguments/root")
+                required = {
+                    "predecessor_root", "predecessor_finalization_digest",
+                    "predecessor_root_digest", "successor_context",
+                    "initialize_mutation", "controller_pack_source_path",
+                }
+                if set(payload) != required or not isinstance(payload["initialize_mutation"], dict):
+                    self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                source = payload["controller_pack_source_path"]
+                if not isinstance(source, str) or not Path(source).is_absolute():
+                    self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/controller_pack_source_path")
+                source_path = Path(source).resolve(strict=False)
+                try:
+                    source_path.relative_to(Path(root).resolve(strict=False))
+                    content = source_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError, ValueError):
+                    self._gateway_error("STATE_GATEWAY_PACK_SOURCE_INVALID", "/params/arguments/request/parameters/controller_pack_source_path")
+                digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+                initialize_mutation = copy.deepcopy(payload["initialize_mutation"])
+                if initialize_mutation.get("controller_pack_digest") != digest:
+                    self._gateway_error("STATE_GATEWAY_PACK_SOURCE_DIGEST_MISMATCH", "/params/arguments/request/parameters/initialize_mutation/controller_pack_digest")
+                artifacts = [{
+                    "path": ".codex-loop/sources/CONTROLLER_PACK.md",
+                    "source_path": str(source_path), "digest": digest,
+                    "media_type": "text/markdown",
+                }]
+                gateway_payload = {
+                    "predecessor_root": payload["predecessor_root"],
+                    "predecessor_finalization_digest": payload["predecessor_finalization_digest"],
+                    "predecessor_root_digest": payload["predecessor_root_digest"],
+                    "successor_context": copy.deepcopy(payload["successor_context"]),
+                    "initialize_mutation": initialize_mutation,
+                }
+                mutation = {"type": "STATE_GATEWAY", "operation": operation, "gateway_request": gateway_payload}
+            else:
+                if state is None:
+                    self._gateway_error("STATE_NOT_INITIALIZED", "/params/arguments/root")
+                if operation == "PREPARE_ROUTE":
+                    if set(payload) != {"route_id", "goal_id", "route_kind", "target_thread_id", "observed_at"}:
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    gateway_payload = copy.deepcopy(payload)
+                    artifacts = []
+                elif operation == "REGISTER_TASK":
+                    if payload:
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    gateway_payload = _extract_app_action_result(
+                        params,
+                        metadata,
+                        action="THREAD_CREATE_OR_READ",
+                        result_fields={
+                            "thread_id", "role_kind", "bootstrap_role_kind",
+                            "bootstrap_prompt_digest", "worktree_path",
+                        },
+                    )
+                    artifacts = []
+                elif operation in {"REGISTER_HEARTBEAT", "RECORD_HEARTBEAT_OBSERVATION"}:
+                    if payload:
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    required_observation = {
+                        "automation_id", "status", "automation_name", "kind",
+                        "target_thread_id", "rrule", "prompt_digest",
+                        "prompt_normalization", "observed_at",
+                    }
+                    observation = _extract_app_action_result(
+                        params,
+                        metadata,
+                        action="AUTOMATION_OBSERVATION",
+                        result_fields=required_observation,
+                    )
+                    if operation == "REGISTER_HEARTBEAT":
+                        controller = state.get("thread_registry", {}).get(metadata.thread_id, {})
+                        if controller.get("role_kind") != "CONTROLLER":
+                            self._gateway_error("STEERING_ACTOR_INVALID", "/params/arguments/request")
+                    else:
+                        identity = state.get("heartbeat_prompt_identity")
+                        if not isinstance(identity, dict):
+                            self._gateway_error("STATE_GATEWAY_HEARTBEAT_UNREGISTERED", "/params/arguments/request")
+                    content = json.dumps(observation, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+                    digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+                    evidence_path = (
+                        ".codex-loop/reports/gateway-heartbeat-"
+                        f"{str(observation['automation_id'])}-{digest.removeprefix('sha256:')}.json"
+                    )
+                    artifacts = [{
+                        "path": evidence_path, "content": content,
+                        "digest": digest, "media_type": "application/json",
+                    }]
+                    gateway_payload = {
+                        "heartbeat_observation": observation,
+                        "automation_observation_path": evidence_path,
+                        "automation_observation_digest": digest,
+                    }
+                elif operation == "RECORD_ROUTE_SENT":
+                    if set(payload) != {"route_id"}:
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    route_id = payload["route_id"]
+                    required_receipt = {
+                        "message_id", "target_thread_id", "observed_at", "payload_digest",
+                    }
+                    app_send_receipt = {
+                        **_extract_app_action_result(
+                            params,
+                            metadata,
+                            action="SEND_MESSAGE_TO_THREAD",
+                            result_fields=required_receipt,
+                        ),
+                        "source_turn_id": metadata.turn_id,
+                    }
+                    route = state.get("gateway_route_ledger", {}).get(route_id, {})
+                    outbox_field = {
+                        "DISPATCH": "dispatch_outbox",
+                        "ASSURANCE": "assurance_dispatch_outbox",
+                        "LOCAL": "local_verification_outbox",
+                    }.get(route.get("outbox_kind"))
+                    outbox = (
+                        state.get(outbox_field, {}).get(route_id, {})
+                        if outbox_field is not None
+                        else {}
+                    )
+                    if app_send_receipt["payload_digest"] != outbox.get("payload_digest"):
+                        self._gateway_error(
+                            "APP_SEND_RECEIPT_PAYLOAD_MISMATCH",
+                            f"/params/_meta/{MCP_APP_ACTION_RECEIPT_META_KEY}/result/payload_digest",
+                        )
+                    observation = {
+                        "observation_kind": "APP_SEND_OBSERVATION",
+                        "outbox_id": route_id,
+                        "payload_digest": app_send_receipt["payload_digest"],
+                        "target_thread_id": app_send_receipt["target_thread_id"],
+                        "message_id": app_send_receipt["message_id"],
+                        "observed_at": app_send_receipt["observed_at"],
+                        "source_thread_id": metadata.thread_id,
+                        "source_turn_id": metadata.turn_id,
+                    }
+                    content = json.dumps(observation, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+                    evidence_path = f".codex-loop/reports/{route_id}-send.json"
+                    digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+                    artifacts = [{"path": evidence_path, "content": content, "digest": digest, "media_type": "application/json"}]
+                    gateway_payload = {
+                        "route_id": route_id,
+                        "send_observation": {
+                            "message_id": app_send_receipt["message_id"],
+                            "target_thread_id": app_send_receipt["target_thread_id"],
+                            "payload_digest": app_send_receipt["payload_digest"],
+                            "observed_at": app_send_receipt["observed_at"],
+                            "source_thread_id": metadata.thread_id,
+                            "source_turn_id": metadata.turn_id,
+                            "evidence_path": evidence_path,
+                            "evidence_digest": digest,
+                        },
+                    }
+                elif operation in {"ACK_ROUTE_RESULT", "REPORT_RECOVERY"}:
+                    key = "route_id" if operation == "ACK_ROUTE_RESULT" else "outbox_id"
+                    if set(payload) != {key, "staged_report"} or not isinstance(payload["staged_report"], dict):
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    staged = copy.deepcopy(payload["staged_report"])
+                    required_stage = {"path", "source_path", "digest", "media_type", "result"}
+                    if set(staged) != required_stage:
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/staged_report")
+                    source = Path(staged["source_path"]).resolve(strict=False)
+                    staging_root = (Path(root) / ".codex-loop" / "report-staging").resolve(strict=False)
+                    expected_name = (
+                        f"{payload[key]}.{str(staged['digest']).removeprefix('sha256:')}.json"
+                    )
+                    try:
+                        source.relative_to(staging_root)
+                        if source.name != expected_name:
+                            raise ValueError("unexpected staged report name")
+                        content = source.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError, ValueError):
+                        self._gateway_error(
+                            "STATE_GATEWAY_STAGED_REPORT_UNAVAILABLE",
+                            "/params/arguments/request/parameters/staged_report/source_path",
+                        )
+                    content_digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+                    if content_digest != staged["digest"]:
+                        self._gateway_error(
+                            "STATE_GATEWAY_STAGED_REPORT_DIGEST_MISMATCH",
+                            "/params/arguments/request/parameters/staged_report/digest",
+                        )
+                    route_id = payload[key]
+                    route = state.get("gateway_route_ledger", {}).get(route_id, {})
+                    if not isinstance(route, dict):
+                        self._gateway_error("STATE_GATEWAY_ROUTE_NOT_SENT", "/params/arguments/request/parameters")
+                    attestation_key = (str(Path(root).resolve()), route_id, staged["digest"])
+                    report_attestation = self.codec_report_attestations.get(attestation_key)
+                    expected_role = {
+                        "DISPATCH": "WORKER", "ASSURANCE": "REVIEWER", "LOCAL": "LOCAL_VERIFIER",
+                    }.get(route.get("outbox_kind"))
+                    if (
+                        not isinstance(report_attestation, dict)
+                        or report_attestation.get("outbox_id") != route_id
+                        or report_attestation.get("report_digest") != staged["digest"]
+                        or report_attestation.get("thread_id") != route.get("target_thread_id")
+                        or report_attestation.get("role_kind") != expected_role
+                    ):
+                        self._gateway_error(
+                            "STATE_GATEWAY_REPORT_TARGET_ATTESTATION_MISSING",
+                            "/params/arguments/request/parameters/staged_report",
+                        )
+                    artifacts = [{
+                        "path": staged["path"], "content": content,
+                        "digest": staged["digest"], "media_type": staged["media_type"],
+                    }]
+                    gateway_payload = {
+                        key: route_id,
+                        "staged_report": staged,
+                        "codec_report_attestation": copy.deepcopy(report_attestation),
+                    }
+                elif operation == "RECORD_TRANSPORT_OBSERVATION":
+                    if payload:
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    gateway_payload = _extract_app_action_result(
+                        params,
+                        metadata,
+                        action="APP_TRANSPORT_OBSERVATION",
+                        result_fields={
+                            "fingerprint", "outbox_id", "observed_at",
+                            "natural_heartbeat", "heartbeat_automation_id",
+                        },
+                    )
+                    artifacts = []
+                elif operation == "ACK_TRANSPORT_PAUSE":
+                    if set(payload) != set():
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    paused_receipt = {
+                        **_extract_app_action_result(
+                            params,
+                            metadata,
+                            action="AUTOMATION_UPDATE",
+                            result_fields={
+                                "automation_id", "status", "automation_name", "kind",
+                                "target_thread_id", "rrule", "prompt_digest",
+                                "prompt_normalization", "observed_at",
+                            },
+                        ),
+                        "source_turn_id": metadata.turn_id,
+                    }
+                    heartbeat_observation, artifacts, pause_receipt = self._gateway_paused_automation_artifacts(
+                        state,
+                        paused_receipt,
+                        metadata,
+                        stem="gateway-transport",
+                    )
+                    gateway_payload = {
+                        "heartbeat_observation": heartbeat_observation,
+                        **pause_receipt,
+                    }
+                elif operation == "ADVANCE_ROADMAP":
+                    if set(payload) != {"goal_id", "roadmap_audit_id", "observed_at"}:
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    gateway_payload = copy.deepcopy(payload)
+                    artifacts = []
+                elif operation == "PREPARE_FINALIZATION":
+                    if set(payload) != {"finalization_id", "goal_id", "final_audit_id", "observed_at"}:
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    gateway_payload = copy.deepcopy(payload)
+                    artifacts = []
+                elif operation == "ACK_FINALIZATION":
+                    if set(payload) != {"finalization_id"}:
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                    required_receipt = {
+                        "automation_id", "status", "automation_name", "kind",
+                        "target_thread_id", "rrule", "prompt_digest",
+                        "prompt_normalization", "observed_at",
+                    }
+                    paused_receipt = {
+                        **_extract_app_action_result(
+                            params,
+                            metadata,
+                            action="AUTOMATION_UPDATE",
+                            result_fields=required_receipt,
+                        ),
+                        "source_turn_id": metadata.turn_id,
+                    }
+                    identity = state.get("heartbeat_prompt_identity")
+                    if not isinstance(identity, dict):
+                        self._gateway_error("STATE_GATEWAY_HEARTBEAT_UNREGISTERED", "/params/arguments/request")
+                    heartbeat_observation = {
+                        **copy.deepcopy(identity),
+                        "automation_id": paused_receipt["automation_id"],
+                        "status": paused_receipt["status"],
+                        "observed_at": paused_receipt["observed_at"],
+                    }
+                    if (
+                        paused_receipt.get("status") != "PAUSED"
+                        or any(
+                            paused_receipt.get(key) != heartbeat_observation.get(key)
+                            for key in (
+                                "automation_id", "automation_name", "kind",
+                                "target_thread_id", "rrule", "prompt_digest",
+                                "prompt_normalization", "observed_at",
+                            )
+                        )
+                    ):
+                        self._gateway_error("APP_AUTOMATION_RECEIPT_IDENTITY_MISMATCH", "/params/arguments/request/parameters/paused_automation_receipt")
+                    heartbeat_content = json.dumps(heartbeat_observation, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+                    heartbeat_digest = "sha256:" + hashlib.sha256(heartbeat_content.encode("utf-8")).hexdigest()
+                    heartbeat_path = (
+                        ".codex-loop/reports/gateway-final-heartbeat-"
+                        f"{heartbeat_digest.removeprefix('sha256:')}.json"
+                    )
+                    goal_observation = {
+                        "goal_id": "GATEWAY_NO_NATIVE_GOAL",
+                        "status": "COMPLETE",
+                        "observation_kind": "NATIVE_GOAL_NOT_USED",
+                    }
+                    goal_content = json.dumps(goal_observation, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+                    goal_digest = "sha256:" + hashlib.sha256(goal_content.encode("utf-8")).hexdigest()
+                    goal_path = (
+                        ".codex-loop/reports/gateway-final-native-goal-"
+                        f"{goal_digest.removeprefix('sha256:')}.json"
+                    )
+                    app_receipt = {
+                        "observation_kind": "APP_AUTOMATION_UPDATE_OBSERVATION",
+                        "controller_thread_id": metadata.thread_id,
+                        "controller_turn_id": metadata.turn_id,
+                        "automation": copy.deepcopy(paused_receipt),
+                    }
+                    app_content = json.dumps(app_receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+                    app_digest = "sha256:" + hashlib.sha256(app_content.encode("utf-8")).hexdigest()
+                    app_path = (
+                        ".codex-loop/reports/gateway-final-app-automation-"
+                        f"{app_digest.removeprefix('sha256:')}.json"
+                    )
+                    artifacts = [
+                        {"path": goal_path, "content": goal_content, "digest": goal_digest, "media_type": "application/json"},
+                        {"path": heartbeat_path, "content": heartbeat_content, "digest": heartbeat_digest, "media_type": "application/json"},
+                        {"path": app_path, "content": app_content, "digest": app_digest, "media_type": "application/json"},
+                    ]
+                    gateway_payload = {
+                        "finalization_id": payload["finalization_id"],
+                        "automation_id": paused_receipt["automation_id"],
+                        "controller_goal_observation_path": goal_path,
+                        "controller_goal_observation_digest": goal_digest,
+                        "heartbeat_observation": heartbeat_observation,
+                        "automation_observation_path": heartbeat_path,
+                        "automation_observation_digest": heartbeat_digest,
+                        "app_automation_receipt_path": app_path,
+                        "app_automation_receipt_digest": app_digest,
+                    }
+                else:
+                    self._gateway_error("STATE_GATEWAY_OPERATION_INVALID", "/params/arguments/request/operation")
+                mutation = {"type": "STATE_GATEWAY", "operation": operation, "gateway_request": gateway_payload}
+            expected_version = 0 if state is None else state["state_version"]
+            runtime_request = {
+                "controller_approved": True,
+                "state_request_id": request_id,
+                "event_id": f"gateway-event-{request_id}",
+                "expected_state_version": expected_version,
+                "actor": "MCP_STATE_GATEWAY",
+                "thread_id": metadata.thread_id,
+                "occurred_at": occurred_at,
+                "evidence_paths": [artifact["path"] for artifact in artifacts],
+                "artifacts": artifacts,
+                "mutation": mutation,
+            }
+            pack_digest = (
+                state.get("controller_pack_identity", {}).get("digest")
+                if state is not None
+                else mutation.get("gateway_request", {})
+                .get("initialize_mutation", {})
+                .get("controller_pack_digest")
+            )
+            if isinstance(pack_digest, str):
+                runtime_request["controller_pack_digest"] = pack_digest
+            response = runtime.apply(runtime_request, trusted_turn_metadata=metadata)
         except McpBridgeError as exc:
             response = _runtime_error(exc.code, exc.path, exc.details)
         return self._tool_result(response)
@@ -656,7 +1392,65 @@ class AdaptiveStateMcpServer:
                                             "request": {"type": "object"},
                                         },
                                     },
+                                    {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["operation", "root", "request"],
+                                        "properties": {
+                                            "operation": {"const": "CAPTURE_COMPLETE_DIFF"},
+                                            "root": {"type": "string"},
+                                            "request": {"type": "object"},
+                                        },
+                                    },
                                 ]
+                            },
+                            "annotations": {
+                                "readOnlyHint": False,
+                                "destructiveHint": False,
+                                "idempotentHint": True,
+                                "openWorldHint": False,
+                            },
+                        },
+                        {
+                            "name": MCP_STATE_GATEWAY_TOOL_NAME,
+                            "description": (
+                                "The schema v3 canonical writer. Atomically prepares "
+                                "a route, records one App send observation, acknowledges "
+                                "a staged report on the original outbox, registers bootstrap "
+                                "tasks and the sole heartbeat, advances an unchanged roadmap, "
+                                "finalizes a v3 loop, initializes a fresh loop or successor, "
+                                "or records bounded transport degradation. "
+                                "It derives leases, freshness, validation and artifact "
+                                "identities from canonical state; callers cannot supply them."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "required": ["root", "request"],
+                                "properties": {
+                                    "root": {"type": "string"},
+                                    "request": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["request_id", "operation", "occurred_at", "parameters"],
+                                        "properties": {
+                                            "request_id": {"type": "string"},
+                                            "operation": {
+                                                "enum": [
+                                                    "INITIALIZE", "MIGRATE_V2_TO_V3", "PREPARE_ROUTE",
+                                                    "REGISTER_TASK", "REGISTER_HEARTBEAT",
+                                                    "RECORD_HEARTBEAT_OBSERVATION", "RECORD_ROUTE_SENT",
+                                                    "ACK_ROUTE_RESULT", "REPORT_RECOVERY", "ADVANCE_ROADMAP",
+                                                    "PREPARE_FINALIZATION", "ACK_FINALIZATION",
+                                                    "INITIALIZE_SUCCESSOR", "RECORD_TRANSPORT_OBSERVATION",
+                                                    "ACK_TRANSPORT_PAUSE"
+                                                ]
+                                            },
+                                            "occurred_at": {"type": "string"},
+                                            "parameters": {"type": "object"}
+                                        }
+                                    }
+                                }
                             },
                             "annotations": {
                                 "readOnlyHint": False,
@@ -670,7 +1464,11 @@ class AdaptiveStateMcpServer:
             }
         if method == "tools/call":
             tool_name = params.get("name")
-            if tool_name not in {MCP_TOOL_NAME, MCP_RUNTIME_CODEC_TOOL_NAME}:
+            if tool_name not in {
+                MCP_TOOL_NAME,
+                MCP_RUNTIME_CODEC_TOOL_NAME,
+                MCP_STATE_GATEWAY_TOOL_NAME,
+            }:
                 return self._jsonrpc_error(request_id, -32602, "Unknown tool")
             return {
                 "jsonrpc": "2.0",
@@ -679,6 +1477,8 @@ class AdaptiveStateMcpServer:
                     self._call_route_tool(params)
                     if tool_name == MCP_TOOL_NAME
                     else self._call_runtime_codec(params)
+                    if tool_name == MCP_RUNTIME_CODEC_TOOL_NAME
+                    else self._call_state_gateway(params)
                 ),
             }
         return self._jsonrpc_error(request_id, -32601, "Method not found")

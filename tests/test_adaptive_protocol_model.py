@@ -98,6 +98,8 @@ class AdaptiveProtocolCatalogTests(unittest.TestCase):
             (
                 "INITIALIZE",
                 "MIGRATE_V1_TO_V2",
+                "MIGRATE_V2_TO_V3",
+                "STATE_GATEWAY",
                 "PREPARE_CONTROLLER_PACK_MIGRATION",
                 "MIGRATE_CONTROLLER_PACK",
                 "ROLLBACK_CONTROLLER_PACK_MIGRATION",

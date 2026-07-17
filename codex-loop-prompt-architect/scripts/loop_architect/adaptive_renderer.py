@@ -120,7 +120,16 @@ def state_writer_adaptive_protocol(
 {roadmap_projection_contract(goals_path, dashboard_path, dashboard)}"""
 
 
-def local_verifier_protocol() -> str:
+def local_verifier_protocol(state_gateway: bool = False) -> str:
+    if state_gateway:
+        return """Local Verifier Protocol (schema v3):
+- This is a real Codex App project task created just in time, never an internal subagent and never a code-writing Worker.
+- Verify the exact branch/commit/worktree/snapshot identity supplied in the Gateway-derived dispatch using the declared local browser, account, permission, simulator, device, or hardware surface.
+- Accept a dispatch only after the exact source artifact has an acknowledged CODE_REVIEW. Every dispatch/report carries milestone_id, roadmap_version, Goal ID, verification_id, source artifact digest, local dispatch_id, real target threadId, payload digest, and Gateway-derived route identity. Return PASS, FAIL, or BLOCKED with those identities plus exact steps, expected/actual result, screenshot/log/console refs, reproduction steps, blocker, and next action.
+- Before send, `state_gateway(PREPARE_ROUTE)` must return the exact PREPARED local route; after the one external send, `RECORD_ROUTE_SENT` makes it SENT. Stage the report through runtime_codec, then close only that route through `ACK_ROUTE_RESULT`. No PASS/FAIL/BLOCKED report may be accepted without that matching SENT route.
+- Do not expose credentials, cookies, tokens, personal data, or sensitive screenshots to remote Workers or reports.
+- FAIL returns the same verification_id to the implementation Worker for repair and requires a retest of that exact item. If repair changes the artifact digest, the repaired artifact needs a new CODE_REVIEW ACK before retest. Worker prose cannot replace either gate.
+- BLOCKED becomes LOCAL_VERIFICATION_BLOCKED or LOCAL_VERIFICATION_PENDING according to the declared policy; never claim verification passed."""
     return """Local Verifier Protocol:
 - This is a real Codex App project task created just in time, never an internal subagent and never a code-writing Worker.
 - Verify the exact branch/commit/worktree/snapshot identity supplied in the dispatch using the declared local browser, account, permission, simulator, device, or hardware surface.
@@ -129,6 +138,62 @@ def local_verifier_protocol() -> str:
 - Do not expose credentials, cookies, tokens, personal data, or sensitive screenshots to remote Workers or reports.
 - FAIL returns the same verification_id to the implementation Worker for repair and requires a retest of that exact item. If repair changes the artifact digest, the repaired artifact needs a new CODE_REVIEW ACK before retest. Worker prose cannot replace either gate.
 - BLOCKED becomes LOCAL_VERIFICATION_BLOCKED or LOCAL_VERIFICATION_PENDING according to the declared policy; never claim verification passed."""
+
+
+def state_gateway_protocol(repo_root: str, goals_path: str, dashboard_path: str, dashboard: bool) -> str:
+    """Protocol emitted for new schema-v3 Packs.
+
+    This intentionally does not describe the legacy session State-Writer.  The
+    installed MCP server is the only canonical writer in a new Pack; retaining
+    old instructions here would recreate the single-message wakeup dependency
+    that v3 removes.
+    """
+
+    zero_execution_blockers = ", ".join(
+        f"`{code}`" for code in sorted(ZERO_EXECUTION_BLOCKER_CODES)
+    )
+    return f"""Adaptive v3 MCP State Gateway Protocol:
+- Canonical writer: the installed `codex-loop-state` MCP tool `state_gateway({{root, request}})`. It is the only writer for `LOOP_STATE.md`, events, journals, report archive, {goals_path}, {dashboard_path}, leases, outboxes, route ledger, and terminal receipt. Controller, Worker, Reviewer, Local Verifier, and any Supervisor must never create a State-Writer task or hand-edit `.codex-loop/**`.
+- A public request has exactly `request_id`, `operation`, `occurred_at`, and `parameters`. The App-attested current Controller turn is mandatory. The controller may provide only its Goal, route kind, target task and direct external observation; it must not copy a lease, freshness object, validation matrix, review handoff, artifact identity, roadmap version, or payload digest.
+- An App-attested MCP turn is not proof that a preceding App subtool completed. `REGISTER_TASK` requires an App-owned `THREAD_CREATE_OR_READ` receipt; `REGISTER_HEARTBEAT` and `RECORD_HEARTBEAT_OBSERVATION` require `AUTOMATION_OBSERVATION`; `RECORD_ROUTE_SENT` requires `SEND_MESSAGE_TO_THREAD`; `RECORD_TRANSPORT_OBSERVATION` requires `APP_TRANSPORT_OBSERVATION` (including whether it was a real registered-heartbeat wake); `ACK_TRANSPORT_PAUSE` and `ACK_FINALIZATION` require `AUTOMATION_UPDATE`. All use the same non-argument, App-owned `x-codex-app-action-receipt-v1` result carrier. Never put task, send, automation, or transport-failure evidence in `parameters`, never infer it from a transcript, and stop with `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE` before any external task/automation action or send when the installed App does not expose that carrier. A manual canary observation cannot substitute for this evidence.
+- `INITIALIZE` creates a fresh schema-v3 canonical state from an exact Pack source inside the new root, with no State-Writer identity. `INITIALIZE_SUCCESSOR` additionally binds an immutable terminal predecessor receipt and root digest; neither operation can overwrite an existing canonical root. `REGISTER_TASK` records only one App-attested reconciled Worker, Reviewer, or Local Verifier identity; it is the narrow bootstrap receipt, never a product dispatch.
+- `REGISTER_HEARTBEAT` binds the one App-attested real ACTIVE business heartbeat and its exact observation. `RECORD_HEARTBEAT_OBSERVATION` records only a later App-attested readback, including PAUSED terminal readback. Neither may create a second heartbeat. `PREPARE_ROUTE` atomically attests the Controller turn, captures the current repository identity, builds the canonical payload and one PREPARED outbox. `RECORD_ROUTE_SENT` accepts only an App-owned send receipt whose App-computed exact materialized payload digest matches that outbox; it does not fabricate a receipt from a bare message id or self-derived digest. `ACK_ROUTE_RESULT` consumes only a runtime-staged report for that same SENT outbox, staged by its exact target role. `REPORT_RECOVERY` ACKs that original outbox when stdout/task indexing was lost; it never creates a report-only product dispatch or increments a repair attempt.
+- `MATERIALIZE_DISPATCH`, `VERIFY_DISPATCH`, `STAGE_REPORT`, `STAGE_EXTERNAL_RECEIPT`, `NORMALIZE_FINGERPRINT`, and `CAPTURE_COMPLETE_DIFF` use `runtime_codec`; no codec operation may be implemented through a shell session stdin. The codec is bounded, one-frame, strict UTF-8 and fail-closed. Missing codec support returns `RUNTIME_CODEC_TOOL_UNAVAILABLE` with zero side effects.
+- Runtime binding is installation-owned: resolve `RUNTIME_PATH` and `RUNTIME_PYTHON` from the exact installed `[mcp_servers.codex-loop-state]` registration. Require the bridge and `RUNTIME_PATH` to share the installed skill root, and its internal launcher is `[RUNTIME_PYTHON, RUNTIME_PATH, "--root", <canonical root>]`; never fall back to ambient `python3`. A mismatch is `STATE_RUNTIME_UNAVAILABLE` with zero side effects. Controller/roles still invoke only `runtime_codec` and never run that launcher through a shell.
+- A report may close with `execution_started=false` only for the closed runtime zero-execution blocker set: {zero_execution_blockers}. Any other pre-execution BLOCKED result is rejected rather than consuming or bypassing a repair attempt.
+- The Gateway derives review handoff, validation matrix, freshness, current artifact and roadmap data from canonical state. PASS projection requires all three current identities: current Goal artifact, current Worker dispatch, and a PASS formal report. BLOCKED, stale dispatches, stale artifacts, or reports from another outbox cannot enter a PASS projection.
+- `CAPTURE_COMPLETE_DIFF` reads raw Git bytes itself, includes only allowed untracked paths, rejects control-plane/path escapes, verifies reverse binary application, and stores a manifest. A Worker PASS may use only its digest-addressed `CAPTURED_GIT_DIFF_V1` reference; runtime derives and rechecks the capture path. Models never carry binary patch bytes or a control-plane path in message strings.
+- `ADVANCE_ROADMAP` consumes only a current `ROADMAP_AUDIT_PASS` and advances the unchanged canonical Goal registry; it cannot add, delete, reorder, or re-materialize Goal definitions. `PREPARE_FINALIZATION` requires a current Final Audit PASS and all prior Goals complete; `ACK_FINALIZATION` then records only an App-owned verified PAUSED-heartbeat receipt. Schema v3 disables native Goal adapters, so the receipt explicitly records `GATEWAY_NO_NATIVE_GOAL` rather than faking a Goal completion.
+- `MIGRATE_V2_TO_V3` is explicit-only, requires a paused quiescent v2 state, and archives the historical State-Writer identity. It is never an automatic recovery action. `INITIALIZE_SUCCESSOR` initializes a fresh root from a terminal predecessor handoff and cannot alter that predecessor.
+- `LOOP_METRICS.json` is derived only: it records route/control waiting windows, dispatch/review/rejection counts, transport failures, Steering and available token measurements. It is neither canonical state nor permission to route.
+- For one matching transport fingerprint/outbox, the first App-attested `APP_TRANSPORT_OBSERVATION` retains that outbox and waits. Its real registered-heartbeat flag, fingerprint and time never come from Controller parameters. Two natural heartbeat observations or fifteen minutes enter `WAITING_TRANSPORT_RECOVERY`, stop canonical routing, and require one user notification. Controller may submit `ACK_TRANSPORT_PAUSE` only with the App-owned pause receipt; before its receipt, never claim the business heartbeat is PAUSED. Do not keep retrying every ten minutes; do not use an outer Supervisor as a second routing channel.
+- Legacy schema-v1/v2 State-Writer and `route_state_mutation` requests remain compatibility-only. A schema-v3 Pack must not use either path."""
+
+
+def state_gateway_reviewer_protocol() -> str:
+    return """Adaptive v3 Assurance Protocol:
+- This real read-only Reviewer is reused for CODE_REVIEW, ROADMAP_AUDIT and FINAL_AUDIT, but each is a separately prepared Gateway route and a separate exact report.
+- Accept only a runtime-verified review payload. Its source Worker dispatch, report digest, current artifact digest, Code Review/Local ACK chain where required, roadmap version and target thread identity are Gateway-derived and immutable.
+- Stage the formal JSON report through `runtime_codec(operation=STAGE_REPORT)` before replying. Return only the staged handle. The Controller forwards that handle to `state_gateway(operation=ACK_ROUTE_RESULT)`; neither actor reads, copies, hashes or reconstructs report bytes.
+- A CODE_REVIEW PASS applies only to the current Worker artifact. A required Local Verification PASS is bound into the subsequent Roadmap/Final audit payload. BLOCKED, needs-repair, a different artifact, or a different Worker dispatch is non-PASS evidence and cannot advance the Goal.
+- Review findings remain severity-first with exact file/line evidence, required fixes and test gaps. Do not write product files, canonical state, projections, dashboard, or reports by hand."""
+
+
+def state_gateway_controller_protocol(data: dict[str, Any], audit_paths: dict[str, str]) -> str:
+    return f"""Adaptive v3 Controller Routing Protocol:
+- This Controller is read-only. New v3 topology is Controller + just-in-time Worker + reusable Reviewer + optional Local Verifier + one business heartbeat. There is no State-Writer task and no external Supervisor role.
+- Bootstrap the Controller identity and archive the exact Pack through Gateway initialization. If the App does not expose the protected result carrier, stop before creating or reading a formal task or business heartbeat. Otherwise reconcile/create a formal task only when needed, then record its exact App-attested identity through `REGISTER_TASK` before routing it. Create Reviewer only after a current Worker PASS; create Local Verifier only when the Goal requires real local evidence.
+- Do not send or prepare a product route unless the installed App exposes the App-owned action-result metadata carrier required by the Gateway. On the current host capability, record `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE` as a safe platform block and stop; do not use a transcript, argument object or Supervisor workaround as a receipt. Once the carrier exists, every route is `PREPARE_ROUTE`; materialize through `runtime_codec`; send returned transport text once; App attests the result for `RECORD_ROUTE_SENT`; then wait for a role-owned staged report and call `ACK_ROUTE_RESULT`. A lost report index/stdout uses `REPORT_RECOVERY` for the existing outbox, never a second product dispatch.
+- The Gateway, not Controller prose, chooses current validation/review/artifact/freshness context. A Worker PASS flows CODE_REVIEW -> required LOCAL_VERIFICATION -> ROADMAP_AUDIT. A nonfinal `ROADMAP_AUDIT_PASS` uses `ADVANCE_ROADMAP`; a final candidate then flows FINAL_AUDIT -> PREPARE_FINALIZATION -> protected App heartbeat-PAUSED receipt -> ACK_FINALIZATION. Native Goal adapters are disabled in schema v3.
+- At a matching transport fault, retain the same outbox. After the Gateway returns `WAITING_TRANSPORT_RECOVERY`, use the real App to pause the one business heartbeat, submit `ACK_TRANSPORT_PAUSE`, and notify the user once; do not reactivate it, restart Codex, or create a parallel Supervisor workaround.
+- Native Goal adapters are disabled in schema v3 and cannot replace canonical Gateway finalization. `FINALIZATION_ACKED` is the only completion state; a terminal predecessor remains immutable and a continuation uses `INITIALIZE_SUCCESSOR` in a fresh root.
+- `STATUS.md`, `{audit_paths['root']}GOALS.md`, and `LOOP_METRICS.json` are derived observation surfaces. Read canonical state before a route; never use a projection or a task title as mutation authority.
+
+Human Steering And Convergence:
+- Schema-v3 preserves human-control evidence but does not reinterpret prior-schema mutation vocabulary as Gateway operations. Historical v1/v2 records remain readable through compatibility code; new v3 state may cross only the explicit paused-safe-point `MIGRATE_V2_TO_V3` boundary.
+- `STATUS_QUERY` is read-only: it reads canonical state plus derived `STATUS.md`, `GOALS.md`, and metrics, creates no route and cannot spend a route budget. A user pause is a safety request, not a Controller assertion: `PAUSE_REQUESTED` is historical run-control vocabulary, while v3 may project a heartbeat PAUSED only after the required protected App receipt.
+- Decision Cards are limited to real, user-owned gates. Their decision id, option id, scope and context digest must bind the exact current canonical state; a stale card has no authority. `review_surface` is confined user-artifact guidance, not evidence that promotes a product route.
+- The Gateway derives the current Validation Matrix and context freshness itself. `RECORD_CONTEXT_FRESHNESS` is a v2 compatibility label, never a schema-v3 Controller request. Repeated failure evidence can be diagnosed as `THRASHING_DETECTED`, but does not authorize a retry outside the bounded repair policy. Conflicting hard evidence is `EVIDENCE_CONFLICT` and fails closed."""
 
 
 def adaptive_controller_protocol(data: dict[str, Any], audit_paths: dict[str, str]) -> str:
@@ -315,6 +380,24 @@ Deterministic Runtime Protocol Vocabulary:
 def adaptive_user_guide_block(data: dict[str, Any], audit_paths: dict[str, str]) -> str:
     milestones = normalize_milestones(data.get("milestones"))
     dashboard = dashboard_required(data, len(milestones))
+    if data.get("state_gateway_mode", "MCP_CANONICAL_WRITER") == "MCP_CANONICAL_WRITER":
+        dashboard_line = (
+            f"- `{audit_paths['root']}progress-dashboard.html`：只读进度看板，由 Gateway canonical state 派生。"
+            if dashboard
+            else "- 本次没有触发 HTML 看板；路线图仍可在 `GOALS.md` 查看。"
+        )
+        return f"""## Adaptive 模式怎么回查
+
+- 发布状态：`beta/experimental`。Gateway、生成器、测试和安装检查只证明本地协议行为；真实 Codex App canary 与正式 Release 仍是单独的验收层。
+- 本次运行策略：schema v3 `MCP_CANONICAL_WRITER`。实际角色只有 Controller、当前 Worker、可复用 Reviewer、按需 Local Verifier 和唯一业务 heartbeat；MCP State Gateway 是安装服务，不是一个 State-Writer 任务，Supervisor 也不是产品角色。
+- `{audit_paths['state']}` 是唯一 canonical source；`GOALS.md`、`STATUS.md` 和 `LOOP_METRICS.json` 都是派生观察面。状态投影滞后或语义冲突时，以 canonical state 和终态 receipt 为准。
+{dashboard_line}
+- 正常慢：同一个 SENT outbox 有活跃 Worker/Reviewer 或新证据；只观察，不重复派发。传输退化：只有 App-owned `APP_TRANSPORT_OBSERVATION` 能记录同一指纹、outbox、时间和自然-heartbeat 身份；两次自然 heartbeat 或累计 15 分钟后进入 `WAITING_TRANSPORT_RECOVERY`，仅在 App 自身验证暂停回执后才投影 heartbeat PAUSED 并通知用户一次。真正终态：只有 `FINALIZATION_ACKED` 或经证据支持的 `LOOP_BLOCKED`，旧终态不可复活。
+- 每条产品路线固定为 `PREPARE_ROUTE -> runtime_codec MATERIALIZE_DISPATCH -> 一次 App send -> RECORD_ROUTE_SENT -> 角色 STAGE_REPORT -> ACK_ROUTE_RESULT`。丢失 stdout/任务索引但已有 staged report 时，用 `REPORT_RECOVERY` ACK 原 outbox；绝不为补报告创建第二个产品 dispatch。
+- Worker PASS 后的顺序是 Code Review、必要 Local Verification、Roadmap Audit；最终候选还需 Final Audit、`PREPARE_FINALIZATION`、App-owned heartbeat PAUSED receipt 和 `ACK_FINALIZATION` 才到达 `FINALIZATION_ACKED`。Gateway 只接纳同一 Goal、当前 Worker dispatch、当前 artifact 和 PASS 正式报告的三重绑定。
+- `CAPTURE_COMPLETE_DIFF` 由 runtime 原样读取/反向校验 Git binary diff；模型不应在消息里搬运 patch bytes。`LOOP_METRICS.json` 可显示每 Goal 的总时长、已观测 Worker 窗口、控制面等待、拒绝和消息故障，但不是第二 canonical。
+- schema v1/v2 State-Writer 仅兼容读取；迁移到 v3 必须在暂停且静默安全点显式 `MIGRATE_V2_TO_V3`。从已终态 predecessor 继续时，在全新 root 使用 `INITIALIZE_SUCCESSOR`，保留 predecessor 原样。
+- 需要用户决定时只回复 Decision Card 中的 decision id 和 option id。卡片的批准仅覆盖列出的预授权动作，不包含 exclusions。"""
     dashboard_line = (
         f"- `{audit_paths['root']}progress-dashboard.html`：只读进度看板，由状态生成。"
         if dashboard

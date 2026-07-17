@@ -919,16 +919,69 @@ class GeneratedPackTests(unittest.TestCase):
             "full",
         )
         for marker in (
-            "PREPARE_CONTROLLER_PACK_MIGRATION",
-            "MIGRATE_CONTROLLER_PACK",
-            "ROLLBACK",
-            "controller_pack_identity.path",
-            "UNKNOWN_NOT_OBSERVED",
-            "route-reserving PREPARED/SENT/ACKED outbox",
-            "routing target ACTIVE",
+            "MIGRATE_V2_TO_V3",
+            "paused quiescent v2 state",
+            "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE",
+            "Do not create a replacement heartbeat",
         ):
             self.assertIn(marker, pack)
-        self.assertIn("never create another heartbeat", pack)
+        self.assertNotIn("PREPARE_CONTROLLER_PACK_MIGRATION", pack)
+        self.assertNotIn("MIGRATE_CONTROLLER_PACK", pack)
+
+    @mock.patch.dict(os.environ, {"CODEX_HOME": "/workspace/.codex"})
+    def test_schema_v3_user_guide_stops_before_unreceipted_bootstrap(self) -> None:
+        payload = scaffold.load_payload(
+            scaffold.build_parser().parse_args(
+                ["--input", str(ROOT / "examples/03-adaptive-passkey-input.json")]
+            )
+        )
+        guide = scaffold.render_user_guide(
+            payload, "examples/03-adaptive-passkey-controller-pack.md"
+        )
+        for marker in (
+            "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE",
+            "THREAD_CREATE_OR_READ",
+            "APP_TRANSPORT_OBSERVATION",
+            "REGISTER_TASK` / `REGISTER_HEARTBEAT",
+            "PREPARE_FINALIZATION -> App-owned PAUSED receipt -> ACK_FINALIZATION",
+            "Gateway runtime 的 PREPARED/APPLIED 恢复日志",
+        ):
+            self.assertIn(marker, guide)
+        for legacy_instruction in (
+            "Adaptive 必须先以 `THREAD` outbox",
+            "`AUTOMATION` outbox 的 `PREPARED -> SENT -> ACKED`",
+            "Worker 派发使用 `DISPATCH` outbox",
+            "等待 `STATE_WRITE_APPLIED`",
+            "最终状态写入成功后才是 `LOOP_COMPLETE`",
+            "State-Writer 的 PREPARED/APPLIED",
+        ):
+            self.assertNotIn(legacy_instruction, guide)
+
+    @mock.patch.dict(os.environ, {"CODEX_HOME": "/workspace/.codex"})
+    def test_schema_v3_pack_has_no_legacy_completion_or_dispatch_lifecycle(self) -> None:
+        payload = scaffold.load_payload(
+            scaffold.build_parser().parse_args(
+                ["--input", str(ROOT / "examples/03-adaptive-passkey-input.json")]
+            )
+        )
+        pack = scaffold.render_controller_pack(payload, "full")
+        for marker in (
+            "Controller Canonical Terminal Statuses: FINALIZATION_ACKED | LOOP_BLOCKED",
+            "PREPARE_FINALIZATION",
+            "ACK_FINALIZATION yields FINALIZATION_ACKED",
+            "one Gateway PREPARE_ROUTE owns the only current route",
+            "retained outbox storage remains actively written and validated only by State Gateway operations",
+            "no terminal status exists before that ACK",
+            "two same-fingerprint natural observations or 15 minutes",
+        ):
+            self.assertIn(marker, pack)
+        for legacy_instruction in (
+            "before LOOP_COMPLETE",
+            "Controller Canonical Terminal Statuses: LOOP_COMPLETE",
+            "every outbound message requires a prepared and acknowledged dispatch outbox entry",
+            "To stop after terminal completion",
+        ):
+            self.assertNotIn(legacy_instruction, pack)
 
     def test_goal_scope_can_narrow_worker_scope(self) -> None:
         payload = base_payload()
@@ -1349,9 +1402,9 @@ class CliTests(unittest.TestCase):
 class ExampleFixtureTests(unittest.TestCase):
     def test_standard_fixture_hashes_are_stable(self) -> None:
         expected = {
-            "01-passkey-login-controller-pack.md": "846e7e8f0942767c46b5c1e23aab2917e6275ef27452ef64ab0cbc29f3649e51",
+            "01-passkey-login-controller-pack.md": "ab7290617804b460cd84aa8fb67043927b1d191f42c6b90f2588387626941696",
             "01-passkey-login-usage.md": "d8e38f4680a47aed114adf3ddfa20ba9534be7dbfc03fd6a770b345b118f81e4",
-            "02-daily-ci-triage-controller-pack.md": "f6b67955da3acbbedfdd45ee26c23890b29d5cfae9fd71f0b78670a3fc537db8",
+            "02-daily-ci-triage-controller-pack.md": "0243aa887f4caae46ee83ab4a4ad7696b3a2cf09d97123799f4098974a7616af",
             "02-daily-ci-triage-usage.md": "cea1c0a82898712685aac818ef3862fe0cbda444967a7e0313592b77ac2eb73a",
         }
         for name, expected_digest in expected.items():

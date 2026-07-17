@@ -758,8 +758,8 @@ def gate_report(plan: Mapping[str, Any], needs: Mapping[str, Any]) -> tuple[list
     for field in sha_fields:
         if not isinstance(plan.get(field), str) or not SHA_RE.fullmatch(str(plan.get(field, ""))):
             errors.append(f"plan {field} is missing or invalid")
-    if plan.get("expected_total_tests") != 580:
-        errors.append("plan expected_total_tests is not 580")
+    if plan.get("expected_total_tests") != 615:
+        errors.append("plan expected_total_tests is not 615")
     missing_jobs = sorted(EXPECTED_GATE_JOBS.difference(needs))
     if missing_jobs:
         errors.append(f"needs JSON is missing jobs: {missing_jobs}")
@@ -784,7 +784,7 @@ def gate_report(plan: Mapping[str, Any], needs: Mapping[str, Any]) -> tuple[list
 
     coverage_outputs = needs.get("coverage", {}).get("outputs", {}) if isinstance(needs.get("coverage"), Mapping) else {}
     if plan.get("run_full") is True and expected_results["coverage"] == "success":
-        expected_total = str(plan.get("expected_total_tests", "580"))
+        expected_total = str(plan.get("expected_total_tests", "615"))
         if str(coverage_outputs.get("total_tests", "")) != expected_total:
             errors.append(
                 f"coverage total_tests expected {expected_total} but was {coverage_outputs.get('total_tests', '<missing>')}"
@@ -934,7 +934,7 @@ def _parser() -> argparse.ArgumentParser:
     classify.add_argument("--event-path", required=True)
     classify.add_argument("--github-sha", required=True)
     classify.add_argument("--manual-profile", default="release")
-    classify.add_argument("--expected-total-tests", type=int, default=580)
+    classify.add_argument("--expected-total-tests", type=int, default=615)
     classify.add_argument("--output", default=PLAN_NAME)
     classify.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT", ""))
     classify.add_argument("--summary", default=os.environ.get("GITHUB_STEP_SUMMARY", ""))

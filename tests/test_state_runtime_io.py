@@ -4,6 +4,295 @@ from state_runtime_support import *  # noqa: F403
 
 
 class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
+    def test_gateway_freshness_hashes_unstaged_bytes_not_only_porcelain_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for command in (
+                ["git", "init", "-q", str(root)],
+                ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+                ["git", "-C", str(root), "config", "user.name", "Loop Test"],
+            ):
+                subprocess.run(command, check=True, capture_output=True)
+            source = root / "product.txt"
+            source.write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "product.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+            runtime = AdaptiveStateRuntime(root)
+            source.write_text("first unstaged content\n", encoding="utf-8")
+            first = runtime._gateway_observed_identity_delta()  # noqa: SLF001
+            source.write_text("second unstaged content\n", encoding="utf-8")
+            second = runtime._gateway_observed_identity_delta()  # noqa: SLF001
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(root), "status", "--porcelain=v1"],
+                    check=True, text=True, capture_output=True,
+                ).stdout,
+                " M product.txt\n",
+            )
+            self.assertNotEqual(first["dirty_boundary_digest"], second["dirty_boundary_digest"])
+            self.assertNotEqual(first["repo_root_digest"], second["repo_root_digest"])
+
+    def test_runtime_captures_binary_diff_without_model_patch_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for command in (
+                ["git", "init", "-q", str(root)],
+                ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+                ["git", "-C", str(root), "config", "user.name", "Loop Test"],
+            ):
+                subprocess.run(command, check=True, capture_output=True)
+            (root / "tracked.txt").write_text("before\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+            base = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, text=True, capture_output=True,
+            ).stdout.strip()
+            (root / "tracked.txt").write_text("after\n", encoding="utf-8")
+            (root / "image.bin").write_bytes(b"\x89PNG\r\n\x1a\n\x00binary")
+            captured = state_runtime_module.capture_complete_diff(
+                root,
+                {"base_ref": base, "allowed_untracked_paths": ["image.bin"]},
+            )
+            self.assertEqual(captured["status"], "COMPLETE_DIFF_CAPTURED")
+            self.assertTrue(captured["reverse_apply_verified"])
+            patch = Path(captured["patch_path"])
+            self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), captured["patch_digest"].removeprefix("sha256:"))
+            self.assertIn({"status": "A", "path": "image.bin"}, captured["manifest"])
+            self.assertEqual(captured["manifest_digest"], json_digest(captured["manifest"]))
+            with self.assertRaisesRegex(
+                state_runtime_module.RuntimeRejection,
+                "COMPLETE_DIFF_UNTRACKED_BOUNDARY_MISMATCH",
+            ):
+                state_runtime_module.capture_complete_diff(
+                    root,
+                    {"base_ref": base, "allowed_untracked_paths": []},
+                )
+
+    def test_worker_pass_consumes_runtime_captured_binary_diff_without_patch_transport(self) -> None:
+        """A Worker PASS can cite a digest-addressed capture, never patch bytes."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for command in (
+                ["git", "init", "-q", str(root)],
+                ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+                ["git", "-C", str(root), "config", "user.name", "Loop Test"],
+            ):
+                subprocess.run(command, check=True, capture_output=True)
+            tracked = root / "tracked.txt"
+            tracked.write_text("before\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+            base = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, text=True, capture_output=True,
+            ).stdout.strip()
+            harness, claim, dispatch_id, payload = self._prepare_sent_worker(
+                root, "dispatch-captured-git-diff"
+            )
+            tracked.write_text("after\n", encoding="utf-8")
+            (root / "image.bin").write_bytes(b"\x89PNG\r\n\x1a\n\x00binary")
+            captured = state_runtime_module.capture_complete_diff(
+                root,
+                {"base_ref": base, "allowed_untracked_paths": ["image.bin"]},
+            )
+            self.assertTrue(Path(captured["patch_path"]).is_file())
+            result = {
+                "status": "PASS",
+                "artifact_digest": digest("captured-git-diff-artifact"),
+            }
+            report = json.loads(
+                harness.formal_report_content("DISPATCH", dispatch_id, result)
+            )
+            patch_sha256 = captured["patch_digest"].removeprefix("sha256:")
+            report.update(
+                {
+                    "before_snapshot_sha256": hashlib.sha256(b"before\n").hexdigest(),
+                    "changed_files": ["image.bin", "tracked.txt"],
+                    "diff_sha256": patch_sha256,
+                    "complete_diff_reference": {
+                        "kind": "CAPTURED_GIT_DIFF_V1",
+                        "hash_algorithm": "sha256",
+                        "media_type": "text/x-diff",
+                        "sha256": patch_sha256,
+                    },
+                    "evidence_artifacts": [
+                        f".codex-loop/reports/{dispatch_id}-send.json"
+                    ],
+                }
+            )
+            report_content = json.dumps(
+                report, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            staged = harness.runtime.stage_formal_report(
+                {"outbox_id": dispatch_id, "result": result, "report_text": report_content}
+            )
+            self.assertEqual(staged["status"], "FORMAL_REPORT_STAGED")
+            acked = harness.ack_outbox(
+                claim,
+                "DISPATCH",
+                dispatch_id,
+                payload,
+                target_id="worker-1",
+                result={**result, "report_digest": staged["report_digest"]},
+                report_content=report_content,
+            )
+            self.assertTrue(acked["ok"], acked)
+            handoff = harness.state()["goal_execution_ledger"]["g1"]["latest_worker"]["review_handoff"]
+            self.assertEqual(
+                handoff["artifact_identity"]["complete_diff_reference"]["kind"],
+                "CAPTURED_GIT_DIFF_V1",
+            )
+
+    def test_metrics_keep_worker_reviewer_and_local_windows_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)
+            initialized, _ = harness.initialize(state_gateway=True)
+            self.assertTrue(initialized["ok"], initialized)
+            state = harness.state()
+            state["logical_time"] = "2026-01-01T00:03:00Z"
+            state["gateway_route_ledger"] = {
+                "worker-route": {
+                    "goal_id": "g1", "route_kind": "WORKER",
+                    "prepared_at": "2026-01-01T00:00:00Z",
+                    "sent_at": "2026-01-01T00:00:00Z",
+                    "acked_at": "2026-01-01T00:01:00Z", "status": "ACKED",
+                },
+                "review-route": {
+                    "goal_id": "g1", "route_kind": "CODE_REVIEW",
+                    "prepared_at": "2026-01-01T00:01:00Z",
+                    "sent_at": "2026-01-01T00:01:00Z",
+                    "acked_at": "2026-01-01T00:02:00Z", "status": "ACKED",
+                },
+                "local-route": {
+                    "goal_id": "g1", "route_kind": "LOCAL_VERIFICATION",
+                    "prepared_at": "2026-01-01T00:02:00Z",
+                    "sent_at": "2026-01-01T00:02:00Z",
+                    "acked_at": "2026-01-01T00:03:00Z", "status": "ACKED",
+                },
+            }
+            metrics = json.loads(harness.runtime._render_loop_metrics(state))  # noqa: SLF001
+            goal_metrics = metrics["goals"]["g1"]
+            self.assertEqual(goal_metrics["worker_active_seconds"], 60.0)
+            self.assertEqual(goal_metrics["reviewer_active_seconds"], 60.0)
+            self.assertEqual(goal_metrics["local_verifier_active_seconds"], 60.0)
+
+    def test_complete_diff_excludes_tracked_control_plane_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for command in (
+                ["git", "init", "-q", str(root)],
+                ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+                ["git", "-C", str(root), "config", "user.name", "Loop Test"],
+            ):
+                subprocess.run(command, check=True, capture_output=True)
+            (root / "product.txt").write_text("base\n", encoding="utf-8")
+            (root / ".codex-loop").mkdir()
+            control = root / ".codex-loop" / "legacy-control.txt"
+            control.write_text("old incident evidence\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(root), "add", "product.txt", ".codex-loop/legacy-control.txt"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+            base = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, text=True, capture_output=True,
+            ).stdout.strip()
+            (root / "product.txt").write_text("changed product\n", encoding="utf-8")
+            control.write_text("do not include this control-plane mutation\n", encoding="utf-8")
+            captured = state_runtime_module.capture_complete_diff(
+                root,
+                {"base_ref": base, "allowed_untracked_paths": []},
+            )
+            self.assertEqual(captured["manifest"], [{"status": "M", "path": "product.txt"}])
+            patch = Path(captured["patch_path"]).read_text(encoding="utf-8", errors="strict")
+            self.assertIn("changed product", patch)
+            self.assertNotIn("legacy-control.txt", patch)
+            self.assertNotIn("control-plane mutation", patch)
+
+    def test_complete_diff_rejects_symlinked_control_capture_paths_without_outside_write(self) -> None:
+        for link_name in (".codex-loop", "diff-captures"):
+            with self.subTest(link_name=link_name), tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as outside:
+                root = Path(temporary)
+                for command in (
+                    ["git", "init", "-q", str(root)],
+                    ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+                    ["git", "-C", str(root), "config", "user.name", "Loop Test"],
+                ):
+                    subprocess.run(command, check=True, capture_output=True)
+                product = root / "product.txt"
+                product.write_text("base\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(root), "add", "product.txt"], check=True)
+                subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+                base = subprocess.run(
+                    ["git", "-C", str(root), "rev-parse", "HEAD"],
+                    check=True, text=True, capture_output=True,
+                ).stdout.strip()
+                product.write_text("changed\n", encoding="utf-8")
+                control = root / ".codex-loop"
+                if link_name == ".codex-loop":
+                    control.symlink_to(outside, target_is_directory=True)
+                else:
+                    control.mkdir()
+                    (control / "diff-captures").symlink_to(outside, target_is_directory=True)
+                with self.assertRaisesRegex(
+                    state_runtime_module.RuntimeRejection,
+                    "COMPLETE_DIFF_CAPTURE_CONTROL_PATH_INVALID",
+                ):
+                    state_runtime_module.capture_complete_diff(
+                        root, {"base_ref": base, "allowed_untracked_paths": []}
+                    )
+                self.assertEqual(list(Path(outside).iterdir()), [])
+
+    def test_successor_snapshot_must_still_match_declared_base_and_current_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for command in (
+                ["git", "init", "-q", str(root)],
+                ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+                ["git", "-C", str(root), "config", "user.name", "Loop Test"],
+            ):
+                subprocess.run(command, check=True, capture_output=True)
+            product = root / "product.txt"
+            product.write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "product.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+            base = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, text=True, capture_output=True,
+            ).stdout.strip()
+            product.write_text("captured successor product\n", encoding="utf-8")
+            captured = state_runtime_module.capture_complete_diff(
+                root, {"base_ref": base, "allowed_untracked_paths": []}
+            )
+            context = {
+                "product_base_commit": base,
+                "product_snapshot_digest": captured["patch_digest"],
+                "product_snapshot_manifest": captured["manifest"],
+                "product_snapshot_manifest_digest": captured["manifest_digest"],
+                "acknowledged_evidence": [],
+                "repair_backlog": {},
+                "pending_goal_ids": [],
+            }
+            runtime = AdaptiveStateRuntime(root)
+            # The empty evidence is intentionally the later validation failure:
+            # reaching it proves the freshly captured current-root snapshot was
+            # accepted before predecessor evidence is considered.
+            with self.assertRaisesRegex(
+                state_runtime_module.RuntimeRejection,
+                "STATE_GATEWAY_SUCCESSOR_EVIDENCE_INVALID",
+            ):
+                runtime._validate_successor_context({}, context, "/successor_context")  # noqa: SLF001
+            product.write_text("changed after capture\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                state_runtime_module.RuntimeRejection,
+                "STATE_GATEWAY_SUCCESSOR_SNAPSHOT_STALE",
+            ):
+                runtime._validate_successor_context({}, context, "/successor_context")  # noqa: SLF001
+
     def test_initialize_canonical_state_and_json_only_cli(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

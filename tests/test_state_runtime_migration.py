@@ -3,6 +3,27 @@ from __future__ import annotations
 from state_runtime_support import *  # noqa: F403
 
 
+class StateGatewaySchemaTests(unittest.TestCase):
+    def test_schema_v3_initializes_without_a_state_writer_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = Harness(root)  # noqa: F405
+            initialized, _ = harness.initialize(state_gateway=True)
+            self.assertTrue(initialized["ok"], initialized)
+            state = harness.state()
+            self.assertEqual(state["schema_version"], 3)
+            self.assertEqual(state["state_gateway_mode"], "MCP_CANONICAL_WRITER")
+            self.assertNotIn("state-writer-1", state["thread_registry"])
+            self.assertEqual(state["gateway_route_ledger"], {})
+            self.assertEqual(state["transport_recovery"]["status"], "HEALTHY")
+            metrics = root / ".codex-loop" / "LOOP_METRICS.json"
+            self.assertTrue(metrics.exists())
+            self.assertEqual(
+                json.loads(metrics.read_text(encoding="utf-8"))["derived_from"]["state_version"],
+                1,
+            )
+
+
 class ControllerPackMigrationReconciliationTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
     @staticmethod
     def _pause(harness: Harness) -> None:

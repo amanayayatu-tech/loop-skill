@@ -53,6 +53,29 @@ ADAPTIVE_RESOURCE_CONTRACT_MARKERS = (
     "lost stdout never authorizes an external retry",
 )
 
+ADAPTIVE_V3_TRANSPORT_CONTRACT_MARKERS = (
+    "Adaptive v3 MCP State Gateway Protocol",
+    "state_gateway({root, request})",
+    "PREPARE_ROUTE",
+    "RECORD_ROUTE_SENT",
+    "ACK_ROUTE_RESULT",
+    "REPORT_RECOVERY",
+    "MATERIALIZE_DISPATCH",
+    "VERIFY_DISPATCH",
+    "STAGE_REPORT",
+    "CAPTURE_COMPLETE_DIFF",
+    "RUNTIME_CODEC_TOOL_UNAVAILABLE",
+)
+
+ADAPTIVE_V3_RESOURCE_CONTRACT_MARKERS = (
+    "LOOP_METRICS.json",
+    "current Goal artifact, current Worker dispatch, and a PASS formal report",
+    "Two natural heartbeat observations or fifteen minutes",
+    "WAITING_TRANSPORT_RECOVERY",
+    "never creates a report-only product dispatch",
+    "INITIALIZE_SUCCESSOR",
+)
+
 ADAPTIVE_NATIVE_GOAL_RECOVERY_DEFERRED_MARKERS = (
     "Native Controller Goal Generation Recovery: DEFERRED/UNAVAILABLE",
     "NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE",
@@ -121,14 +144,25 @@ def _dangerous_clause_is_negated(clause: str, match: re.Match[str]) -> bool:
 def validate_adaptive_pack_transport_contract(pack: str) -> list[str]:
     """Reject an Adaptive Pack that weakens any runtime transport contract."""
 
+    v3 = "Adaptive v3 MCP State Gateway Protocol" in pack
+    transport_markers = (
+        ADAPTIVE_V3_TRANSPORT_CONTRACT_MARKERS
+        if v3
+        else ADAPTIVE_TRANSPORT_CONTRACT_MARKERS
+    )
+    resource_markers = (
+        ADAPTIVE_V3_RESOURCE_CONTRACT_MARKERS
+        if v3
+        else ADAPTIVE_RESOURCE_CONTRACT_MARKERS
+    )
     errors = [
         f"adaptive_transport_contract:missing:{marker}"
-        for marker in ADAPTIVE_TRANSPORT_CONTRACT_MARKERS
+        for marker in transport_markers
         if marker not in pack
     ]
     errors.extend(
         f"adaptive_resource_contract:missing:{marker}"
-        for marker in ADAPTIVE_RESOURCE_CONTRACT_MARKERS
+        for marker in resource_markers
         if marker not in pack
     )
     errors.extend(
@@ -170,6 +204,15 @@ def validate_adaptive_pack_transport_contract(pack: str) -> list[str]:
             for match in re.finditer(pattern, clause):
                 if not _dangerous_clause_is_negated(clause, match):
                     unsafe_kinds.add(kind)
+    # The generated Controller prompt can contain nested Markdown fences.  A
+    # malformed/nested fence must never hide an ambient interpreter invocation
+    # from this release gate: no schema-v3 runtime contract permits it.
+    if re.search(
+        r"[\[(]\s*['\"]python3?['\"]\s*,\s*runtime_path",
+        pack,
+        flags=re.IGNORECASE,
+    ):
+        unsafe_kinds.add("ambient_python")
     if unsafe_kinds:
         errors.append("adaptive_transport_contract:unsafe_shell_transport")
         errors.extend(

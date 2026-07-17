@@ -65,12 +65,21 @@ class ReleaseContractTests(unittest.TestCase):
         ):
             self.assertIn(option, canary_validator)
 
-    def test_version_and_changelog_share_the_formal_release(self) -> None:
+    def test_version_and_changelog_share_a_formal_release_or_explicit_candidate_boundary(
+        self,
+    ) -> None:
         version = (ROOT / "VERSION").read_text().strip()
         self.assertRegex(version, r"^[0-9]+\.[0-9]+\.[0-9]+$")
         changelog = (ROOT / "CHANGELOG.md").read_text()
-        self.assertIn(f"## [{version}]", changelog)
-        self.assertIn(f"/releases/tag/v{version}", changelog)
+        candidate_header = f"## [{version}-candidate]"
+        if candidate_header in changelog:
+            self.assertIn("### Release boundary", changelog)
+            self.assertIn("not released until", changelog)
+            self.assertIn("fail closed", changelog)
+            self.assertNotIn(f"/releases/tag/v{version}", changelog)
+        else:
+            self.assertIn(f"## [{version}]", changelog)
+            self.assertIn(f"/releases/tag/v{version}", changelog)
         for readme in ("README.md", "README.en.md"):
             self.assertIn(f"v{version}", (ROOT / readme).read_text())
 
@@ -183,8 +192,8 @@ class ReleaseContractTests(unittest.TestCase):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                 and node.name.startswith("test_")
             )
-        self.assertEqual(len(names), 111)
-        self.assertEqual(len(set(names)), 111)
+        self.assertEqual(len(names), 121)
+        self.assertEqual(len(set(names)), 121)
         self.assertTrue((ROOT / "tests" / "state_runtime_support.py").is_file())
 
 

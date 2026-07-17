@@ -49,6 +49,11 @@ def render_full_mode_sections(
     data: dict[str, Any], goals: list[dict[str, Any]], errors: list[str]
 ) -> str:
     test_goal = goals[0]["goal_id"] if goals else "G1"
+    gateway_v3 = (
+        data.get("coordination_mode") == "adaptive"
+        and data.get("state_gateway_mode", "MCP_CANONICAL_WRITER")
+        == "MCP_CANONICAL_WRITER"
+    )
     law_status = "PASS" if not errors else "BLOCKED"
     score_line = (
         "Loop Integrity Score: 12/12 for the generated contract. Runtime conformance still requires a Codex App smoke run."
@@ -57,6 +62,11 @@ def render_full_mode_sections(
     )
     adaptive_flow = (
         "  -> required Local Verifier evidence -> same Reviewer ROADMAP_AUDIT ACK\n"
+        "  -> Gateway ADVANCE_ROADMAP over unchanged registry\n"
+        "  -> final candidate -> same Reviewer FINAL_AUDIT ACK -> PREPARE_FINALIZATION\n"
+        if gateway_v3
+        else
+        "  -> required Local Verifier evidence -> same Reviewer ROADMAP_AUDIT ACK\n"
         "  -> in-envelope roadmap CAS update -> GOALS/dashboard projection ACK\n"
         "  -> complete/recover native Controller Goal -> activate one next milestone\n"
         "  -> final candidate -> same Reviewer FINAL_AUDIT ACK -> FINALIZE_LOOP ACK\n"
@@ -64,6 +74,9 @@ def render_full_mode_sections(
         else ""
     )
     completion_flow = (
+        "  -> App-owned verified heartbeat PAUSED receipt -> ACK_FINALIZATION -> FINALIZATION_ACKED"
+        if gateway_v3
+        else
         "  -> exact Goal COMPLETE + exact heartbeat PAUSED readbacks\n"
         "  -> ACK_FINALIZATION -> FINALIZATION_ACKED"
         if data.get("coordination_mode") == "adaptive"
@@ -76,6 +89,9 @@ def render_full_mode_sections(
         else "Repair, runtime retry, wake, idle, and stale-active budgets are bounded."
     )
     durable_state_fix = (
+        "Gateway-owned versioned runtime state, recovery journal, route outboxes, queue, heartbeat, and ledgers are included."
+        if gateway_v3
+        else
         "Versioned runtime state, recovery journal, generic outboxes, queue, heartbeat, and ledgers are included."
         if data.get("coordination_mode") == "adaptive"
         else "Versioned single-writer state, recovery journal, creation/dispatch outboxes, queue, heartbeat, and ledgers are included."
@@ -91,11 +107,18 @@ def render_full_mode_sections(
         else "WAITING_ACTIVE, idle budget, total wake budget, terminal-only pause"
     )
     outbox_control = (
+        "Gateway registration receipts plus one canonical route outbox with exact identities"
+        if gateway_v3
+        else
         "generic THREAD/AUTOMATION/GOAL/DISPATCH outboxes with exact identities"
         if data.get("coordination_mode") == "adaptive"
         else "deterministic markers plus thread, automation, and dispatch outboxes"
     )
     startup_flow = (
+        "  -> MCP State Gateway INITIALIZE -> no State-Writer task\n"
+        "  -> protected App task/heartbeat receipts -> REGISTER_TASK/REGISTER_HEARTBEAT\n"
+        if gateway_v3
+        else
         "  -> State-Writer recovery/create -> full LOOP_INITIALIZED + GOALS projection ACK\n"
         "  -> startup Controller lease ACK\n"
         "  -> THREAD outbox PREPARED -> create/reconcile once -> SENT -> ACKED\n"
@@ -107,17 +130,27 @@ def render_full_mode_sections(
         "  -> AUTOMATION_CREATE_PREPARED -> heartbeat reconcile/create -> REGISTERED ACK\n"
     )
     dispatch_flow = (
+        "  -> Gateway PREPARE_ROUTE -> runtime_codec payload -> one App send/RECORD_ROUTE_SENT\n"
+        "  -> target-owned staged report -> ACK_ROUTE_RESULT"
+        if gateway_v3
+        else
         "  -> DISPATCH outbox PREPARED -> materialized WORKER_DISPATCH + state snapshot -> send once -> SENT\n"
         "  -> strict JSON Worker report archive -> ACK_OUTBOX -> COMPLETED"
         if data.get("coordination_mode") == "adaptive"
         else "  -> DISPATCH_PREPARED ACK -> materialized /goal + state snapshot -> DISPATCH_SENT ACK"
+    )
+    report_ack = "Gateway ACK_ROUTE_RESULT" if gateway_v3 else "State ACK"
+    review_ack = (
+        "exact-artifact review route -> Gateway ACK_ROUTE_RESULT"
+        if gateway_v3
+        else "exact-artifact /review with diff_sha256 -> Review ACK"
     )
     return f"""
 ## Loop Diagnosis
 
 | Law | Status | Generated Fix |
 | --- | --- | --- |
-| L1 Role Isolation | {law_status} | Controller routes; scoped Workers execute; State-Writer owns audit files. |
+| L1 Role Isolation | {law_status} | Controller routes; scoped Workers execute; {"MCP State Gateway owns canonical files" if gateway_v3 else "State-Writer owns audit files"}. |
 | L2 Addressing | {law_status} | Real threadId/worktree materialization is required before dispatch. |
 | L3 Atomic Goals | {law_status} | Goal Queue contains identified dependency-ordered goals. |
 | L4 Acceptance First | {law_status} | Every goal embeds success criteria before execution details. |
@@ -149,14 +182,14 @@ def render_full_mode_sections(
 ```text
 Controller preflight -> deterministic loop/bootstrap identity
 {startup_flow}{dispatch_flow}
-  -> Worker report -> State ACK
-  -> exact-artifact /review with diff_sha256 -> Review ACK
+  -> Worker report -> {report_ack}
+  -> {review_ack}
 {adaptive_flow}{completion_flow}
 ```
 
 ## Test Goals
 
-- Normal progress: {test_goal} -> Worker report -> state ACK -> review -> next queue/final audit.
+- Normal progress: {test_goal} -> Worker report -> {report_ack} -> review -> next queue/final audit.
 - Hard blocker: missing source/cost/connector/worktree evidence stops before side effects.
 - Idempotency: replay the same event_id/state_request_id and verify no duplicate event or dispatch.
 - Creation recovery: interrupt after task/automation create but before registration and verify exact adoption without duplicates.
@@ -195,6 +228,11 @@ def render_standard_user_guide(
     max_idle = runtime.int_value(data, "max_idle_wakeups", 8)
     errors = runtime.validation_errors(data)
     adaptive = data.get("coordination_mode") == "adaptive"
+    gateway_v3 = (
+        adaptive
+        and data.get("state_gateway_mode", "MCP_CANONICAL_WRITER")
+        == "MCP_CANONICAL_WRITER"
+    )
     controller_launch_step = (
         "4. 先对生成的 Controller Pack 本地文件计算精确 byte length 和 SHA-256；在同一条初始 Controller launch input 中附上 `PACK_IDENTITY_ATTESTATION`（绝对路径、byte length、SHA-256、parent create_thread observation），再发送完整 `.md`。Controller 必须从该本地路径独立复算，禁止 hash/decode `codex_delegation`、XML/HTML entities、UI 或 read_thread wrapper；缺失/不匹配时在创建任何子任务前停止。"
         if adaptive
@@ -234,6 +272,41 @@ def render_standard_user_guide(
         if adaptive
         else "- `RUNTIME_DEPENDENCY_BLOCKED`、`VALIDATION_BLOCKED`、`REPAIR_BUDGET_EXHAUSTED`、`STATE_VERSION_CONFLICT` 无法自动调和、`HEARTBEAT_BUDGET_EXHAUSTED`、`HEARTBEAT_IDLE_BUDGET_EXHAUSTED`、`HARD_BLOCK`。"
     )
+    guide_steps = (
+        "9. 每次 Worker/Reviewer 只通过目标角色的 `runtime_codec STAGE_REPORT` stage 报告，再由 Gateway `ACK_ROUTE_RESULT` 或 `REPORT_RECOVERY` ACK 原 outbox；不得等待或伪造 `STATE_WRITE_APPLIED`。\n"
+        f"10. 宿主具备受保护回执后，唯一业务 heartbeat 才能每 {heartbeat_interval} 分钟观察一次；同一失败最多记录两次自然 heartbeat 或累计 15 分钟，然后进入 `WAITING_TRANSPORT_RECOVERY`。未获 App 暂停回执前不得宣称 PAUSED。\n"
+        "11. Goal Queue 全部通过后做完整 FINAL_AUDIT；只经 `PREPARE_FINALIZATION -> App-owned PAUSED receipt -> ACK_FINALIZATION` 到达 `FINALIZATION_ACKED`，不使用 native Goal 或 `LOOP_COMPLETE` 代称。"
+        if gateway_v3
+        else "9. 每次 Worker/Reviewer 回报先写状态并等待 `STATE_WRITE_APPLIED`，再进入 review、repair 或下一 Goal。\n"
+        f"10. heartbeat 每 {heartbeat_interval} 分钟唤醒，最多 {max_wakeups} 次；Worker 正在运行时记录 `WAITING_ACTIVE`，不能 NOOP 关闭。只有终态或无 inflight/queue 且连续 {max_idle} 次 idle 才允许暂停。\n"
+        "11. Goal Queue 全部通过后还要做一次完整 Git base-to-head 或 non_git before-to-after snapshot FINAL_AUDIT，最终状态写入成功后才是 `LOOP_COMPLETE`。"
+    )
+    state_observer = (
+        "Gateway request_id、event_id、state_version_before/after、route ledger 与 transaction journal"
+        if gateway_v3
+        else "state_request_id、event_id、state_version_before/after、transaction journal"
+    )
+    transaction_observer = (
+        f"- `{audit_paths['transactions']}`：Gateway runtime 的 PREPARED/APPLIED 恢复日志；用于判断中断后缺哪一步，不能当作第二份 canonical state。"
+        if gateway_v3
+        else f"- `{audit_paths['transactions']}`：State-Writer 的 PREPARED/APPLIED 恢复日志；用于判断中断后缺哪一步，不能当作第二份 canonical state。"
+    )
+    manual_boundary = (
+        "当前 Codex App 缺少受保护 action-result receipt 时，不存在可安全的手动降级：记录 `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE` 并停止；不要以 State-Writer、参数、transcript 或 Supervisor 替代 Gateway 证据。"
+        if gateway_v3
+        else "只有真实 Codex App 线程或 heartbeat 工具不可用时才使用。手动模式仍需真实项目线程、版本化单写者状态、精确 worktree 审查和相同停止条件。"
+    )
+    if gateway_v3:
+        task_setup_steps = (
+            "5. 先确认当前 Codex App 能注入受保护的 `x-codex-app-action-receipt-v1`，覆盖 `THREAD_CREATE_OR_READ`、`AUTOMATION_OBSERVATION`、`SEND_MESSAGE_TO_THREAD`、`APP_TRANSPORT_OBSERVATION` 与 `AUTOMATION_UPDATE`。当前 App 缺少该能力时，在创建/读取 Worker 或 heartbeat 前以 `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE` 零副作用停止；不能用 transcript、参数或 Supervisor 绕过。\n"
+            "6. 能力存在时，Controller 仅通过 `state_gateway INITIALIZE` 建立 schema v3 canonical state；随后以 App 回执注册唯一当前 Worker/heartbeat（`REGISTER_TASK` / `REGISTER_HEARTBEAT`），不创建 State-Writer 或 native Goal。\n"
+            "7. 每条产品路线只用 `PREPARE_ROUTE -> runtime_codec MATERIALIZE_DISPATCH -> 一次 App send -> RECORD_ROUTE_SENT -> target STAGE_REPORT -> ACK_ROUTE_RESULT`。所有 lease、freshness、matrix、artifact 与 payload 由 Gateway 从 canonical state 原子生成，Controller 不复制。"
+        )
+        controller_check = "- 控制线程：看 Pack identity、真实 Controller/Worker identity、Gateway route ledger、原 outbox、当前 Goal、派生 metrics 和下一动作；当前 App 无 receipt carrier 时只应看到零副作用能力阻断。"
+        heartbeat_check = "- heartbeat 卡片：看经 App `AUTOMATION_OBSERVATION` 证明的 automation id、ACTIVE/PAUSED、rrule、目标 Controller 任务和 transport recovery；缺回执时不是 ACTIVE 证据。"
+        state_check = f"- `{audit_paths['state']}`：schema-v3 canonical roadmap、Goal/route ledger、一个路线 outbox、lease、receipt-bound heartbeat、transport recovery、预算、审批与 finalization receipt；它没有 State-Writer/Goal outbox 身份。"
+        normal_signal = "正常信号：Gateway `GATEWAY_LOOP_INITIALIZED` 后，App receipt-bound `REGISTER_TASK` / `REGISTER_HEARTBEAT` 各登记一次；每个 Goal 只保留同一 route/outbox，报告仅由目标角色 stage 后 ACK；最终出现 `PREPARE_FINALIZATION`、已验证 heartbeat PAUSED receipt 与 `FINALIZATION_ACKED`。"
+        runtime_blockers = "- `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE`、`RUNTIME_CODEC_TOOL_UNAVAILABLE`、`RUNTIME_DEPENDENCY_BLOCKED`、`VALIDATION_BLOCKED`、`REPAIR_BUDGET_EXHAUSTED`、`WAITING_TRANSPORT_RECOVERY`、无法调和的 `STATE_VERSION_CONFLICT`/`RECOVERY_REQUIRED`、`ROUTING_BUDGET_EXHAUSTED`、`HARD_BLOCK`。"
     pack_line = (
         f"已生成 Controller Pack：`{controller_pack_path}`。"
         if controller_pack_path
@@ -264,22 +337,20 @@ def render_standard_user_guide(
 {controller_launch_step}
 {task_setup_steps}
 8. Reviewer 不在启动时预创建；Worker 报告已写入且存在可审 diff 后再即时创建。worktree Reviewer 优先用 `fork_thread(... same-directory)`，否则传递可验证的绝对 worktree 路径和完整 diff。
-9. 每次 Worker/Reviewer 回报先写状态并等待 `STATE_WRITE_APPLIED`，再进入 review、repair 或下一 Goal。
-10. heartbeat 每 {heartbeat_interval} 分钟唤醒，最多 {max_wakeups} 次；Worker 正在运行时记录 `WAITING_ACTIVE`，不能 NOOP 关闭。只有终态或无 inflight/queue 且连续 {max_idle} 次 idle 才允许暂停。
-11. Goal Queue 全部通过后还要做一次完整 Git base-to-head 或 non_git before-to-after snapshot FINAL_AUDIT，最终状态写入成功后才是 `LOOP_COMPLETE`。
+{guide_steps}
 
 ## 怎么回查 loop
 
 {controller_check}
 - 实现线程：看 worktree_path、Git 或 snapshot identity、changed_files、diff_summary、diff_sha256 和带 exit_code 的验证结果。
 - 审查线程：看 severity-first 的 file/line findings、reviewed artifact identity 和 test gaps。
-- 状态线程：看 state_request_id、event_id、state_version_before/after、transaction journal，确认没有重复事件或半事务。
+- 状态线程：看 {state_observer}，确认没有重复事件或半事务。
 {heartbeat_check}
 {state_check}
 - `{audit_paths['events']}`：按 event_id 记录的派发、ACK、重试、审查、停止流水。
 - `{audit_paths['triage']}`：TRIAGE_ACTIONABLE/TRIAGE_NO_ACTION 发现及其证据和后续 Goal。
 - `{audit_paths['reports']}`：Worker、Reviewer 和 FINAL_AUDIT 报告归档。
-- `{audit_paths['transactions']}`：State-Writer 的 PREPARED/APPLIED 恢复日志；用于判断中断后缺哪一步，不能当作第二份 canonical state。
+{transaction_observer}
 - `{audit_paths['sources']}CONTROLLER_PACK.md`：初始化时归档的精确 Controller Pack；heartbeat 校验 PACK_SHA256 后用它抵抗长对话压缩。
 
 {normal_signal}
@@ -295,5 +366,5 @@ def render_standard_user_guide(
 
 ## 手动降级
 
-只有真实 Codex App 线程或 heartbeat 工具不可用时才使用。手动模式仍需真实项目线程、版本化单写者状态、精确 worktree 审查和相同停止条件。
+{manual_boundary}
 """

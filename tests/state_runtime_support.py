@@ -529,6 +529,8 @@ class Harness:
         dashboard_required: bool = False,
         human_control_policy: dict[str, Any] | None = None,
         native_goal_policy: str = "required",
+        state_gateway: bool = False,
+        bootstrap_threads: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         definitions = definitions or {"g1": goal("g1", "m1")}
         milestones = milestones or [milestone("m1", "ACTIVE")]
@@ -547,8 +549,14 @@ class Harness:
                 "controller_pack_digest": pack["digest"],
                 "controller_thread_id": "controller-1",
                 "controller_bootstrap_prompt_digest": digest("controller-bootstrap"),
-                "state_writer_thread_id": "state-writer-1",
-                "state_writer_bootstrap_prompt_digest": digest("state-writer-bootstrap"),
+                **(
+                    {"state_gateway_mode": "MCP_CANONICAL_WRITER"}
+                    if state_gateway
+                    else {
+                        "state_writer_thread_id": "state-writer-1",
+                        "state_writer_bootstrap_prompt_digest": digest("state-writer-bootstrap"),
+                    }
+                ),
                 "dashboard_required": dashboard_required,
                 "native_goal_policy": native_goal_policy,
                 "milestones": milestones,
@@ -557,6 +565,11 @@ class Harness:
                 "authorization_envelope": self.authorization,
                 "local_verification_required_goal_ids": list(
                     local_required_goal_ids or []
+                ),
+                **(
+                    {"bootstrap_threads": copy.deepcopy(bootstrap_threads)}
+                    if bootstrap_threads is not None
+                    else {}
                 ),
                 **(
                     {"human_control_policy": copy.deepcopy(human_control_policy)}
