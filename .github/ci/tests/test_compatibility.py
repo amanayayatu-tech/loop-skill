@@ -48,7 +48,7 @@ def needs_for(plan: dict[str, object]) -> dict[str, object]:
     for job, should_run in expected.items():
         outputs: dict[str, str] = {}
         if job == "coverage" and should_run:
-            outputs = {"total_tests": "615", "coverage_percent": "80.06"}
+            outputs = {"total_tests": "615", "coverage_percent": "80.02"}
         if job == "fuzz-generator" and should_run:
             outputs = {"case_count": "5000", "seed": "20260710"}
         if job == "fuzz-state" and should_run:
