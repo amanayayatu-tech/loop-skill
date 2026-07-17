@@ -30,6 +30,9 @@ All notable changes to this project are documented here. The project follows
   observer, and positive recovery suite. Historical schema fields remain
   readable, while every legacy recovery request continues to return
   `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` with `side_effects=NONE`.
+- Rebased the compatibility shadow-coverage identity to 80.06% after that
+  intentional suite and implementation retirement. The independent all-shipped
+  branch-coverage release floor remains unchanged at 80%.
 - Reframed `INV-INPUT-001` around one bounded, strict-UTF-8, single-frame,
   non-PTY-safe, fail-closed transport contract rather than a host-specific
   promise that a non-PTY stdin pipe stays writable after process launch.
