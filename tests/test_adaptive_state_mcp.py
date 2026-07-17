@@ -317,7 +317,14 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                     "worker_role_kind": "implementation",
                 },
             }
-            materialized = materialize_dispatch_payload(specification)  # noqa: F405
+            materialized = harness.codec_call(
+                {
+                    "operation": "MATERIALIZE_DISPATCH",
+                    "request": specification,
+                }
+            )
+            self.assertTrue(materialized["ok"], materialized)
+            self.assertEqual(materialized["status"], "PAYLOAD_MATERIALIZED")
             prepared, payload_digest = harness.state.prepare_outbox(
                 claim,
                 "DISPATCH",

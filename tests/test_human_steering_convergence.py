@@ -732,6 +732,16 @@ class HumanControlRuntimeTests(unittest.TestCase):
         self.assertTrue(recovered["ok"], recovered)
         self.assertEqual(persisted_snapshot(Path(self.temp.name)), before_recover)
 
+        journal_path.unlink()
+        status_before_journal_repair = runtime.status_path.read_bytes()
+        repaired = runtime.recover()
+        self.assertTrue(repaired["ok"], repaired)
+        self.assertTrue(journal_path.is_file())
+        self.assertEqual(
+            runtime.status_path.read_bytes(), status_before_journal_repair
+        )
+        self.assertFalse(runtime._projections_need_recovery_locked(runtime.read_state()))
+
         upgraded = self.request(
             {
                 "type": "RECORD_STEERING",

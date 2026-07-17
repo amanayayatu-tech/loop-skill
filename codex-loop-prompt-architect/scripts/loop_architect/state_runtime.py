@@ -1946,6 +1946,12 @@ class AdaptiveStateRuntime:
                         == HISTORICAL_STATUS_RENDER_CONTRACT
                     ):
                         self._write_status_projection_locked(state)
+                    else:
+                        status_payload = self.status_path.read_bytes()
+                        if self._status_projection_journal_needs_recovery_locked(
+                            state, status_payload
+                        ):
+                            self._repair_historical_status_journal_locked(state)
                 self._cleanup_temps_locked()
             version = state["state_version"] if state is not None else 0
             return {
@@ -3996,6 +4002,46 @@ class AdaptiveStateRuntime:
         )
         journal["status"] = "APPLIED"
         journal["readback_digest"] = _bytes_digest(self.status_path.read_bytes())
+        self._atomic_replace_bytes(
+            journal_path,
+            _canonical_json(journal, indent=2).encode("utf-8") + b"\n",
+            f"status-v{state['state_version']}",
+            "STATUS_JOURNAL",
+        )
+
+    def _repair_historical_status_journal_locked(
+        self, state: dict[str, Any]
+    ) -> None:
+        target = state.get("status_projection_target")
+        if not (
+            isinstance(target, dict)
+            and target.get("render_contract_version")
+            == HISTORICAL_STATUS_RENDER_CONTRACT
+        ):
+            raise RuntimeRejection(
+                "STATUS_RENDER_CONTRACT_UNSUPPORTED",
+                "/status_projection_target/render_contract_version",
+            )
+        self._reject_symlink(self.status_path, "/status_projection_target/path")
+        if not self.status_path.is_file():
+            raise RuntimeRejection("RECOVERY_REQUIRED", "/STATUS.md")
+        payload_digest = _bytes_digest(self.status_path.read_bytes())
+        if payload_digest != target["target_digest"]:
+            raise RuntimeRejection(
+                "STATUS_PROJECTION_TARGET_INVALID", "/status_projection_target"
+            )
+        journal_path = self.projection_transactions_dir / (
+            f"status-v{state['state_version']}.json"
+        )
+        journal = {
+            "journal_version": 1,
+            "status": "APPLIED",
+            "target_state_version": state["state_version"],
+            "target_digest": target["target_digest"],
+            "render_contract_version": HISTORICAL_STATUS_RENDER_CONTRACT,
+            "projected_digest": payload_digest,
+            "readback_digest": payload_digest,
+        }
         self._atomic_replace_bytes(
             journal_path,
             _canonical_json(journal, indent=2).encode("utf-8") + b"\n",
