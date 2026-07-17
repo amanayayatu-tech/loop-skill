@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from adaptive_state_runtime import execute_runtime_codec
+
 from loop_architect.state_runtime import (
     OPENAI_CODE_SIGN_IDENTIFIER,
     OPENAI_CODE_SIGN_TEAM_ID,
@@ -36,8 +38,9 @@ from loop_architect.state_runtime import (
 
 MCP_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2024-11-05")
 MCP_SERVER_NAME = "codex-loop-state"
-MCP_SERVER_VERSION = "1.1.0"
+MCP_SERVER_VERSION = "1.2.0"
 MCP_TOOL_NAME = "route_state_mutation"
+MCP_RUNTIME_CODEC_TOOL_NAME = "runtime_codec"
 MCP_TURN_META_KEY = "x-codex-turn-metadata"
 MCP_THREAD_META_KEY = "threadId"
 MCP_INPUT_MAX_BYTES = 4_000_000
@@ -473,6 +476,58 @@ class AdaptiveStateMcpServer:
             response = _runtime_error(exc.code, exc.path, exc.details)
         return self._tool_result(response)
 
+    def _call_runtime_codec(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self.host_attestation is None:
+            error = self.host_error or McpBridgeError(
+                "BLOCKED_BY_APP_ATTESTATION"
+            )
+            return self._tool_result(
+                _runtime_error(error.code, error.path, error.details)
+            )
+        try:
+            arguments = params.get("arguments")
+            if not isinstance(arguments, dict):
+                raise McpBridgeError("MCP_ARGUMENTS_INVALID", "/params/arguments")
+            operation = arguments.get("operation")
+            allowed_keys = {
+                "MATERIALIZE_DISPATCH": {"operation", "request"},
+                "VERIFY_DISPATCH": {"operation", "root", "transport_text"},
+                "STAGE_REPORT": {"operation", "root", "request"},
+                "STAGE_EXTERNAL_RECEIPT": {"operation", "root", "request"},
+                "NORMALIZE_FINGERPRINT": {"operation", "request"},
+            }
+            if operation not in allowed_keys or set(arguments) != allowed_keys[operation]:
+                raise McpBridgeError(
+                    "RUNTIME_CODEC_ARGUMENTS_INVALID", "/params/arguments"
+                )
+            root = arguments.get("root")
+            if root is not None and (
+                not isinstance(root, str) or not Path(root).is_absolute()
+            ):
+                raise McpBridgeError(
+                    "MCP_ROOT_INVALID", "/params/arguments/root"
+                )
+            request = arguments.get("request")
+            if request is not None and not isinstance(request, dict):
+                raise McpBridgeError(
+                    "RUNTIME_CODEC_ARGUMENTS_INVALID", "/params/arguments/request"
+                )
+            transport_text = arguments.get("transport_text")
+            if transport_text is not None and not isinstance(transport_text, str):
+                raise McpBridgeError(
+                    "RUNTIME_CODEC_ARGUMENTS_INVALID",
+                    "/params/arguments/transport_text",
+                )
+            response = execute_runtime_codec(
+                operation,
+                root=root,
+                request=request,
+                transport_text=transport_text,
+            )
+        except McpBridgeError as exc:
+            response = _runtime_error(exc.code, exc.path, exc.details)
+        return self._tool_result(response)
+
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
         request_id = message.get("id")
         method = message.get("method")
@@ -543,16 +598,88 @@ class AdaptiveStateMcpServer:
                                 "openWorldHint": False,
                             },
                         }
+                        ,
+                        {
+                            "name": MCP_RUNTIME_CODEC_TOOL_NAME,
+                            "description": (
+                                "Materialize or verify exact dispatch payloads, stage "
+                                "formal reports or external receipts, and normalize "
+                                "failure fingerprints without a shell stdin session."
+                            ),
+                            "inputSchema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["operation", "request"],
+                                        "properties": {
+                                            "operation": {"const": "MATERIALIZE_DISPATCH"},
+                                            "request": {"type": "object"},
+                                        },
+                                    },
+                                    {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["operation", "root", "transport_text"],
+                                        "properties": {
+                                            "operation": {"const": "VERIFY_DISPATCH"},
+                                            "root": {"type": "string"},
+                                            "transport_text": {"type": "string"},
+                                        },
+                                    },
+                                    {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["operation", "root", "request"],
+                                        "properties": {
+                                            "operation": {"const": "STAGE_REPORT"},
+                                            "root": {"type": "string"},
+                                            "request": {"type": "object"},
+                                        },
+                                    },
+                                    {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["operation", "root", "request"],
+                                        "properties": {
+                                            "operation": {"const": "STAGE_EXTERNAL_RECEIPT"},
+                                            "root": {"type": "string"},
+                                            "request": {"type": "object"},
+                                        },
+                                    },
+                                    {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["operation", "request"],
+                                        "properties": {
+                                            "operation": {"const": "NORMALIZE_FINGERPRINT"},
+                                            "request": {"type": "object"},
+                                        },
+                                    },
+                                ]
+                            },
+                            "annotations": {
+                                "readOnlyHint": False,
+                                "destructiveHint": False,
+                                "idempotentHint": True,
+                                "openWorldHint": False,
+                            },
+                        }
                     ]
                 },
             }
         if method == "tools/call":
-            if params.get("name") != MCP_TOOL_NAME:
+            tool_name = params.get("name")
+            if tool_name not in {MCP_TOOL_NAME, MCP_RUNTIME_CODEC_TOOL_NAME}:
                 return self._jsonrpc_error(request_id, -32602, "Unknown tool")
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "result": self._call_route_tool(params),
+                "result": (
+                    self._call_route_tool(params)
+                    if tool_name == MCP_TOOL_NAME
+                    else self._call_runtime_codec(params)
+                ),
             }
         return self._jsonrpc_error(request_id, -32601, "Method not found")
 

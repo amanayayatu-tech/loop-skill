@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import select
@@ -84,6 +85,10 @@ def _read_regular_stdin(fd: int, *, max_bytes: int) -> str:
         chunks.append(chunk)
     decoded = _decode_transport(b"".join(chunks), final=True)
     assert decoded is not None
+    if received == 0:
+        raise InputTransportError(
+            "INPUT_TRANSPORT_EOF_BEFORE_FRAME", bytes_received=0
+        )
     return decoded
 
 
@@ -119,6 +124,10 @@ def _read_bounded_stdin(
             )
         chunk = os.read(fd, INPUT_TRANSPORT_CHUNK_BYTES)
         if not chunk:
+            if not data:
+                raise InputTransportError(
+                    "INPUT_TRANSPORT_EOF_BEFORE_FRAME", bytes_received=0
+                )
             decoded = _decode_transport(bytes(data), final=True)
             assert decoded is not None
             return decoded
@@ -259,6 +268,54 @@ def _native_goal_recovery_unavailable_response() -> dict[str, Any]:
             "side_effects": "NONE",
         },
     )
+
+
+def execute_runtime_codec(
+    operation: str,
+    *,
+    root: str | None = None,
+    request: dict[str, Any] | None = None,
+    transport_text: str | None = None,
+) -> dict[str, Any]:
+    """Execute one typed codec operation without a shell stdin session."""
+
+    try:
+        if operation == "MATERIALIZE_DISPATCH":
+            if root is not None or request is None or transport_text is not None:
+                raise ValueError("MATERIALIZE_DISPATCH_ARGUMENTS_INVALID")
+            return materialize_dispatch_payload(copy.deepcopy(request))
+        if operation == "VERIFY_DISPATCH":
+            if root is None or request is not None or not isinstance(transport_text, str):
+                raise ValueError("VERIFY_DISPATCH_ARGUMENTS_INVALID")
+            return verify_dispatch_payload_against_state(root, transport_text)
+        if operation == "STAGE_REPORT":
+            if root is None or request is None or transport_text is not None:
+                raise ValueError("STAGE_REPORT_ARGUMENTS_INVALID")
+            return AdaptiveStateRuntime(root).stage_formal_report(copy.deepcopy(request))
+        if operation == "STAGE_EXTERNAL_RECEIPT":
+            if root is None or request is None or transport_text is not None:
+                raise ValueError("STAGE_EXTERNAL_RECEIPT_ARGUMENTS_INVALID")
+            return AdaptiveStateRuntime(root).stage_external_receipt(copy.deepcopy(request))
+        if operation == "NORMALIZE_FINGERPRINT":
+            if root is not None or request is None or transport_text is not None:
+                raise ValueError("NORMALIZE_FINGERPRINT_ARGUMENTS_INVALID")
+            fingerprint = build_failure_fingerprint(**copy.deepcopy(request))
+            return {
+                "ok": True,
+                "status": "FAILURE_FINGERPRINT_NORMALIZED",
+                "fingerprint": fingerprint,
+                "external_actions": [],
+                "external_action_count": 0,
+            }
+        raise ValueError("RUNTIME_CODEC_OPERATION_INVALID")
+    except RuntimeRejection as exc:
+        return _response(exc.code, exc.path, exc.details)
+    except (TypeError, ValueError) as exc:
+        return _response(
+            "RUNTIME_CODEC_INPUT_INVALID",
+            "/operation",
+            {"error_type": type(exc).__name__, "reason": str(exc)},
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

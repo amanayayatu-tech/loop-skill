@@ -508,6 +508,7 @@
           "enum": [
             "DISPATCH_VALIDATION_MATRIX_MISMATCH",
             "DISPATCH_FRESHNESS_SNAPSHOT_MISMATCH",
+            "INPUT_TRANSPORT_EOF_BEFORE_FRAME",
             "INPUT_TRANSPORT_TIMEOUT",
             "INPUT_TRANSPORT_TOO_LARGE",
             "INPUT_TRANSPORT_UTF8_INVALID",
@@ -2057,7 +2058,7 @@
     "validationEvidence": {"type": "object", "additionalProperties": false, "required": ["evidence_path", "evidence_digest", "artifact_digest", "checked_at"], "properties": {"evidence_path": {"type": "string", "minLength": 1}, "evidence_digest": {"$ref": "#/$defs/digest"}, "evidence_media_type": {"type": "string", "minLength": 1}, "artifact_digest": {"$ref": "#/$defs/digest"}, "worker_dispatch_id": {"$ref": "#/$defs/safeId"}, "checked_at": {"$ref": "#/$defs/timestamp"}}},
     "validationEvidenceDimensions": {"type": "object", "propertyNames": {"enum": ["functional", "regression", "static_quality", "compatibility", "security", "performance", "user_experience", "change_impact"]}, "additionalProperties": {"$ref": "#/$defs/validationEvidence"}},
     "validationEvidenceMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/validationEvidenceDimensions"}}, "additionalProperties": false},
-    "statusProjectionTarget": {"type": "object", "additionalProperties": false, "required": ["path", "target_state_version", "target_digest", "render_contract_version"], "properties": {"path": {"const": ".codex-loop/STATUS.md"}, "target_state_version": {"type": "integer", "minimum": 1}, "target_digest": {"$ref": "#/$defs/digest"}, "render_contract_version": {"enum": ["status-v1", "status-v2", "status-v3"]}}},
+    "statusProjectionTarget": {"type": "object", "additionalProperties": false, "required": ["path", "target_state_version", "target_digest", "render_contract_version"], "properties": {"path": {"const": ".codex-loop/STATUS.md"}, "target_state_version": {"type": "integer", "minimum": 1}, "target_digest": {"$ref": "#/$defs/digest"}, "render_contract_version": {"enum": ["status-v1", "status-v2", "status-v3", "status-v4"]}}},
     "humanControlPolicy": {"type": "object", "additionalProperties": false, "required": ["human_steering_enabled", "status_projection_enabled", "decision_cards_enabled", "failure_fingerprint_enabled", "context_freshness_required", "review_evidence_policy"], "properties": {"human_steering_enabled": {"type": "boolean"}, "status_projection_enabled": {"type": "boolean"}, "decision_cards_enabled": {"type": "boolean"}, "failure_fingerprint_enabled": {"const": true}, "context_freshness_required": {"const": true}, "review_evidence_policy": {"const": "deterministic_first"}}},
     "jsonValue": {
       "oneOf": [

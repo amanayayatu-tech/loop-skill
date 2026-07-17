@@ -486,20 +486,16 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertIn("direct-ACK the exact PREPARED GOAL outbox", self.pack)
         self.assertIn("generic DELEGATION outbox", self.pack)
 
-    def test_pack_enforces_non_pty_materialization_completion_contract(self) -> None:
+    def test_pack_enforces_mcp_runtime_codec_contract(self) -> None:
         self.assertEqual(validate_adaptive_pack_transport_contract(self.pack), [])
         for marker in (
-            "`tty:false`",
-            "`exit_code=0`",
-            "no longer returns `session_id`",
-            "single `PAYLOAD_MATERIALIZED`",
-            "PAYLOAD_MATERIALIZATION_TRANSPORT_TIMEOUT",
+            "runtime_codec",
+            "MATERIALIZE_DISPATCH",
+            "VERIFY_DISPATCH",
+            "RUNTIME_CODEC_TOOL_UNAVAILABLE",
         ):
             self.assertIn(marker, self.pack)
-        weakened = self.pack.replace(
-            "Do not use `dd`, `stty`, fixed-byte readers, heredocs, or any extra shell pipeline.",
-            "Use `dd` and `stty` to read a fixed byte count.",
-        )
+        weakened = self.pack + "\nUse `dd` and `stty` to read a fixed byte count."
         errors = validate_adaptive_pack_transport_contract(weakened)
         self.assertIn(
             "adaptive_transport_contract:unsafe_shell_transport", errors
@@ -576,9 +572,9 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             "one in-flight read per target",
             "30/60/120-second backoff",
             "Validation identity dedupe",
-            "Process/session cleanup contract",
-            "writable non-PTY stdin pipe",
-            "temporary-file redirection",
+            "Runtime transport contract",
+            "bounded typed channel",
+            "EOF-before-frame",
             "lost stdout never authorizes an external retry",
         ):
             self.assertIn(marker, self.pack)
@@ -615,7 +611,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             "MIGRATE_CONTROLLER_PACK",
             "controller_pack_digest",
             "controller_turn_id",
-            "--external-receipt-stage",
+            "STAGE_EXTERNAL_RECEIPT",
             ".codex-loop/external-receipts/",
             "execution_started=false",
         ):
@@ -789,7 +785,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertEqual(verified["status"], "PAYLOAD_BYTES_VERIFIED")
 
     def test_pack_enforces_semantic_payload_roles_jit_and_blocker_gate(self) -> None:
-        self.assertIn("--root CANONICAL_REPO_ROOT --payload-verify", self.pack)
+        self.assertIn("runtime_codec operation VERIFY_DISPATCH", self.pack)
         self.assertIn("PAYLOAD_BYTES_VERIFIED alone is never execution permission", self.pack)
         self.assertIn("bootstrap_role_kind", self.pack)
         self.assertIn("formal_role_kind", self.pack)
@@ -931,9 +927,9 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         )
         self.assertIn('"dispatch_payload_digest": "PAYLOAD_DIGEST_PLACEHOLDER"', self.pack)
         self.assertIn("PAYLOAD_DIGEST_PLACEHOLDER", self.pack)
-        self.assertIn("--payload-materialize", self.pack)
-        self.assertIn("--payload-verify", self.pack)
-        self.assertIn("exact received codexDelegation.input body", self.pack)
+        self.assertIn("MATERIALIZE_DISPATCH", self.pack)
+        self.assertIn("VERIFY_DISPATCH", self.pack)
+        self.assertIn("exact received codexDelegation.input string", self.pack)
         self.assertNotIn("Recompute the PAYLOAD_DIGEST_PLACEHOLDER form", self.pack)
         self.assertIn(
             "prepared_state_version == snapshot.state_version + 1",
@@ -1341,7 +1337,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
 
     def test_formal_reports_use_runtime_managed_staging(self) -> None:
         self.assertIn(
-            "adaptive_state_runtime.py --root CANONICAL_ROOT --report-stage",
+            "runtime_codec(operation=STAGE_REPORT, root=CANONICAL_ROOT",
             self.pack,
         )
         self.assertIn("FORMAL_REPORT_STAGED", self.pack)
@@ -1353,7 +1349,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
         self.assertIn("worker_dispatch_id,artifact_digest,evidence_path", self.pack)
         self.assertIn("RECORD_VALIDATION is legacy/post-ACK only", self.pack)
         self.assertIn("product/review artifacts: read-only", self.pack)
-        self.assertIn("RUNTIME-ONLY: installed --report-stage may write", self.pack)
+        self.assertIn("RUNTIME-ONLY: installed runtime_codec STAGE_REPORT may write", self.pack)
         self.assertIn("EXCLUDE all other control-plane paths", self.pack)
         self.assertIn(
             "terminal state allows only ACK_FINALIZATION, so do not prepare a GOAL UPDATE",

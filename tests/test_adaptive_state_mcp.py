@@ -142,6 +142,76 @@ class AdaptiveStateMcpTests(unittest.TestCase):
         self.assertEqual(tool["inputSchema"]["required"], ["root", "request"])
         self.assertIn("recovery is unavailable", tool["description"])
         self.assertNotIn("recovery-scoped lease acquisition", tool["description"])
+        codec = listed["result"]["tools"][1]
+        self.assertEqual(codec["name"], mcp.MCP_RUNTIME_CODEC_TOOL_NAME)
+        self.assertEqual(len(codec["inputSchema"]["oneOf"]), 5)
+
+    def test_runtime_codec_normalizes_without_shell_stdin(self) -> None:
+        server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+        server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "init",
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            }
+        )
+        request = {
+            "command": "python -m unittest",
+            "exit_code": 1,
+            "output_lines": ["FAILED test_x"],
+            "failing_test_ids": ["test_x"],
+            "changed_files": ["app.py"],
+            "diff_digest": "sha256:" + "a" * 64,
+            "strategy_id": "strategy-1",
+            "hypothesis_digest": "sha256:" + "b" * 64,
+            "raw_log_digest": "sha256:" + "c" * 64,
+        }
+        response = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "codec",
+                "method": "tools/call",
+                "params": {
+                    "name": mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                    "arguments": {
+                        "operation": "NORMALIZE_FINGERPRINT",
+                        "request": request,
+                    },
+                },
+            }
+        )
+        result = response["result"]["structuredContent"]
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["status"], "FAILURE_FINGERPRINT_NORMALIZED")
+
+    def test_runtime_codec_rejects_extra_arguments(self) -> None:
+        server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+        server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "init",
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            }
+        )
+        response = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "codec",
+                "method": "tools/call",
+                "params": {
+                    "name": mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                    "arguments": {
+                        "operation": "MATERIALIZE_DISPATCH",
+                        "request": {},
+                        "root": "/tmp/forbidden",
+                    },
+                },
+            }
+        )
+        result = response["result"]["structuredContent"]
+        self.assertEqual(result["status"], "RUNTIME_CODEC_ARGUMENTS_INVALID")
 
     def test_forged_argument_metadata_cannot_cross_host_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
