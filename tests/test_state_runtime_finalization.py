@@ -493,6 +493,16 @@ class AdaptiveStateRuntimeFinalizationTests(AdaptiveStateRuntimeTestCase):  # no
                 state["finalization_receipt"]["blocker_code"],
                 "PAYLOAD_DIGEST_MISMATCH",
             )
+            status = (root / ".codex-loop" / "STATUS.md").read_text()
+            self.assertIn("Status: `BLOCKED`", status)
+            self.assertIn(
+                "Validation gate: `NOT_APPLICABLE_TERMINAL_BLOCKED`", status
+            )
+            self.assertIn("Blocked at Goal: `g1`", status)
+            self.assertIn("Run control: `TERMINAL_BLOCKED`", status)
+            self.assertIn("Next action: `NONE_TERMINAL`", status)
+            self.assertIn("heartbeat-1:PAUSED:FINALIZATION_RECEIPT", status)
+            self.assertNotIn("HEARTBEAT_ACTIVE_WHILE_CANONICAL_PAUSED", status)
             state_path = root / ".codex-loop" / "LOOP_STATE.md"
             for name, mutate in (
                 (
