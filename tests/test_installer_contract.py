@@ -38,14 +38,14 @@ class InstallerContractTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def _run(self) -> subprocess.CompletedProcess[str]:
+    def _run(self, python: str | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [str(INSTALLER)],
             cwd=ROOT,
             env={
                 **os.environ,
                 "CODEX_HOME": str(self.codex_home),
-                "PYTHON": sys.executable,
+                "PYTHON": python or sys.executable,
                 "PYTHONDONTWRITEBYTECODE": "1",
             },
             stdout=subprocess.PIPE,
@@ -109,6 +109,81 @@ class InstallerContractTests(unittest.TestCase):
         self.assertEqual(config.read_bytes(), original_config)
         self.assertEqual(marker.read_text(encoding="utf-8"), "preserve\n")
         self.assertFalse((old_skill / "SKILL.md").exists())
+
+    def test_managed_same_bridge_upgrade_preserves_prior_runtime_and_replaces_skill(self) -> None:
+        first = self._run()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        config = self.codex_home / "config.toml"
+        before = config.read_bytes()
+        replacement_python = Path(sys.executable).parent / f".loop-skill-upgrade-{os.getpid()}"
+        replacement_python.symlink_to(Path(sys.executable).name)
+
+        try:
+            second = self._run(str(replacement_python))
+        finally:
+            replacement_python.unlink(missing_ok=True)
+
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(config.read_bytes(), before)
+        receipts = sorted((self.codex_home / "install-receipts/codex-loop-prompt-architect").glob("*.json"))
+        latest = json.loads(receipts[-1].read_text(encoding="utf-8"))
+        self.assertEqual(latest["mcp_registration"]["command"], sys.executable)
+        self.assertEqual(_manifest(SKILL), _manifest(self.codex_home / "skills/codex-loop-prompt-architect"))
+
+    def test_managed_same_bridge_non_python_runtime_restores_config_and_skill(self) -> None:
+        first = self._run()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        config = self.codex_home / "config.toml"
+        non_python = Path(self.tempdir.name) / "non-python-runtime"
+        non_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        non_python.chmod(0o755)
+        original_config = config.read_bytes().replace(
+            f'command = {json.dumps(sys.executable)}'.encode("utf-8"),
+            f'command = {json.dumps(str(non_python))}'.encode("utf-8"),
+        )
+        self.assertNotEqual(original_config, config.read_bytes())
+        config.write_bytes(original_config)
+        installed = self.codex_home / "skills/codex-loop-prompt-architect"
+        marker = installed / "USER_OLD_SKILL.txt"
+        marker.write_text("preserve\n", encoding="utf-8")
+
+        second = self._run()
+
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn("MCP_PYTHON_RUNTIME_INVALID", second.stderr)
+        self.assertEqual(config.read_bytes(), original_config)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "preserve\n")
+
+    def test_managed_probe_spoof_without_verifier_receipt_restores_config_and_skill(self) -> None:
+        first = self._run()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        config = self.codex_home / "config.toml"
+        spoof = Path(self.tempdir.name) / "probe-spoof-runtime"
+        spoof.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"-c\" ]; then\n"
+            "  printf '%s\\n' LOOPSKILL_PYTHON_RUNTIME_OK_V1\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        spoof.chmod(0o755)
+        original_config = config.read_bytes().replace(
+            f'command = {json.dumps(sys.executable)}'.encode("utf-8"),
+            f'command = {json.dumps(str(spoof))}'.encode("utf-8"),
+        )
+        self.assertNotEqual(original_config, config.read_bytes())
+        config.write_bytes(original_config)
+        installed = self.codex_home / "skills/codex-loop-prompt-architect"
+        marker = installed / "USER_OLD_SKILL.txt"
+        marker.write_text("preserve\n", encoding="utf-8")
+
+        second = self._run()
+
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn("MCP_MANAGED_RUNTIME_VERIFICATION_INVALID", second.stderr)
+        self.assertEqual(config.read_bytes(), original_config)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "preserve\n")
 
 
 if __name__ == "__main__":

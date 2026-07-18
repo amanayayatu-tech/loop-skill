@@ -107,10 +107,15 @@ Supervisor as a routing dependency.
    `evidence_layer=local-main-mac`. It binds the exact commit and tracked-tree
    digest and must not claim independent-host, remote, or cross-host proof.
 4. Install into an isolated macOS `CODEX_HOME`. `scripts/install.sh` atomically
-   registers `codex-loop-state`, preserves prior config bytes, rejects a
-   conflicting registration, writes an install manifest, and verifies zero
-   source/install drift. Validate the resulting manifest with the installed
-   `verify_installation.py`.
+   registers `codex-loop-state`, preserves prior config bytes, and writes an
+   install manifest with zero source/install drift. An existing entry is a
+   managed in-place upgrade only when it has exactly the same installed bridge
+   path and no execution fields beyond `command`/one `args` item: its already
+   registered absolute Python is retained only after a bounded dependency
+   capability probe and an actual verifier receipt/write/readback. A different
+   bridge, extra execution semantics, or an invalid prior runtime is a conflict and
+   restores the prior config/skill unchanged. Validate the resulting manifest
+   with the installed `verify_installation.py`.
 5. On that exact SHA and installed manifest, run the real Codex App canary. The
    receipt must reach the canary's own canonical `FINALIZATION_ACKED`; synthetic
    MCP tests, a Node REPL observation, source reading, or a tool-list screenshot

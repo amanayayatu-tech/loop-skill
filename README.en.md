@@ -32,6 +32,12 @@ python3 -m pip install -r requirements-test.txt
 ./scripts/install.sh
 ```
 
+If an existing `codex-loop-state` entry points to the same installed skill
+bridge, the installer retains that registered absolute Python runtime and
+atomically replaces the skill. A different bridge, extra execution fields, or
+an invalid runtime remains a conflict and rolls back; do not hand-edit config
+to bypass it.
+
 Open a new task in Codex App after installation. Start with a read-only intake:
 
 ```text

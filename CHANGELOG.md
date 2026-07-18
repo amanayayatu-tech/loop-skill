@@ -24,6 +24,14 @@ All notable changes to this project are documented here. The project follows
 
 ### Fixed
 
+- The installer now recognizes a managed in-place `codex-loop-state` upgrade
+  when the existing registration has exactly the same installed bridge and no
+  extra execution semantics. It retains the prior absolute Python runtime only
+  after a bounded dependency-capability probe plus verifier receipt/write/
+  readback, instead of treating an ordinary runtime-path change as an
+  external registration conflict; foreign bridges, extra fields and invalid
+  prior runtimes still fail closed and restore the previous installation.
+
 - A PASS projection now requires the same Goal's current artifact, current
   Worker dispatch and matching PASS formal report. BLOCKED, stale artifact,
   stale dispatch and foreign reports have no PASS side effect.
