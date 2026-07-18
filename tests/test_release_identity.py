@@ -49,6 +49,19 @@ class ReleaseIdentityTests(unittest.TestCase):
         self.assertEqual(result["commit"], self.commit)
 
     def test_tag_commit_version_and_main_mismatches_fail_closed(self) -> None:
+        invalid_inputs = (
+            ("not-a-sha", "v9.8.7", "refs/remotes/origin/main", "RELEASE_EXPECTED_SHA_INVALID"),
+            (self.commit, "release-9.8.7", "refs/remotes/origin/main", "RELEASE_TAG_INVALID"),
+            (self.commit, "v9.8.7", "refs/heads/main", "RELEASE_MAIN_REF_INVALID"),
+            ("0" * 40, "v9.8.7", "refs/remotes/origin/main", "RELEASE_OBJECT_UNAVAILABLE"),
+        )
+        for expected_sha, tag, main_ref, error in invalid_inputs:
+            with self.subTest(error=error):
+                with self.assertRaisesRegex(release_identity.ReleaseIdentityError, error):
+                    release_identity.check_release_identity(
+                        self.repo, expected_sha, tag, main_ref
+                    )
+
         (self.repo / "other").write_text("other\n", encoding="utf-8")
         self._git("add", "other")
         self._git("commit", "-q", "-m", "other")
