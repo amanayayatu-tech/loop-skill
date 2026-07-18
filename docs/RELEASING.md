@@ -49,7 +49,11 @@ following checks are additional, not substitutes:
    `RECORD_HEARTBEAT_OBSERVATION` with real automation create/readback,
    `PREPARE_ROUTE`, one real App send with `SEND_MESSAGE_TO_THREAD`,
    `RECORD_ROUTE_SENT`, role-owned `runtime_codec` materialize/verify/stage,
-   and `ACK_ROUTE_RESULT` on the same exact SHA. It must prove that a staged
+   and `ACK_ROUTE_RESULT` on the same exact SHA. The target stage must leave
+   its immutable, root-confined target-attestation sidecar, and a separate
+   Controller MCP bridge must derive and validate it rather than receiving it
+   as a public parameter. The canary must reject a missing or mismatched
+   sidecar with no canonical side effect. It must also prove that a staged
    report with lost stdout/index uses `REPORT_RECOVERY` on the original outbox
    without another product dispatch.
    The Gateway obtains the exact materialized `payload_digest` from its prepared
@@ -77,6 +81,13 @@ following checks are additional, not substitutes:
 6. A disposable terminal predecessor must remain byte-identical while a fresh
    root is initialized by `INITIALIZE_SUCCESSOR`; only the successor may route
    further. The canary itself reaches `FINALIZATION_ACKED`.
+7. Use separate disposable roots for (a) heartbeat registration and a maximum
+   legal automation id, (b) cross-task send/stage/ACK and REPORT_RECOVERY,
+   (c) binary diff plus transport pause, and (d) finalization plus successor.
+   Roots, canonical state, tasks, and heartbeats must not be shared. Run every
+   independent fixture even if an earlier fixture fails, then aggregate the
+   receipt as FAIL; a failed fixture never permits tag or Release. This is a
+   minimal release orchestration rule, not a new general canary framework.
 
 The v3 canary is still disposable. It never authorizes reviving an incident
 loop, modifying a predecessor `.codex-loop/**`, or treating an outer

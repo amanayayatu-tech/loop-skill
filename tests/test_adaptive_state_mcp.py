@@ -17,6 +17,91 @@ from state_runtime_support import *  # noqa: F403
 import adaptive_state_mcp as mcp  # noqa: E402
 
 
+_ISOLATED_MCP_BRIDGE = """
+import json
+import sys
+
+from adaptive_state_mcp import AdaptiveStateMcpServer
+from loop_architect.state_runtime import (
+    OPENAI_CODE_SIGN_IDENTIFIER,
+    OPENAI_CODE_SIGN_TEAM_ID,
+    TRUSTED_HOST_BOUNDARY,
+    TrustedHostAttestation,
+)
+
+server = AdaptiveStateMcpServer(TrustedHostAttestation(
+    boundary=TRUSTED_HOST_BOUNDARY,
+    parent_pid=4242,
+    parent_executable="/Applications/ChatGPT.app/Contents/Resources/codex",
+    parent_identifier=OPENAI_CODE_SIGN_IDENTIFIER,
+    parent_team_id=OPENAI_CODE_SIGN_TEAM_ID,
+    parent_cdhash="c" * 64,
+))
+initialized = server.handle({
+    "jsonrpc": "2.0", "id": "isolated-init", "method": "initialize",
+    "params": {"protocolVersion": "2025-06-18"},
+})
+if initialized is None or "result" not in initialized:
+    raise RuntimeError("isolated MCP initialize failed")
+message = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+response = server.handle(message)
+if response is None:
+    raise RuntimeError("isolated MCP response missing")
+sys.stdout.write(json.dumps(response, separators=(",", ":")))
+"""
+
+
+def call_isolated_mcp_bridge(
+    tool_name: str,
+    arguments: dict[str, object],
+    *,
+    thread_id: str,
+    turn_id: str,
+    root: Path | None = None,
+) -> dict[str, object]:
+    """Exercise one MCP call through a fresh OS process and bridge instance."""
+
+    if tool_name == mcp.MCP_STATE_GATEWAY_TOOL_NAME:
+        if root is None:
+            raise AssertionError("state_gateway requires root")
+        tool_arguments: dict[str, object] = {
+            "root": str(root),
+            "request": copy.deepcopy(arguments),
+        }
+    else:
+        tool_arguments = copy.deepcopy(arguments)
+    message = {
+        "jsonrpc": "2.0",
+        "id": f"isolated-{tool_name}-{turn_id}",
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "_meta": McpHarness.metadata(thread_id=thread_id, turn_id=turn_id),
+            "arguments": tool_arguments,
+        },
+    }
+    environment = dict(os.environ)
+    scripts_path = str(Path(mcp.__file__).resolve().parent)
+    inherited_path = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part for part in (scripts_path, inherited_path) if part
+    )
+    completed = subprocess.run(
+        [sys.executable, "-W", "error", "-c", _ISOLATED_MCP_BRIDGE],
+        input=json.dumps(message, separators=(",", ":")).encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=scripts_path,
+        env=environment,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr.decode("utf-8", errors="replace"))
+    response = json.loads(completed.stdout.decode("utf-8"))
+    return response["result"]["structuredContent"]
+
+
 def synthetic_host_attestation() -> TrustedHostAttestation:  # noqa: F405
     return TrustedHostAttestation(  # noqa: F405
         boundary=TRUSTED_HOST_BOUNDARY,  # noqa: F405
@@ -916,8 +1001,8 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             staging_dir = root / ".codex-loop" / "report-staging"
             self.assertFalse(staging_dir.exists() and any(staging_dir.iterdir()))
-            staged = call_runtime_codec(
-                server,
+            staged = call_isolated_mcp_bridge(
+                mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
                 {
                     "operation": "STAGE_REPORT",
                     "root": str(root),
@@ -928,23 +1013,127 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 },
                 },
                 thread_id="worker-1",
+                turn_id="isolated-worker-stage",
             )
             self.assertTrue(staged["ok"], staged)
-            acked = call_state_gateway(
-                server,
-                root,
+            durable_attestation = AdaptiveStateRuntime(root).read_codec_report_attestation(  # noqa: F405
+                "gateway-dispatch-1", staged["report_digest"]
+            )
+            self.assertEqual(durable_attestation["thread_id"], "worker-1")
+            self.assertEqual(durable_attestation["role_kind"], "WORKER")
+            staged_report = {**staged["artifact"], "result": staged["result"]}
+            before_attestation_rejections = state.state()
+            for name, route_id, candidate in (
+                ("wrong-route", "gateway-other-route", staged_report),
+                (
+                    "wrong-digest",
+                    "gateway-dispatch-1",
+                    {**staged_report, "digest": "sha256:" + "0" * 64},
+                ),
+            ):
+                rejected = call_isolated_mcp_bridge(
+                    mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                    {
+                        "request_id": f"gateway-ack-{name}",
+                        "operation": "ACK_ROUTE_RESULT",
+                        "occurred_at": T3,  # noqa: F405
+                        "parameters": {
+                            "route_id": route_id,
+                            "staged_report": candidate,
+                        },
+                    },
+                    thread_id="controller-1",
+                    turn_id=f"isolated-controller-{name}",
+                    root=root,
+                )
+                self.assertFalse(rejected["ok"], rejected)
+                self.assertEqual(state.state(), before_attestation_rejections)
+            # The Controller must not be able to ACK a staged report after the
+            # target-bound durable proof is missing.  Re-staging the same
+            # report is an idempotent report recovery, not a second dispatch.
+            attestation_path = Path(staged["codec_report_attestation_source_path"])
+            forged_attestation = copy.deepcopy(durable_attestation)
+            forged_attestation["thread_id"] = "worker-other"
+            attestation_path.chmod(0o600)
+            attestation_path.write_text(
+                json.dumps(
+                    forged_attestation,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            attestation_path.chmod(0o444)
+            wrong_thread = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                {
+                    "request_id": "gateway-ack-wrong-thread",
+                    "operation": "ACK_ROUTE_RESULT",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "route_id": "gateway-dispatch-1",
+                        "staged_report": staged_report,
+                    },
+                },
+                thread_id="controller-1",
+                turn_id="isolated-controller-wrong-thread",
+                root=root,
+            )
+            self.assertFalse(wrong_thread["ok"], wrong_thread)
+            self.assertEqual(state.state(), before_attestation_rejections)
+            attestation_path.unlink()
+            before_missing_attestation = state.state()
+            missing_attestation = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                {
+                    "request_id": "gateway-ack-missing-attestation",
+                    "operation": "ACK_ROUTE_RESULT",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "route_id": "gateway-dispatch-1",
+                        "staged_report": staged_report,
+                    },
+                },
+                thread_id="controller-1",
+                turn_id="isolated-controller-missing-attestation",
+                root=root,
+            )
+            self.assertFalse(missing_attestation["ok"], missing_attestation)
+            self.assertEqual(
+                missing_attestation["status"],
+                "STATE_GATEWAY_REPORT_TARGET_ATTESTATION_MISSING",
+            )
+            self.assertEqual(state.state(), before_missing_attestation)
+            restaged = call_isolated_mcp_bridge(
+                mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                {
+                    "operation": "STAGE_REPORT",
+                    "root": str(root),
+                    "request": {
+                        "outbox_id": "gateway-dispatch-1",
+                        "result": report_result,
+                        "report_text": report_text,
+                    },
+                },
+                thread_id="worker-1",
+                turn_id="isolated-worker-restage",
+            )
+            self.assertTrue(restaged["ok"], restaged)
+            acked = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
                 {
                     "request_id": "gateway-ack-1",
                     "operation": "ACK_ROUTE_RESULT",
                     "occurred_at": T3,  # noqa: F405
                     "parameters": {
                         "route_id": "gateway-dispatch-1",
-                        "staged_report": {
-                            **staged["artifact"],
-                            "result": staged["result"],
-                        },
+                        "staged_report": staged_report,
                     },
                 },
+                thread_id="controller-1",
+                turn_id="isolated-controller-ack",
+                root=root,
             )
             self.assertTrue(acked["ok"], acked)
             self.assertEqual(acked["operation_status"], "GATEWAY_ROUTE_ACKED")
@@ -1607,8 +1796,8 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "execution_started": False,
                 "blocker_code": "REPORT_STAGING_FAILED",
             }
-            staged = call_runtime_codec(
-                server,
+            staged = call_isolated_mcp_bridge(
+                mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
                 {
                     "operation": "STAGE_REPORT",
                     "root": str(root),
@@ -1621,11 +1810,14 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 },
                 },
                 thread_id="worker-1",
+                turn_id="isolated-recovery-worker-stage",
             )
             self.assertTrue(staged["ok"], staged)
-            recovered = call_state_gateway(
-                server,
-                root,
+            # Worker and Controller are distinct OS processes, matching the
+            # App bridge boundary. Recovery must derive the target proof from
+            # the durable sidecar rather than an in-memory process map.
+            recovered = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
                 {
                     "request_id": "recovery-ack",
                     "operation": "REPORT_RECOVERY",
@@ -1635,6 +1827,9 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                         "staged_report": {**staged["artifact"], "result": staged["result"]},
                     },
                 },
+                thread_id="controller-1",
+                turn_id="isolated-recovery-controller-ack",
+                root=root,
             )
             self.assertTrue(recovered["ok"], recovered)
             self.assertEqual(recovered["operation_status"], "GATEWAY_REPORT_RECOVERY_ACKED")
