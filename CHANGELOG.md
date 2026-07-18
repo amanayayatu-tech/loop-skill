@@ -400,7 +400,7 @@ evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
 [Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.1...HEAD
-[3.3.1]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.0...v3.3.1
+[3.3.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.1
 [3.3.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.0
 [3.3.0-candidate]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.8...HEAD
 [3.2.8]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.8

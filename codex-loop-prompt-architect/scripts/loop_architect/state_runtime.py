@@ -2850,7 +2850,9 @@ class AdaptiveStateRuntime:
         missing = sorted(
             path
             for path in report_evidence
-            if path not in state.get("artifact_ledger", {}) and path not in pending
+            if path.startswith(".codex-loop/")
+            and path not in state.get("artifact_ledger", {})
+            and path not in pending
         )
         if missing:
             raise RuntimeRejection(

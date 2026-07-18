@@ -151,7 +151,7 @@ class ManifestAndArtifactTests(unittest.TestCase):
         self.assertEqual(self.inventory["expected_total_tests"], 629)
         self.assertEqual(
             {key: value["test_count"] for key, value in self.inventory["shards"].items()},
-            {"1": 181, "2": 168, "3": 139, "4": 141},
+            {"1": 179, "2": 168, "3": 141, "4": 141},
         )
         self.assertEqual(set(self.inventory["dedicated_only"]), {
             "tests.test_adaptive_state_runtime",
