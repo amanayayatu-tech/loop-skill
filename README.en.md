@@ -15,6 +15,12 @@ Chats end. Windows refresh. The work rarely ends at the same moment. The hardest
 
 It **designs the Loop and generates the Pack**. It does not implement the target project for you, and one invocation does not silently launch an unattended run.
 
+## OpenAI Build Week 2026
+
+LoopSkill had a foundation before the event and was meaningfully extended with **Codex and GPT-5.6** from July 13–17, 2026. Codex was the primary engineering environment for this work, with GPT-5.6 used across implementation, incident analysis, test design, documentation, review, and release hardening.
+
+The Build Week work added or strengthened bilingual onboarding, an evolvable project specification and validator, sharded compatibility CI, typed MCP runtime payloads, historical-state repair protections, and the fail-closed retirement of an unavailable native Goal recovery path. The public history records **75 commits across 102 changed files** during the period, culminating in [`v3.2.8`](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.8).
+
 ## 30-second quickstart
 
 Requirements: macOS, Codex App, Git, and Python 3.9+.

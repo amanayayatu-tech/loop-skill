@@ -15,6 +15,12 @@
 
 它负责**设计 Loop 和生成 Pack**，不会替你直接实现目标项目，也不会仅凭一句调用就自动启动无人值守任务。
 
+## OpenAI Build Week 2026
+
+LoopSkill 在活动开始前已有基础版本，并在 2026 年 7 月 13–17 日使用 **Codex 和 GPT-5.6** 完成了实质性扩展。Codex 是这轮工作的主要工程环境，GPT-5.6 用于实现、事故分析、测试设计、文档、审查与发布加固。
+
+Build Week 期间新增或强化了双语上手路径、可演进的项目规范及校验器、分片兼容性 CI、类型化 MCP 运行时载荷、历史状态修复保护，以及对不可用原生 Goal 恢复路径的 fail-closed 退役。公开提交历史记录了这段期间的 **75 个提交、102 个变更文件**，并收束于 [`v3.2.8`](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.8)。
+
 ## 30 秒 Quickstart
 
 要求：macOS、Codex App、Git、Python 3.9+。
