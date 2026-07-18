@@ -758,8 +758,13 @@ def gate_report(plan: Mapping[str, Any], needs: Mapping[str, Any]) -> tuple[list
     for field in sha_fields:
         if not isinstance(plan.get(field), str) or not SHA_RE.fullmatch(str(plan.get(field, ""))):
             errors.append(f"plan {field} is missing or invalid")
-    if plan.get("expected_total_tests") != 615:
-        errors.append("plan expected_total_tests is not 615")
+    expected_total_tests = plan.get("expected_total_tests")
+    if (
+        not isinstance(expected_total_tests, int)
+        or isinstance(expected_total_tests, bool)
+        or expected_total_tests <= 0
+    ):
+        errors.append("plan expected_total_tests is missing or invalid")
     missing_jobs = sorted(EXPECTED_GATE_JOBS.difference(needs))
     if missing_jobs:
         errors.append(f"needs JSON is missing jobs: {missing_jobs}")
@@ -784,7 +789,7 @@ def gate_report(plan: Mapping[str, Any], needs: Mapping[str, Any]) -> tuple[list
 
     coverage_outputs = needs.get("coverage", {}).get("outputs", {}) if isinstance(needs.get("coverage"), Mapping) else {}
     if plan.get("run_full") is True and expected_results["coverage"] == "success":
-        expected_total = str(plan.get("expected_total_tests", "615"))
+        expected_total = str(plan.get("expected_total_tests", ""))
         if str(coverage_outputs.get("total_tests", "")) != expected_total:
             errors.append(
                 f"coverage total_tests expected {expected_total} but was {coverage_outputs.get('total_tests', '<missing>')}"
@@ -840,10 +845,35 @@ def _path_or_none(value: str) -> Path | None:
     return Path(value) if value else None
 
 
+def _inventory_total(path: Path) -> int:
+    inventory = _load_json(path)
+    total = inventory.get("expected_total_tests")
+    shards = inventory.get("shards")
+    if (
+        inventory.get("schema_version") != SCHEMA_VERSION
+        or not isinstance(total, int)
+        or isinstance(total, bool)
+        or total <= 0
+        or not isinstance(shards, dict)
+        or set(shards) != {"1", "2", "3", "4"}
+    ):
+        raise CompatibilityError("validated inventory identity is missing or invalid")
+    observed_total = 0
+    for shard in shards.values():
+        if not isinstance(shard, dict) or not isinstance(shard.get("test_count"), int):
+            raise CompatibilityError("validated inventory shard count is missing or invalid")
+        observed_total += shard["test_count"]
+    if observed_total != total:
+        raise CompatibilityError(
+            f"validated inventory total={total} but shard counts sum to {observed_total}"
+        )
+    return total
+
+
 def _cmd_classify(args: argparse.Namespace) -> int:
     event = _load_json(Path(args.event_path))
     plan = build_plan(Path(args.repo).resolve(), args.event_name, event, args.github_sha, args.manual_profile)
-    plan["expected_total_tests"] = args.expected_total_tests
+    plan["expected_total_tests"] = _inventory_total(Path(args.inventory))
     output = Path(args.output)
     _write_json(output, plan)
     _append_outputs(
@@ -934,7 +964,7 @@ def _parser() -> argparse.ArgumentParser:
     classify.add_argument("--event-path", required=True)
     classify.add_argument("--github-sha", required=True)
     classify.add_argument("--manual-profile", default="release")
-    classify.add_argument("--expected-total-tests", type=int, default=615)
+    classify.add_argument("--inventory", required=True)
     classify.add_argument("--output", default=PLAN_NAME)
     classify.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT", ""))
     classify.add_argument("--summary", default=os.environ.get("GITHUB_STEP_SUMMARY", ""))

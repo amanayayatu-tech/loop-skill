@@ -34,9 +34,10 @@ def call_state_gateway(
     server: mcp.AdaptiveStateMcpServer,
     root: Path,
     request: dict[str, object],
+    *,
+    meta: dict[str, object] | None = None,
 ) -> dict[str, object]:
     request = copy.deepcopy(request)
-    meta = McpHarness.metadata()
     response = server.handle(
         {
             "jsonrpc": "2.0",
@@ -44,7 +45,7 @@ def call_state_gateway(
             "method": "tools/call",
             "params": {
                 "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
-                "_meta": meta,
+                "_meta": McpHarness.metadata() if meta is None else meta,
                 "arguments": {"root": str(root), "request": request},
             },
         }
@@ -52,6 +53,28 @@ def call_state_gateway(
     if response is None:
         raise AssertionError("missing MCP response")
     return response["result"]["structuredContent"]
+
+
+def app_action_metadata(
+    action: str,
+    result: dict[str, object],
+    *,
+    thread_id: str = "controller-1",
+    turn_id: str = "real-app-turn-1",
+) -> dict[str, object]:
+    meta = McpHarness.metadata(thread_id=thread_id, turn_id=turn_id)
+    meta[mcp.MCP_APP_ACTION_RECEIPT_META_KEY] = json.dumps(
+        {
+            "schema_version": 1,
+            "action": action,
+            "source_thread_id": thread_id,
+            "source_turn_id": turn_id,
+            "result": result,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return meta
 
 
 def call_runtime_codec(
@@ -394,6 +417,169 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             self.assertFalse(duplicate["ok"], duplicate)
             self.assertEqual(duplicate["status"], "BUSINESS_HEARTBEAT_ALREADY_REGISTERED")
+
+    def test_state_gateway_accepts_optional_stronger_app_action_receipts(self) -> None:
+        """Future App attestations remain usable without becoming a hard dependency."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(
+                state_gateway=True,
+                bootstrap_threads=[
+                    {
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    }
+                ],
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "init",
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18"},
+                }
+            )
+
+            task_result = {
+                "thread_id": "reviewer-1",
+                "role_kind": "REVIEWER",
+                "bootstrap_role_kind": "code_reviewer",
+                "bootstrap_prompt_digest": digest("reviewer-bootstrap"),  # noqa: F405
+                "worktree_path": str(root.resolve()),
+            }
+            task_meta = app_action_metadata("THREAD_CREATE_OR_READ", task_result)
+            rejected_task = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-attested-task-with-payload",
+                    "operation": "REGISTER_TASK",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {"forged": True},
+                },
+                meta=task_meta,
+            )
+            self.assertFalse(rejected_task["ok"], rejected_task)
+            self.assertEqual(rejected_task["status"], "STATE_GATEWAY_REQUEST_INVALID")
+            registered = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-attested-task",
+                    "operation": "REGISTER_TASK",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {},
+                },
+                meta=task_meta,
+            )
+            self.assertTrue(registered["ok"], registered)
+
+            heartbeat_result = {
+                "automation_id": "heartbeat-attested-1",
+                "status": "ACTIVE",
+                "automation_name": "attested heartbeat",
+                "kind": "HEARTBEAT",
+                "target_thread_id": "controller-1",
+                "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                "prompt_digest": digest("heartbeat-prompt"),  # noqa: F405
+                "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+                "observed_at": T2,  # noqa: F405
+            }
+            heartbeat_meta = app_action_metadata(
+                "AUTOMATION_OBSERVATION", heartbeat_result
+            )
+            rejected_heartbeat = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-attested-heartbeat-with-payload",
+                    "operation": "REGISTER_HEARTBEAT",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {"forged": True},
+                },
+                meta=heartbeat_meta,
+            )
+            self.assertFalse(rejected_heartbeat["ok"], rejected_heartbeat)
+            self.assertEqual(
+                rejected_heartbeat["status"], "STATE_GATEWAY_REQUEST_INVALID"
+            )
+            heartbeat = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-attested-heartbeat",
+                    "operation": "REGISTER_HEARTBEAT",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {},
+                },
+                meta=heartbeat_meta,
+            )
+            self.assertTrue(heartbeat["ok"], heartbeat)
+
+            prepared = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-attested-transport-route",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "route_id": "attested-transport-route",
+                        "goal_id": "g1",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T2,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(prepared["ok"], prepared)
+            transport_result = {
+                "fingerprint": digest("attested-transport-failure"),  # noqa: F405
+                "outbox_id": "attested-transport-route",
+                "observed_at": T3,  # noqa: F405
+                "natural_heartbeat": False,
+                "heartbeat_automation_id": None,
+            }
+            transport_meta = app_action_metadata(
+                "APP_TRANSPORT_OBSERVATION", transport_result
+            )
+            rejected_transport = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-attested-transport-with-payload",
+                    "operation": "RECORD_TRANSPORT_OBSERVATION",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {"forged": True},
+                },
+                meta=transport_meta,
+            )
+            self.assertFalse(rejected_transport["ok"], rejected_transport)
+            self.assertEqual(
+                rejected_transport["status"], "STATE_GATEWAY_REQUEST_INVALID"
+            )
+            observed = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-attested-transport",
+                    "operation": "RECORD_TRANSPORT_OBSERVATION",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {},
+                },
+                meta=transport_meta,
+            )
+            self.assertTrue(observed["ok"], observed)
+            self.assertEqual(
+                observed["operation_status"], "TRANSPORT_FAILURE_RECORDED"
+            )
 
     def test_state_gateway_prepares_worker_route_from_schema_v3_canonical_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
