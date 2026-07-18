@@ -433,13 +433,25 @@ def build_plan(
     if event_name == "push":
         ref = event.get("ref", "")
         tag_identity = isinstance(ref, str) and ref.startswith("refs/tags/v")
-        reason = "tag-push-release-profile" if tag_identity else "main-push-release-profile"
-        return _release_plan(
-            event_name,
-            reason,
+        if tag_identity:
+            return _release_plan(
+                event_name,
+                "tag-push-release-profile",
+                head_sha=safe_merge_sha,
+                merge_sha=safe_merge_sha,
+                tag_identity=True,
+            )
+        return _plan(
+            tier="standard",
+            event_name=event_name,
+            reasons=["main-push-full-without-fuzz"],
             head_sha=safe_merge_sha,
             merge_sha=safe_merge_sha,
-            tag_identity=tag_identity,
+            run_full=True,
+            run_state_fuzz=False,
+            run_generator_fuzz=False,
+            run_install=True,
+            run_tag_identity=False,
         )
 
     return _release_plan(event_name, f"unsupported-event:{event_name or '<empty>'}", head_sha=safe_merge_sha, merge_sha=safe_merge_sha)

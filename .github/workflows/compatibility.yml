@@ -30,6 +30,9 @@ concurrency:
 
 # This workflow is a compatibility mirror. The current main Mac's complete
 # exact-SHA gate and same-SHA real Codex App canary remain authoritative.
+# Full 5000-case fuzz runs only for the affected PR risk domain, weekly
+# schedules, version tags, or the manual release profile. Main push repeats
+# canonical coverage and installs, but does not duplicate the Mac fuzz gate.
 jobs:
   plan:
     name: Plan and CI contract tests
