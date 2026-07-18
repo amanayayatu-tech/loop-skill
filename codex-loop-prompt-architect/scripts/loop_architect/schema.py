@@ -127,6 +127,8 @@ ADAPTIVE_STATE_SCHEMA_TYPES = {
 ADAPTIVE_RUNTIME_MUTATIONS = (
     "INITIALIZE",
     "MIGRATE_V1_TO_V2",
+    "MIGRATE_V2_TO_V3",
+    "STATE_GATEWAY",
     "PREPARE_CONTROLLER_PACK_MIGRATION",
     "MIGRATE_CONTROLLER_PACK",
     "ROLLBACK_CONTROLLER_PACK_MIGRATION",
@@ -241,7 +243,10 @@ DEFAULT_ADAPTIVE_VALUES = {
     "failure_fingerprint_policy": {"enabled": True},
     "context_freshness_policy": "required_at_gates",
     "review_evidence_policy": "deterministic_first",
+    "state_gateway_mode": "MCP_CANONICAL_WRITER",
 }
+
+STATE_GATEWAY_MODES = {"MCP_CANONICAL_WRITER", "LEGACY_STATE_WRITER"}
 
 
 REQUIRED = [
@@ -280,6 +285,7 @@ OPTIONAL = [
     "failure_fingerprint_policy",
     "context_freshness_policy",
     "review_evidence_policy",
+    "state_gateway_mode",
     "surface",
     "project_name",
     "project_root",
@@ -506,6 +512,7 @@ STRING_OPTIONAL_FIELDS = (
     "decision_card_policy",
     "context_freshness_policy",
     "review_evidence_policy",
+    "state_gateway_mode",
     "project_name",
     "project_root",
     "workspace_setup",
@@ -813,6 +820,7 @@ def _build_input_schema() -> dict:
             },
             "context_freshness_policy": {"enum": ["required_at_gates", "disabled"]},
             "review_evidence_policy": {"enum": ["deterministic_first"]},
+            "state_gateway_mode": {"enum": sorted(STATE_GATEWAY_MODES)},
         },
         "allOf": [
             {
@@ -839,6 +847,7 @@ def _build_input_schema() -> dict:
     schema["properties"]["decision_card_policy"] = {"enum": ["on_real_gate", "disabled"]}
     schema["properties"]["context_freshness_policy"] = {"enum": ["required_at_gates", "disabled"]}
     schema["properties"]["review_evidence_policy"] = {"enum": ["deterministic_first"]}
+    schema["properties"]["state_gateway_mode"] = {"enum": sorted(STATE_GATEWAY_MODES)}
     schema["properties"]["failure_fingerprint_policy"] = {
         "type": "object",
         "required": ["enabled"],

@@ -27,6 +27,9 @@ from loop_architect.adaptive_renderer import (  # noqa: E402
     adaptive_user_guide_block,
     local_verifier_protocol,
     reviewer_adaptive_protocol,
+    state_gateway_controller_protocol,
+    state_gateway_protocol,
+    state_gateway_reviewer_protocol,
     state_writer_adaptive_protocol,
 )
 from loop_architect.forecast import dashboard_required, local_verifier_needed  # noqa: E402
@@ -55,6 +58,7 @@ from loop_architect.schema import (  # noqa: E402
     ROLE_KINDS,
     STATE_SCHEMA_FIELDS,
     STATE_SCHEMA_TYPES,
+    STATE_GATEWAY_MODES,
     STRING_OPTIONAL_FIELDS,
     VALID_EVIDENCE,
     VALID_PERMISSIONS,
@@ -510,6 +514,16 @@ def is_state_role(worker: dict[str, Any]) -> bool:
     return worker.get("permission") == "state_write_only" or role_has_marker(str(worker.get("role", "")), STATE_ROLE_MARKERS)
 
 
+def uses_state_gateway(data: dict[str, Any]) -> bool:
+    """Whether this generated Adaptive Pack uses the schema-v3 writer."""
+
+    return (
+        data.get("coordination_mode") == "adaptive"
+        and data.get("state_gateway_mode", DEFAULTS["state_gateway_mode"])
+        == "MCP_CANONICAL_WRITER"
+    )
+
+
 def review_required(review: str) -> bool:
     text = review.lower()
     no_review_markers = (
@@ -588,7 +602,7 @@ def normalize_workers(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "validation": [],
             }
         )
-    if not any(is_state_role(worker) for worker in workers):
+    if not uses_state_gateway(data) and not any(is_state_role(worker) for worker in workers):
         workers.append(
             {
                 "role": unique_auto_role_name("state-writer", workers),
@@ -1285,6 +1299,16 @@ def heartbeat_cadence(data: dict[str, Any]) -> str:
     interval = int_value(data, "heartbeat_interval_minutes", int(DEFAULTS["heartbeat_interval_minutes"]))
     max_wakeups = int_value(data, "max_wakeups", int(DEFAULTS["max_wakeups"]))
     max_idle = int_value(data, "max_idle_wakeups", int(DEFAULTS["max_idle_wakeups"]))
+    if (
+        data.get("coordination_mode") == "adaptive"
+        and uses_state_gateway(data)
+    ):
+        return (
+            f"heartbeat every {interval} minutes; max {max_wakeups} total wakeups; "
+            "the Gateway pauses the heartbeat only after a real App pause and matching PAUSED readback: "
+            "on transport degradation after two same-fingerprint natural observations or 15 minutes, "
+            "or after PREPARE_FINALIZATION; ACK_FINALIZATION alone creates the terminal status"
+        )
     return (
         f"heartbeat every {interval} minutes; max {max_wakeups} total wakeups; "
         f"pause only after terminal completion or {max_idle} consecutive idle wakeups with no inflight/queued work"
@@ -1294,6 +1318,9 @@ def heartbeat_cadence(data: dict[str, Any]) -> str:
 def validation_errors(data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     adaptive_mode = data.get("coordination_mode") == "adaptive"
+    gateway_mode = data.get("state_gateway_mode", DEFAULTS["state_gateway_mode"])
+    if adaptive_mode and gateway_mode not in STATE_GATEWAY_MODES:
+        errors.append("state_gateway_mode:unsupported")
     for key in REQUIRED:
         value = data.get(key)
         if value is None or value == "" or (value == [] and key != "allowed"):
@@ -1506,6 +1533,8 @@ def validation_errors(data: dict[str, Any]) -> list[str]:
             reviewer_count += 1
         if is_state_role(worker) and permission != "state_write_only":
             errors.append(f"state_writer_must_be_state_write_only:{worker['role']}")
+        if uses_state_gateway(data) and is_state_role(worker):
+            errors.append(f"state_writer_not_allowed_in_gateway_mode:{worker['role']}")
         if permission == "state_write_only":
             state_writer_count += 1
         elif not is_review_role(worker):
@@ -1940,11 +1969,16 @@ def markdown_prompt_fence(data: dict[str, Any]) -> str:
     return "`" * max(3, longest + 1)
 
 
-def state_schema_block(adaptive: bool = False) -> str:
+def state_schema_block(adaptive: bool = False, state_gateway: bool = False) -> str:
     if adaptive:
         schema_path = SCRIPT_DIR.parent / "references" / "adaptive-state.schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         required = "\n".join(f"  - {field}" for field in schema["required"])
+        compatibility_note = (
+            "\n  schema-v3 compatibility note: retained controller_goal fields are historical/read-only; retained outbox storage remains actively written and validated only by State Gateway operations. No actor may use legacy mutations or lifecycle steps to route, register, advance, recover reports, or finalize"
+            if state_gateway
+            else ""
+        )
         return (
             "  authoritative schema: installed references/adaptive-state.schema.json "
             "(Draft 2020-12, additionalProperties=false)\n"
@@ -1953,7 +1987,8 @@ def state_schema_block(adaptive: bool = False) -> str:
             "  required top-level keys:\n"
             f"{required}\n"
             "  invariant enforcement belongs to adaptive_state_runtime.py; neither "
-            "Controller nor State-Writer may synthesize or patch this object manually"
+            "Controller nor any canonical-writer adapter may synthesize or patch this object manually"
+            f"{compatibility_note}"
         )
     field_types = {field: STATE_SCHEMA_TYPES[field] for field in STATE_SCHEMA_FIELDS}
     fields = "\n".join(f"  - {field}: {value}" for field, value in field_types.items())
@@ -2049,7 +2084,23 @@ def cost_usage_policy_block(data: dict[str, Any], workers: list[dict[str, Any]])
     )
 
 
-def thread_tool_boundary_block(adaptive: bool = False, delegation_policy: str = "disabled") -> str:
+def thread_tool_boundary_block(
+    adaptive: bool = False,
+    delegation_policy: str = "disabled",
+    state_gateway: bool = False,
+) -> str:
+    if adaptive and state_gateway:
+        return (
+            "Task And Subagent Tool Boundary (schema v3):\n"
+            "- Controller, implementation Worker, Reviewer, and Local Verifier roles must be real Codex App project tasks, never internal subagents. The installed MCP State Gateway is a service, not a task and not a role to create.\n"
+            "- Project/repo path: list_projects -> resolve PROJECT_ID -> list_threads(query=BOOTSTRAP_MARKER) for recovery -> create_thread(prompt=BOOTSTRAP_PROMPT, target={type:\"project\", projectId:PROJECT_ID, environment:{type:\"local\"}}) only when no exact task exists. For a worktree use target.environment={type:\"worktree\", startingState:{type:\"branch\", branchName:VERIFIED_BASE_BRANCH}}.\n"
+            "- Controller self-identity gate: a codex_delegation source_thread_id is the upstream parent task, never the current Controller. Query recent project tasks using the exact PACK_SHA256 and canonical repo path, and resolve one unique current Controller task whose project/cwd/launch payload match this Pack. CONTROLLER_THREAD_ID is that real threadId. If none or multiple remain, stop CONTROLLER_THREAD_ID_UNRESOLVED before Gateway initialization or child creation; a deterministic LOOP_ID fallback may aid search but can never substitute for owner identity.\n"
+            "- Forbidden role substitutions: multi_agent_v1.spawn_agent, agent_type, fork_context, internal \"智能体\", or agentId-only delegation may not stand in for any formal role or durable threadId.\n"
+            "- Only the Controller may invoke an explicitly authorized read-only sidecar. Every formal child task must work directly, must not spawn subagents or create/fork/message tasks, and returns blocker evidence instead of delegating. Sidecars never delegate further.\n"
+            f"- Read-only sidecar delegation policy is {delegation_policy}. When allowed, inspect the currently exposed collaboration/subagent tool name and schema, then use only its declared fields under the bounded Adaptive delegation contract; do not assume multi_agent_v1__spawn_agent, spawn_agent, agent_type, or fork_context exists. Its returned ephemeral agent identity is evidence metadata, never a thread_registry identity.\n"
+            "- fork_thread with environment.type=\"same-directory\" is allowed only for a just-in-time exact-artifact Reviewer, a just-in-time Local Verifier that must inspect the same worktree, or a sequential replacement execution role after the prior writer is idle and acknowledged. It is a real Codex App task operation, not fork_context.\n"
+            "- If list_projects/list_threads/create_thread/read_thread/send_message_to_thread are unavailable, output THREAD_TOOLS_UNAVAILABLE and stop automatic mode. Missing subagent tools alone is not a blocker; continue without the optional sidecar."
+        )
     if adaptive:
         return (
             "Task And Subagent Tool Boundary:\n"
@@ -2072,7 +2123,11 @@ def thread_tool_boundary_block(adaptive: bool = False, delegation_policy: str = 
     )
 
 
-def role_output_vocabulary(worker: dict[str, Any], adaptive: bool = False) -> str:
+def role_output_vocabulary(
+    worker: dict[str, Any],
+    adaptive: bool = False,
+    state_gateway: bool = False,
+) -> str:
     if not adaptive:
         return (
             "Status Vocabulary: READY_IDLE_AWAITING_GOAL | REVIEW_IDLE_AWAITING_ARTIFACTS | "
@@ -2087,6 +2142,29 @@ def role_output_vocabulary(worker: dict[str, Any], adaptive: bool = False) -> st
             "RUNTIME_DEPENDENCY_RETRYING | VALIDATION_BLOCKED | "
             "RUNTIME_DEPENDENCY_BLOCKED | BLOCKED_COST_CAP | BLOCKED_USAGE_METADATA | "
             "PHASE_PERMISSION_CONFLICT | HARD_BLOCK | AWAITING_HUMAN_APPROVAL"
+        )
+    if adaptive and state_gateway:
+        if is_review_role(worker):
+            return (
+                "Role Output Vocabulary: bootstrap-only REVIEW_IDLE_AWAITING_ARTIFACTS. "
+                "A strict staged Gateway review decision must be one of REVIEW_PASS, "
+                "REVIEW_PASS_WITH_LIMITATION, REVIEW_NEEDS_REPAIR, "
+                "REVIEW_ARTIFACT_UNAVAILABLE, ROADMAP_AUDIT_PASS, "
+                "ROADMAP_CHANGE_PROPOSED, ROADMAP_AUDIT_PASS_FINAL_CANDIDATE, "
+                "ROADMAP_AUDIT_NEEDS_REPAIR, FINAL_REVIEW_PASS, "
+                "FINAL_REVIEW_PASS_WITH_LIMITATION, or FINAL_REVIEW_NEEDS_REPAIR, "
+                "and must match review_kind."
+            )
+        if is_local_verifier(worker):
+            return (
+                "Role Output Vocabulary: bootstrap-only LOCAL_VERIFIER_IDLE_AWAITING_ARTIFACT; "
+                "the strict staged Gateway result status is PASS, FAIL, or BLOCKED."
+            )
+        return (
+            "Role Output Vocabulary: bootstrap-only READY_IDLE_AWAITING_GOAL; "
+            "the strict staged Gateway result status is PASS, FAIL, or BLOCKED. "
+            "Triage conclusions, retry reasons, and blockers belong in typed report fields, "
+            "not in Gateway operation names or result status."
         )
     if worker["permission"] == "state_write_only":
         return (
@@ -2119,7 +2197,20 @@ def role_output_vocabulary(worker: dict[str, Any], adaptive: bool = False) -> st
     )
 
 
-def thread_bootstrap_protocol_block(adaptive: bool = False) -> str:
+def thread_bootstrap_protocol_block(
+    adaptive: bool = False,
+    state_gateway: bool = False,
+) -> str:
+    if adaptive and state_gateway:
+        return (
+            "Thread Creation And Bootstrap Idempotency (schema v3):\n"
+            "- Before any child task, Goal, heartbeat, or Gateway request, require one launcher-supplied PACK_IDENTITY_ATTESTATION in the initial Controller launch input. It binds the absolute on-disk Controller Pack path, exact byte length, lowercase SHA-256, and parent create_thread observation. Independently hash that local file and require an exact match. Missing or mismatched attestation stops PACK_IDENTITY_ATTESTATION_REQUIRED or CONTROLLER_PACK_TRANSPORT_IDENTITY_UNRESOLVED with zero side effects.\n"
+            "- PACK_SHA256 is the attested digest of that exact on-disk Controller Pack. Define LOOP_ID as SHA-256(CONTROLLER_THREAD_ID + canonical repo path + PACK_SHA256), truncated to a stable readable id. A codex_delegation source_thread_id, title, LOOP_ID, or synthetic fallback is never Controller owner identity.\n"
+            "- Initialize canonical state once through state_gateway INITIALIZE before creating a Worker, Reviewer, Local Verifier, or heartbeat. The Gateway owns the archive of the attested Pack; a schema-v3 Pack must never recover, create, message, or register a State-Writer task.\n"
+            "- BOOTSTRAP_MARKER_VALUE is LOOP_ID + `|` + the exact generated role_kind token + `|` + PACK_SHA256. ROLE_PROMPT_TEXT is the exact UTF-8 text inside the matching prompt fence. BOOTSTRAP_PROMPT is exactly ROLE_PROMPT_TEXT + `\\n\\nBOOTSTRAP_MARKER: ` + marker + `\\nBOOTSTRAP_ONLY`, with no trailing LF; compute a lowercase sha256 digest over those exact bytes.\n"
+            "- For every Worker/Reviewer/Local task, reconcile exact marker/project/cwd candidates before create/fork. A create_thread result is identity evidence even when initial indexing is delayed: retry the returned id after 1, 2, 4, 8, and 16 seconds and never create a replacement in that bounded window. A readable mismatch stops E2E_PROTOCOL_VIOLATION; a still unreadable returned id stops THREAD_IDENTITY_PROPAGATION_TIMEOUT.\n"
+            "- create_thread carries BOOTSTRAP_PROMPT as its initial prompt. fork_thread carries no prompt, so after fork returns a real threadId, send the new role's full BOOTSTRAP_PROMPT exactly once and verify its declared idle status. Do not route product work until the Gateway registers the real task identity."
+        )
     dispatch_envelopes = (
         f"{ADAPTIVE_WORKER_ENVELOPE} or {ADAPTIVE_REVIEW_ENVELOPE}"
         if adaptive
@@ -2198,7 +2289,12 @@ def repo_and_worktree_gate_block(
     )
 
 
-def review_runtime_mapping_block() -> str:
+def review_runtime_mapping_block(state_gateway: bool = False) -> str:
+    completion = (
+        "before the Gateway's PREPARE_FINALIZATION and real PAUSED heartbeat readback; only ACK_FINALIZATION yields FINALIZATION_ACKED."
+        if state_gateway
+        else "before LOOP_COMPLETE."
+    )
     return (
         "Reviewer Artifact Mapping:\n"
         "- Never create or dispatch a Reviewer before a Worker report identifies a reviewable diff/artifact. Create it just in time after the Worker report is durably acknowledged.\n"
@@ -2206,10 +2302,11 @@ def review_runtime_mapping_block() -> str:
         "- If the writing Worker uses environment.type=\"local\", create the Reviewer in the same project checkout and pass base_sha/head_sha/current_branch.\n"
         "- If the writing Worker uses a worktree, create the Reviewer just in time with fork_thread(threadId=WORKER_THREAD_ID, environment={type:\"same-directory\"}) when available.\n"
         "- If same-directory fork is unavailable, use a separate Reviewer only after proving it can read the absolute worker_worktree_path and after passing base_sha, head_sha, changed_files, and a complete diff/patch reference.\n"
-        "- Every Worker PASS report includes one structured complete_diff_reference; for non_git or an uncommitted new_git tree use sorted LF MANIFEST_DELTA_V1 `A|M|D<TAB>path<TAB>size<TAB>sha256`, equal NO_DIFF, or confined PATCH_FILE_V1, each hashing to diff_sha256; exclude .codex-loop control files and report the exclusion manifest separately; unavailable Git SHAs are NOT_APPLICABLE.\n"
+        "- Every Worker PASS report includes one structured complete_diff_reference; for non_git or an uncommitted new_git tree use sorted LF MANIFEST_DELTA_V1 `A|M|D<TAB>path<TAB>size<TAB>sha256`, equal NO_DIFF, confined PATCH_FILE_V1, or runtime-produced CAPTURED_GIT_DIFF_V1 (digest only; never a .codex-loop path), each hashing to diff_sha256; exclude .codex-loop control files and report the exclusion manifest separately; unavailable Git SHAs are NOT_APPLICABLE.\n"
         "- If neither route exposes the exact artifact, output REVIEW_ARTIFACT_UNAVAILABLE; do not issue REVIEW_PASS from report text alone.\n"
         "- Reviewer output must lead with findings ordered by severity and include file, line, evidence, test gaps, reviewed base/head SHA, and final decision.\n"
-        "- After all queued goals pass, run one final integrated review over the complete Git base-to-head diff or non_git before-to-after snapshot diff and accumulated validation evidence before LOOP_COMPLETE."
+        "- After all queued goals pass, run one final integrated review over the complete Git base-to-head diff or non_git before-to-after snapshot diff and accumulated validation evidence "
+        f"{completion}"
     )
 
 
@@ -2703,7 +2800,10 @@ def phase_permission_overlay_block(
     )
 
 
-def runtime_retry_policy_block(data: dict[str, Any]) -> str:
+def runtime_retry_policy_block(
+    data: dict[str, Any],
+    state_gateway: bool = False,
+) -> str:
     attempts = int_value(data, "runtime_retry_attempts", 10)
     total_minutes = int_value(data, "runtime_retry_total_minutes", 180)
     attempt_timeout = int_value(data, "runtime_retry_attempt_timeout_minutes", 12)
@@ -2716,8 +2816,9 @@ def runtime_retry_policy_block(data: dict[str, Any]) -> str:
         "- Ladder: exact command with captured logs -> supported retry/fetch flags and lower concurrency -> package-supported resumable/range/chunked fetch or store warming -> allowlisted alternate public registry/source -> project-scoped cleanup -> package-supported native/browser host.\n"
         "- Preserve an existing tracked lockfile. Remove a lockfile only when this loop created an untracked partial lockfile during the failed attempt and the current goal explicitly owns it.\n"
         "- Never delete global caches, change global registry config, add private credentials, or use paid mirrors without approval. Restore temporary registry/source overrides and record integrity/lockfile evidence.\n"
-        "- Record attempt number, elapsed time, timeout, backoff, source, command, exit status, progress evidence, and next action through State-Writer.\n"
-        "- Use RUNTIME_DEPENDENCY_RETRYING while both attempt and elapsed budgets remain; otherwise RUNTIME_DEPENDENCY_BLOCKED or VALIDATION_BLOCKED with exact evidence."
+        "- Record attempt number, elapsed time, timeout, backoff, source, command, exit status, progress evidence, and next action through "
+        + ("the MCP State Gateway.\n" if state_gateway else "State-Writer.\n")
+        + "- Use RUNTIME_DEPENDENCY_RETRYING while both attempt and elapsed budgets remain; otherwise RUNTIME_DEPENDENCY_BLOCKED or VALIDATION_BLOCKED with exact evidence."
     )
 
 
@@ -3140,7 +3241,53 @@ def formal_role_delegation_boundary(adaptive: bool = False) -> str:
     )
 
 
-def worker_input_gate(worker: dict[str, Any], adaptive: bool = False) -> str:
+def worker_input_gate(
+    worker: dict[str, Any],
+    adaptive: bool = False,
+    state_gateway: bool = False,
+) -> str:
+    if adaptive and state_gateway:
+        verification_contract = (
+            "Pass CANONICAL_REPO_ROOT and the exact received codexDelegation.input string "
+            "to runtime_codec operation VERIFY_DISPATCH and proceed only on "
+            "PAYLOAD_VERIFIED. The runtime alone may normalize CRLF to LF and remove at "
+            "most one trailing newline before strict JSON semantic canonicalization. "
+            "Never hash or reserialize a UI wrapper, manually replace payload fields, "
+            "or treat PAYLOAD_BYTES_VERIFIED as execution permission."
+        )
+        if is_review_role(worker):
+            return (
+                "Input Gate:\n"
+                "- BOOTSTRAP_ONLY: do not review and reply REVIEW_IDLE_AWAITING_ARTIFACTS.\n"
+                f"- Execute only a Gateway-derived {ADAPTIVE_REVIEW_ENVELOPE} for CODE_REVIEW, "
+                f"ROADMAP_AUDIT, or FINAL_AUDIT. {verification_contract}\n"
+                "- The Gateway-derived payload already binds the source Worker dispatch/report, "
+                "current artifact, required Local Verification chain, and target Reviewer. "
+                "A stale artifact, stale dispatch, or BLOCKED report is never PASS evidence.\n"
+                "- Stage the exact strict JSON report with runtime_codec STAGE_REPORT and return "
+                "only FORMAL_REPORT_STAGED; do not write canonical state or report bytes by hand."
+            )
+        if is_local_verifier(worker):
+            return (
+                "Input Gate:\n"
+                "- BOOTSTRAP_ONLY: do not verify and reply LOCAL_VERIFIER_IDLE_AWAITING_ARTIFACT.\n"
+                f"- Execute only a Gateway-derived LOCAL_VERIFY_DISPATCH. {verification_contract}\n"
+                "- Never edit product code or expose local credentials. Preserve verification_id "
+                "on FAIL; a changed artifact requires a new current CODE_REVIEW before retest.\n"
+                "- Stage the exact strict JSON result with runtime_codec STAGE_REPORT and return "
+                "only FORMAL_REPORT_STAGED."
+            )
+        return (
+            "Input Gate:\n"
+            "- BOOTSTRAP_ONLY: do not execute and reply READY_IDLE_AWAITING_GOAL.\n"
+            f"- Execute only a Gateway-derived {ADAPTIVE_WORKER_ENVELOPE}. {verification_contract}\n"
+            "- The exact Gateway route owns the prepared/sent outbox, current Goal, immutable "
+            "definition, freshness, validation, and target identity. Reject unresolved "
+            "MATERIALIZE_* tokens or a duplicate dispatch without executing it again.\n"
+            "- Capture a complete diff through runtime_codec CAPTURE_COMPLETE_DIFF when the "
+            "artifact changes; stage the exact strict JSON result through STAGE_REPORT and "
+            "return only FORMAL_REPORT_STAGED."
+        )
     if worker["permission"] == "state_write_only":
         if adaptive:
             return (
@@ -3291,7 +3438,7 @@ def status_report_fields(worker: dict[str, Any], adaptive: bool = False) -> str:
                 "source_artifact_digest",
                 "report_digest: literal PENDING_CONTROLLER_ARCHIVE in the task output; canonical state uses the bound archived application/json SHA-256",
                 "adaptive_artifact_identity_rule: source_artifact_digest is exactly the literal sha256: prefix followed by after_snapshot_sha256; non_git current_branch/base_sha/head_sha are literal NOT_APPLICABLE (never null); changed_files are repo-relative POSIX paths",
-                "complete_diff_reference: PASS; NO_DIFF, sorted-LF MANIFEST_DELTA_V1 A|M|D<TAB>path<TAB>size<TAB>sha256, or confined PATCH_FILE_V1; hash=diff_sha256",
+                "complete_diff_reference: PASS; NO_DIFF, sorted-LF MANIFEST_DELTA_V1 A|M|D<TAB>path<TAB>size<TAB>sha256, confined PATCH_FILE_V1, or runtime-produced digest-only CAPTURED_GIT_DIFF_V1; hash=diff_sha256",
             ]
         )
     if is_review_role(worker):
@@ -3374,7 +3521,7 @@ def render_goal_block(
                 "acceptance_criteria": list(goal["success_criteria"]),
                 "allowed_write_scope": allowed_write_scope,
                 "artifact_identity_rule": (
-                    "PASS uses complete_diff_reference: PATCH_FILE_V1, deterministic MANIFEST_DELTA_V1, or NO_DIFF; "
+                    "PASS uses complete_diff_reference: runtime-produced digest-only CAPTURED_GIT_DIFF_V1, PATCH_FILE_V1, deterministic MANIFEST_DELTA_V1, or NO_DIFF; "
                     "hash equals diff_sha256. Exclude control/cache paths. For non_git, branch/base/head are "
                     "NOT_APPLICABLE and changed_files are repo-relative POSIX paths."
                 ),
@@ -3503,7 +3650,7 @@ Review Gate: {data.get('review')}
 Prompt Injection Boundary: {PROMPT_INJECTION_BOUNDARY}
 Dispatch Idempotency: If this exact Dispatch ID already appears in this thread's completed or active work, do not execute it again. Return the existing status/report and mark duplicate_dispatch=true.
 
-Artifact Identity: use Git base/head plus diff_sha256 when available; otherwise deterministic before/after approved-product-scope snapshot SHA-256 manifests plus diff_sha256. Every Adaptive PASS includes structured complete_diff_reference: explicit NO_DIFF, MANIFEST_DELTA_V1 canonical UTF-8 tab-separated content, or a root-confined PATCH_FILE_V1 artifact_path; hash_algorithm is sha256 and reference sha256 equals diff_sha256. Exclude .codex-loop, declared pre-existing unrelated files, and caches from the product digest and report the exclusion manifest separately. Never invent a Git SHA.{' For adaptive non_git work, current_branch, base_sha, and head_sha must each be the exact string NOT_APPLICABLE, never null/empty; changed_files must be repo-relative POSIX paths.' if adaptive else ''}
+Artifact Identity: use Git base/head plus diff_sha256 when available; otherwise deterministic before/after approved-product-scope snapshot SHA-256 manifests plus diff_sha256. Every Adaptive PASS includes structured complete_diff_reference: explicit NO_DIFF, MANIFEST_DELTA_V1 canonical UTF-8 tab-separated content, a root-confined PATCH_FILE_V1 artifact_path, or runtime-produced digest-only CAPTURED_GIT_DIFF_V1; hash_algorithm is sha256 and reference sha256 equals diff_sha256. CAPTURED_GIT_DIFF_V1 never includes a .codex-loop path or patch bytes. Exclude .codex-loop, declared pre-existing unrelated files, and caches from the product digest and report the exclusion manifest separately. Never invent a Git SHA.{' For adaptive non_git work, current_branch, base_sha, and head_sha must each be the exact string NOT_APPLICABLE, never null/empty; changed_files must be repo-relative POSIX paths.' if adaptive else ''}
 
 Required Completion Report:
 {status_report_fields(worker, adaptive)}
@@ -3546,7 +3693,13 @@ def _render_controller_pack_base(data: dict[str, Any], mode: str) -> str:
     worktree_policy = str(data.get("worktree_policy", DEFAULTS["worktree_policy"]))
     if repo_mode == "non_git":
         worktree_policy = "non_git local integration directory only; no Git worktree"
+    state_gateway = uses_state_gateway(data)
     thread_topology = str(data.get("thread_topology", DEFAULTS["thread_topology"]))
+    if state_gateway:
+        thread_topology = (
+            "lean just-in-time topology: one current execution Worker, the installed "
+            "MCP State Gateway as canonical writer, and one Reviewer only when its review artifact is accessible"
+        )
     max_child_threads = int_value(data, "max_child_threads", 4)
     max_repair_attempts = int_value(data, "max_repair_attempts_per_goal", 5)
     review = str(data.get("review", DEFAULTS["review"]))
@@ -3561,6 +3714,20 @@ def _render_controller_pack_base(data: dict[str, Any], mode: str) -> str:
     active_stale = int_value(data, "active_stale_after_minutes", 60)
     runtime_retry_attempts = int_value(data, "runtime_retry_attempts", 10)
     cadence = heartbeat_cadence(data)
+    automation_stop_line = (
+        "- Finalization uses `PREPARE_FINALIZATION`, then a real App "
+        "`automation_update(... status=\"PAUSED\" ...)` plus PAUSED readback, then "
+        "`ACK_FINALIZATION`; no terminal status exists before that ACK. "
+        "Transport degradation uses the same pause/readback-bound transition after two same-fingerprint natural observations or 15 minutes."
+        if state_gateway
+        else (
+            "- To stop after terminal completion, call automation_update(mode=\"update\", "
+            "id=automation_id_from_canonical_state, kind=\"heartbeat\", "
+            "destination=\"thread\", status=\"PAUSED\", "
+            f"rrule=\"FREQ=MINUTELY;INTERVAL={heartbeat_interval}\", "
+            "name=HEARTBEAT_AUTOMATION_NAME, prompt=HEARTBEAT_PROMPT)."
+        )
+    )
     state = str(data.get("state", ".codex-loop/LOOP_STATE.md"))
     triage_output = str(data.get("triage_output", ".codex-loop/TRIAGE.md"))
     audit_paths = loop_audit_paths(repo, state, triage_output)
@@ -3576,8 +3743,10 @@ def _render_controller_pack_base(data: dict[str, Any], mode: str) -> str:
         None,
     ) if adaptive else None
     prompt_fence = markdown_prompt_fence(data)
-    state_writer = next(worker for worker in workers if is_state_role(worker))
-    state_writer_role = state_writer["role"]
+    state_writer = next((worker for worker in workers if is_state_role(worker)), None)
+    if state_writer is None and not state_gateway:
+        raise ValueError("legacy Pack requires one State-Writer")
+    state_writer_role = "MCP State Gateway" if state_gateway else state_writer["role"]
     first_goal = next(
         (
             goal
@@ -3642,15 +3811,17 @@ def _render_controller_pack_base(data: dict[str, Any], mode: str) -> str:
                     dashboard_required(data, len(normalize_milestones(data.get("milestones")))),
                 )
         elif is_review_role(worker):
-            role_protocol = review_runtime_mapping_block()
-            if adaptive:
+            role_protocol = review_runtime_mapping_block(state_gateway=state_gateway)
+            if adaptive and state_gateway:
+                role_protocol += "\n\n" + state_gateway_reviewer_protocol()
+            elif adaptive:
                 role_protocol += "\n\n" + reviewer_adaptive_protocol().replace(
                     "/review", ADAPTIVE_REVIEW_ENVELOPE
                 )
         elif is_local_verifier(worker):
-            role_protocol = local_verifier_protocol()
+            role_protocol = local_verifier_protocol(state_gateway=state_gateway)
         else:
-            role_protocol = runtime_retry_policy_block(data)
+            role_protocol = runtime_retry_policy_block(data, state_gateway=state_gateway)
         worker_blocks.append(
             f"""### Worker Prompt - {role}
 SEND TO: real Codex App task for {role}; Controller records the returned real threadId after create/fork
@@ -3665,7 +3836,7 @@ Permission Declaration: {worker['permission']} ({worker['permission_source']})
 Sandbox expectation: {sandbox_text(worker, adaptive)}.
 Prompt Injection Boundary: {PROMPT_INJECTION_BOUNDARY}{formal_role_delegation_boundary(adaptive)}
 
-{worker_input_gate(worker, adaptive)}
+{worker_input_gate(worker, adaptive, state_gateway)}
 
 Allowed Write Scope:
 {worker_allowed_scope(worker, worker.get('allowed') or allowed, audit_paths, adaptive=adaptive)}
@@ -3699,7 +3870,7 @@ Role-Specific Operating Protocol:
 Required Report Fields:
 {status_report_fields(worker, adaptive)}
 
-{role_output_vocabulary(worker, adaptive)}
+{role_output_vocabulary(worker, adaptive, state_gateway)}
 {prompt_fence}{role_prompt_end}"""
         )
 
@@ -3722,26 +3893,79 @@ Required Report Fields:
         human_approval_policy,
         adaptive,
     )
-    state_protocol = state_update_protocol_block(state_writer_role, adaptive)
-    heartbeat_prompt = heartbeat_prompt_block(
-        audit_paths,
-        state_writer_role,
-        max_wakeups,
-        max_idle_wakeups,
-        active_stale,
-        max_repair_attempts,
-        adaptive,
-        str(data.get("native_goal_policy", "required")),
-    )
-    transition_table = deterministic_transition_table_block(
-        state_writer_role,
-        runtime_retry_attempts,
-        max_wakeups,
-        max_idle_wakeups,
-        active_stale,
-        max_repair_attempts,
-        adaptive,
-    )
+    if state_gateway:
+        state_protocol = state_gateway_protocol(
+            repo,
+            f"{audit_paths['root']}GOALS.md",
+            f"{audit_paths['root']}progress-dashboard.html",
+            dashboard_required(data, len(normalize_milestones(data.get("milestones")))),
+        )
+        heartbeat_prompt = (
+            "Gateway Heartbeat Contract:\n"
+            f"- One business heartbeat may observe and route at most one Gateway transition every {heartbeat_interval} minutes.\n"
+            "- It reads canonical state, observes an existing outbox first, and never retries a matching transport fault after WAITING_TRANSPORT_RECOVERY.\n"
+            "- After WAITING_TRANSPORT_RECOVERY, ACK_TRANSPORT_PAUSE only after one real pause and a matching PAUSED automation readback bound to the registered heartbeat; do not claim heartbeat PAUSED before it. FINALIZATION_ACKED requires the same readback-bound evidence; only an explicit authorized successor may create a new heartbeat."
+        )
+        transition_table = (
+            "Gateway Transition Contract:\n"
+            "| Canonical condition | One permitted action | Never do |\n"
+            "| --- | --- | --- |\n"
+            "| Reconciled formal task or first heartbeat | REGISTER_TASK or REGISTER_HEARTBEAT with its real App return/readback bound to the current host turn | Create a State-Writer or a duplicate heartbeat |\n"
+            "| Ready Goal | PREPARE_ROUTE then one send/RECORD_ROUTE_SENT | Create a State-Writer or duplicate dispatch |\n"
+            "| SENT outbox with staged report | ACK_ROUTE_RESULT on that outbox | Make a report-only product dispatch |\n"
+            "| ROADMAP_AUDIT_PASS on unchanged canonical Goals | ADVANCE_ROADMAP | Rebuild freshness, validation, or future Goal objects in Controller prose |\n"
+            "| FINAL_AUDIT PASS with all prior Goals complete | PREPARE_FINALIZATION then pause heartbeat/ACK_FINALIZATION | Create or complete a native Goal |\n"
+            "| Lost stdout/index, staged report remains | REPORT_RECOVERY on original outbox | Re-execute product work |\n"
+            "| Same transport fault twice naturally or 15 minutes | Pause heartbeat and notify user once | Infinite ten-minute retries |\n"
+            "| Terminal predecessor | INITIALIZE_SUCCESSOR in a fresh root only | Modify predecessor canonical state |"
+        )
+        topology_bootstrap_lines = (
+            "- Do not create a State-Writer. Initialize/reconcile the installed MCP State Gateway as the canonical writer, then reconcile/create the current execution Worker and record its exact identity through REGISTER_TASK before its first route.\n"
+            "- Never create Reviewer at startup. Create it just in time only after a reviewable Worker report is durably acknowledged, then record its exact identity through REGISTER_TASK before its first review route.\n"
+            "- Create no future blocked-stage Worker and reuse sequential implementation Workers when scopes are compatible.\n"
+            "- Reuse one Reviewer per integration workspace/worktree across repair/review rounds when possible. Archive only completed non-reusable tasks after their report ACK; the Gateway remains installed through finalization."
+        )
+        startup_transaction_block = (
+            "Gateway startup:\n"
+            "1. Verify the installed `codex-loop-state` MCP server and its schemas read-only.\n"
+            "2. Resolve the real Controller identity and initialize schema v3 through the Gateway; no session State-Writer or pre-state task is allowed.\n"
+            "3. Reconcile/create the one business heartbeat and current Worker only after Gateway initialization; bind their actual App return/readback through REGISTER_HEARTBEAT and REGISTER_TASK. An optional stronger receipt is strictly checked when present but is never a prerequisite.\n"
+            "4. Route First Goal only through PREPARE_ROUTE -> runtime_codec -> one App send -> RECORD_ROUTE_SENT."
+        )
+    else:
+        state_protocol = state_update_protocol_block(state_writer_role, adaptive)
+        heartbeat_prompt = heartbeat_prompt_block(
+            audit_paths,
+            state_writer_role,
+            max_wakeups,
+            max_idle_wakeups,
+            active_stale,
+            max_repair_attempts,
+            adaptive,
+            str(data.get("native_goal_policy", "required")),
+        )
+        transition_table = deterministic_transition_table_block(
+            state_writer_role,
+            runtime_retry_attempts,
+            max_wakeups,
+            max_idle_wakeups,
+            active_stale,
+            max_repair_attempts,
+            adaptive,
+        )
+        topology_bootstrap_lines = (
+            "- Reconcile/create State-Writer first. Only after canonical state ACK, reconcile/create the current execution Worker through thread_creation_outbox.\n"
+            "- Never create Reviewer at startup. Create it just in time only after a reviewable Worker report is durably acknowledged and its exact local/worktree artifact mapping exists.\n"
+            "- Create no future blocked-stage Worker and reuse sequential implementation Workers when scopes are compatible.\n"
+            "- Reuse one Reviewer per integration workspace/worktree across repair/review rounds when possible. After a completed task is acknowledged and no longer reusable, record its lifecycle and call set_thread_archived(threadId=..., archived=true). Do not archive State-Writer before final state ACK."
+        )
+        startup_transaction_block = startup_transaction_gate_block(
+            state_writer_role,
+            first_goal["worker_role"],
+            audit_paths,
+            adaptive,
+            str(data.get("native_goal_policy", "required")),
+        )
     queue_templates_text = "\n\n".join(queue_templates) if queue_templates else "No additional queued goal templates."
     adaptive_goal_registry_text = (
         "Adaptive Canonical Goal Definition Registry (bootstrap this exact object into LOOP_STATE.md):\n"
@@ -3770,6 +3994,22 @@ Required Report Fields:
         if adaptive
         else ""
     )
+    if adaptive and state_gateway:
+        adaptive_authorization_text = (
+            "Adaptive v3 Runtime Handoff:\n"
+            "- Verify the installed `codex-loop-state` MCP server exposes `state_gateway` and `runtime_codec`; do not invoke a shell runtime or create a State-Writer task.\n"
+            "- New schema-v3 canonical state is written only through host-attested `state_gateway` requests. Legacy `route_state_mutation` is compatibility-only and prohibited for this Pack.\n"
+            "- `INITIALIZE_SUCCESSOR` is allowed only from immutable terminal predecessor evidence into a fresh root; it never revives a predecessor.\n\n"
+            "Adaptive Canonical Authorization Envelope (bootstrap this exact closed object into LOOP_STATE.md):\n"
+            "AUTHORIZATION_ENVELOPE_JSON_BEGIN\n"
+            + json.dumps(
+                adaptive_authorization_envelope(data, goals),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\nAUTHORIZATION_ENVELOPE_JSON_END\n"
+        )
     adaptive_observability_lines = (
         f"- Roadmap projection: {audit_paths['root']}GOALS.md\n"
         f"- Progress dashboard: {audit_paths['root']}progress-dashboard.html when the Adaptive dashboard trigger is true\n"
@@ -3782,6 +4022,11 @@ Required Report Fields:
         if adaptive
         else ""
     )
+    if adaptive and state_gateway:
+        adaptive_automation_identity_lines = (
+            "- Gateway heartbeat identity stores automation_name, kind=HEARTBEAT, real Controller target_thread_id, exact rrule, canonical prompt_digest, and prompt_normalization=LF_NORMALIZED_NO_TRAILING_NEWLINE. REGISTER_HEARTBEAT and RECORD_HEARTBEAT_OBSERVATION bind actual automation create/readback to the current host turn; ACK_FINALIZATION requires an actual PAUSED update/readback for that identity.\n"
+            "- The canonical heartbeat body has no trailing newline. On tool/config readback normalize CRLF or CR to LF, verify there is still no trailing newline, and hash those exact UTF-8 bytes. Never hash delimiter lines or silently trim arbitrary whitespace.\n"
+        )
     automation_setup_lines = (
         "- Before create, send PREPARE_OUTBOX(kind=AUTOMATION) with deterministic name, real Controller target, rrule, exact prompt digest, and normalization rule; reconcile canonical outbox plus local automation records before any external call.\n"
         f"- Heartbeat creation call when no exact match exists: automation_update(mode=\"create\", kind=\"heartbeat\", destination=\"thread\", status=\"ACTIVE\", rrule=\"FREQ=MINUTELY;INTERVAL={heartbeat_interval}\", name=HEARTBEAT_AUTOMATION_NAME, prompt=HEARTBEAT_PROMPT). `HEARTBEAT_PROMPT` means the exact delimited text above. Omit targetThreadId for the current Controller or use its real threadId; never use a nonexistent target or interval argument.\n"
@@ -3791,11 +4036,20 @@ Required Report Fields:
         f"- Heartbeat creation call when no exact match exists: automation_update(mode=\"create\", kind=\"heartbeat\", destination=\"thread\", status=\"ACTIVE\", rrule=\"FREQ=MINUTELY;INTERVAL={heartbeat_interval}\", name=HEARTBEAT_AUTOMATION_NAME, prompt=HEARTBEAT_PROMPT). `HEARTBEAT_PROMPT` means the exact delimited text above. Omit targetThreadId for the current Controller or use its real threadId; never use a nonexistent target or interval argument.\n"
         "- Persist AUTOMATION_REGISTERED with returned/adopted automation id, status, rrule, prompt digest, last_wake_at, and wake counters before First Goal."
     )
+    if adaptive and state_gateway:
+        automation_setup_lines = (
+            "- Reconcile/create only one business heartbeat after schema-v3 Gateway initialization. After the actual App create/adopt call, bind its real Controller target, exact rrule, prompt digest, status=ACTIVE, and readback through REGISTER_HEARTBEAT before First Goal. An optional stronger result carrier is strictly validated when present but never required.\n"
+            "- A transport degradation threshold or PREPARE_FINALIZATION requires a real pause and PAUSED readback for that exact heartbeat; only the subsequent Gateway ACK projects PAUSED or terminal state. Do not create a replacement heartbeat, revive an old successor, or add an outer Supervisor loop."
+        )
     heartbeat_budget_lines = (
         f"- max_routing_turns: {max_wakeups}; ACQUIRE_LEASE counts both Goal turns and heartbeat wakes\n"
         if adaptive
         else f"- max_wakeups: {max_wakeups}\n- max_consecutive_idle_wakeups: {max_idle_wakeups}\n"
     )
+    if adaptive and state_gateway:
+        heartbeat_budget_lines = (
+            f"- max_gateway_route_observations: {max_wakeups}; one natural heartbeat may prepare or observe one canonical route\n"
+        )
     discovery_triage_lines = (
         "Discovery/Triage:\n"
         f"- Sources: {data.get('discovery')}\n"
@@ -3808,23 +4062,54 @@ Required Report Fields:
         "- Actionable result status: TRIAGE_ACTIONABLE with finding_id, evidence, proposed Worker, allowed scope, validation, and matching queued goal.\n"
         "- No-action result status: TRIAGE_NO_ACTION with evidence; skip conditional repair goals after state acknowledgement."
     )
+    if adaptive and state_gateway:
+        discovery_triage_lines = (
+            "Discovery/Triage:\n"
+            f"- Sources: {data.get('discovery')}\n"
+            "- A formal triage Goal returns only PASS, FAIL, or BLOCKED in its staged result; "
+            "TRIAGE_ACTIONABLE/TRIAGE_NO_ACTION remain typed domain fields, never route operations.\n"
+            f"- The Gateway archives the staged report under {audit_paths['reports']}. "
+            "It cannot mutate the canonical future Goal registry: only a current "
+            "ROADMAP_AUDIT_PASS may use ADVANCE_ROADMAP over that unchanged registry."
+        )
     controller_terminal_statuses = (
+        "Controller Canonical Terminal Statuses: FINALIZATION_ACKED | LOOP_BLOCKED\n"
+        "Only PREPARE_FINALIZATION followed by a real verified PAUSED readback and ACK_FINALIZATION may set FINALIZATION_ACKED. LOOP_BLOCKED preserves immutable hard-block evidence; transient blockers remain nonterminal report evidence or safe wait states."
+        if adaptive and state_gateway
+        else
         "Controller Canonical Terminal Statuses: LOOP_COMPLETE | LOOP_COMPLETE_WITH_LIMITATION | LOOP_BLOCKED\n"
         "Only STOP_LOOP may set LOOP_BLOCKED from one immutable hard-block report. Transient blockers and wait reasons remain nonterminal report evidence or RELEASE_LEASE reason codes."
         if adaptive
         else "Controller Terminal Statuses: LOOP_COMPLETE | LOOP_COMPLETE_WITH_LIMITATION | LOOP_STOPPED | REPAIR_BUDGET_EXHAUSTED | THREAD_BUDGET_EXHAUSTED | AUTOMATION_TOOLS_UNAVAILABLE | AUTOMATION_IDENTITY_UNRESOLVED | HEARTBEAT_BUDGET_EXHAUSTED | HEARTBEAT_IDLE_BUDGET_EXHAUSTED | WORKTREE_INTEGRATION_PLAN_MISSING | PATH_SCOPE_ESCAPE | HARD_BLOCK"
     )
     adaptive_controller_block = (
-        adaptive_controller_protocol(data, audit_paths) + "\n\n" if adaptive else ""
+        (
+            state_gateway_controller_protocol(data, audit_paths)
+            if state_gateway
+            else adaptive_controller_protocol(data, audit_paths)
+        )
+        + "\n\n"
+        if adaptive
+        else ""
     )
     adaptive_materialization_lines = (
-        "- Adaptive only: each Goal template is a PAYLOAD_MATERIALIZATION_SPEC strict JSON object. Parse it, replace each whole MATERIALIZE_* value with the correctly typed runtime value (integer, object, string, or null), and reject any remaining token. The claim contains lease_epoch, lease_id, owner_kind, owner_identity equal to the exact registered real Controller threadId, routing_turn_id, and intended_transition. A codex_delegation source_thread_id is parent metadata and is never valid owner identity.\n"
+        "- Adaptive v3 only: each Goal template is a Gateway-derived PAYLOAD_MATERIALIZATION_SPEC strict JSON object. The Controller must not replace lease, validation, freshness, review-handoff, artifact, roadmap, or payload fields; use only the returned specification and codec result. A codex_delegation source_thread_id is parent metadata and is never valid owner identity.\n"
+        "- Use state_gateway PREPARE_ROUTE before materialization, runtime_codec MATERIALIZE_DISPATCH to obtain transport_text, then state_gateway RECORD_ROUTE_SENT after the one real App send. Worker/Reviewer/Local report handles are ACKed only through state_gateway ACK_ROUTE_RESULT. A lost task stdout/index uses REPORT_RECOVERY for the same outbox, never another product dispatch.\n"
+        "- Runtime transport contract: dispatch materialize/verify, report staging, external-receipt staging, fingerprint normalization, and complete-diff capture use only the configured codex-loop-state MCP tools. Never start a shell process or depend on a session stdin. Missing tool returns RUNTIME_CODEC_TOOL_UNAVAILABLE with zero side effects.\n"
+        if adaptive and state_gateway
+        else "- Adaptive only: each Goal template is a PAYLOAD_MATERIALIZATION_SPEC strict JSON object. Parse it, replace each whole MATERIALIZE_* value with the correctly typed runtime value (integer, object, string, or null), and reject any remaining token. The claim contains lease_epoch, lease_id, owner_kind, owner_identity equal to the exact registered real Controller threadId, routing_turn_id, and intended_transition. A codex_delegation source_thread_id is parent metadata and is never valid owner identity.\n"
         "- Runtime transport contract: State-Writer apply/recover keeps the installed bounded CLI compatibility path. Dispatch materialize/verify, report staging, external-receipt staging, and fingerprint normalization use only the configured codex-loop-state runtime_codec MCP tool operations MATERIALIZE_DISPATCH, VERIFY_DISPATCH, STAGE_REPORT, STAGE_EXTERNAL_RECEIPT, and NORMALIZE_FINGERPRINT. Never start a shell process or depend on a session stdin for codec work. Missing tool returns RUNTIME_CODEC_TOOL_UNAVAILABLE with zero side effects.\n"
         "- Keep dispatch_payload_digest equal to the literal PAYLOAD_DIGEST_PLACEHOLDER in that specification. Invoke runtime_codec operation MATERIALIZE_DISPATCH with the strict specification object and require one PAYLOAD_MATERIALIZED result. Use its payload_digest in PREPARE_OUTBOX and, after the PREPARE ACK, send transport_text unchanged as the exact codexDelegation.input body. Receiver passes CANONICAL_REPO_ROOT and that exact string to VERIFY_DISPATCH; runtime alone may normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization. Entity substitution or any field/value change still fails. Never manually replace/hash text, preserve a sha256: prefix, add angle brackets, reserialize transport_text, or hash the visible XML/UI wrapper.\n"
         "- Every Adaptive PREPARE_OUTBOX(kind=DISPATCH) record binds dispatch_id + exact payload_digest + target_thread_id + immutable Goal definition digest. Recover only when all four match, and allow only one PREPARED/SENT Worker dispatch.\n"
         if adaptive
         else ""
     )
+    if adaptive and state_gateway:
+        adaptive_materialization_lines = (
+            "- Adaptive v3 only: each Goal template is a Gateway-derived PAYLOAD_MATERIALIZATION_SPEC strict JSON object. The Controller must not replace lease, validation, freshness, review-handoff, artifact, roadmap, or payload fields; use only the returned specification and codec result. A codex_delegation source_thread_id is parent metadata and is never valid owner identity.\n"
+            "- Use state_gateway PREPARE_ROUTE before materialization, runtime_codec MATERIALIZE_DISPATCH to obtain transport_text, then state_gateway RECORD_ROUTE_SENT after the one real App send. Worker/Reviewer/Local report handles are ACKed only through state_gateway ACK_ROUTE_RESULT. A lost task stdout/index uses REPORT_RECOVERY for the same outbox, never another product dispatch.\n"
+            "- Runtime transport contract: dispatch materialize/verify, report staging, external-receipt staging, fingerprint normalization, and complete-diff capture use only the configured codex-loop-state MCP tools. Never start a shell process or depend on a session stdin. Missing tool returns RUNTIME_CODEC_TOOL_UNAVAILABLE with zero side effects.\n"
+        )
     queue_policy_lines = (
         "- The current acknowledged queue order is authoritative until ROADMAP_REVISION_APPLIED. An in-envelope audited mutation may replace only future unlocked entries under CAS; active/completed dispatch identity and history are immutable. Each future entry has exactly goal_id, milestone_id, roadmap_version, status=READY|PLANNED, and depends_on; each id resolves to one immutable executable definition, never rebinds or returns after retirement, dependencies are known and acyclic, and the one Active milestone has a dependency-satisfied READY Goal.\n"
         "- Select the exact Goal itself, verify status=READY and completed dependencies, then materialize only from goal_definition_registry. Prepare and acknowledge exactly one dispatch outbox after dispatch_when, cost, approval, local-verification, roadmap-audit, and worktree gates pass; then send once. Worker/report/audit failures may unlock another attempt only while the deterministic repair policy permits it.\n"
@@ -3832,6 +4117,12 @@ Required Report Fields:
         if adaptive
         else "- Queue order is authoritative. Prepare and acknowledge exactly one dispatch outbox entry after dependencies, dispatch_when, cost, approval, and worktree gates pass; then send that immutable dispatch once.\n- TRIAGE_ACTIONABLE unlocks only matching conditional goals; TRIAGE_NO_ACTION skips those goals without creating an implementation Worker."
     )
+    if adaptive and state_gateway:
+        queue_policy_lines = (
+            "- The canonical Goal registry and queue are immutable to Controller prose. Select only a READY Goal with completed dependencies, then PREPARE_ROUTE it from canonical state. Worker/report/audit failures may unlock a repair attempt only while the deterministic repair policy permits it.\n"
+            "- A nonfinal ROADMAP_AUDIT_PASS may use only ADVANCE_ROADMAP. The Gateway marks the audited Goal complete, advances the existing milestone/queue dependencies, and derives the next READY Goal. It rejects additions, deletions, reorders, stale audits, or manually copied validation/freshness/handoff data.\n"
+            "- A ROADMAP_AUDIT_PASS_FINAL_CANDIDATE never advances the queue. It must flow to FINAL_AUDIT, then PREPARE_FINALIZATION and ACK_FINALIZATION with the exact paused-heartbeat App observation."
+        )
     review_closeout_lines = (
         f"- Per-goal CODE_REVIEW is required for every diff or exact NO_DIFF artifact, and every {ADAPTIVE_REVIEW_ENVELOPE} uses the prepared-outbox protocol with full lease_claim plus dispatch_id/payload_digest/target_thread_id identity.\n"
         "- Reuse the same exact-artifact Reviewer task for CODE_REVIEW, post-local-verification ROADMAP_AUDIT, and final FINAL_AUDIT; these remain three distinct tagged reports and State-Writer ACKs.\n"
@@ -3846,10 +4137,17 @@ Required Report Fields:
         "- After the queue is empty, run FINAL_AUDIT over the complete Git base-to-head diff or non_git before-to-after snapshot diff, validation logs, forbidden artifacts, unresolved comments, Controller Pack snapshot/hash identity, state/event consistency, evidence layer, claim boundary, and approval ledger.\n"
         "- FINAL_REVIEW_PASS or the permitted FINAL_READ_ONLY_AUDIT_PASS plus acknowledged final state sets LOOP_COMPLETE. Their WITH_LIMITATION variants may set LOOP_COMPLETE_WITH_LIMITATION only when every limitation is explicit and evidence-bounded with no unresolved required fix; never silently upgrade it to full completion."
     )
+    if adaptive and state_gateway:
+        review_closeout_lines = (
+            "- Per-goal CODE_REVIEW is required for every diff or exact NO_DIFF artifact. Each CODE_REVIEW, ROADMAP_AUDIT, and FINAL_AUDIT is a separately prepared Gateway route with one exact staged report and Gateway ACK.\n"
+            "- Reuse the same exact-artifact Reviewer when compatible, but do not create it until a current Worker PASS has been durably acknowledged and its exact artifact mapping exists. Findings are severity-first with file/line evidence, required fixes, and test gaps.\n"
+            "- A CODE_REVIEW PASS applies only to the current Worker dispatch/artifact. Required Local Verification is bound into the Roadmap/Final payload. BLOCKED, needs-repair, an old artifact, or an old dispatch is non-PASS evidence and cannot advance a Goal.\n"
+            "- A nonfinal ROADMAP_AUDIT_PASS can only invoke ADVANCE_ROADMAP over the unchanged canonical registry. A final candidate requires FINAL_AUDIT over the complete artifact/evidence/state boundary, followed by PREPARE_FINALIZATION, the one exact heartbeat PAUSE, and ACK_FINALIZATION. `FINALIZATION_ACKED` is the only completion receipt; schema v3 never creates or updates a native Goal."
+        )
 
     pack = f"""{draft_prefix}# Codex Loop Controller Pack
 
-Read this entire Markdown document. Extract and materialize Worker/Reviewer/State-Writer prompts and Goal Queue templates from this file. Do not ask the user to copy sections manually unless real Codex App thread tools are unavailable.
+Read this entire Markdown document. Extract and materialize Worker/Reviewer/Local Verifier prompts and Goal Queue templates from this file. In legacy compatibility mode only, it also contains a State-Writer prompt. Do not ask the user to copy sections manually unless real Codex App thread tools are unavailable.
 
 ## 关键风险
 
@@ -3884,11 +4182,11 @@ Project And Source Binding:
 
 {repo_and_worktree_gate_block(repo, repo_mode, branch, base_branch, target_branch, adaptive)}
 
-{thread_tool_boundary_block(adaptive, str(data.get('delegation_policy', 'disabled')))}
+{thread_tool_boundary_block(adaptive, str(data.get('delegation_policy', 'disabled')), state_gateway=state_gateway)}
 
-{thread_bootstrap_protocol_block(adaptive)}
+{thread_bootstrap_protocol_block(adaptive, state_gateway=state_gateway)}
 
-{review_runtime_mapping_block()}
+{review_runtime_mapping_block(state_gateway=state_gateway)}
 
 {phase_overlay}
 
@@ -3903,13 +4201,10 @@ Thread Topology:
 - Policy: {thread_topology}
 - Worktree/integration policy: {worktree_policy}
 - Max child threads: {max_child_threads} lifetime child tasks for this loop; Controller excluded, archived tasks still count.
-- Reconcile/create State-Writer first. Only after canonical state ACK, reconcile/create the current execution Worker through thread_creation_outbox.
-- Never create Reviewer at startup. Create it just in time only after a reviewable Worker report is durably acknowledged and its exact local/worktree artifact mapping exists.
-- Create no future blocked-stage Worker and reuse sequential implementation Workers when scopes are compatible.
+{topology_bootstrap_lines}
 {integration_topology_block(repo_mode)}
-- Reuse one Reviewer per integration workspace/worktree across repair/review rounds when possible. After a completed task is acknowledged and no longer reusable, record its lifecycle and call set_thread_archived(threadId=..., archived=true). Do not archive State-Writer before final state ACK.
 
-    {startup_transaction_gate_block(state_writer_role, first_goal['worker_role'], audit_paths, adaptive, str(data.get('native_goal_policy', 'required')))}{native_goal_generation_recovery_protocol_block(adaptive)}
+    {startup_transaction_block}{native_goal_generation_recovery_protocol_block(adaptive)}
 
 Worker Routing:
 | Role | Runtime Thread ID Template | Permission | Responsibility |
@@ -3928,7 +4223,7 @@ Canonical Control-Plane Observability:
 - Recovery journals: {audit_paths['transactions']}
 - Trusted Controller Pack snapshot: {audit_paths['sources']}CONTROLLER_PACK.md
 {adaptive_observability_lines}- State schema:
-{state_schema_block(adaptive)}
+{state_schema_block(adaptive, state_gateway=state_gateway)}
 - Event JSONL fields: {event_schema_block(adaptive)}
 
 {state_protocol}
@@ -3938,17 +4233,17 @@ Canonical Control-Plane Observability:
 Budget And Automation:
 - declared_automation_intent: {automation_intent}
 - max_parallel_execution_workers: 1
-- max_goals_per_round: 1 by default; every outbound message requires a prepared and acknowledged dispatch outbox entry
+- max_goals_per_round: 1 by default; {"one Gateway PREPARE_ROUTE owns the only current route and its real send return is bound to that outbox" if state_gateway else "every outbound message requires a prepared and acknowledged dispatch outbox entry"}
 - max_repair_attempts_per_goal: {max_repair_attempts}
 - heartbeat_interval_minutes: {heartbeat_interval}
 {heartbeat_budget_lines.rstrip()}
 - active_stale_after_minutes: {active_stale}
 - HEARTBEAT_AUTOMATION_NAME is the exact string `{project_name} loop heartbeat ` plus loop_id from canonical state. Its prompt digest is SHA-256 of the exact HEARTBEAT_PROMPT text.
 {automation_setup_lines}
-{adaptive_automation_identity_lines}- To stop after terminal completion, call automation_update(mode=\"update\", id=automation_id_from_canonical_state, kind=\"heartbeat\", destination=\"thread\", status=\"PAUSED\", rrule=\"FREQ=MINUTELY;INTERVAL={heartbeat_interval}\", name=HEARTBEAT_AUTOMATION_NAME, prompt=HEARTBEAT_PROMPT).
+{adaptive_automation_identity_lines}{automation_stop_line}
 - Cadence policy: {cadence}
 
-{runtime_retry_policy_block(data)}
+{runtime_retry_policy_block(data, state_gateway=state_gateway)}
 
 {cost_gate}
 

@@ -101,7 +101,7 @@ The result is more than a longer prompt. It is an operating package for a Contro
 Use it when:
 
 - the work spans many turns, several real Codex App tasks, or more than half a day;
-- Workers, a Reviewer, State-Writer, and Local Verifier need distinct responsibilities;
+- Workers, a Reviewer, the MCP State Gateway, and a Local Verifier need distinct responsibilities;
 - file writes, pushes, external calls, paid resources, or local verification need precise boundaries;
 - results must bind a specific artifact, test run, identity, and review record;
 - later evidence may change the roadmap without erasing history.
@@ -124,6 +124,34 @@ Do not use it when:
 | Shared boundary | Real task identity, read-only Controller, serial canonical writes, bounded repair, per-Goal review, final audit | Same |
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
+
+## Adaptive v3.3.0: who writes state and who advances a route
+
+New Adaptive Packs default to schema v3. They do not create a session State-Writer task. The installed MCP `state_gateway({root, request})` is the sole canonical writer. The Controller remains read-only, Workers perform product work, Reviewer/Local Verifier tasks submit evidence, and an outer Supervisor is not a product role.
+
+**Current platform boundary:** schema v3 uses **host-cooperative evidence**. It does not claim Byzantine resistance to a malicious Controller that can forge every App call. The Gateway binds one real App task/thread, automation, send-return target, or PAUSED readback to the current host-attested turn, one PREPARED outbox, and the registered heartbeat; it derives the canonical payload digest itself, and a send observation never produces PASS. This protects against crashes, duplicate sends, stale/mismatched/replayed reports, wrong artifact/dispatch, and premature terminal projection. If a future App exposes `x-codex-app-action-receipt-v1`, it is strictly checked as optional stronger attestation; its current absence does not block normal operation, a canary, or release.
+
+```text
+Controller (read-only)
+  -> State Gateway: PREPARE_ROUTE
+  -> runtime_codec: MATERIALIZE_DISPATCH
+  -> App send once -> RECORD_ROUTE_SENT
+  -> role-owned STAGE_REPORT -> ACK_ROUTE_RESULT
+```
+
+The Gateway derives the lease, repository snapshot, freshness, validation matrix, review handoff, current artifact, and outbox from canonical state. The Controller does not copy those objects. A PASS projection requires all three current identities for one Goal: **current artifact + current Worker dispatch + PASS formal report**. A `BLOCKED` report, stale artifact, or stale dispatch cannot become PASS.
+
+After a Worker PASS, the route is Code Review, required Local Verification, then Roadmap Audit. A nonfinal audit PASS can only use `ADVANCE_ROADMAP` over the unchanged canonical registry. A final candidate needs Final Audit, `PREPARE_FINALIZATION`, one real `automation_update` pause and matching PAUSED readback, and `ACK_FINALIZATION` before `FINALIZATION_ACKED`. Schema v3 disables the native Goal adapter and records the local `GATEWAY_NO_NATIVE_GOAL` sentinel; it is not an external Goal-tool receipt. The Gateway never manufactures `PAUSED` heartbeat evidence or accepts Controller JSON that does not exactly match the registered heartbeat. When a report is staged but stdout or the task index is lost, `REPORT_RECOVERY` ACKs the original outbox; it never creates a second product dispatch just to recover a report, and the exact target Worker/Reviewer/Verifier must re-stage it through an MCP-attested call.
+
+Schema v1/v2 and `route_state_mutation` / State-Writer remain compatibility-only, with explicit `MIGRATE_V2_TO_V3`. Migration requires a PAUSED, lease-free, outbox-quiescent safe point. A terminal predecessor is immutable; continuation uses `INITIALIZE_SUCCESSOR` in a fresh root.
+
+## Reading normal slowness, transport degradation, and terminal state
+
+- **Normal slowness**: the same SENT outbox still has an active role or fresh evidence. Observe that route; do not dispatch again.
+- **Transport degradation**: a real registered-heartbeat observation of the matching outbox/fingerprint failure is bound to the current host turn before entering canonical state. The first failure preserves the original outbox. Two natural heartbeats or fifteen minutes enter `WAITING_TRANSPORT_RECOVERY`. Canonical routing stops immediately; `ACK_TRANSPORT_PAUSE` needs a real pause followed by PAUSED readback for that exact heartbeat and otherwise remains safely blocked. Until that readback exists, the loop never claims the heartbeat is already paused.
+- **True terminal state**: only canonical `FINALIZATION_ACKED`, or evidence-backed `LOOP_BLOCKED`. A stale derived `RUNNING` field cannot revive a terminal loop.
+
+`LOOP_METRICS.json` is derived observation only: per-Goal elapsed time, separately observed Worker, Reviewer, and Local Verifier windows, control-plane wait, dispatch/review/rejection counts, message faults, Steering, and available token usage. It is not a second canonical source and cannot authorize a route.
 
 ## A short, complete example
 
@@ -156,7 +184,7 @@ Trust does not come from a green UI or a role saying “done.” It comes from c
 | Two Controller turns cannot advance the same route | Canonical leases, real App-turn binding, and one route per turn |
 | State conflicts are not resolved by model guesswork | Deterministic runtime, CAS, journals, outboxes, and idempotent replay |
 | Repair cannot run forever | Repair beyond the initial execution has a hard cap; exhaustion pauses, asks, or stops |
-| “Done” has one auditable gate | `FINALIZE_LOOP` is not closure; only `FINALIZATION_ACKED` is |
+| “Done” has one auditable gate | v3 `PREPARE_FINALIZATION` is not closure; only `FINALIZATION_ACKED` is |
 
 Real identity cannot be established by model prose, a task title, environment variable, or random UUID. Adaptive routing accepts only validated host-provided App metadata and process identity. If it cannot prove that identity, it fails closed.
 
@@ -179,13 +207,13 @@ Old evidence cannot unlock a new artifact. When the artifact, code, configuratio
 
 ### Native Goal generation recovery: `DEFERRED_UNAVAILABLE`
 
-v3.2.8 does not recover a lost native Goal identity. The current Codex App has no public create-paused, resume, restore, or rebind interface that can preserve the same identity, so generated Packs do not include this recovery path. v3.2.7 reached repository `main` but never received a tag or GitHub Release; v3.2.8 formally closes that deferred work without rewriting history.
+v3.2.8 does not recover a lost native Goal identity. The current Codex App has no public create-paused, resume, restore, or rebind interface that can preserve the same identity, so generated Packs do not include this recovery path. New schema-v3 Packs go further and disable the native Goal adapter; the required-mode wording below applies only to readable v1/v2 compatibility state. v3.2.7 reached repository `main` but never received a tag or GitHub Release; v3.2.8 formally closes that deferred work without rewriting history.
 
 Legacy CLI and MCP recovery surfaces reject with `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` and `side_effects=NONE`. If required mode observes `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, canonical state stays unchanged, the same heartbeat stays paused, and no substitute Goal, Controller, thread, session, or heartbeat is created. Historical BLOCKED receipts remain BLOCKED evidence; they cannot become PASS.
 
 ### App messaging and process transport
 
-New Adaptive Packs pass structured parameters through the installed MCP `runtime_codec` for dispatch materialization and verification, formal-report and external-receipt staging, and fingerprint normalization. They no longer assume that a `tty:false` process exposes a session stdin that remains available for a later `write_stdin` call.
+New Adaptive Packs pass structured parameters through the installed MCP `runtime_codec` for dispatch materialization and verification, formal-report and external-receipt staging, fingerprint normalization, and `CAPTURE_COMPLETE_DIFF`. They no longer assume that a `tty:false` process exposes a session stdin that remains available for a later `write_stdin` call. The runtime captures binary Git patches as raw bytes, reverse-validates them, and records a manifest. A Worker PASS may cite only digest-only `CAPTURED_GIT_DIFF_V1`; the runtime derives and rechecks the capture path, and models carry neither patch bytes nor a `.codex-loop` path.
 
 CLI stdin remains only for legacy State-Writer and compatibility calls. EOF before the first frame returns `INPUT_TRANSPORT_EOF_BEFORE_FRAME`; an unavailable codec returns `RUNTIME_CODEC_TOOL_UNAVAILABLE`. Both stop with zero side effects and must not be bypassed with a PTY, heredoc, pipeline, or hand-built digest.
 
@@ -272,7 +300,7 @@ python3 codex-loop-prompt-architect/scripts/validate_skill.py
 bash -n scripts/install.sh
 ```
 
-The complete release process also covers branch coverage across every shipped Python entrypoint, two independent 5000-case fuzz lanes, isolated install/rollback, zero source/install drift, security checks, and a real same-SHA App canary. The current main Mac's structured receipt uses `evidence_layer=local-main-mac`.
+The complete release process also covers branch coverage across every shipped Python entrypoint, two independent 5000-case fuzz lanes, isolated install/rollback, zero source/install drift, security checks, and a real same-SHA App canary. A v3 canary must also prove no State-Writer task, Gateway one-route-per-turn, original-outbox recovery after lost stdout, transport pausing, successor handoff, and `FINALIZATION_ACKED`. The current main Mac's structured receipt uses `evidence_layer=local-main-mac`.
 
 GitHub Actions is a compatibility mirror, not release acceptance. Historical E2E records are bounded smoke evidence for their recorded machine, App build, and artifact; they do not prove cross-version, production, long-run, or public acceptance. See the [release process](docs/RELEASING.md) and [evidence index](evidence/README.md) for exact boundaries.
 

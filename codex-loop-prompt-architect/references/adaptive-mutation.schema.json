@@ -35,6 +35,8 @@
       "oneOf": [
         {"$ref": "#/$defs/initialize"},
         {"$ref": "#/$defs/migrateV1ToV2"},
+        {"$ref": "#/$defs/migrateV2ToV3"},
+        {"$ref": "#/$defs/stateGateway"},
         {"$ref": "#/$defs/prepareControllerPackMigration"},
         {"$ref": "#/$defs/migrateControllerPack"},
         {"$ref": "#/$defs/rollbackControllerPackMigration"},
@@ -495,6 +497,8 @@
     },
     "humanControlPolicy": {"type": "object", "additionalProperties": false, "required": ["human_steering_enabled", "status_projection_enabled", "decision_cards_enabled", "failure_fingerprint_enabled", "context_freshness_required", "review_evidence_policy"], "properties": {"human_steering_enabled": {"type": "boolean"}, "status_projection_enabled": {"type": "boolean"}, "decision_cards_enabled": {"type": "boolean"}, "failure_fingerprint_enabled": {"const": true}, "context_freshness_required": {"const": true}, "review_evidence_policy": {"const": "deterministic_first"}}},
     "migrateV1ToV2": {"type": "object", "additionalProperties": false, "required": ["type", "source_state_digest"], "properties": {"type": {"const": "MIGRATE_V1_TO_V2"}, "source_state_digest": {"$ref": "#/$defs/digest"}}},
+    "migrateV2ToV3": {"type": "object", "additionalProperties": false, "required": ["type", "source_state_digest"], "properties": {"type": {"const": "MIGRATE_V2_TO_V3"}, "source_state_digest": {"$ref": "#/$defs/digest"}}},
+    "stateGateway": {"type": "object", "additionalProperties": false, "required": ["type", "operation", "gateway_request"], "properties": {"type": {"const": "STATE_GATEWAY"}, "operation": {"enum": ["INITIALIZE", "PREPARE_ROUTE", "REGISTER_TASK", "REGISTER_HEARTBEAT", "RECORD_HEARTBEAT_OBSERVATION", "RECORD_ROUTE_SENT", "ACK_ROUTE_RESULT", "REPORT_RECOVERY", "ADVANCE_ROADMAP", "PREPARE_FINALIZATION", "ACK_FINALIZATION", "INITIALIZE_SUCCESSOR", "RECORD_TRANSPORT_OBSERVATION", "ACK_TRANSPORT_PAUSE"]}, "gateway_request": {"$ref": "#/$defs/jsonObject"}}},
     "heartbeatObservation": {
       "type": "object",
       "additionalProperties": false,
@@ -809,8 +813,6 @@
         "controller_pack_digest",
         "controller_thread_id",
         "controller_bootstrap_prompt_digest",
-        "state_writer_thread_id",
-        "state_writer_bootstrap_prompt_digest",
         "dashboard_required",
         "milestones",
         "goal_definition_registry",
@@ -827,6 +829,8 @@
         "controller_bootstrap_prompt_digest": {"$ref": "#/$defs/digest"},
         "state_writer_thread_id": {"$ref": "#/$defs/safeId"},
         "state_writer_bootstrap_prompt_digest": {"$ref": "#/$defs/digest"},
+        "state_gateway_mode": {"const": "MCP_CANONICAL_WRITER"},
+        "bootstrap_threads": {"type": "array", "maxItems": 3, "items": {"$ref": "#/$defs/jsonObject"}},
         "dashboard_required": {"type": "boolean"},
         "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
         "milestones": {
@@ -845,7 +849,11 @@
         "human_control_policy": {"$ref": "#/$defs/humanControlPolicy"},
         "max_routing_turns": {"type": "integer", "minimum": 1},
         "projection_digest": {"$ref": "#/$defs/digest"}
-      }
+      },
+      "oneOf": [
+        {"required": ["state_writer_thread_id", "state_writer_bootstrap_prompt_digest"], "not": {"required": ["state_gateway_mode"]}},
+        {"required": ["state_gateway_mode"], "not": {"anyOf": [{"required": ["state_writer_thread_id"]}, {"required": ["state_writer_bootstrap_prompt_digest"]}]}}
+      ]
     },
     "acquireLease": {
       "type": "object",

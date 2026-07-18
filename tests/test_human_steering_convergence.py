@@ -411,15 +411,16 @@ class HumanControlHelperTests(unittest.TestCase):
         )
 
     @mock.patch.dict("os.environ", {"CODEX_HOME": "/workspace/.codex"})
-    def test_adaptive_pack_contains_v327_contract_with_bounded_growth(self) -> None:
+    def test_adaptive_pack_preserves_human_controls_without_legacy_gateway_ops(
+        self,
+    ) -> None:
         input_path = ROOT / "examples" / "03-adaptive-passkey-input.json"
         args = scaffold.build_parser().parse_args(["--input", str(input_path)])
         payload = scaffold.load_payload(args)
         pack = scaffold.render_controller_pack(payload, "full").rstrip() + "\n"
         for token in (
             "Human Steering And Convergence",
-            "MIGRATE_V1_TO_V2",
-            "MIGRATE_CONTROLLER_PACK",
+            "MIGRATE_V2_TO_V3",
             "STATUS_QUERY",
             "PAUSE_REQUESTED",
             "Decision Cards",
@@ -430,9 +431,9 @@ class HumanControlHelperTests(unittest.TestCase):
             "EVIDENCE_CONFLICT",
         ):
             self.assertIn(token, pack)
-        # v3.2.6 budget: 213556 bytes/2640 lines; tracked predecessor: 217477/2622.
-        # Deduplicated v3.2.7 recovery contract: 222707/2637 (+4.285% vs budget,
-        # +2.405% vs predecessor). One-percent headroom keeps later growth bounded.
+        self.assertNotIn("MIGRATE_CONTROLLER_PACK", pack)
+        # The v3.3 Gateway contract must remain within the previously established
+        # Pack-size ceiling; human controls cannot justify unbounded prompt growth.
         self.assertLessEqual(len(pack.encode("utf-8")), int(222707 * 1.01))
         self.assertLessEqual(len(pack.splitlines()), int(2637 * 1.01))
 

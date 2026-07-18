@@ -16,6 +16,7 @@ from typing import Any
 from loop_architect.state_runtime import (
     CRASH_STAGES,
     AdaptiveStateRuntime,
+    capture_complete_diff,
     InjectedCrash,
     RuntimeRejection,
     _requests_deferred_native_goal_recovery,
@@ -307,6 +308,10 @@ def execute_runtime_codec(
                 "external_actions": [],
                 "external_action_count": 0,
             }
+        if operation == "CAPTURE_COMPLETE_DIFF":
+            if root is None or request is None or transport_text is not None:
+                raise ValueError("CAPTURE_COMPLETE_DIFF_ARGUMENTS_INVALID")
+            return capture_complete_diff(root, copy.deepcopy(request))
         raise ValueError("RUNTIME_CODEC_OPERATION_INVALID")
     except RuntimeRejection as exc:
         return _response(exc.code, exc.path, exc.details)

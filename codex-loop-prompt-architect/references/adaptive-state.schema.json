@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "allOf": [
     {
-      "if": {"properties": {"schema_version": {"const": 2}}},
+      "if": {"properties": {"schema_version": {"enum": [2, 3]}}},
       "then": {
         "required": [
           "run_control", "steering_queue", "steering_ledger",
@@ -24,6 +24,18 @@
             "type": "array", "items": {"$ref": "#/$defs/estimateRevision"}
           }
         }
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": 3}}},
+      "then": {
+        "required": [
+          "state_gateway_contract_version",
+          "state_gateway_mode",
+          "gateway_route_ledger",
+          "transport_recovery",
+          "successor_handoff"
+        ]
       }
     },
     {
@@ -103,7 +115,12 @@
     "external_action_count"
   ],
   "properties": {
-    "schema_version": {"enum": [1, 2]},
+    "schema_version": {"enum": [1, 2, 3]},
+    "state_gateway_contract_version": {"const": 3},
+    "state_gateway_mode": {"const": "MCP_CANONICAL_WRITER"},
+    "gateway_route_ledger": {"$ref": "#/$defs/gatewayRouteMap"},
+    "transport_recovery": {"$ref": "#/$defs/transportRecovery"},
+    "successor_handoff": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/successorHandoff"}]},
     "review_contract_version": {"const": 2},
     "worker_validation_projection_contract_version": {"type": "integer", "enum": [0, 1]},
     "controller_pack_migration_contract_version": {"const": 2},
@@ -449,6 +466,17 @@
             "hash_algorithm": {"const": "sha256"},
             "media_type": {"const": "text/x-diff"},
             "artifact_path": {"type": "string", "minLength": 1},
+            "sha256": {"$ref": "#/$defs/sha256Hex"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "hash_algorithm", "media_type", "sha256"],
+          "properties": {
+            "kind": {"const": "CAPTURED_GIT_DIFF_V1"},
+            "hash_algorithm": {"const": "sha256"},
+            "media_type": {"const": "text/x-diff"},
             "sha256": {"$ref": "#/$defs/sha256Hex"}
           }
         }
@@ -1004,7 +1032,7 @@
     },
     "threadRegistry": {
       "type": "object",
-      "minProperties": 2,
+      "minProperties": 1,
       "patternProperties": {
         "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/threadRecord"}
       },
@@ -1335,6 +1363,10 @@
         "automation_id": {"$ref": "#/$defs/safeId"},
         "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
         "closeout_capability": {"$ref": "#/$defs/digest"},
+        "gateway_finalization": {"type": "boolean"},
+        "completion_terminal_status": {
+          "enum": ["LOOP_COMPLETE", "LOOP_COMPLETE_WITH_LIMITATION"]
+        },
         "outcome_kind": {"enum": ["SUCCESS", "BLOCKED"]},
         "controller_goal_target_status": {"enum": ["COMPLETE", "BLOCKED"]},
         "automation_target_status": {"const": "PAUSED"},
@@ -1447,6 +1479,7 @@
         "finalization_id": {"$ref": "#/$defs/safeId"},
         "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
         "closeout_capability": {"$ref": "#/$defs/digest"},
+        "gateway_finalization": {"type": "boolean"},
         "controller_goal_id": {"$ref": "#/$defs/safeId"},
         "controller_goal_status": {"enum": ["COMPLETE", "BLOCKED"]},
         "controller_goal_observation_path": {"type": "string", "minLength": 1},
@@ -1455,6 +1488,8 @@
         "automation_status": {"const": "PAUSED"},
         "automation_observation_path": {"type": "string", "minLength": 1},
         "automation_observation_digest": {"$ref": "#/$defs/digest"},
+        "app_automation_receipt_path": {"type": "string", "minLength": 1},
+        "app_automation_receipt_digest": {"$ref": "#/$defs/digest"},
         "outcome_kind": {"enum": ["SUCCESS", "BLOCKED"]},
         "blocker_code": {
           "oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]
@@ -1495,6 +1530,18 @@
         "evidence_paths": {"$ref": "#/$defs/stringArray"}
       },
       "allOf": [
+        {
+          "if": {
+            "required": ["gateway_finalization"],
+            "properties": {"gateway_finalization": {"const": true}}
+          },
+          "then": {
+            "required": [
+              "app_automation_receipt_path",
+              "app_automation_receipt_digest"
+            ]
+          }
+        },
         {
           "if": {"properties": {"outcome_kind": {"const": "SUCCESS"}}},
           "then": {
@@ -2069,6 +2116,111 @@
         {"type": "array", "items": {"$ref": "#/$defs/jsonValue"}},
         {"type": "object", "additionalProperties": {"$ref": "#/$defs/jsonValue"}}
       ]
+    },
+    "gatewayRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["route_id", "goal_id", "route_kind", "outbox_id", "outbox_kind", "status", "prepared_state_version", "prepared_at", "sent_at", "acked_at", "target_thread_id", "payload_digest", "artifact_digest", "worker_dispatch_id", "send_observation", "report_digest", "report_attestation"],
+      "properties": {
+        "route_id": {"$ref": "#/$defs/safeId"},
+        "goal_id": {"$ref": "#/$defs/safeId"},
+        "route_kind": {"enum": ["WORKER", "CODE_REVIEW", "ROADMAP_AUDIT", "FINAL_AUDIT", "LOCAL_VERIFICATION"]},
+        "outbox_id": {"$ref": "#/$defs/safeId"},
+        "outbox_kind": {"enum": ["DISPATCH", "ASSURANCE", "LOCAL"]},
+        "status": {"enum": ["PREPARED", "SENT", "ACKED", "RECOVERED"]},
+        "prepared_state_version": {"type": "integer", "minimum": 1},
+        "prepared_at": {"$ref": "#/$defs/timestamp"},
+        "sent_at": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+        "acked_at": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+        "target_thread_id": {"$ref": "#/$defs/safeId"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "artifact_digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "worker_dispatch_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+        "send_observation": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/gatewaySendObservation"}]},
+        "report_digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "report_attestation": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["thread_id", "turn_id", "role_kind", "outbox_id", "report_digest"],
+              "properties": {
+                "thread_id": {"$ref": "#/$defs/safeId"},
+                "turn_id": {"$ref": "#/$defs/safeId"},
+                "role_kind": {"enum": ["WORKER", "REVIEWER", "LOCAL_VERIFIER"]},
+                "outbox_id": {"$ref": "#/$defs/safeId"},
+                "report_digest": {"$ref": "#/$defs/digest"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "gatewaySendObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["returned_thread_id", "provider_observation_id", "target_thread_id", "payload_digest", "observed_at", "evidence_path", "evidence_digest", "source_thread_id", "source_turn_id"],
+      "properties": {
+        "returned_thread_id": {"$ref": "#/$defs/safeId"},
+        "provider_observation_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+        "target_thread_id": {"$ref": "#/$defs/safeId"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "evidence_path": {"type": "string", "minLength": 1},
+        "evidence_digest": {"$ref": "#/$defs/digest"},
+        "source_thread_id": {"$ref": "#/$defs/safeId"},
+        "source_turn_id": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "gatewayRouteMap": {
+      "type": "object",
+      "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/gatewayRoute"}},
+      "additionalProperties": false
+    },
+    "transportRecovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "fingerprint", "first_failed_at", "natural_observation_count", "failure_count", "outbox_id", "notified_at", "notification_required", "heartbeat_pause_required", "heartbeat_pause_receipt_path", "heartbeat_pause_receipt_digest"],
+      "properties": {
+        "status": {"enum": ["HEALTHY", "OBSERVING", "WAITING_TRANSPORT_RECOVERY"]},
+        "fingerprint": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "first_failed_at": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+        "natural_observation_count": {"type": "integer", "minimum": 0, "maximum": 2},
+        "failure_count": {"type": "integer", "minimum": 0},
+        "outbox_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+        "notified_at": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+        "notification_required": {"type": "boolean"},
+        "heartbeat_pause_required": {"type": "boolean"},
+        "heartbeat_pause_receipt_path": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
+        "heartbeat_pause_receipt_digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}
+      }
+    },
+    "successorHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predecessor_loop_id", "predecessor_finalization_digest", "predecessor_root_digest", "product_base_commit", "product_snapshot_digest", "product_snapshot_manifest_digest", "acknowledged_evidence", "repair_backlog", "pending_goal_ids", "initialized_at"],
+      "properties": {
+        "predecessor_loop_id": {"$ref": "#/$defs/safeId"},
+        "predecessor_finalization_digest": {"$ref": "#/$defs/digest"},
+        "predecessor_root_digest": {"$ref": "#/$defs/digest"},
+        "product_base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "product_snapshot_digest": {"$ref": "#/$defs/digest"},
+        "product_snapshot_manifest_digest": {"$ref": "#/$defs/digest"},
+        "acknowledged_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/jsonValue"}
+        },
+        "repair_backlog": {"$ref": "#/$defs/jsonValue"},
+        "pending_goal_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/safeId"},
+          "uniqueItems": true
+        },
+        "initialized_at": {"$ref": "#/$defs/timestamp"}
+      }
     },
     "jsonObjectMap": {
       "type": "object",

@@ -125,13 +125,13 @@ invariants:
     status: ACTIVE
     scope: [successful completion, blocked completion, external adapter sync]
     rationale: Passing work or preparing finalization does not prove the external and canonical closeout identities agree.
-    normative_statement: A Loop is closed only at canonical FINALIZATION_ACKED with matching one-use capability, exact Goal outcome, paused heartbeat observation, review chain, artifact identities, and receipt; intermediate finalization statuses are not completion.
+    normative_statement: A Loop is closed only at canonical FINALIZATION_ACKED with matching one-use capability, real paused-heartbeat readback bound to the registered heartbeat and host turn, review chain, and artifact identities. A legacy native adapter requires its exact Goal outcome; schema-v3 records GATEWAY_NO_NATIVE_GOAL because native Goal adapters are disabled. Schema-v3 PREPARE_FINALIZATION keeps terminal_status null, locks routing pending pause/readback, and must render WAITING_FINALIZATION_ACK; only pause/readback-bound ACK_FINALIZATION creates the terminal projection.
     non_goals: [requiring every Loop to end successfully, treating review PASS alone as closeout]
     allowed_evolution: [change adapter mechanics while preserving atomic evidence-bound acknowledgement]
     authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
     implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
     schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
-    test_surfaces: [tests/test_state_runtime_finalization.py]
+    test_surfaces: [tests/test_state_runtime_finalization.py, tests/test_adaptive_state_mcp.py]
     evidence_surfaces: [docs/RELEASING.md, codex-loop-prompt-architect/references/app-canary-receipt.schema.json]
     adr: [docs/adr/0008-finalization-acked.md]
     introduced_version: 3.2.0
@@ -220,3 +220,88 @@ invariants:
     evidence_surfaces: [CHANGELOG.md, docs/RELEASING.md]
     adr: [docs/adr/0005-defer-native-goal-recovery.md]
     introduced_version: 3.2.7
+
+  - id: INV-GATEWAY-001
+    title: Schema-v3 MCP State Gateway is the only new-loop canonical writer
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [schema-v3 initialization, canonical state mutation, State-Writer migration]
+    rationale: A session State-Writer made canonical progress depend on a single App message wakeup channel.
+    normative_statement: New schema-v3 Adaptive loops write canonical state only through a host-attested MCP State Gateway, create no session State-Writer task, and permit v1/v2 migration only by explicit paused lease-free outbox-quiescent MIGRATE_V2_TO_V3.
+    non_goals: [removing legacy state readability, claiming App message delivery is bug-free, automatically migrating a live loop]
+    allowed_evolution: [add Gateway operations with reviewed schemas and equivalent atomicity, replace the MCP implementation while retaining attested single-writer semantics]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_mcp.py, codex-loop-prompt-architect/scripts/loop_architect/state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_adaptive_state_mcp.py, tests/test_state_runtime_migration.py]
+    evidence_surfaces: [docs/RELEASING.md]
+    adr: [docs/adr/0010-mcp-state-gateway.md]
+    introduced_version: 3.3.0
+
+  - id: INV-GATEWAY-EVIDENCE-001
+    title: Gateway PASS requires current artifact dispatch and report
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [Worker validation projection, review handoff, report recovery]
+    rationale: A BLOCKED report or an old artifact must not become current PASS evidence merely because it is structurally valid.
+    normative_statement: A schema-v3 PASS projection requires one Goal's current Worker dispatch, current artifact digest, and a matching PASS formal report on that current SENT outbox; blocked stale-artifact stale-dispatch and report-only dispatch evidence has no PASS side effect.
+    non_goals: [requiring product execution again when a matching staged report exists, treating a local check as independent review]
+    allowed_evolution: [extend formal report fields or projection views while retaining the three-way current binding]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/loop_architect/state_runtime.py, codex-loop-prompt-architect/scripts/adaptive_state_mcp.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json, codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_adaptive_state_mcp.py, tests/test_state_runtime_reports.py]
+    evidence_surfaces: [docs/RELEASING.md]
+    adr: [docs/adr/0010-mcp-state-gateway.md]
+    introduced_version: 3.3.0
+
+  - id: INV-HOST-COOPERATIVE-OPERATION-001
+    title: Gateway binds every operation to its prepared route and host turn
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [schema-v3 task bootstrap, heartbeat observations, transport observations, route sending, heartbeat pausing, finalization]
+    rationale: Current Codex hosts expose task and automation identifiers and send return thread ids, but no provider-signed subtool receipt. The Gateway must resist ordinary crashes duplication stale observations and route mismatches without claiming Byzantine resistance against a Controller that can forge every App call.
+    normative_statement: REGISTER_TASK REGISTER_HEARTBEAT RECORD_HEARTBEAT_OBSERVATION RECORD_ROUTE_SENT RECORD_TRANSPORT_OBSERVATION ACK_TRANSPORT_PAUSE and ACK_FINALIZATION bind real App return values or readback to the current host-attested Controller turn and exact canonical identity. RECORD_ROUTE_SENT requires the returned target thread id to equal its one PREPARED outbox and obtains the exact payload digest only from that outbox. ACK_TRANSPORT_PAUSE and ACK_FINALIZATION require a PAUSED readback that exactly matches the one registered heartbeat. Missing malformed stale wrong-target wrong-outbox wrong-heartbeat or mismatched optional stronger-receipt evidence returns a specific zero-side-effect rejection. A present x-codex-app-action-receipt-v1 carrier is strictly validated as stronger evidence, but its absence is not a normal-path blocker and no operation claims a provider-signed receipt that the host does not expose.
+    non_goals: [Byzantine resistance to a malicious Controller that can forge every App call, treating a transcript as provider-signed evidence, promoting a send observation itself to PASS]
+    allowed_evolution: [adopt a provider-signed action-result carrier as optional stronger evidence while preserving host-cooperative route and readback binding]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_mcp.py, codex-loop-prompt-architect/scripts/loop_architect/state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_adaptive_state_mcp.py, tests/test_state_runtime_recovery.py]
+    evidence_surfaces: [README.md, README.en.md, docs/RELEASING.md]
+    adr: [docs/adr/0010-mcp-state-gateway.md]
+    introduced_version: 3.3.0
+
+  - id: INV-CAPTURED-GIT-DIFF-001
+    title: Raw Git patch bytes stay runtime-owned through Worker PASS evidence
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [schema-v3 runtime codec, binary diff capture, Worker PASS review handoff]
+    rationale: A binary patch passed through a model-authored report string can be altered before review evidence binds it.
+    normative_statement: CAPTURE_COMPLETE_DIFF captures raw Git bytes and reverse-validates them before storing a digest-addressed 0444 capture under a non-symlink confined control directory. CAPTURED_GIT_DIFF_V1 contains only the SHA-256 identity; runtime derives the capture path, rejects symlinks and mismatched bytes, and never accepts a report-supplied .codex-loop path or patch payload.
+    non_goals: [turning .codex-loop capture files into product write scope, allowing model-authored binary patches]
+    allowed_evolution: [add a runtime-owned capture manifest while preserving digest-addressed raw-byte validation]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/loop_architect/state_runtime.py, codex-loop-prompt-architect/scripts/adaptive_state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json]
+    test_surfaces: [tests/test_state_runtime_io.py]
+    evidence_surfaces: [README.md, README.en.md, docs/RELEASING.md]
+    adr: [docs/adr/0010-mcp-state-gateway.md]
+    introduced_version: 3.3.0
+
+  - id: INV-TRANSPORT-DEGRADATION-001
+    title: Matching transport faults pause rather than spin
+    level: PUBLIC_CONTRACT
+    status: ACTIVE
+    scope: [schema-v3 transport observation, heartbeat, user notification]
+    rationale: Repeating the same failing App transport action indefinitely consumes control-plane budget without new evidence.
+    normative_statement: A host-cooperative observation binds one matching outbox/fingerprint failure, observed time, and registered-heartbeat flag to the current host turn. The first such failure retains that outbox; two natural heartbeat observations or fifteen minutes enter WAITING_TRANSPORT_RECOVERY, immediately block every PREPARE_ROUTE, require a real matching PAUSED readback before projecting the business heartbeat PAUSED, and require one user notification. A later matching observation has zero side effects until authorized recovery.
+    non_goals: [pretending a transport fault is a product repair, using an outer Supervisor as a second route channel]
+    allowed_evolution: [tighten an evidence-backed threshold or notification representation through a reviewed public-contract change]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/loop_architect/state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json]
+    test_surfaces: [tests/test_adaptive_state_mcp.py]
+    evidence_surfaces: [docs/RELEASING.md]
+    adr: [docs/adr/0010-mcp-state-gateway.md]
+    introduced_version: 3.3.0

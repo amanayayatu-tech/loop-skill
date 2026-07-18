@@ -5,6 +5,79 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.0-candidate] - 2026-07-17
+
+### Added
+
+- Added schema-v3 `state_gateway` as the canonical writer for new Adaptive
+  Packs. It initializes fresh roots without a session State-Writer and provides
+  atomic `PREPARE_ROUTE`, `RECORD_ROUTE_SENT`, `ACK_ROUTE_RESULT`, original
+  outbox `REPORT_RECOVERY`, bootstrap task/heartbeat receipts, static
+  `ADVANCE_ROADMAP`, Gateway finalization/ACK without a native Goal, successor
+  initialization, and bounded transport observation.
+- Added Gateway-derived route payloads: current repository snapshot/freshness,
+  validation matrix, review handoff, artifact identity, virtual lease and
+  outbox are no longer Controller-copied fields.
+- Added runtime-owned `CAPTURE_COMPLETE_DIFF` for raw binary Git diff capture,
+  confined untracked paths, reverse-apply verification and a manifest; added
+  derived `LOOP_METRICS.json` for route/control-plane timing and counts.
+
+### Fixed
+
+- A PASS projection now requires the same Goal's current artifact, current
+  Worker dispatch and matching PASS formal report. BLOCKED, stale artifact,
+  stale dispatch and foreign reports have no PASS side effect.
+- A staged report with lost stdout/task indexing is ACKed on its original
+  outbox; recovery cannot create a report-only product dispatch or consume a
+  new repair attempt.
+- Repeated matching transport failures no longer spin indefinitely: the first
+  observation retains the outbox, while two natural heartbeats or fifteen
+  minutes move to `WAITING_TRANSPORT_RECOVERY`, require a real App pause plus
+  matching PAUSED readback before projecting the business heartbeat PAUSED, and request one
+  user notification.
+- `PREPARE_FINALIZATION` now remains explicitly nonterminal in schema v3:
+  it renders `WAITING_FINALIZATION_ACK`, keeps `terminal_status=null`, and
+  locks routing until the pause/readback acknowledgement reaches
+  `ACK_FINALIZATION`.
+- `RECORD_ROUTE_SENT` now requires the real returned target thread to equal the
+  PREPARED outbox; Gateway supplies the exact materialized `payload_digest`
+  from that canonical outbox. A wrong target or a present stronger receipt for
+  a different payload rejects with zero side effects.
+- `PREPARE_ROUTE` now stops at the transport safe point, while the retained
+  failed outbox remains eligible only for its recovery/ACK path. Metrics now
+  keep Worker, Reviewer, and Local Verifier active windows separate.
+- A Worker PASS can consume a runtime-owned digest-addressed binary
+  `CAPTURED_GIT_DIFF_V1` capture. Reports contain neither raw patch bytes nor
+  a model-chosen `.codex-loop` path.
+
+### Changed
+
+- New generated Adaptive Packs default to `MCP_CANONICAL_WRITER` and contain no
+  State-Writer task. Schema v1/v2 and `route_state_mutation` remain
+  compatibility-only; `MIGRATE_V2_TO_V3` is explicit, paused and quiescent.
+  Schema-v3 runtime rejects legacy canonical mutations with
+  `STATE_GATEWAY_REQUIRED`; migration is available only through the Gateway's
+  explicit safe-point operation.
+- A terminal predecessor is immutable incident evidence. Continuation uses
+  `INITIALIZE_SUCCESSOR` in a fresh root and records a predecessor handoff.
+- Updated Chinese and English README files, the Adaptive contract, SPEC,
+  invariants, ADR 0010 and release guidance for the v3 architecture.
+- Replaced the unavailable private App action-receipt hard gate with an explicit
+  host-cooperative evidence model. Optional `x-codex-app-action-receipt-v1`
+  remains stricter when present; normal task/heartbeat registration, send,
+  transport pause and finalization bind real App returns/readback to the
+  host-attested turn and canonical route/heartbeat identity instead.
+
+### Release boundary
+
+v3.3.0 is not released until the exact protected-main merge SHA passes the
+same-SHA real Codex App Gateway canary, is installed with zero drift, has an
+independent P0/P1/P2=0 review, and is then tagged and published as a GitHub
+Release. The real canary records host-cooperative task/heartbeat/send/report/
+successor/pause observations on that SHA; an optional private App receipt is
+not a release precondition. Repository tests and CI remain prerequisite
+evidence, not a release claim.
+
 ## [3.2.8] - 2026-07-17
 
 ### Fixed
@@ -277,6 +350,7 @@ evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
 [Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.8...HEAD
+[3.3.0-candidate]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.8...HEAD
 [3.2.8]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.8
 [3.2.7]: https://github.com/amanayayatu-tech/loop-skill/pull/11
 [3.2.6]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.6

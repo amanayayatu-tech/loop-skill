@@ -3,6 +3,84 @@
 Use this reference only when `coordination_mode=adaptive`. Standard Mode keeps
 the existing fixed Goal Queue contract and generated fixture behavior.
 
+## Schema v3 State Gateway (current new-Pack contract)
+
+New Adaptive Packs use `state_gateway_mode=MCP_CANONICAL_WRITER` and
+`schema_version: 3`. The installed MCP `state_gateway({root, request})` is the
+only canonical writer. No session State-Writer task exists in a v3 thread
+registry, and Controller, Worker, Reviewer, Local Verifier, and an outer
+Supervisor are forbidden from hand-writing `.codex-loop/**`.
+
+The public request is closed to `request_id`, `operation`, `occurred_at`, and
+`parameters`, under an attested real Controller turn. Its supported operations
+are `INITIALIZE`, `INITIALIZE_SUCCESSOR`, `MIGRATE_V2_TO_V3`, bootstrap-only
+`REGISTER_TASK` and `REGISTER_HEARTBEAT`, `RECORD_HEARTBEAT_OBSERVATION`,
+`PREPARE_ROUTE`, `RECORD_ROUTE_SENT`, `ACK_ROUTE_RESULT`, `REPORT_RECOVERY`,
+`ADVANCE_ROADMAP`, `PREPARE_FINALIZATION`, `ACK_FINALIZATION`,
+`ACK_TRANSPORT_PAUSE`, and bounded transport observation. `INITIALIZE` requires
+an exact Pack source in a fresh root. `INITIALIZE_SUCCESSOR` additionally binds
+the terminal predecessor's receipt/root digest, product snapshot/base, exact
+ACK evidence and a repair backlog; it never changes that predecessor.
+
+`PREPARE_ROUTE` atomically derives host-turn identity, virtual route lease,
+repository snapshot/freshness, Goal definition, validation matrix, review
+handoff, current artifact and one PREPARED outbox. Controller sends the
+`runtime_codec` materialized payload once, then records the real returned target
+thread and observed time through `RECORD_ROUTE_SENT`. Gateway binds that target
+to the PREPARED outbox and supplies its exact canonical materialized
+`payload_digest`; a bare route id, wrong returned target, stale outbox, or
+present-but-mismatched stronger receipt has zero side effect. A same-turn MCP
+identity does not claim a provider-signed preceding subtool result: schema v3
+is host-cooperative, not Byzantine. The exact target role stages report bytes
+through `runtime_codec(STAGE_REPORT)` under its
+MCP-attested task identity; Gateway ACKs that exact original outbox.
+`REGISTER_TASK`, `REGISTER_HEARTBEAT`, and
+`RECORD_HEARTBEAT_OBSERVATION` bind real task/automation returns or readback to
+the host-attested turn and canonical identity. `ACK_TRANSPORT_PAUSE` and
+`ACK_FINALIZATION` require a PAUSED readback exactly matching the one registered
+heartbeat. An optional non-argument `x-codex-app-action-receipt-v1` carrier is
+strictly verified when present, but is not a normal-path prerequisite. This
+model prevents operational mismatches and replay; it does not claim to defeat a
+Controller that can forge all App calls.
+When a role has completed/staged a report but task stdout or indexing is lost,
+`REPORT_RECOVERY` ACKs that same outbox and never adds a report-only product
+dispatch or repair attempt.
+
+A v3 PASS projection requires the same Goal's current artifact, current Worker
+dispatch and a matching PASS formal report. `BLOCKED`, stale dispatch, stale
+artifact and foreign outbox reports have no PASS side effect. Review routes are
+CODE_REVIEW -> required LOCAL_VERIFICATION -> ROADMAP_AUDIT. A nonfinal current
+`ROADMAP_AUDIT_PASS` can only use `ADVANCE_ROADMAP`, which derives the next
+ready Goal from the unchanged canonical registry; it cannot add, delete,
+reorder, or copy a roadmap payload. A final candidate requires FINAL_AUDIT,
+`PREPARE_FINALIZATION`, a real matching heartbeat-pause/readback, and
+`ACK_FINALIZATION`. `PREPARE_FINALIZATION` is nonterminal: it creates a
+PREPARED finalization outbox while `terminal_status` remains null. Only the
+pause/readback-bound ACK creates the terminal projection.
+Schema v3 disables native Goal adapters and records `GATEWAY_NO_NATIVE_GOAL` as
+a local sentinel, never as an external Goal-tool outcome.
+`CAPTURE_COMPLETE_DIFF` captures raw Git binary bytes, allows only confined
+untracked paths, reverse-checks the patch and emits a manifest; no model
+transports binary patch text.
+
+For a matching transport fingerprint/outbox, the first real
+registered-heartbeat observation retains the outbox. Gateway binds its
+fingerprint, time, and registered-heartbeat identity to the current host turn.
+Two natural heartbeat observations or fifteen minutes enter
+`WAITING_TRANSPORT_RECOVERY`, stop canonical routing and request one user
+notification. The Controller must pause the one business heartbeat in the App
+and submit `ACK_TRANSPORT_PAUSE`; until a matching PAUSED readback exists the
+runtime never claims PAUSED. Later matching observations are zero-side-effect
+until an authorized recovery. `LOOP_METRICS.json` is derived observation only.
+
+Schema v1/v2 State-Writer state remains readable for history. Its only route to
+v3 is explicit `MIGRATE_V2_TO_V3` while PAUSED with no lease or active outbox;
+there is no automatic migration. A schema-v3 runtime rejects every legacy
+mutation type as `STATE_GATEWAY_REQUIRED`, including raw migration replay, so
+the compatibility path cannot bypass Gateway ownership. The remainder of
+this file describes the legacy v1/v2 compatibility protocol unless a section
+explicitly says schema v3.
+
 ## Contents
 
 1. Mode boundary
@@ -30,7 +108,7 @@ Adaptive input requires:
 - at least one dependency-free Goal for the initial `ACTIVE` milestone
 - Local Verifier, subagent, and dashboard policies
 
-Role kinds are `implementation`, `code_reviewer`, `state_writer`,
+Legacy role kinds are `implementation`, `code_reviewer`, `state_writer`,
 `local_verifier`, `triage`, and `explorer`. A Local Verifier or generic Auditor
 must never accidentally satisfy the code-review gate.
 Auto-injected formal roles use deterministic collision-free names. Revalidate
@@ -76,7 +154,7 @@ both normalized role names and thread placeholder slugs after injection.
 - `validation_requirements`, `validation_results`, and exact evidence identity
 - `validation_gate_status` and `status_projection_target`
 
-`schema_version: 2` is the current format. Existing v1 state changes only
+For legacy compatibility, `schema_version: 2` remains readable. Existing v1 state changes only
 through `MIGRATE_V1_TO_V2` with its exact source digest. The migration is a
 locked, journaled, CAS-protected transaction with no external actions; ordinary
 reads do not migrate. Repeating an applied migration is idempotent, while an
@@ -159,9 +237,9 @@ when an expected artifact remains unresolved, and before every mutation.
 `STATUS.md` is a derived observation surface and never mutation authority.
 
 After a send, the observation order is canonical mtime/version, expected
-artifact, compact projected fields, then a compact State-Writer task read only
-if unresolved. Controller itself is read only for phase completion, a blocker,
-or a Decision. Each target permits one in-flight
+artifact, compact projected fields, then a compact Gateway state read only if
+unresolved. Controller itself is read only for phase completion, a blocker, or
+a Decision. Each target permits one in-flight
 `read_thread(threadId=..., turnLimit=1, includeOutputs=false)` call. Tool results
 are reduced internally to status, timestamps, item types, and the final bounded
 agent message; raw results and long transcripts are not forwarded. Unchanged
@@ -203,29 +281,25 @@ identity. Neither side manually replaces substrings, preserves
 a `sha256:` prefix, adds angle brackets, reserializes transport, or hashes a UI,
 XML, or `<codex_delegation>` wrapper.
 
-State-Writer must not hand-write canonical state/events/journals. It resolves
-the runtime interpreter only from the exact installed
-`[mcp_servers.codex-loop-state]` command/args readback, verifies that the bridge
-and runtime share the installed skill root, and never falls back to ambient
-`python3`. Missing runtime, interpreter identity, schema, or `jsonschema` yields
-`STATE_RUNTIME_UNAVAILABLE`; a structured
-rejection never authorizes a prose fallback. A rejected request leaves state,
-events, journals, outboxes, and external-action count unchanged.
-Normal apply is also forbidden from recovering an earlier incomplete
-transaction as a side effect: it returns `RECOVERY_REQUIRED`. State-Writer must
-invoke the explicit `--recover` path, relay that structured result, reread
-canonical state, and only then accept the next mutation.
+The installed State Gateway, not a session task, owns canonical
+state/events/journals. It resolves the runtime interpreter only from the exact
+installed `[mcp_servers.codex-loop-state]` command/args readback, verifies that
+bridge and runtime share the installed skill root, and never falls back to
+ambient `python3`. Missing runtime, interpreter identity, schema, or
+`jsonschema` yields `STATE_RUNTIME_UNAVAILABLE`; a structured rejection never
+authorizes a prose fallback. A rejected request leaves state, events, journals,
+outboxes, and external-action count unchanged. Normal apply cannot recover an
+earlier incomplete transaction as a side effect: it returns
+`RECOVERY_REQUIRED`, then Gateway recovery must finish before the next request.
 
-Bootstrap is ordered and crash-recoverable: deterministically recover/create the
-one State-Writer before state exists; apply one `INITIALIZE` CAS containing the
-exact parsed milestone array, Goal definition registry/queue, closed
-authorization envelope, project id, Pack digest/artifact, real Controller and
-State-Writer ids plus bootstrap digests, dashboard policy, local-verification
-set, explicit `native_goal_policy`, and empty ledgers/outboxes. The policy enum
-is `disabled|advisory|required`; new inputs default to `required`, and an omitted
-legacy state value is interpreted as `required`. After `LOOP_INITIALIZED`, every startup action
-uses a fresh `ACQUIRE_LEASE`; it atomically counts the routing turn and returns
-the one-route claim. No separate wake-start mutation exists.
+Schema-v3 bootstrap is ordered and crash-recoverable: invoke
+`state_gateway(INITIALIZE)` once for the new root, with the parsed milestone
+array, Goal registry/queue, authorization envelope, project id, Pack
+source-path/digest, real Controller identity, dashboard policy,
+local-verification set, and empty ledgers/outboxes. It creates no State-Writer
+identity. `PREPARE_ROUTE` subsequently performs host-turn attestation, lease,
+current repository snapshot, canonical payload construction, and PREPARED
+outbox creation atomically. No separate wake-start mutation exists.
 Historical ACKED terminal states without nested capability fields remain readable.
 A historical PREPARED finalization without them fails closed as
 `FINALIZATION_CAPABILITY_MIGRATION_REQUIRED` and cannot authorize an adapter call.
@@ -245,8 +319,8 @@ validates strict UTF-8/JSON framing without reserialization, and returns the
 runtime-computed exact-byte digest, byte count, media type,
 ACK-ready result, and a regular non-symlink read-only `source_path` under the
 root-confined non-canonical staging directory `.codex-loop/report-staging/`.
-State-Writer accepts only such helper-produced files and runtime archives them
-under `.codex-loop/reports/`. The formal role returns only the ASCII-safe handle;
+Gateway accepts only such helper-produced files and runtime archives them under
+`.codex-loop/reports/`. The formal role returns only the ASCII-safe handle;
 Controller only forwards it and never reads, copies, parses, or transports
 REPORT bytes. The same outbox identity may be restaged after
 an archive failure without re-executing product work.
@@ -515,23 +589,19 @@ Reusing the same id with another owner does not transfer ownership. A competing
 turn returns `WAITING_CONTROLLER_LEASE` and sends nothing. Expired takeover
 requires trustworthy current time plus structured `read_thread` evidence for
 the exact owner task, increments the epoch, and fences every old action.
-Controller sends acquisition and takeover only through the configured
-`route_state_mutation` MCP tool and omits `controller_turn_id` from model
-arguments. The bridge verifies that its direct parent is the OpenAI-signed Codex
-app-server, reads Codex-owned top-level MCP `params._meta` outside tool
-arguments, parses `x-codex-turn-metadata`, requires metadata `thread_id` to
-equal outer request `threadId`, and only then injects the real `turn_id`.
-Metadata `session_id` is required as the trusted
-session-tree identity but may legitimately differ from `thread_id` after a fork
-or resume; it never substitutes for `turn_id`. State-Writer, direct CLI, shell, inline Python, JSON,
-argv, environment variables, task titles, timestamps, and model-generated UUIDs
-are not route-attestation channels. Runtime indexes the canonical ledger by the
-attested turn and rejects a second lease from that same App turn even after
-completion or voluntary release. Missing or invalid host metadata returns
-`BLOCKED_BY_APP_ATTESTATION` with zero canonical side effects. All non-route
-mutations continue through the existing State-Writer. Repository tests prove
-the bridge boundary synthetically; release claims still require the real App
-two-route canary.
+`PREPARE_ROUTE` uses the installed `state_gateway` and omits
+`controller_turn_id` from model arguments. The bridge verifies its direct
+parent, reads Codex-owned top-level MCP metadata outside tool arguments, and
+injects the current Controller turn only when its thread identity is valid.
+The session-tree identity may differ from a thread after fork or resume and
+never substitutes for the turn. Direct CLI, shell, inline Python, JSON, argv,
+environment variables, task titles, timestamps, and model-generated UUIDs are
+not route-attestation channels. Runtime indexes the canonical ledger by the
+attested turn and rejects a second route from that same App turn even after
+completion or release. Missing or invalid host turn metadata returns
+`BLOCKED_BY_APP_ATTESTATION` with zero canonical side effects. All schema-v3
+mutations continue through Gateway; repository tests prove its boundary
+synthetically, while release claims still require the real App canary.
 
 Installation atomically registers exactly one `codex-loop-state` stdio server.
 Its command is a stable absolute Python executable and its sole argument is the
@@ -792,7 +862,11 @@ must equal `diff_sha256`, and every non-deleted file entry must match the
 current regular non-symlink file. `NO_DIFF` uses the SHA-256 of empty bytes,
 empty `changed_files`, and equal before/after snapshots. `PATCH_FILE_V1` names
 a root-confined regular non-symlink diff artifact whose bytes hash to
-`diff_sha256`. `FAIL` and `BLOCKED` reports remain archivable without this
+`diff_sha256`. `CAPTURED_GIT_DIFF_V1` instead names only the SHA-256 returned
+by runtime `CAPTURE_COMPLETE_DIFF`; runtime derives the digest-addressed
+`.codex-loop/diff-captures/<sha256>.patch` path and rechecks its raw bytes, so
+the Worker report never transports patch content or a model-selected control
+plane path. `FAIL` and `BLOCKED` reports remain archivable without this
 review handoff so a zero-effect failure can still close a SENT outbox.
 Worker, Reviewer, and Local Verifier build one strict JSON `report_text` inside the
 target task, without fences or trailing prose, whose `report_digest` value is

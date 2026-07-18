@@ -8,5 +8,6 @@ __pycache__/
 .coverage.*
 coverage.xml
 htmlcov/
+inventory-v1.json
 .pytest_cache/
 .venv/

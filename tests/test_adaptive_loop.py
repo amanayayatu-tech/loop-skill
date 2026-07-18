@@ -34,6 +34,7 @@ def adaptive_payload() -> dict:
     payload.update(
         {
             "coordination_mode": "adaptive",
+            "state_gateway_mode": "LEGACY_STATE_WRITER",
             "adaptive_reason": "Two product milestones may change after exact browser evidence",
             "acceptance_criteria": [
                 "Feature behavior is covered by tests",
@@ -112,6 +113,29 @@ def adaptive_payload() -> dict:
 class AdaptiveValidationTests(unittest.TestCase):
     def test_valid_adaptive_payload(self) -> None:
         self.assertEqual(scaffold.validation_errors(adaptive_payload()), [])
+
+    def test_new_adaptive_pack_defaults_to_the_mcp_state_gateway(self) -> None:
+        payload = adaptive_payload()
+        payload["state_gateway_mode"] = "MCP_CANONICAL_WRITER"
+        payload["_provided_keys"] = sorted(
+            key for key in payload if not key.startswith("_")
+        )
+        self.assertEqual(scaffold.validation_errors(payload), [])
+        pack = scaffold.render_controller_pack(payload, "compact")
+        self.assertIn("Adaptive v3 MCP State Gateway Protocol", pack)
+        self.assertIn("state_gateway({root, request})", pack)
+        self.assertIn("PREPARE_ROUTE", pack)
+        self.assertIn("REPORT_RECOVERY", pack)
+        self.assertIn("CAPTURE_COMPLETE_DIFF", pack)
+        self.assertIn("REGISTER_HEARTBEAT", pack)
+        self.assertIn("ADVANCE_ROADMAP", pack)
+        self.assertIn("PREPARE_FINALIZATION", pack)
+        self.assertIn("Native Goal adapters are disabled", pack)
+        self.assertNotIn("### Worker Prompt - state-writer", pack)
+        self.assertNotIn("Create a State-Writer task", pack)
+        self.assertNotIn("immediately before PREPARE_OUTBOX", pack)
+        self.assertNotIn("strict JSON ACK_OUTBOX result.status", pack)
+        self.assertNotIn("only reviewed evidence plus ROADMAP_REVISION may change future Goals", pack)
 
     def test_native_goal_policy_defaults_required_and_rejects_unknown(self) -> None:
         payload = adaptive_payload()
@@ -1176,6 +1200,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             self.pack,
         )
         self.assertIn("MANIFEST_DELTA_V1", self.pack)
+        self.assertIn("CAPTURED_GIT_DIFF_V1", self.pack)
         self.assertIn("latest_worker.review_handoff", self.pack)
         self.assertIn(
             "The review payload copies artifact_identity/evidence_refs exactly",
@@ -1415,7 +1440,7 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Adaptive Coordination Mode", pack_path.read_text(encoding="utf-8"))
+            self.assertIn("Adaptive v3 Controller Routing Protocol", pack_path.read_text(encoding="utf-8"))
             self.assertIn("Adaptive 模式怎么回查", guide_path.read_text(encoding="utf-8"))
 
     def test_cli_accepts_strict_structured_workers_json(self) -> None:

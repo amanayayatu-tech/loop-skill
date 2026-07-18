@@ -48,29 +48,29 @@
 2. 当前 repo_mode 是 `existing_git`：`existing_git` 先检查现有 git/worktree/脏文件；`new_git` 第一阶段先用 local Worker，且只有 Goal 的 `git_init/branch_create` 为 true 才初始化；`non_git` 不执行分支/worktree 检查。
 3. 把资料放进工作区或提供子线程可读的绝对路径：SELF_CONTAINED。只附在控制聊天里的文件不会自动传给新线程。
 4. 先对生成的 Controller Pack 本地文件计算精确 byte length 和 SHA-256；在同一条初始 Controller launch input 中附上 `PACK_IDENTITY_ATTESTATION`（绝对路径、byte length、SHA-256、parent create_thread observation），再发送完整 `.md`。Controller 必须从该本地路径独立复算，禁止 hash/decode `codex_delegation`、XML/HTML entities、UI 或 read_thread wrapper；缺失/不匹配时在创建任何子任务前停止。
-5. 控制线程使用 `list_projects`、`list_threads`、`create_thread`、`read_thread`、`send_message_to_thread` 创建和恢复真实项目任务，禁止用 sub-agent 冒充；Adaptive 必须先以 `THREAD` outbox 的 `PREPARED -> SENT -> ACKED` 登记真实 threadId，才能派发。
-6. 控制线程先通过确定性 runtime 完成 `INITIALIZE`，收到 `LOOP_INITIALIZED`；再以独立 lease 执行 `AUTOMATION` outbox 的 `PREPARED -> SENT -> ACKED`，核对本机记录后只创建或认领一个 heartbeat。
-7. 所有 `MATERIALIZE_*` token 必须替换为真实 `threadId`、dispatch identity、lease claim 和 canonical state snapshot；Worker 派发使用 `DISPATCH` outbox：`PREPARED -> 发送一次 -> SENT -> strict JSON report -> COMPLETED`。
+5. 先通过 `state_gateway INITIALIZE` 建立 schema v3 canonical state。真实 create/read 的 task/threadId、automation create/readback、send 返回 target threadId 与 PAUSED readback 是宿主协作 operation evidence；它们各自绑定当前 host-attested turn 和 Gateway 已准备的对象，不能只报 route id、标题或 transcript。
+6. Controller 以真实 App 返回注册唯一当前 Worker/heartbeat（`REGISTER_TASK` / `REGISTER_HEARTBEAT`），不创建 State-Writer 或 native Goal。当前 App 缺少可选 `x-codex-app-action-receipt-v1` 不阻断该路径；若存在则 Gateway 额外严格校验。
+7. 每条产品路线只用 `PREPARE_ROUTE -> runtime_codec MATERIALIZE_DISPATCH -> 一次 App send -> RECORD_ROUTE_SENT -> target STAGE_REPORT -> ACK_ROUTE_RESULT`。所有 lease、freshness、matrix、artifact 与 payload 由 Gateway 从 canonical state 原子生成，Controller 不复制。
 8. Reviewer 不在启动时预创建；Worker 报告已写入且存在可审 diff 后再即时创建。worktree Reviewer 优先用 `fork_thread(... same-directory)`，否则传递可验证的绝对 worktree 路径和完整 diff。
-9. 每次 Worker/Reviewer 回报先写状态并等待 `STATE_WRITE_APPLIED`，再进入 review、repair 或下一 Goal。
-10. heartbeat 每 15 分钟唤醒，最多 192 次；Worker 正在运行时记录 `WAITING_ACTIVE`，不能 NOOP 关闭。只有终态或无 inflight/queue 且连续 8 次 idle 才允许暂停。
-11. Goal Queue 全部通过后还要做一次完整 Git base-to-head 或 non_git before-to-after snapshot FINAL_AUDIT，最终状态写入成功后才是 `LOOP_COMPLETE`。
+9. 每次 Worker/Reviewer 只通过目标角色的 `runtime_codec STAGE_REPORT` stage 报告，再由 Gateway `ACK_ROUTE_RESULT` 或 `REPORT_RECOVERY` ACK 原 outbox；不得等待或伪造 `STATE_WRITE_APPLIED`。
+10. 唯一业务 heartbeat 每 15 分钟最多观察一次；同一失败最多记录两次自然 heartbeat 或累计 15 分钟，然后进入 `WAITING_TRANSPORT_RECOVERY`。未获真实 pause 后的 PAUSED readback 前不得宣称 PAUSED。
+11. Goal Queue 全部通过后做完整 FINAL_AUDIT；只经 `PREPARE_FINALIZATION -> PAUSED readback -> ACK_FINALIZATION` 到达 `FINALIZATION_ACKED`，不使用 native Goal 或 `LOOP_COMPLETE` 代称。
 
 ## 怎么回查 loop
 
-- 控制线程：看 PACK_SHA256/LOOP_ID、真实 threadId、routing turn/lease、generic outbox、Goal Queue、runtime ACK 和下一动作。
+- 控制线程：看 Pack identity、真实 Controller/Worker identity、Gateway route ledger、原 outbox、当前 Goal、派生 metrics 和下一动作；send/automation evidence 必须绑定当前 turn 与对应 prepared 对象。
 - 实现线程：看 worktree_path、Git 或 snapshot identity、changed_files、diff_summary、diff_sha256 和带 exit_code 的验证结果。
 - 审查线程：看 severity-first 的 file/line findings、reviewed artifact identity 和 test gaps。
-- 状态线程：看 state_request_id、event_id、state_version_before/after、transaction journal，确认没有重复事件或半事务。
-- heartbeat 卡片：看 automation id、ACTIVE/PAUSED、rrule、目标控制任务和 canonical `routing_turn_count`。
-- `/workspace/adaptive-passkey-app/.codex-loop/LOOP_STATE.md`：版本化 canonical roadmap、Goal 定义/执行 ledger、thread/automation/Goal/dispatch/assurance/local/delegation outbox、lease、预算、审批和 finalization receipt。
+- 状态线程：看 Gateway request_id、event_id、state_version_before/after、route ledger 与 transaction journal，确认没有重复事件或半事务。
+- heartbeat 卡片：看真实 automation create/readback 的 automation id、ACTIVE/PAUSED、rrule、目标 Controller 任务和 transport recovery；终态必须有 pause 成功后的 PAUSED readback。
+- `/workspace/adaptive-passkey-app/.codex-loop/LOOP_STATE.md`：schema-v3 canonical roadmap、Goal/route ledger、一个路线 outbox、lease、host-cooperative heartbeat、transport recovery、预算、审批与 finalization receipt；它没有 State-Writer/Goal outbox 身份。
 - `/workspace/adaptive-passkey-app/.codex-loop/LOOP_EVENTS.jsonl`：按 event_id 记录的派发、ACK、重试、审查、停止流水。
 - `/workspace/adaptive-passkey-app/.codex-loop/TRIAGE.md`：TRIAGE_ACTIONABLE/TRIAGE_NO_ACTION 发现及其证据和后续 Goal。
 - `/workspace/adaptive-passkey-app/.codex-loop/reports/`：Worker、Reviewer 和 FINAL_AUDIT 报告归档。
-- `/workspace/adaptive-passkey-app/.codex-loop/transactions/`：State-Writer 的 PREPARED/APPLIED 恢复日志；用于判断中断后缺哪一步，不能当作第二份 canonical state。
+- `/workspace/adaptive-passkey-app/.codex-loop/transactions/`：Gateway runtime 的 PREPARED/APPLIED 恢复日志；用于判断中断后缺哪一步，不能当作第二份 canonical state。
 - `/workspace/adaptive-passkey-app/.codex-loop/sources/CONTROLLER_PACK.md`：初始化时归档的精确 Controller Pack；heartbeat 校验 PACK_SHA256 后用它抵抗长对话压缩。
 
-正常信号：`LOOP_INITIALIZED` 后只出现一个当前 Worker 的 `THREAD_OUTBOX_ACKED` 和唯一 heartbeat 的 `AUTOMATION_OUTBOX_ACKED`；active 工作保持原 `SENT` identity 并按需续租，不会重发；Worker strict JSON 报告绑定后 `DISPATCH_OUTBOX_ACKED`/COMPLETED；三类 assurance 独立 ACK；最终出现 `FINALIZE_LOOP_APPLIED` 与 `FINALIZATION_ACKED`。
+正常信号：Gateway `GATEWAY_LOOP_INITIALIZED` 后，真实返回绑定的 `REGISTER_TASK` / `REGISTER_HEARTBEAT` 各登记一次；每个 Goal 只保留同一 route/outbox，报告仅由目标角色 stage 后 ACK；最终出现 `PREPARE_FINALIZATION`、已验证 heartbeat PAUSED readback 与 `FINALIZATION_ACKED`。
 
 异常信号：同一 BOOTSTRAP_MARKER 出现多个未归档任务、重复 heartbeat、未替换的 `MATERIALIZE_*` 运行时 token、重复 dispatch_id、状态版本倒退、Reviewer 看不到 worktree、Worker active 时 heartbeat 被暂停、state update 与下一 Goal 同时发送。
 
@@ -79,30 +79,22 @@
 - `MISSING_PROJECT_WORKSPACE`、`MISSING_SOURCE_ARTIFACT`、`THREAD_TOOLS_UNAVAILABLE`、`THREAD_BUDGET_EXHAUSTED`、`AUTOMATION_TOOLS_UNAVAILABLE`、`AUTOMATION_IDENTITY_UNRESOLVED`、`MISSING_CONNECTOR`。
 - `DIRTY_WORKTREE_CONFLICT`、`WORKTREE_BOOTSTRAP_BLOCKED`、`WORKTREE_INTEGRATION_PLAN_MISSING`、`PATH_SCOPE_ESCAPE`、`THREAD_IDENTITY_UNRESOLVED`、`REVIEW_ARTIFACT_UNAVAILABLE`。
 - `BLOCKED_COST_CAP`、`BLOCKED_USAGE_METADATA`、`AWAITING_HUMAN_APPROVAL`、`PHASE_PERMISSION_CONFLICT`。
-- `RUNTIME_DEPENDENCY_BLOCKED`、`VALIDATION_BLOCKED`、`REPAIR_BUDGET_EXHAUSTED`、无法调和的 `STATE_VERSION_CONFLICT`/`RECOVERY_REQUIRED`、`ROUTING_BUDGET_EXHAUSTED`、`HARD_BLOCK`。
+- `RUNTIME_CODEC_TOOL_UNAVAILABLE`、`RUNTIME_DEPENDENCY_BLOCKED`、`VALIDATION_BLOCKED`、`REPAIR_BUDGET_EXHAUSTED`、`WAITING_TRANSPORT_RECOVERY`、无法调和的 `STATE_VERSION_CONFLICT`/`RECOVERY_REQUIRED`、`ROUTING_BUDGET_EXHAUSTED`、`HARD_BLOCK`。
 
 ## 手动降级
 
-只有真实 Codex App 线程或 heartbeat 工具不可用时才使用。手动模式仍需真实项目线程、版本化单写者状态、精确 worktree 审查和相同停止条件。
+schema v3 使用宿主协作证据：真实 App 返回或 readback 绑定当前宿主认证 turn、唯一 outbox 与 heartbeat 身份。它不声称能抵御可伪造所有 App 调用的恶意 Controller；可选 `x-codex-app-action-receipt-v1` 仅增强而非前置条件。不要以 State-Writer、手写 canonical 或 Supervisor 替代 Gateway。
 
 
 ## Adaptive 模式怎么回查
 
-- 发布状态：`beta/experimental`。确定性 runtime、生成器、测试和安装检查只证明本地协议行为；不能据此声称所有 Codex App 环境都能自动循环到终态。
-- 本次运行策略：`adaptive`。输出详略模式与它独立，不影响一份 Pack 启动方式。
-- Adaptive 的实际启动顺序：唯一 State-Writer -> `INITIALIZE`/GOALS/Pack 归档 ACK -> 当前 Worker、heartbeat、Controller Goal、First Goal 各自使用一轮独立的 `ACQUIRE_LEASE -> outbox -> 外部动作 -> ACK`。前一轮 lease 消费后才开始下一轮，不能复用同一个启动 lease。
-- `/workspace/adaptive-passkey-app/.codex-loop/GOALS.md`：当前里程碑、为什么这样排序、需要什么证据、最近为何改计划；它是 `LOOP_STATE.md` 的只读投影。
-- `/workspace/adaptive-passkey-app/.codex-loop/STATUS.md`：普通用户状态页，只看 What's done / What's next / Any blockers、state version、最近任务观察、待处理 Steering/Decision 和验证缺口；它落后时以 `LOOP_STATE.md` 为准。
-- `/workspace/adaptive-passkey-app/.codex-loop/progress-dashboard.html`：只读进度看板，由状态生成。
-- `/workspace/adaptive-passkey-app/.codex-loop/LOOP_STATE.md` 还应能回查 `goal_definition_registry`、`goal_execution_ledger`、`controller_goal_outbox`、`controller_lease`/已消费 lease id 和三阶段 assurance identity；缺少这些不是完整 Adaptive 初始化。
-- 长任务超过 lease TTL 时，应看到 `SAME_OWNER_LEASE_RENEWED`、原 `SENT` outbox 的新 claim 和未变化的 dispatch/payload identity；不应出现第二次发送。
-- Worker/Reviewer/Local 必须在自己的目标任务内、最终回复穿过 App transport 前，把报告交给 installed MCP `runtime_codec` operation `STAGE_REPORT`。最终只返回 ASCII-safe `FORMAL_REPORT_STAGED` handle；Controller 只原样转发其中 `.codex-loop/report-staging/` 只读 regular non-symlink `source_path`、真实 digest、media type 和 ACK-ready result，永不读取或搬运 REPORT bytes。不得 inline 搬运、手写 staging 文件或自行计算 report digest。归档后 canonical `report_digest` 必须等于 `.codex-loop/reports/` 中对应 `application/json` 文件的实际 SHA-256；`PENDING_CONTROLLER_ARCHIVE` 不能直接进入状态。State-Writer 必须让 runtime 在 ACK 前解析报告并把顶层 dispatch/Goal/milestone/roadmap/target/payload/artifact/decision/source identity 与当前 SENT outbox 精确绑定；嵌套字段不能补齐缺失的顶层身份。
-- 代码审查、路线图审计和最终完整审查复用一个只读审查任务，但会显示为独立派发和独立报告。
-- Local Verifier 只在需要真实浏览器、本机权限、模拟器、设备或账号状态时创建。
-- 自动只读子代理策略为 `auto_read_only`；配置上限为 2 个、全程最多 4 次运行。当前确定性路由每个 lease 只串行运行一个 sidecar，不承诺同时并发；它们只做短时搜索/归类，正式角色仍是同一项目下可回查的真实任务。
-- 正常顺序：实现报告 ACK -> 代码审查 ACK -> 必要的本机验证 ACK -> 路线图审计 ACK -> GOALS 投影 ACK -> 切换唯一 Active milestone；最后一个里程碑还要经过最终完整审查 ACK 和独立终态写入 ACK。
-- `ROADMAP_CHANGE_REQUIRES_APPROVAL` 表示新计划扩大了原始授权；`CONTROLLER_GOAL_CONFLICT` 表示当前任务已有不匹配的 Goal；`WAITING_CONTROLLER_LEASE` 表示另一个 Goal/heartbeat 回合正在安全路由。
-- 每次状态变化只看 `What's done / What's next / Any blockers`；需要底层排障时再查看事件、事务和任务报告。
-- 运行中可直接说“现在做到哪了”“先暂停”“恢复同一个 loop”“新增约束：...”“纠正：...”。状态查询不改变任务；暂停只在可验证安全点完成；约束和纠正不会静默修改已发送的 Worker payload。
+- 发布状态：`beta/experimental`。Gateway、生成器、测试和安装检查只证明本地协议行为；真实 Codex App canary 与正式 Release 仍是单独的验收层。
+- 本次运行策略：schema v3 `MCP_CANONICAL_WRITER`。实际角色只有 Controller、当前 Worker、可复用 Reviewer、按需 Local Verifier 和唯一业务 heartbeat；MCP State Gateway 是安装服务，不是一个 State-Writer 任务，Supervisor 也不是产品角色。
+- `/workspace/adaptive-passkey-app/.codex-loop/LOOP_STATE.md` 是唯一 canonical source；`GOALS.md`、`STATUS.md` 和 `LOOP_METRICS.json` 都是派生观察面。状态投影滞后或语义冲突时，以 canonical state 和终态 receipt 为准。
+- `/workspace/adaptive-passkey-app/.codex-loop/progress-dashboard.html`：只读进度看板，由 Gateway canonical state 派生。
+- 正常慢：同一个 SENT outbox 有活跃 Worker/Reviewer 或新证据；只观察，不重复派发。传输退化：绑定当前 host turn 和已登记 heartbeat 的真实 observation 记录同一指纹、outbox、时间和自然-heartbeat 身份；两次自然 heartbeat 或累计 15 分钟后进入 `WAITING_TRANSPORT_RECOVERY`，仅在真实 pause 后读回 PAUSED 才投影 heartbeat PAUSED 并通知用户一次。真正终态：只有 `FINALIZATION_ACKED` 或经证据支持的 `LOOP_BLOCKED`，旧终态不可复活。
+- 每条产品路线固定为 `PREPARE_ROUTE -> runtime_codec MATERIALIZE_DISPATCH -> 一次 App send -> RECORD_ROUTE_SENT -> 角色 STAGE_REPORT -> ACK_ROUTE_RESULT`。丢失 stdout/任务索引但已有 staged report 时，用 `REPORT_RECOVERY` ACK 原 outbox；绝不为补报告创建第二个产品 dispatch。
+- Worker PASS 后的顺序是 Code Review、必要 Local Verification、Roadmap Audit；最终候选还需 Final Audit、`PREPARE_FINALIZATION`、真实 heartbeat PAUSED readback 和 `ACK_FINALIZATION` 才到达 `FINALIZATION_ACKED`。Gateway 只接纳同一 Goal、当前 Worker dispatch、当前 artifact 和 PASS 正式报告的三重绑定。
+- `CAPTURE_COMPLETE_DIFF` 由 runtime 原样读取/反向校验 Git binary diff；模型不应在消息里搬运 patch bytes。`LOOP_METRICS.json` 可显示每 Goal 的总时长、已观测 Worker 窗口、控制面等待、拒绝和消息故障，但不是第二 canonical。
+- schema v1/v2 State-Writer 仅兼容读取；迁移到 v3 必须在暂停且静默安全点显式 `MIGRATE_V2_TO_V3`。从已终态 predecessor 继续时，在全新 root 使用 `INITIALIZE_SUCCESSOR`，保留 predecessor 原样。
 - 需要用户决定时只回复 Decision Card 中的 decision id 和 option id。卡片的批准仅覆盖列出的预授权动作，不包含 exclusions。
-- 如果 Goal 声明 review_surface，按 STATUS 中的路径/本地预览和问题检查；它只证明所列用户产物，不替代代码审查、部署或生产验收。
