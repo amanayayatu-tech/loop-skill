@@ -27,7 +27,7 @@
     "receipt_digest"
   ],
   "properties": {
-    "schema_version": {"const": "app-canary-receipt-v5"},
+    "schema_version": {"const": "app-canary-receipt-v6"},
     "evidence_layer": {"const": "local-main-mac"},
     "status": {"enum": ["PASS", "BLOCKED", "FAIL"]},
     "started_at": {"type": "string", "format": "date-time"},
@@ -218,6 +218,9 @@
         "lost_stdout_recovered_without_second_send",
         "successor_initialized_from_terminal_predecessor",
         "transport_pause_readback_bound",
+        "transport_recovery_readback_bound",
+        "transport_recovery_zero_new_dispatch_or_repair",
+        "transport_recovery_negative_cases_zero_effect",
         "pack_migration_same_heartbeat_reconciled",
         "native_goal_generation_recovery_status",
         "native_goal_generation_recovery_cli",
@@ -243,6 +246,9 @@
         "lost_stdout_recovered_without_second_send": {"type": "boolean"},
         "successor_initialized_from_terminal_predecessor": {"type": "boolean"},
         "transport_pause_readback_bound": {"type": "boolean"},
+        "transport_recovery_readback_bound": {"type": "boolean"},
+        "transport_recovery_zero_new_dispatch_or_repair": {"type": "boolean"},
+        "transport_recovery_negative_cases_zero_effect": {"type": "boolean"},
         "pack_migration_same_heartbeat_reconciled": {"type": "boolean"},
         "native_goal_generation_recovery_status": {"const": "DEFERRED_UNAVAILABLE"},
         "native_goal_generation_recovery_cli": {"$ref": "#/$defs/unavailableRecoverySurface"},
@@ -260,7 +266,8 @@
         "target_staged_report_digest",
         "lost_stdout_recovery_digest",
         "successor_initialization_digest",
-        "pause_readback_digest"
+        "pause_readback_digest",
+        "transport_recovery_readback_digest"
       ],
       "properties": {
         "task_thread_return_digest": {"$ref": "#/$defs/digest"},
@@ -269,7 +276,8 @@
         "target_staged_report_digest": {"$ref": "#/$defs/digest"},
         "lost_stdout_recovery_digest": {"$ref": "#/$defs/digest"},
         "successor_initialization_digest": {"$ref": "#/$defs/digest"},
-        "pause_readback_digest": {"$ref": "#/$defs/digest"}
+        "pause_readback_digest": {"$ref": "#/$defs/digest"},
+        "transport_recovery_readback_digest": {"$ref": "#/$defs/digest"}
       }
     },
     "error_classification": {

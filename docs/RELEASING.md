@@ -76,6 +76,15 @@ following checks are additional, not substitutes:
    projecting a paused business heartbeat, and one user notification
    requirement. Never manufacture repeated samples merely to
    reach the threshold.
+   For v3.3.2+, it must then complete or recover that same retained outbox,
+   update/read back the same heartbeat as ACTIVE, and prove
+   `ACK_TRANSPORT_RECOVERY` atomically restores RUNNING without a new product
+   dispatch, repair attempt, or PASS projection. An unresolved outbox or wrong
+   heartbeat receipt must remain zero-effect and return the mandatory
+   post-state action with routing forbidden. WAITING/PAUSED returns
+   `PAUSE_SAME_HEARTBEAT_AND_READBACK` and the canary performs that rollback;
+   an already HEALTHY/RUNNING replay returns `READ_STATE_ALREADY_RECOVERED`
+   and must not pause. An unreadable state requires read/reconciliation first.
 5. A nonfinal ROADMAP_AUDIT PASS must prove `ADVANCE_ROADMAP` derives the next
    existing Goal without a Controller-copied queue or matrix. Finalization must
    use `PREPARE_FINALIZATION` and a real paused-heartbeat `ACK_FINALIZATION`.

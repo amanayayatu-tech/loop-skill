@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-[![Test](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/test.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/test.yml)
+[![Compatibility CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/compatibility.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/compatibility.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
 
 **Turn a complex task that could drift across long chats into a Codex App workflow that can be handed off, reviewed, verified, and decisively closed.**
@@ -131,7 +131,7 @@ Do not use it when:
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
 
-## Adaptive v3.3.1: who writes state and who advances a route
+## Adaptive v3.3.2: who writes state and who advances a route
 
 New Adaptive Packs default to schema v3. They do not create a session State-Writer task. The installed MCP `state_gateway({root, request})` is the sole canonical writer. The Controller remains read-only, Workers perform product work, Reviewer/Local Verifier tasks submit evidence, and an outer Supervisor is not a product role.
 
@@ -165,7 +165,7 @@ Schema v1/v2 and `route_state_mutation` / State-Writer remain compatibility-only
 ## Reading normal slowness, transport degradation, and terminal state
 
 - **Normal slowness**: the same SENT outbox still has an active role or fresh evidence. Observe that route; do not dispatch again.
-- **Transport degradation**: a real registered-heartbeat observation of the matching outbox/fingerprint failure is bound to the current host turn before entering canonical state. The first failure preserves the original outbox. Two natural heartbeats or fifteen minutes enter `WAITING_TRANSPORT_RECOVERY`. Canonical routing stops immediately; `ACK_TRANSPORT_PAUSE` needs a real pause followed by PAUSED readback for that exact heartbeat and otherwise remains safely blocked. Until that readback exists, the loop never claims the heartbeat is already paused.
+- **Transport degradation**: a real registered-heartbeat observation of the matching outbox/fingerprint failure is bound to the current host turn before entering canonical state. The first failure preserves the original outbox. Two natural heartbeats or fifteen minutes enter `WAITING_TRANSPORT_RECOVERY`. Canonical routing stops immediately; `ACK_TRANSPORT_PAUSE` needs a real pause followed by PAUSED readback for that exact heartbeat. After the original outbox completes or recovers, only a real ACTIVE update/readback for that same heartbeat lets `ACK_TRANSPORT_RECOVERY` atomically restore `RUNNING`; it cannot add a dispatch or repair attempt or create PASS by itself. On rejection, re-pause only if post-call canonical is still WAITING/PAUSED; an already HEALTHY/RUNNING recovery must stay ACTIVE, while unreadable state is reconciled before any route.
 - **True terminal state**: only canonical `FINALIZATION_ACKED`, or evidence-backed `LOOP_BLOCKED`. A stale derived `RUNNING` field cannot revive a terminal loop.
 
 `LOOP_METRICS.json` is derived observation only: per-Goal elapsed time, separately observed Worker, Reviewer, and Local Verifier windows, control-plane wait, dispatch/review/rejection counts, message faults, Steering, and available token usage. It is not a second canonical source and cannot authorize a route.

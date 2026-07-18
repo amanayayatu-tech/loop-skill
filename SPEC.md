@@ -170,7 +170,25 @@ identity; the optional stronger receipt is validated when present.
 Once that threshold reaches `WAITING_TRANSPORT_RECOVERY`, every
 `PREPARE_ROUTE` rejects with zero side effects. Existing staged reports and the
 original failed outbox remain available only to their bounded recovery/ACK
-operations; no new product or report-only dispatch is created.
+operations; no new product or report-only dispatch is created. After that
+retained outbox is completed/ACKed and its route is recovered/ACKed,
+`ACK_TRANSPORT_RECOVERY` requires an ACTIVE update/readback for the same
+registered heartbeat and atomically restores `RUNNING`. It preserves the
+historical failure count and cannot create PASS, a dispatch, or a repair
+attempt; an unresolved/foreign outbox or wrong heartbeat receipt is zero-effect.
+Its public `parameters` are exactly
+`{active_automation_receipt:{automation_id,status,automation_name,kind,target_thread_id,rrule,prompt_digest,prompt_normalization,observed_at}}`;
+`status` is `ACTIVE`, `kind` is `HEARTBEAT`, and every identity field must match
+the registered heartbeat. The Gateway derives the current source turn; Pack
+callers do not copy it.
+Because the App update necessarily precedes the Gateway ACK, a rejection is
+classified from the post-call canonical state with `routing_permitted=false`.
+If canonical is still WAITING/PAUSED, it returns
+`PAUSE_SAME_HEARTBEAT_AND_READBACK` and the host immediately performs that
+rollback. If a concurrent/idempotent recovery already left canonical
+HEALTHY/RUNNING, it returns `READ_STATE_ALREADY_RECOVERED` and the host must not
+pause. If canonical cannot be read, it returns
+`READ_STATE_AND_RECONCILE_HEARTBEAT`; no route is legal before reconciliation.
 Target role reports likewise require the target's MCP-attested `STAGE_REPORT`
 call before the Controller can ACK them. A Worker PASS may bind exact validation
 files through `evidence_sources`; runtime reads them only from the registered

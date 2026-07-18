@@ -3906,7 +3906,7 @@ Required Report Fields:
             "Gateway Heartbeat Contract:\n"
             f"- One business heartbeat may observe and route at most one Gateway transition every {heartbeat_interval} minutes.\n"
             "- It reads canonical state, observes an existing outbox first, and never retries a matching transport fault after WAITING_TRANSPORT_RECOVERY.\n"
-            "- After WAITING_TRANSPORT_RECOVERY, ACK_TRANSPORT_PAUSE only after one real pause and a matching PAUSED automation readback bound to the registered heartbeat; do not claim heartbeat PAUSED before it. FINALIZATION_ACKED requires the same readback-bound evidence; only an explicit authorized successor may create a new heartbeat."
+            "- After WAITING_TRANSPORT_RECOVERY, ACK_TRANSPORT_PAUSE only after one real pause and a matching PAUSED automation readback bound to the registered heartbeat. Once the retained outbox completes/recovers, ACK_TRANSPORT_RECOVERY uses exactly parameters={active_automation_receipt:{automation_id,status,automation_name,kind,target_thread_id,rrule,prompt_digest,prompt_normalization,observed_at}}, with status=ACTIVE, kind=HEARTBEAT, the registered identity, and no copied source turn. On rejection obey the post-state action with routing forbidden: WAITING/PAUSED means PAUSE_SAME_HEARTBEAT_AND_READBACK; HEALTHY/RUNNING means READ_STATE_ALREADY_RECOVERED and must not pause; unreadable state requires read/reconcile first. FINALIZATION_ACKED requires the same readback-bound PAUSED evidence; only an explicit authorized successor may create a new heartbeat."
         )
         transition_table = (
             "Gateway Transition Contract:\n"

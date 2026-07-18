@@ -42,6 +42,9 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "lost_stdout_recovered_without_second_send": True,
             "successor_initialized_from_terminal_predecessor": True,
             "transport_pause_readback_bound": True,
+            "transport_recovery_readback_bound": True,
+            "transport_recovery_zero_new_dispatch_or_repair": True,
+            "transport_recovery_negative_cases_zero_effect": True,
             "pack_migration_same_heartbeat_reconciled": True,
             "native_goal_generation_recovery_status": "DEFERRED_UNAVAILABLE",
             "native_goal_generation_recovery_cli": {
@@ -61,7 +64,7 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "finalization_acked": True,
         }
         self.receipt = {
-            "schema_version": "app-canary-receipt-v5",
+            "schema_version": "app-canary-receipt-v6",
             "evidence_layer": "local-main-mac",
             "status": "PASS",
             "started_at": "2026-07-15T15:00:00+08:00",
@@ -145,6 +148,7 @@ class AppCanaryReceiptTests(unittest.TestCase):
                 "lost_stdout_recovery_digest": "e" * 64,
                 "successor_initialization_digest": "f" * 64,
                 "pause_readback_digest": "0" * 64,
+                "transport_recovery_readback_digest": "9" * 64,
             },
             "error_classification": None,
             "contains_sensitive_content": False,
@@ -354,7 +358,7 @@ class AppCanaryReceiptTests(unittest.TestCase):
                         expected_compatibility_identity_digest=stale_digest,
                     )
 
-    def test_v3_receipt_is_not_silently_accepted_by_v5_schema(self) -> None:
+    def test_v3_receipt_is_not_silently_accepted_by_current_schema(self) -> None:
         self.receipt["schema_version"] = "app-canary-receipt-v3"
         self.receipt["mcp"]["protocol_version"] = "2025-11-25"
         for field in (
