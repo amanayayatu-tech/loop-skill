@@ -31,6 +31,7 @@
       "items": {"$ref": "#/$defs/artifact"}
     },
     "controller_pack_digest": {"$ref": "#/$defs/digest"},
+    "gateway_public_request_digest": {"$ref": "#/$defs/digest"},
     "mutation": {
       "oneOf": [
         {"$ref": "#/$defs/initialize"},

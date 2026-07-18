@@ -1961,6 +1961,7 @@
       "required": ["request_digest", "event_id", "mutation_type", "applied_state_version"],
       "properties": {
         "request_digest": {"$ref": "#/$defs/digest"},
+        "gateway_public_request_digest": {"$ref": "#/$defs/digest"},
         "event_id": {"$ref": "#/$defs/safeId"},
         "mutation_type": {"$ref": "#/$defs/safeId"},
         "applied_state_version": {"type": "integer", "minimum": 1}

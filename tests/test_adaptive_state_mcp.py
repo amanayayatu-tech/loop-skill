@@ -245,6 +245,9 @@ class AdaptiveStateMcpTests(unittest.TestCase):
         self.assertEqual(gateway["name"], mcp.MCP_STATE_GATEWAY_TOOL_NAME)
         self.assertEqual(gateway["inputSchema"]["required"], ["root", "request"])
         self.assertIn("canonical writer", gateway["description"])
+        request_id_schema = gateway["inputSchema"]["properties"]["request"]["properties"]["request_id"]
+        self.assertEqual(request_id_schema["maxLength"], 128)
+        self.assertEqual(request_id_schema["pattern"], "^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
     def test_state_gateway_requires_host_turn_metadata_before_state_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -297,21 +300,24 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "jsonrpc": "2.0", "id": "init", "method": "initialize",
                 "params": {"protocolVersion": "2025-06-18"},
             })
-            initialized = call_state_gateway(
-                server,
-                root,
-                {
-                    "request_id": "gateway-initialize",
-                    "operation": "INITIALIZE",
-                    "occurred_at": T1,  # noqa: F405
-                    "parameters": {
-                        "initialize_mutation": initialize_mutation,
-                        "controller_pack_source_path": str(source),
-                    },
+            request = {
+                "request_id": "gateway-initialize",
+                "operation": "INITIALIZE",
+                "occurred_at": T1,  # noqa: F405
+                "parameters": {
+                    "initialize_mutation": initialize_mutation,
+                    "controller_pack_source_path": str(source),
                 },
-            )
+            }
+            initialized = call_state_gateway(server, root, request)
             self.assertTrue(initialized["ok"], initialized)
             self.assertEqual(initialized["operation_status"], "GATEWAY_LOOP_INITIALIZED")
+            replayed = call_state_gateway(server, root, request)
+            self.assertTrue(replayed["ok"], replayed)
+            self.assertEqual(replayed["status"], "STATE_WRITE_ALREADY_APPLIED")
+            self.assertEqual(
+                replayed["state_version_after"], initialized["state_version_after"]
+            )
             current = AdaptiveStateRuntime(root).read_state()  # noqa: F405
             self.assertEqual(current["schema_version"], 3)
             self.assertEqual(current["state_gateway_mode"], "MCP_CANONICAL_WRITER")
@@ -417,6 +423,97 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             self.assertFalse(duplicate["ok"], duplicate)
             self.assertEqual(duplicate["status"], "BUSINESS_HEARTBEAT_ALREADY_REGISTERED")
+
+    def test_state_gateway_bounds_direct_heartbeat_evidence_basename(self) -> None:
+        """A legal long App automation ID cannot overflow report-path limits."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(state_gateway=True)
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            automation_id = "automation-" + "a" * 117
+            request = {
+                "request_id": "request-" + "r" * 120,
+                "operation": "REGISTER_HEARTBEAT",
+                "occurred_at": T2,  # noqa: F405
+                "parameters": {
+                    "automation_id": automation_id,
+                    "automation_name": "long-id heartbeat",
+                    "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                    "prompt_digest": digest("heartbeat-prompt"),  # noqa: F405
+                    "status": "ACTIVE",
+                    "observed_at": T2,  # noqa: F405
+                },
+            }
+            registered = call_state_gateway(
+                server,
+                root,
+                request,
+            )
+            self.assertTrue(registered["ok"], registered)
+            self.assertTrue(registered["state_request_id"].startswith("gateway-request-"))
+            self.assertLessEqual(len(registered["state_request_id"]), 128)
+            replayed = call_state_gateway(server, root, request)
+            self.assertTrue(replayed["ok"], replayed)
+            self.assertEqual(replayed["status"], "STATE_WRITE_ALREADY_APPLIED")
+            self.assertEqual(
+                replayed["state_version_after"], registered["state_version_after"]
+            )
+            changed = copy.deepcopy(request)
+            changed["parameters"]["status"] = "PAUSED"
+            rejected_reuse = call_state_gateway(server, root, changed)
+            self.assertFalse(rejected_reuse["ok"], rejected_reuse)
+            self.assertEqual(rejected_reuse["status"], "STATE_REQUEST_ID_CONFLICT")
+            current = state.state()
+            artifact_path = current["heartbeat_live_observation"]["observation_path"]
+            self.assertEqual(Path(artifact_path).parent.as_posix(), ".codex-loop/reports")
+            self.assertLessEqual(len(Path(artifact_path).name), 128)
+            self.assertEqual(
+                current["heartbeat_live_observation"]["automation_id"], automation_id
+            )
+            self.assertIn(artifact_path, current["artifact_ledger"])
+            self.assertEqual(len(current["automation_outbox"]), 1)
+            outbox_id = next(iter(current["automation_outbox"]))
+            self.assertLessEqual(len(outbox_id), 128)
+            self.assertNotIn(automation_id, outbox_id)
+
+    def test_state_gateway_rejects_route_ids_that_overflow_derived_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(state_gateway=True)
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            before = copy.deepcopy(state.state())
+            rejected = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-too-long-route",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "route_id": "r" * 49,
+                        "goal_id": "g1",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-1",
+                        "observed_at": T2,  # noqa: F405
+                    },
+                },
+            )
+            self.assertFalse(rejected["ok"], rejected)
+            self.assertEqual(rejected["status"], "STATE_GATEWAY_ROUTE_ID_TOO_LONG")
+            self.assertEqual(state.state(), before)
 
     def test_state_gateway_accepts_optional_stronger_app_action_receipts(self) -> None:
         """Future App attestations remain usable without becoming a hard dependency."""
@@ -1397,22 +1494,28 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             source_digest = "sha256:" + hashlib.sha256(
                 harness.state.runtime._render_state(harness.state.state())  # noqa: SLF001
             ).hexdigest()
-            migrated = call_state_gateway(
-                harness.server,
-                root,
-                {
-                    "request_id": "gateway-migrate-v2-v3",
-                    "operation": "MIGRATE_V2_TO_V3",
-                    "occurred_at": T2,  # noqa: F405
-                    "parameters": {"source_state_digest": source_digest},
-                },
-            )
+            migration_request = {
+                "request_id": "gateway-migrate-v2-v3",
+                "operation": "MIGRATE_V2_TO_V3",
+                "occurred_at": T2,  # noqa: F405
+                "parameters": {"source_state_digest": source_digest},
+            }
+            migrated = call_state_gateway(harness.server, root, migration_request)
             self.assertTrue(migrated["ok"], migrated)
             self.assertEqual(migrated["operation_status"], "SCHEMA_V3_MIGRATED")
             state = harness.state.state()
             self.assertEqual(state["schema_version"], 3)
             self.assertEqual(state["thread_registry"]["state-writer-1"]["status"], "ARCHIVED")
             self.assertEqual(state["run_control"]["status"], "PAUSED_AT_SAFE_POINT")
+
+            # The public Gateway request is idempotent even though its
+            # runtime precondition is now a newer schema/state version.
+            before_gateway_replay = persisted_snapshot(root)  # noqa: F405
+            replayed = call_state_gateway(harness.server, root, migration_request)
+            self.assertTrue(replayed["ok"], replayed)
+            self.assertEqual(replayed["status"], "STATE_WRITE_ALREADY_APPLIED")
+            self.assertEqual(replayed["operation_status"], "IDEMPOTENT_REPLAY")
+            self.assertEqual(before_gateway_replay, persisted_snapshot(root))  # noqa: F405
 
             # Even an apparently idempotent raw replay would append a v3
             # journal/event and bump state_version.  Only the attested MCP
@@ -3018,6 +3121,65 @@ class McpBridgeBoundaryTests(unittest.TestCase):
                 result["error"]["code"], "STATE_GATEWAY_PREDECESSOR_NOT_FINALIZED"
             )
             self.assertFalse((root / ".codex-loop").exists())
+
+    def test_successor_bootstrap_replay_reaches_runtime_before_root_guard(self) -> None:
+        """A registered successor bootstrap replay is not rejected as nonempty."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "CONTROLLER_PACK.md"
+            source_content = "# successor replay fixture\n"
+            source.write_text(source_content, encoding="utf-8")
+            source_digest = digest(source_content)  # noqa: F405
+            template = Harness(root / "template")  # noqa: F405
+            _, template_request = template.initialize(state_gateway=True)
+            initialize_mutation = copy.deepcopy(template_request["mutation"])
+            initialize_mutation["controller_pack_digest"] = source_digest
+            request = {
+                "request_id": "gateway-successor-replay",
+                "operation": "INITIALIZE_SUCCESSOR",
+                "occurred_at": T1,  # noqa: F405
+                "parameters": {
+                    "predecessor_root": str(root / "predecessor"),
+                    "predecessor_finalization_digest": digest("predecessor-final"),  # noqa: F405
+                    "predecessor_root_digest": digest("predecessor-root"),  # noqa: F405
+                    "successor_context": {},
+                    "initialize_mutation": initialize_mutation,
+                    "controller_pack_source_path": str(source),
+                },
+            }
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle({
+                "jsonrpc": "2.0", "id": "init", "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            })
+            request_locator = server._gateway_request_locator(request["request_id"])
+            public_digest = server._gateway_public_request_digest(request)
+            runtime = mock.Mock()
+            runtime.read_state.return_value = {
+                "state_version": 1,
+                "controller_pack_identity": {"digest": source_digest},
+                "request_ledger": {
+                    f"gateway-request-{request_locator}": {
+                        "gateway_public_request_digest": public_digest,
+                    }
+                },
+            }
+            runtime.apply.return_value = {
+                "ok": True,
+                "status": "STATE_WRITE_ALREADY_APPLIED",
+                "state_version_after": 1,
+                "external_actions": [],
+                "external_action_count": 0,
+            }
+            with mock.patch.object(mcp, "AdaptiveStateRuntime", return_value=runtime):
+                replayed = call_state_gateway(server, root, request)
+            self.assertTrue(replayed["ok"], replayed)
+            self.assertEqual(replayed["status"], "STATE_WRITE_ALREADY_APPLIED")
+            runtime.apply.assert_called_once()
+            applied = runtime.apply.call_args.args[0]
+            self.assertEqual(applied["state_request_id"], f"gateway-request-{request_locator}")
+            self.assertEqual(applied["gateway_public_request_digest"], public_digest)
 
     def test_paused_automation_artifacts_require_matching_heartbeat_identity(self) -> None:
         server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())

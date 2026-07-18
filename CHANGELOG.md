@@ -5,6 +5,26 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Bounded direct `REGISTER_HEARTBEAT` derived identifiers. Legal real App
+  automation identifiers can be up to the canonical identifier limit, so both
+  the evidence locator and its internal automation-outbox key now use
+  deterministic hashes rather than concatenating that identifier with other
+  values. The complete identity remains in the report content and is still
+  bound by its full digest.
+- Declared and enforced a 48-character schema-v3 Gateway route-ID bound before
+  state mutation. This is the portable limit for its derived report, staging,
+  lease, freshness, and verification identifiers; oversized route IDs reject
+  fail-closed with no canonical side effects.
+- Mapped Gateway public request IDs to deterministic bounded transaction and
+  event locators, so a valid request ID cannot exceed the portable filesystem
+  basename limit when persisted as a journal receipt.
+- Restored Gateway public-request replay: its separately persisted public
+  request digest makes a lost response replay return the original applied
+  transaction despite a later canonical state version, while reusing the same
+  request ID with changed public parameters still rejects as an ID conflict.
+
 ## [3.3.0-candidate] - 2026-07-17
 
 ### Added
