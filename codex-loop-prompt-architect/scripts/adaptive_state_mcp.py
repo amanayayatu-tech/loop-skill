@@ -54,6 +54,7 @@ MCP_APP_ACTION_RECEIPT_META_KEY = "x-codex-app-action-receipt-v1"
 MCP_INPUT_MAX_BYTES = 4_000_000
 MCP_PARTIAL_FRAME_TIMEOUT_SECONDS = 30.0
 MCP_READ_CHUNK_BYTES = 64 * 1024
+MCP_STATE_GATEWAY_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 NATIVE_GOAL_GENERATION_RECOVERY_SCOPES = {
     "NATIVE_GOAL_GENERATION_PREPARE",
     "NATIVE_GOAL_GENERATION_COMMIT",
@@ -790,6 +791,45 @@ class AdaptiveStateMcpServer:
     def _gateway_error(code: str, path: str = "/") -> None:
         raise McpBridgeError(code, path)
 
+    @staticmethod
+    def _gateway_heartbeat_locator(*components: str) -> str:
+        """Return a bounded deterministic locator for canonical heartbeat data."""
+
+        return hashlib.sha256("\x00".join(components).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _gateway_request_locator(request_id: str) -> str:
+        """Map a public request ID to portable canonical journal identifiers."""
+
+        return hashlib.sha256(request_id.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _gateway_public_request_digest(public: dict[str, Any]) -> str:
+        """Bind a public request independently of its optimistic state version."""
+
+        content = json.dumps(
+            public, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        )
+        return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _gateway_heartbeat_evidence_path(
+        cls, observation: dict[str, Any], digest: str
+    ) -> str:
+        """Return a bounded, deterministic report name for a heartbeat observation.
+
+        Automation identifiers are valid state identifiers up to 128 bytes, so
+        they cannot be interpolated together with a full SHA-256 digest into a
+        report basename.  The report content still carries the full identity
+        and its content digest remains the canonical binding; this filename is
+        only a bounded deterministic locator.
+        """
+
+        locator = cls._gateway_heartbeat_locator(
+            str(observation["automation_id"]), digest
+        )
+        return f".codex-loop/reports/gateway-heartbeat-{locator}.json"
+
     def _gateway_paused_automation_artifacts(
         self,
         state: dict[str, Any],
@@ -877,7 +917,10 @@ class AdaptiveStateMcpServer:
             operation = public["operation"]
             occurred_at = public["occurred_at"]
             payload = public["parameters"]
-            if not isinstance(request_id, str) or not request_id:
+            if (
+                not isinstance(request_id, str)
+                or MCP_STATE_GATEWAY_REQUEST_ID_RE.fullmatch(request_id) is None
+            ):
                 self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/request_id")
             if not isinstance(occurred_at, str) or not occurred_at:
                 self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/occurred_at")
@@ -885,6 +928,19 @@ class AdaptiveStateMcpServer:
                 self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
             runtime = AdaptiveStateRuntime(root)
             state = runtime.read_state()
+            request_locator = self._gateway_request_locator(request_id)
+            state_request_id = f"gateway-request-{request_locator}"
+            gateway_public_request_digest = self._gateway_public_request_digest(public)
+            existing_gateway_request = (
+                state.get("request_ledger", {}).get(state_request_id)
+                if state is not None
+                else None
+            )
+            bootstrap_replay = bool(
+                isinstance(existing_gateway_request, dict)
+                and existing_gateway_request.get("gateway_public_request_digest")
+                == gateway_public_request_digest
+            )
             if operation == "MIGRATE_V2_TO_V3":
                 if set(payload) != {"source_state_digest"}:
                     self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
@@ -895,7 +951,10 @@ class AdaptiveStateMcpServer:
                 artifacts: list[dict[str, Any]] = []
             elif operation == "INITIALIZE":
                 if state is not None:
-                    self._gateway_error("STATE_GATEWAY_ROOT_NOT_EMPTY", "/params/arguments/root")
+                    if existing_gateway_request is not None and not bootstrap_replay:
+                        self._gateway_error("STATE_REQUEST_ID_CONFLICT", "/params/arguments/request/request_id")
+                    if not bootstrap_replay:
+                        self._gateway_error("STATE_GATEWAY_ROOT_NOT_EMPTY", "/params/arguments/root")
                 required = {"initialize_mutation", "controller_pack_source_path"}
                 if set(payload) != required or not isinstance(payload["initialize_mutation"], dict):
                     self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
@@ -924,7 +983,10 @@ class AdaptiveStateMcpServer:
                 }
             elif operation == "INITIALIZE_SUCCESSOR":
                 if state is not None:
-                    self._gateway_error("STATE_GATEWAY_SUCCESSOR_ROOT_NOT_EMPTY", "/params/arguments/root")
+                    if existing_gateway_request is not None and not bootstrap_replay:
+                        self._gateway_error("STATE_REQUEST_ID_CONFLICT", "/params/arguments/request/request_id")
+                    if not bootstrap_replay:
+                        self._gateway_error("STATE_GATEWAY_SUCCESSOR_ROOT_NOT_EMPTY", "/params/arguments/root")
                 required = {
                     "predecessor_root", "predecessor_finalization_digest",
                     "predecessor_root_digest", "successor_context",
@@ -1039,9 +1101,8 @@ class AdaptiveStateMcpServer:
                             self._gateway_error("STEERING_ACTOR_INVALID", "/params/arguments/request")
                     content = json.dumps(observation, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
                     digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
-                    evidence_path = (
-                        ".codex-loop/reports/gateway-heartbeat-"
-                        f"{str(observation['automation_id'])}-{digest.removeprefix('sha256:')}.json"
+                    evidence_path = self._gateway_heartbeat_evidence_path(
+                        observation, digest
                     )
                     artifacts = [{
                         "path": evidence_path, "content": content,
@@ -1390,8 +1451,9 @@ class AdaptiveStateMcpServer:
             expected_version = 0 if state is None else state["state_version"]
             runtime_request = {
                 "controller_approved": True,
-                "state_request_id": request_id,
-                "event_id": f"gateway-event-{request_id}",
+                "state_request_id": state_request_id,
+                "event_id": f"gateway-event-{request_locator}",
+                "gateway_public_request_digest": gateway_public_request_digest,
                 "expected_state_version": expected_version,
                 "actor": "MCP_STATE_GATEWAY",
                 "thread_id": metadata.thread_id,
@@ -1584,7 +1646,12 @@ class AdaptiveStateMcpServer:
                                         "additionalProperties": False,
                                         "required": ["request_id", "operation", "occurred_at", "parameters"],
                                         "properties": {
-                                            "request_id": {"type": "string"},
+                                            "request_id": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 128,
+                                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                                            },
                                             "operation": {
                                                 "enum": [
                                                     "INITIALIZE", "MIGRATE_V2_TO_V3", "PREPARE_ROUTE",

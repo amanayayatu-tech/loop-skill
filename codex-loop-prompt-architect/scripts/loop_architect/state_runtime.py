@@ -49,6 +49,7 @@ LEGACY_STATUS_RENDER_CONTRACT = "status-v1"
 STATE_BEGIN = "STATE_JSON_BEGIN"
 STATE_END = "STATE_JSON_END"
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+GATEWAY_ROUTE_ID_MAX_LENGTH = 48
 DIGEST_RE = re.compile(r"sha256:[a-f0-9]{64}\Z")
 SHA256_HEX_RE = re.compile(r"[a-f0-9]{64}\Z")
 INTENDED_TRANSITION = "ROUTE_ONE_TRANSITION"
@@ -3227,6 +3228,19 @@ class AdaptiveStateRuntime:
             request["evidence_paths"], "/evidence_paths"
         )
         mutation = request["mutation"]
+        gateway_migration = (
+            mutation.get("type") == "MIGRATE_V2_TO_V3"
+            and request.get("actor") == "MCP_STATE_GATEWAY"
+        )
+        if (
+            "gateway_public_request_digest" in request
+            and mutation.get("type") != "STATE_GATEWAY"
+            and not gateway_migration
+        ):
+            raise RuntimeRejection(
+                "GATEWAY_PUBLIC_REQUEST_DIGEST_INVALID",
+                "/gateway_public_request_digest",
+            )
         for key in (
             "send_evidence_paths",
             "ack_evidence_paths",
@@ -6692,7 +6706,7 @@ class AdaptiveStateRuntime:
             "dashboard_projection",
             "dashboard_projection_digest",
         }
-        optional = {"applied_state_digest"}
+        optional = {"applied_state_digest", "gateway_public_request_digest"}
         if not isinstance(journal, dict) or not required.issubset(journal) or not set(journal).issubset(required | optional):
             raise RuntimeRejection("JOURNAL_INVALID", f"/transactions/{path.name}")
         if journal["journal_version"] != 2 or journal["status"] not in {"PREPARED", "APPLIED"}:
@@ -6717,6 +6731,18 @@ class AdaptiveStateRuntime:
         for key in ("request_digest", "mutation_digest", "after_state_digest"):
             if not isinstance(journal[key], str) or DIGEST_RE.fullmatch(journal[key]) is None:
                 raise RuntimeRejection("JOURNAL_INVALID", f"/transactions/{path.name}/{key}")
+        if (
+            "gateway_public_request_digest" in journal
+            and (
+                not isinstance(journal["gateway_public_request_digest"], str)
+                or DIGEST_RE.fullmatch(journal["gateway_public_request_digest"])
+                is None
+            )
+        ):
+            raise RuntimeRejection(
+                "JOURNAL_INVALID",
+                f"/transactions/{path.name}/gateway_public_request_digest",
+            )
         before_digest = journal["before_state_digest"]
         if before_digest is not None and (
             not isinstance(before_digest, str) or DIGEST_RE.fullmatch(before_digest) is None
@@ -6865,7 +6891,7 @@ class AdaptiveStateRuntime:
             _bytes_digest(self._render_state(before_state)) if before_state is not None else None
         )
         dashboard = self._render_dashboard(next_state)
-        return {
+        journal = {
             "journal_version": 2,
             "transaction_id": request["state_request_id"],
             "state_request_id": request["state_request_id"],
@@ -6886,6 +6912,11 @@ class AdaptiveStateRuntime:
             "dashboard_projection": dashboard.decode("utf-8") if dashboard is not None else None,
             "dashboard_projection_digest": _bytes_digest(dashboard) if dashboard is not None else None,
         }
+        if "gateway_public_request_digest" in request:
+            journal["gateway_public_request_digest"] = request[
+                "gateway_public_request_digest"
+            ]
+        return journal
 
     def _build_event(
         self,
@@ -6940,6 +6971,10 @@ class AdaptiveStateRuntime:
             "mutation_type": mutation_type,
             "applied_state_version": after_version,
         }
+        if "gateway_public_request_digest" in request:
+            state["request_ledger"][request_id]["gateway_public_request_digest"] = (
+                request["gateway_public_request_digest"]
+            )
         state["event_ledger"][event_id] = {
             "state_request_id": request_id,
             "request_digest": request_digest,
@@ -6965,14 +7000,31 @@ class AdaptiveStateRuntime:
         event_record = self._event_index_locked().get(event_id)
 
         applied_version = state["state_version"] if state else 0
-        if journal is not None and journal["request_digest"] != request_digest:
+        gateway_public_digest = request.get("gateway_public_request_digest")
+        is_gateway_replay = bool(
+            request.get("mutation", {}).get("type")
+            in {"STATE_GATEWAY", "MIGRATE_V2_TO_V3"}
+            and request.get("actor") == "MCP_STATE_GATEWAY"
+            and isinstance(gateway_public_digest, str)
+            and state_request is not None
+            and state_request.get("gateway_public_request_digest")
+            == gateway_public_digest
+        )
+        if (
+            journal is not None
+            and journal["request_digest"] != request_digest
+            and not is_gateway_replay
+        ):
             raise RuntimeRejection(
                 "STATE_REQUEST_ID_CONFLICT",
                 "/state_request_id",
                 {"state_request_id": request_id},
             )
         if state_request is not None:
-            if state_request["request_digest"] != request_digest:
+            if (
+                state_request["request_digest"] != request_digest
+                and not is_gateway_replay
+            ):
                 raise RuntimeRejection(
                     "STATE_REQUEST_ID_CONFLICT",
                     "/state_request_id",
@@ -6986,8 +7038,14 @@ class AdaptiveStateRuntime:
                 or state_request.get("event_id") != event_id
                 or state_event is None
                 or state_event.get("state_request_id") != request_id
-                or state_event.get("request_digest") != request_digest
+                or state_event.get("request_digest")
+                != state_request["request_digest"]
                 or state_event.get("applied_state_version") != applied_version
+                or (
+                    state_request.get("gateway_public_request_digest") is not None
+                    and journal.get("gateway_public_request_digest")
+                    != state_request["gateway_public_request_digest"]
+                )
                 or event_record != journal["event"]
             ):
                 raise RuntimeRejection(
@@ -7598,6 +7656,20 @@ class AdaptiveStateRuntime:
         if not isinstance(value, str) or SAFE_ID_RE.fullmatch(value) is None:
             raise RuntimeRejection("UNSAFE_ID", path)
         return value
+
+    @classmethod
+    def _gateway_route_id(cls, value: Any, path: str) -> str:
+        """Validate the public route ID against every v3 derived identifier.
+
+        A schema-v3 route ID is reused for report, staging, lease, freshness,
+        and verification identifiers. Its tighter bound keeps each derived
+        artifact basename within the portable 128-character limit.
+        """
+
+        route_id = cls._gateway_safe_id(value, path)
+        if len(route_id) > GATEWAY_ROUTE_ID_MAX_LENGTH:
+            raise RuntimeRejection("STATE_GATEWAY_ROUTE_ID_TOO_LONG", path)
+        return route_id
 
     @staticmethod
     def _gateway_digest(value: Any, path: str) -> str:
@@ -8691,7 +8763,7 @@ class AdaptiveStateRuntime:
             state, request, value, required_status="ACTIVE"
         )
         identity = self._gateway_heartbeat_identity(observation)
-        outbox_id = f"gateway-heartbeat-{identity['automation_id']}"
+        outbox_id = f"gateway-heartbeat-{_digest(identity)[len('sha256:'):]}"
         claim, _ = self._gateway_virtual_lease(
             state,
             route_id=outbox_id,
@@ -8768,7 +8840,7 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "WAITING_TRANSPORT_RECOVERY", "/transport_recovery/status"
             )
-        route_id = self._gateway_safe_id(item["route_id"], "/route_id")
+        route_id = self._gateway_route_id(item["route_id"], "/route_id")
         goal_id = self._gateway_safe_id(item["goal_id"], "/goal_id")
         target_thread_id = self._gateway_safe_id(item["target_thread_id"], "/target_thread_id")
         if item["route_kind"] != "WORKER":
@@ -8996,7 +9068,7 @@ class AdaptiveStateRuntime:
         item = self._gateway_exact_keys(
             value, {"route_id", "send_observation"}, "/mutation/gateway_request"
         )
-        route_id = self._gateway_safe_id(item["route_id"], "/route_id")
+        route_id = self._gateway_route_id(item["route_id"], "/route_id")
         route = state["gateway_route_ledger"].get(route_id)
         record = (
             state[OUTBOX_FIELDS[route["outbox_kind"]]].get(route_id)
@@ -9095,7 +9167,7 @@ class AdaptiveStateRuntime:
             else {"outbox_id", "staged_report", "codec_report_attestation"}
         )
         item = self._gateway_exact_keys(value, expected, "/mutation/gateway_request")
-        outbox_id = self._gateway_safe_id(
+        outbox_id = self._gateway_route_id(
             item["outbox_id"] if recovery else item["route_id"],
             "/outbox_id",
         )
@@ -9268,7 +9340,7 @@ class AdaptiveStateRuntime:
             "/mutation/gateway_request",
         )
         fingerprint = self._gateway_digest(item["fingerprint"], "/fingerprint")
-        outbox_id = self._gateway_safe_id(item["outbox_id"], "/outbox_id")
+        outbox_id = self._gateway_route_id(item["outbox_id"], "/outbox_id")
         if type(item["natural_heartbeat"]) is not bool:
             raise RuntimeRejection("STATE_GATEWAY_TRANSPORT_OBSERVATION_INVALID", "/natural_heartbeat")
         heartbeat_identity = state.get("heartbeat_prompt_identity")
