@@ -1,17 +1,24 @@
 from __future__ import annotations
 
+from loop_architect.human_control import build_failure_fingerprint
 from state_runtime_support import *  # noqa: F403
 
 
 class RepairExhaustionProtocolTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
     def _exhausted_harness(
-        self, root: Path, *, decision_cards_enabled: bool
+        self,
+        root: Path,
+        *,
+        decision_cards_enabled: bool,
+        repair_limit: int = 1,
     ) -> tuple[Harness, dict[str, Any]]:
         harness = Harness(root)
         definitions = {"g1": goal("g1", "m1")}
         milestones = [milestone("m1", "ACTIVE")]
         authorization = authorization_envelope(definitions, milestones)
-        authorization["repair_policy"]["max_repair_attempts_per_goal"] = 1
+        authorization["repair_policy"][
+            "max_repair_attempts_per_goal"
+        ] = repair_limit
         initialized, _ = harness.initialize(
             definitions=definitions,
             milestones=milestones,
@@ -45,7 +52,7 @@ class RepairExhaustionProtocolTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 "worktree_path": ".",
             },
         )
-        for index in (1, 2):
+        for index in range(1, repair_limit + 2):
             claim = harness.acquire()
             outbox_id = f"repair-dispatch-{index}"
             prepared, payload = harness.prepare_outbox(
@@ -71,7 +78,7 @@ class RepairExhaustionProtocolTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 )["ok"]
             )
             result = {
-                "status": "FAIL" if index == 1 else "BLOCKED",
+                "status": "BLOCKED" if index == repair_limit + 1 else "FAIL",
                 "artifact_digest": digest(f"repair-artifact-{index}"),
             }
             report_content = harness.formal_report_content(
@@ -92,7 +99,7 @@ class RepairExhaustionProtocolTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
         exhausted, _ = harness.prepare_outbox(
             exhausted_claim,
             "DISPATCH",
-            "repair-dispatch-3",
+            f"repair-dispatch-{repair_limit + 2}",
             {
                 "goal_id": "g1",
                 "goal_definition_digest": definitions["g1"][
@@ -152,14 +159,18 @@ class RepairExhaustionProtocolTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
         steering_id: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, str]]:
         fingerprint = digest("REPAIR_BUDGET_EXHAUSTED:g1")
+        repair_limit = harness.state()["authorization_envelope"]["repair_policy"][
+            "max_repair_attempts_per_goal"
+        ]
+        completed_attempts = 1 + repair_limit
         report = {
             "blocker_code": "REPAIR_BUDGET_EXHAUSTED",
             "blocker_fingerprint": fingerprint,
             "controller_goal_id": "native-goal-m1",
             "stop_basis": stop_basis,
             "blocked_goal_id": "g1",
-            "completed_attempts": 2,
-            "max_repair_attempts_per_goal": 1,
+            "completed_attempts": completed_attempts,
+            "max_repair_attempts_per_goal": repair_limit,
             "status": "HARD_BLOCK",
         }
         mutation = {
@@ -201,6 +212,55 @@ class RepairExhaustionProtocolTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
         mutation["blocker_report_path"] = artifact["path"]
         mutation["blocker_report_digest"] = artifact["digest"]
         return mutation, artifact
+
+    def test_zero_repair_first_failure_exhausts_and_stops(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _ = self._exhausted_harness(
+                root,
+                decision_cards_enabled=False,
+                repair_limit=0,
+            )
+            fingerprint = build_failure_fingerprint(
+                command="pytest",
+                exit_code=1,
+                output_lines=["FAILED test_zero_repair"],
+                failing_test_ids=["test_zero_repair"],
+                changed_files=["src/x.py"],
+                diff_digest=digest("zero-repair-diff"),
+                strategy_id="zero-repair-strategy",
+                hypothesis_digest=digest("zero-repair-hypothesis"),
+                raw_log_digest=digest("zero-repair-log"),
+            )
+            recorded = harness.apply(
+                {
+                    "type": "RECORD_FAILURE",
+                    "goal_id": "g1",
+                    "fingerprint": fingerprint,
+                }
+            )
+            self.assertEqual(recorded["next_action_code"], "STRATEGY_EXHAUSTED")
+            self.assertEqual(
+                harness.state()["goal_execution_ledger"]["g1"]["status"],
+                "STRATEGY_EXHAUSTED",
+            )
+            mutation, artifact = self._stop_mutation(
+                harness,
+                stop_basis="DETERMINISTIC_REPAIR_BUDGET",
+            )
+            stopped = harness.runtime.apply(
+                harness.make_request(
+                    mutation,
+                    evidence_paths=[artifact["path"]],
+                    artifacts=[artifact],
+                )
+            )
+            self.assertTrue(stopped["ok"], stopped)
+            self.assertEqual(stopped["operation_status"], "STOP_LOOP_APPLIED")
+            self.assertEqual(
+                harness.state()["finalization_outbox"]["blocked_goal_id"],
+                "g1",
+            )
 
     def test_decision_card_is_stable_waits_and_never_dispatches_again(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
