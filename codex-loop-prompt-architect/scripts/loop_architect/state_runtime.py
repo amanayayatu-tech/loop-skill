@@ -2715,6 +2715,12 @@ class AdaptiveStateRuntime:
                 raise RuntimeRejection(
                     "FORMAL_REPORT_EVIDENCE_UNBOUND", f"{item_path}/path"
                 )
+            if not self._is_canonical_control_evidence_path(
+                destination, f"{item_path}/path"
+            ):
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_PATH_INVALID", f"{item_path}/path"
+                )
             media_type = item["media_type"]
             suffix = {
                 "application/json": ".json",
@@ -2847,13 +2853,17 @@ class AdaptiveStateRuntime:
                 "content": content,
             }
 
-        missing = sorted(
-            path
-            for path in report_evidence
-            if path.startswith(".codex-loop/")
-            and path not in state.get("artifact_ledger", {})
-            and path not in pending
-        )
+        missing = []
+        for path in report_evidence:
+            if (
+                self._is_canonical_control_evidence_path(
+                    path, "/report/evidence_artifacts"
+                )
+                and path not in state.get("artifact_ledger", {})
+                and path not in pending
+            ):
+                missing.append(path)
+        missing.sort()
         if missing:
             raise RuntimeRejection(
                 "WORKER_REVIEW_HANDOFF_EVIDENCE_UNARCHIVED",
@@ -3722,6 +3732,35 @@ class AdaptiveStateRuntime:
         except ValueError:
             return False
         return common == parent
+
+    @staticmethod
+    def _is_canonical_control_evidence_path(
+        path: str,
+        json_path: str,
+    ) -> bool:
+        """Classify evidence paths without permitting control-plane aliases."""
+
+        if (
+            not path
+            or "\x00" in path
+            or "\\" in path
+            or path.startswith("/")
+        ):
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID", json_path
+            )
+        parts = path.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID", json_path
+            )
+        if parts[0].casefold() != ".codex-loop":
+            return False
+        if parts[0] != ".codex-loop":
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID", json_path
+            )
+        return True
 
     def _assert_authorized_worktree(
         self,
@@ -16393,7 +16432,10 @@ class AdaptiveStateRuntime:
                     "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID",
                     f"/artifacts/report/evidence_artifacts/{index}",
                 )
-            if evidence_path.startswith(".codex-loop/"):
+            if self._is_canonical_control_evidence_path(
+                evidence_path,
+                f"/artifacts/report/evidence_artifacts/{index}",
+            ):
                 pending = (pending_artifacts or {}).get(evidence_path)
                 evidence_record = (
                     {

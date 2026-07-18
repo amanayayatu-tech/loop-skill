@@ -187,6 +187,40 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             )
             self.assertEqual(before, persisted_snapshot(root))
 
+            for invalid_path in (
+                ".CODEX-LOOP/reports/not-archived-send.json",
+                ".CodEx-LoOp/reports/not-archived-send.json",
+                "/absolute/evidence.json",
+                "../outside/evidence.json",
+                "artifact/./result.md",
+                "artifact/../result.md",
+                "artifact//result.md",
+                "artifact\\result.md",
+            ):
+                with self.subTest(invalid_path=invalid_path):
+                    aliased_report = copy.deepcopy(report)
+                    aliased_report["evidence_artifacts"][0]["path"] = invalid_path
+                    with self.assertRaises(
+                        state_runtime_module.RuntimeRejection
+                    ) as alias_context:
+                        harness.runtime.stage_formal_report(
+                            {
+                                "outbox_id": dispatch_id,
+                                "result": result,
+                                "report_text": json.dumps(
+                                    aliased_report,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ),
+                            }
+                        )
+                    self.assertEqual(
+                        alias_context.exception.code,
+                        "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID",
+                    )
+                    self.assertEqual(before, persisted_snapshot(root))
+
     def test_gateway_freshness_hashes_unstaged_bytes_not_only_porcelain_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
