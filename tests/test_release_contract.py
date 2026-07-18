@@ -102,7 +102,9 @@ class ReleaseContractTests(unittest.TestCase):
                 self.assertTrue((index_path.parent / target).is_file())
 
     def test_ci_has_fast_full_coverage_and_macos_lanes(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text()
+        workflow_dir = ROOT / ".github" / "workflows"
+        workflow = (workflow_dir / "compatibility.yml").read_text()
+        self.assertFalse((workflow_dir / "test.yml").exists())
         for job in (
             "quick:",
             "full:",
@@ -112,18 +114,21 @@ class ReleaseContractTests(unittest.TestCase):
             "install-linux:",
             "macos-install:",
             "tag-identity:",
+            "final-gate:",
         ):
             self.assertIn(job, workflow)
         self.assertIn('ADAPTIVE_FUZZ_CASES: "5000"', workflow)
         self.assertIn('ADAPTIVE_STATE_FUZZ_CASES: "5000"', workflow)
-        self.assertIn("github.event_name == 'pull_request'", workflow)
-        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertIn("pull_request:", workflow)
         self.assertIn("branches:\n      - main", workflow)
         self.assertIn('tags:\n      - "v*"', workflow)
-        self.assertIn("github.event.pull_request.head.ref || github.ref_name", workflow)
+        self.assertIn("github.event.pull_request.number || github.run_id", workflow)
+        self.assertIn("github.event_name == 'pull_request'", workflow)
         self.assertIn("current main Mac's complete", workflow)
         self.assertIn("coverage run --parallel-mode", workflow)
         self.assertIn("coverage combine", workflow)
+        self.assertIn("verify-gate", workflow)
+        self.assertIn("if: always()", workflow)
         self.assertNotIn("full-fuzz:", workflow)
         uses = re.findall(r"^\s*- uses:\s*([^\s#]+)", workflow, re.MULTILINE)
         self.assertGreaterEqual(len(uses), 9)

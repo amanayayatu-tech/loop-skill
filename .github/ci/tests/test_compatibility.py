@@ -48,7 +48,7 @@ def needs_for(plan: dict[str, object]) -> dict[str, object]:
     for job, should_run in expected.items():
         outputs: dict[str, str] = {}
         if job == "coverage" and should_run:
-            outputs = {"total_tests": "615", "coverage_percent": "80.02"}
+            outputs = {"total_tests": "616", "coverage_percent": "80.02"}
         if job == "fuzz-generator" and should_run:
             outputs = {"case_count": "5000", "seed": "20260710"}
         if job == "fuzz-state" and should_run:
@@ -148,15 +148,23 @@ class ManifestAndArtifactTests(unittest.TestCase):
         ).stdout.strip()
 
     def test_canonical_inventory(self) -> None:
-        self.assertEqual(self.inventory["expected_total_tests"], 615)
+        self.assertEqual(self.inventory["expected_total_tests"], 616)
         self.assertEqual(
             {key: value["test_count"] for key, value in self.inventory["shards"].items()},
-            {"1": 175, "2": 168, "3": 134, "4": 138},
+            {"1": 175, "2": 168, "3": 135, "4": 138},
         )
         self.assertEqual(set(self.inventory["dedicated_only"]), {
             "tests.test_adaptive_state_runtime",
             "tests.test_incident_p0_negative",
         })
+        with tempfile.TemporaryDirectory() as temporary:
+            inventory_path = Path(temporary) / "inventory.json"
+            inventory_path.write_text(json.dumps(self.inventory), encoding="utf-8")
+            self.assertEqual(compatibility._inventory_total(inventory_path), 616)
+            malformed = {**self.inventory, "expected_total_tests": 617}
+            inventory_path.write_text(json.dumps(malformed), encoding="utf-8")
+            with self.assertRaises(compatibility.CompatibilityError):
+                compatibility._inventory_total(inventory_path)
 
     def test_artifact_verifier_accepts_exact_unique_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -176,7 +184,7 @@ class ManifestAndArtifactTests(unittest.TestCase):
                 (artifact_dir / f".ci-shard-{shard}.json").write_text(json.dumps(payload), encoding="utf-8")
                 (artifact_dir / f".coverage.shard-{shard}.host.1").touch()
             summary = compatibility.verify_shard_artifacts(REPO, MANIFEST_PATH, artifact_dir, self.sha)
-        self.assertEqual(summary["total_tests"], 615)
+        self.assertEqual(summary["total_tests"], 616)
 
     def test_artifact_verifier_rejects_wrong_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -285,7 +293,7 @@ class CoverageAndGateTests(unittest.TestCase):
         plan = compatibility.classify_entries(
             [entry("README.md")], base_sha="a" * 40, head_sha="b" * 40, merge_sha="c" * 40
         )
-        plan["expected_total_tests"] = 615
+        plan["expected_total_tests"] = 616
         errors, report = compatibility.gate_report(plan, needs_for(plan))
         self.assertEqual(errors, [])
         self.assertIn("PASS", report)
@@ -297,7 +305,7 @@ class CoverageAndGateTests(unittest.TestCase):
             head_sha="b" * 40,
             merge_sha="c" * 40,
         )
-        plan["expected_total_tests"] = 615
+        plan["expected_total_tests"] = 616
         errors, _ = compatibility.gate_report(plan, needs_for(plan))
         self.assertEqual(errors, [])
 
@@ -308,7 +316,7 @@ class CoverageAndGateTests(unittest.TestCase):
             head_sha="b" * 40,
             merge_sha="c" * 40,
         )
-        plan["expected_total_tests"] = 615
+        plan["expected_total_tests"] = 616
         for job, result in (("quick", "failure"), ("full", "cancelled"), ("coverage", "skipped")):
             with self.subTest(job=job, result=result):
                 needs = needs_for(plan)
@@ -320,7 +328,7 @@ class CoverageAndGateTests(unittest.TestCase):
         plan = compatibility.classify_entries(
             [entry("README.md")], base_sha="a" * 40, head_sha="b" * 40, merge_sha="c" * 40
         )
-        plan["expected_total_tests"] = 615
+        plan["expected_total_tests"] = 616
         needs = needs_for(plan)
         needs["fuzz-state"] = {
             "result": "success",
