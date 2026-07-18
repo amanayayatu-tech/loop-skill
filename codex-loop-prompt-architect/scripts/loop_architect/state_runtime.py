@@ -421,6 +421,11 @@ REPORT_STAGE_STAGES = (
     "REPORT_STAGE_REPLACED",
     "REPORT_STAGE_DIR_FSYNCED",
 )
+REPORT_ATTESTATION_STAGES = (
+    "REPORT_ATTESTATION_TEMP_FSYNCED",
+    "REPORT_ATTESTATION_REPLACED",
+    "REPORT_ATTESTATION_DIR_FSYNCED",
+)
 EXTERNAL_RECEIPT_STAGES = (
     "EXTERNAL_RECEIPT_TEMP_FSYNCED",
     "EXTERNAL_RECEIPT_REPLACED",
@@ -466,6 +471,7 @@ CRASH_STAGES = (
     PERSISTENT_STAGES
     + ARTIFACT_STAGES
     + REPORT_STAGE_STAGES
+    + REPORT_ATTESTATION_STAGES
     + EXTERNAL_RECEIPT_STAGES
     + WORKER_ACK_CANDIDATE_STAGES
     + REVIEW_CLOSEOUT_CANDIDATE_STAGES
@@ -1852,6 +1858,7 @@ class AdaptiveStateRuntime:
         self.reports_dir = self.control_dir / "reports"
         self.sources_dir = self.control_dir / "sources"
         self.report_staging_dir = self.control_dir / "report-staging"
+        self.report_attestations_dir = self.control_dir / "report-attestations"
         self.external_receipts_dir = self.control_dir / "external-receipts"
         # Lock the stable project-root inode. A lock file that is deleted during
         # virgin-layout cleanup can split writers across old and new inodes.
@@ -2567,6 +2574,165 @@ class AdaptiveStateRuntime:
                 "external_action_count": 0,
             }
 
+    def stage_codec_report_attestation(self, attestation: Any) -> dict[str, Any]:
+        """Persist the host-bound target identity for one staged formal report.
+
+        The target role's MCP bridge creates this sidecar only after it has
+        authorized and staged the exact report bytes.  A later Controller MCP
+        bridge derives the same path from the SENT outbox and report digest;
+        it never accepts an attestation supplied in its public Gateway input.
+        """
+
+        self._ensure_json_value(attestation, "/")
+        required = {
+            "thread_id", "turn_id", "role_kind", "outbox_id", "report_digest",
+        }
+        if not isinstance(attestation, dict) or set(attestation) != required:
+            raise RuntimeRejection("CODEC_REPORT_ATTESTATION_INVALID", "/")
+        value = copy.deepcopy(attestation)
+        if (
+            not isinstance(value["thread_id"], str)
+            or SAFE_ID_RE.fullmatch(value["thread_id"]) is None
+            or not isinstance(value["turn_id"], str)
+            or SAFE_ID_RE.fullmatch(value["turn_id"]) is None
+            or value["role_kind"] not in {"WORKER", "REVIEWER", "LOCAL_VERIFIER"}
+            or not isinstance(value["outbox_id"], str)
+            or SAFE_ID_RE.fullmatch(value["outbox_id"]) is None
+            or not isinstance(value["report_digest"], str)
+            or DIGEST_RE.fullmatch(value["report_digest"]) is None
+        ):
+            raise RuntimeRejection("CODEC_REPORT_ATTESTATION_INVALID", "/")
+        payload = _canonical_utf8_json(value).encode("utf-8")
+        attestation_digest = _bytes_digest(payload)
+        outbox_id = value["outbox_id"]
+        report_digest = value["report_digest"]
+        with self._exclusive_lock():
+            _, state_validator = self._load_validators()
+            self._ensure_layout()
+            state = self._read_state_locked(state_validator)
+            if state is None:
+                raise RuntimeRejection("STATE_NOT_INITIALIZED", "/outbox_id")
+            matches = [
+                (kind, state[field][outbox_id])
+                for kind, field in (
+                    ("DISPATCH", "dispatch_outbox"),
+                    ("ASSURANCE", "assurance_dispatch_outbox"),
+                    ("LOCAL", "local_verification_outbox"),
+                )
+                if outbox_id in state[field]
+            ]
+            if len(matches) != 1:
+                raise RuntimeRejection("FORMAL_REPORT_SENT_OUTBOX_NOT_FOUND", "/outbox_id")
+            outbox_kind, record = matches[0]
+            expected_role = {
+                "DISPATCH": "WORKER", "ASSURANCE": "REVIEWER", "LOCAL": "LOCAL_VERIFIER",
+            }[outbox_kind]
+            target = state.get("thread_registry", {}).get(value["thread_id"])
+            if (
+                record.get("status") != "SENT"
+                or record.get("target_id") != value["thread_id"]
+                or value["role_kind"] != expected_role
+                or not isinstance(target, dict)
+                or target.get("role_kind") != expected_role
+                or target.get("status") != "REGISTERED"
+            ):
+                raise RuntimeRejection("CODEC_REPORT_ATTESTATION_INVALID", "/")
+            report_source = self.report_staging_dir / (
+                f"{outbox_id}.{report_digest.removeprefix('sha256:')}.json"
+            )
+            self._require_staged_report_file(
+                report_source, report_digest, "/report_digest"
+            )
+            self._ensure_report_attestations_locked()
+            source = self.report_attestations_dir / (
+                f"{outbox_id}.{report_digest.removeprefix('sha256:')}.json"
+            )
+            self._assert_confined(
+                source, self.report_attestations_dir, "/source_path"
+            )
+            if source.exists() or source.is_symlink():
+                existing = self._require_codec_report_attestation_file(
+                    source, attestation_digest, "/source_path"
+                )
+                if existing != payload:
+                    raise RuntimeRejection(
+                        "CODEC_REPORT_ATTESTATION_CONFLICT", "/source_path"
+                    )
+            else:
+                self._atomic_replace_bytes(
+                    source,
+                    payload,
+                    f"report-attestation-{outbox_id}",
+                    "REPORT_ATTESTATION",
+                    final_mode=0o444,
+                )
+                self._require_codec_report_attestation_file(
+                    source, attestation_digest, "/source_path"
+                )
+            return {
+                "ok": True,
+                "status": "CODEC_REPORT_ATTESTED",
+                "outbox_id": outbox_id,
+                "report_digest": report_digest,
+                "attestation": value,
+                "source_path": str(source),
+                "attestation_digest": attestation_digest,
+                "external_actions": [],
+                "external_action_count": 0,
+            }
+
+    def read_codec_report_attestation(
+        self, outbox_id: str, report_digest: str
+    ) -> dict[str, Any]:
+        """Read an immutable target-stage proof derived only from route identity."""
+
+        if (
+            not isinstance(outbox_id, str)
+            or SAFE_ID_RE.fullmatch(outbox_id) is None
+            or not isinstance(report_digest, str)
+            or DIGEST_RE.fullmatch(report_digest) is None
+        ):
+            raise RuntimeRejection("CODEC_REPORT_ATTESTATION_INVALID", "/")
+        source = self.report_attestations_dir / (
+            f"{outbox_id}.{report_digest.removeprefix('sha256:')}.json"
+        )
+        with self._exclusive_lock():
+            self._validate_report_attestations_locked()
+            self._assert_confined(source, self.report_attestations_dir, "/source_path")
+            if not source.is_file() or source.is_symlink():
+                raise RuntimeRejection(
+                    "CODEC_REPORT_ATTESTATION_UNAVAILABLE", "/source_path"
+                )
+            payload = self._require_codec_report_attestation_file(
+                source, None, "/source_path"
+            )
+        try:
+            value = _strict_json_loads(
+                payload.decode("utf-8", errors="strict"),
+                code="CODEC_REPORT_ATTESTATION_INVALID",
+                path="/source_path",
+            )
+        except UnicodeDecodeError as exc:
+            raise RuntimeRejection(
+                "CODEC_REPORT_ATTESTATION_INVALID", "/source_path"
+            ) from exc
+        required = {
+            "thread_id", "turn_id", "role_kind", "outbox_id", "report_digest",
+        }
+        if (
+            not isinstance(value, dict)
+            or set(value) != required
+            or value.get("outbox_id") != outbox_id
+            or value.get("report_digest") != report_digest
+            or not isinstance(value.get("thread_id"), str)
+            or SAFE_ID_RE.fullmatch(value["thread_id"]) is None
+            or not isinstance(value.get("turn_id"), str)
+            or SAFE_ID_RE.fullmatch(value["turn_id"]) is None
+            or value.get("role_kind") not in {"WORKER", "REVIEWER", "LOCAL_VERIFIER"}
+        ):
+            raise RuntimeRejection("CODEC_REPORT_ATTESTATION_INVALID", "/source_path")
+        return value
+
     def stage_external_receipt(self, request: Any) -> dict[str, Any]:
         """Persist an immutable, sanitized before/after receipt for one external call."""
 
@@ -2913,6 +3079,81 @@ class AdaptiveStateRuntime:
         else:
             path.mkdir(mode=0o700, parents=False, exist_ok=False)
             self._fsync_dir(path.parent)
+
+    def _ensure_report_attestations_locked(self) -> None:
+        path = self.report_attestations_dir
+        self._assert_confined(path, self.control_dir, "/report-attestations")
+        self._reject_symlink(path, "/report-attestations")
+        path.mkdir(mode=0o700, parents=False, exist_ok=True)
+        self._validate_report_attestations_locked()
+
+    def _validate_report_attestations_locked(self) -> None:
+        path = self.report_attestations_dir
+        self._assert_confined(path, self.control_dir, "/report-attestations")
+        self._reject_symlink(path, "/report-attestations")
+        try:
+            metadata = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise RuntimeRejection(
+                "CODEC_REPORT_ATTESTATION_UNAVAILABLE", "/report-attestations"
+            ) from exc
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise RuntimeRejection(
+                "CODEC_REPORT_ATTESTATION_UNAVAILABLE", "/report-attestations"
+            )
+
+    def _require_codec_report_attestation_file(
+        self,
+        source: Path,
+        expected_digest: str | None,
+        path: str,
+    ) -> bytes:
+        self._assert_confined(source, self.report_attestations_dir, path)
+        try:
+            descriptor = os.open(
+                source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            )
+        except OSError as exc:
+            raise RuntimeRejection(
+                "CODEC_REPORT_ATTESTATION_UNAVAILABLE", path
+            ) from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o444
+                or metadata.st_size > MAX_ARTIFACT_CONTENT_SIZE
+            ):
+                raise RuntimeRejection("CODEC_REPORT_ATTESTATION_INVALID", path)
+            chunks: list[bytes] = []
+            remaining = MAX_ARTIFACT_CONTENT_SIZE + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+        except OSError as exc:
+            raise RuntimeRejection(
+                "CODEC_REPORT_ATTESTATION_UNAVAILABLE", path
+            ) from exc
+        finally:
+            os.close(descriptor)
+        if (
+            len(payload) > MAX_ARTIFACT_CONTENT_SIZE
+            or (
+                expected_digest is not None
+                and _bytes_digest(payload) != expected_digest
+            )
+        ):
+            raise RuntimeRejection("CODEC_REPORT_ATTESTATION_INVALID", path)
+        return payload
 
     def _validate_report_staging_locked(self) -> None:
         self._validate_report_staging_directory(
@@ -17540,6 +17781,7 @@ __all__ = [
     "PAYLOAD_DIGEST_PLACEHOLDER",
     "PACK_MIGRATION_CANDIDATE_STAGES",
     "PERSISTENT_STAGES",
+    "REPORT_ATTESTATION_STAGES",
     "REPORT_STAGE_STAGES",
     "REVIEW_CLOSEOUT_CANDIDATE_STAGES",
     "STATUS_PROJECTION_STAGES",

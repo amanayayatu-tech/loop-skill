@@ -1041,6 +1041,58 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
                     "replay must consume the deterministic staging temp",
                 )
 
+    def test_codec_report_attestation_recovers_each_atomic_replace_boundary(
+        self,
+    ) -> None:
+        """A target may re-stage after a bridge crash without redispatching work."""
+
+        for stage in state_runtime_module.REPORT_ATTESTATION_STAGES:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness, worker, _, review_dispatch_id, _ = (
+                    self._prepare_sent_code_review(root)
+                )
+                result = {
+                    "status": "REVIEW_PASS",
+                    "artifact_digest": worker["artifact_digest"],
+                }
+                report_text = harness.formal_report_content(
+                    "ASSURANCE", review_dispatch_id, result
+                )
+                staged = harness.runtime.stage_formal_report({
+                    "outbox_id": review_dispatch_id,
+                    "result": result,
+                    "report_text": report_text,
+                })
+                attestation = {
+                    "thread_id": "reviewer-1",
+                    "turn_id": "reviewer-attestation-turn",
+                    "role_kind": "REVIEWER",
+                    "outbox_id": review_dispatch_id,
+                    "report_digest": staged["report_digest"],
+                }
+                crashing = state_runtime_module.AdaptiveStateRuntime(
+                    root, crash_at=stage
+                )
+                with self.assertRaises(state_runtime_module.InjectedCrash):
+                    crashing.stage_codec_report_attestation(attestation)
+
+                recovered = state_runtime_module.AdaptiveStateRuntime(root)
+                persisted = recovered.stage_codec_report_attestation(attestation)
+                self.assertEqual(persisted["status"], "CODEC_REPORT_ATTESTED")
+                self.assertEqual(
+                    recovered.read_codec_report_attestation(
+                        review_dispatch_id, staged["report_digest"]
+                    ),
+                    attestation,
+                )
+                source = Path(persisted["source_path"])
+                self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o444)
+                self.assertFalse(
+                    list(source.parent.glob("*.REPORT_ATTESTATION.tmp")),
+                    "retry must consume the deterministic attestation temp",
+                )
+
     def test_worker_artifact_digest_is_derived_from_after_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

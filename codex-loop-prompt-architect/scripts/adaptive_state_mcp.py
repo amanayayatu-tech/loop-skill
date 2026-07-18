@@ -19,7 +19,7 @@ import select
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -31,6 +31,7 @@ from loop_architect.state_runtime import (
     TRUSTED_HOST_BOUNDARY,
     TRUSTED_TURN_SOURCE,
     AdaptiveStateRuntime,
+    RuntimeRejection,
     TrustedHostAttestation,
     TrustedTurnMetadata,
 )
@@ -475,12 +476,6 @@ class AdaptiveStateMcpServer:
     host_attestation: TrustedHostAttestation | None
     host_error: McpBridgeError | None = None
     initialized: bool = False
-    # This is intentionally process-local.  A report may be staged again by
-    # its attested target after a server restart, but a raw CLI-staged file or
-    # a Controller-authored report can never be ACKed as target work.
-    codec_report_attestations: dict[tuple[str, str, str], dict[str, str]] = field(
-        default_factory=dict
-    )
 
     @classmethod
     def from_current_process(cls) -> "AdaptiveStateMcpServer":
@@ -677,9 +672,10 @@ class AdaptiveStateMcpServer:
         """Bind role-authored codec operations to an App-attested task.
 
         The Controller may route and ACK, but cannot stage a Worker/Reviewer
-        report itself.  The attestation is deliberately in-memory: after a
-        lost MCP server, the same target re-stages the already-produced report
-        and the original outbox is recovered without a product redispatch.
+        report itself.  The target's validated identity is persisted as an
+        immutable runtime sidecar after report staging, so the Controller's
+        separate MCP bridge can recover the original outbox without product
+        redispatch.
         """
 
         state = AdaptiveStateRuntime(root).read_state()
@@ -721,8 +717,25 @@ class AdaptiveStateMcpServer:
                 "outbox_id": request["outbox_id"],
                 "report_digest": report_digest,
             }
-            self.codec_report_attestations[(str(Path(root).resolve()), request["outbox_id"], report_digest)] = attestation
-            response["codec_report_attestation"] = copy.deepcopy(attestation)
+            try:
+                persisted = AdaptiveStateRuntime(root).stage_codec_report_attestation(
+                    attestation
+                )
+            except RuntimeRejection as exc:
+                # Staging has already completed, but its target-bound durable
+                # proof has not.  Return a structured failure so the same role
+                # can safely re-stage the exact report; never leak a bridge
+                # exception or let the Controller ACK without this proof.
+                raise McpBridgeError(exc.code, exc.path, exc.details) from exc
+            response["codec_report_attestation"] = copy.deepcopy(
+                persisted["attestation"]
+            )
+            response["codec_report_attestation_source_path"] = persisted[
+                "source_path"
+            ]
+            response["codec_report_attestation_digest"] = persisted[
+                "attestation_digest"
+            ]
             return
         if operation == "STAGE_EXTERNAL_RECEIPT":
             if (
@@ -1229,8 +1242,20 @@ class AdaptiveStateMcpServer:
                     route = state.get("gateway_route_ledger", {}).get(route_id, {})
                     if not isinstance(route, dict):
                         self._gateway_error("STATE_GATEWAY_ROUTE_NOT_SENT", "/params/arguments/request/parameters")
-                    attestation_key = (str(Path(root).resolve()), route_id, staged["digest"])
-                    report_attestation = self.codec_report_attestations.get(attestation_key)
+                    try:
+                        report_attestation = runtime.read_codec_report_attestation(
+                            route_id, staged["digest"]
+                        )
+                    except RuntimeRejection as exc:
+                        if exc.code == "CODEC_REPORT_ATTESTATION_UNAVAILABLE":
+                            self._gateway_error(
+                                "STATE_GATEWAY_REPORT_TARGET_ATTESTATION_MISSING",
+                                "/params/arguments/request/parameters/staged_report",
+                            )
+                        self._gateway_error(
+                            "STATE_GATEWAY_REPORT_TARGET_ATTESTATION_INVALID",
+                            "/params/arguments/request/parameters/staged_report",
+                        )
                     expected_role = {
                         "DISPATCH": "WORKER", "ASSURANCE": "REVIEWER", "LOCAL": "LOCAL_VERIFIER",
                     }.get(route.get("outbox_kind"))

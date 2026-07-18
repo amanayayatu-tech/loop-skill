@@ -144,7 +144,7 @@ Controller (read-only)
 
 Gateway 从 canonical state 原子取得 lease、仓库快照、freshness、validation matrix、review handoff、当前 artifact 与 outbox；Controller 不复制这些对象。PASS 投影同时要求同一 Goal 的**当前 artifact + 当前 Worker dispatch + PASS 正式报告**。`BLOCKED`、旧 artifact 或旧 dispatch 不能越级成为 PASS。
 
-Worker PASS 后固定经过 Code Review、必要的 Local Verification、Roadmap Audit。非最终的 audit PASS 只能由 `ADVANCE_ROADMAP` 在既有 canonical registry 内推进；最终候选还要经过 Final Audit、`PREPARE_FINALIZATION`、一次真实 `automation_update` pause 与 PAUSED readback、`ACK_FINALIZATION`，才到达 `FINALIZATION_ACKED`。schema v3 禁用 native Goal adapter，记录会明确写出本地 `GATEWAY_NO_NATIVE_GOAL` sentinel；它不是外部 Goal 工具 receipt。Gateway 不会自行制造 heartbeat `PAUSED` 证据，也不接受不匹配当前 heartbeat 的 Controller JSON。报告已 staged 但 stdout 或任务索引丢失时，用 `REPORT_RECOVERY` ACK 原 outbox，不创建第二个“补报告”的产品派发；该 report 必须由目标 Worker/Reviewer/Verifier 的 MCP-attested 调用重新 stage。
+Worker PASS 后固定经过 Code Review、必要的 Local Verification、Roadmap Audit。非最终的 audit PASS 只能由 `ADVANCE_ROADMAP` 在既有 canonical registry 内推进；最终候选还要经过 Final Audit、`PREPARE_FINALIZATION`、一次真实 `automation_update` pause 与 PAUSED readback、`ACK_FINALIZATION`，才到达 `FINALIZATION_ACKED`。schema v3 禁用 native Goal adapter，记录会明确写出本地 `GATEWAY_NO_NATIVE_GOAL` sentinel；它不是外部 Goal 工具 receipt。Gateway 不会自行制造 heartbeat `PAUSED` 证据，也不接受不匹配当前 heartbeat 的 Controller JSON。目标 Worker/Reviewer/Verifier 每次 MCP-attested stage 成功后，runtime 会按 SENT outbox 与 report digest 写入只读 target-stage sidecar；Controller 只可派生读取并验证该证明，不能从参数转交或伪造。报告已 staged 但 stdout 或任务索引丢失时，用 `REPORT_RECOVERY` ACK 原 outbox，不创建第二个“补报告”的产品派发；同一目标角色重新 stage 即可恢复跨 bridge 的证明。
 
 schema v1/v2 与 `route_state_mutation` / State-Writer 只保留兼容读取和显式 `MIGRATE_V2_TO_V3`。迁移只能在 PAUSED、无 lease、无活跃 outbox 的安全点进行。终态 predecessor 永久保留；续跑只能在新 root 使用 `INITIALIZE_SUCCESSOR`。
 

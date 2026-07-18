@@ -197,8 +197,8 @@ class ReleaseContractTests(unittest.TestCase):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                 and node.name.startswith("test_")
             )
-        self.assertEqual(len(names), 121)
-        self.assertEqual(len(set(names)), 121)
+        self.assertEqual(len(names), 122)
+        self.assertEqual(len(set(names)), 122)
         self.assertTrue((ROOT / "tests" / "state_runtime_support.py").is_file())
 
 

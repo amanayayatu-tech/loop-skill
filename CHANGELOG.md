@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The project follows
 
 ### Fixed
 
+- Made schema-v3 target-report attestation durable across independent Codex
+  App MCP bridge processes. After an attested Worker, Reviewer, or Local
+  Verifier stages exact report bytes, the runtime now writes an immutable,
+  identity-bound sidecar derived from the SENT outbox and report digest. A
+  Controller Gateway derives and validates that sidecar itself for ACK or
+  REPORT_RECOVERY; it never accepts a Controller-supplied attestation.
 - Bounded direct `REGISTER_HEARTBEAT` derived identifiers. Legal real App
   automation identifiers can be up to the canonical identifier limit, so both
   the evidence locator and its internal automation-outbox key now use
