@@ -128,7 +128,7 @@ python3 -m pip install -r requirements-test.txt
 
 输出详细度 `compact` / `full` / `minimal_patch` 与协作模式 `standard` / `adaptive` 是两条独立轴，不要混为一谈。
 
-## Adaptive v3.3.0：谁写状态、谁推进路线
+## Adaptive v3.3.1：谁写状态、谁推进路线
 
 新生成的 Adaptive Pack 默认使用 schema v3。它不再创建会话式 State-Writer 任务；已安装的 MCP `state_gateway({root, request})` 是唯一 canonical writer。Controller 仍然只读，Worker 只做产品工作，Reviewer/Local Verifier 只提交证据，任何外层 Supervisor 都不属于产品角色。
 
@@ -141,6 +141,14 @@ Controller (read-only)
   -> App send once -> RECORD_ROUTE_SENT
   -> role-owned STAGE_REPORT -> ACK_ROUTE_RESULT
 ```
+
+Worker 的正式 PASS 若引用本轮验证文件，会在同一次 target-owned
+`STAGE_REPORT` 中传入这些文件的精确路径、SHA-256 与 media type。runtime
+只从已登记 Worker 的 worktree 读取字节，先写入不可变 staging；Gateway
+随后把这些字节与正式报告原子归档到原 outbox。证据缺失、错 digest、错
+线程、未被报告引用或陈旧 artifact 都会零副作用拒绝。Controller 不复制
+测试输出，也不能用 send receipt 代替验证证据。每份报告最多引入 15 个
+验证文件；任何大小写形式的 `.codex-loop/**` 控制面来源都被拒绝。
 
 Gateway 从 canonical state 原子取得 lease、仓库快照、freshness、validation matrix、review handoff、当前 artifact 与 outbox；Controller 不复制这些对象。PASS 投影同时要求同一 Goal 的**当前 artifact + 当前 Worker dispatch + PASS 正式报告**。`BLOCKED`、旧 artifact 或旧 dispatch 不能越级成为 PASS。
 

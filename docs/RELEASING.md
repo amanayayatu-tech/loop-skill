@@ -56,6 +56,11 @@ following checks are additional, not substitutes:
    sidecar with no canonical side effect. It must also prove that a staged
    report with lost stdout/index uses `REPORT_RECOVERY` on the original outbox
    without another product dispatch.
+   For v3.3.1+, the target stage also supplies at least one real validation file
+   from its registered worktree. A separate Controller bridge must archive the
+   immutable staged bytes with the report on that same outbox; missing,
+   wrong-digest, wrong-thread, unreferenced, and crash-boundary replays must be
+   zero-effect or idempotent. Send evidence cannot be reused as validation.
    The Gateway obtains the exact materialized `payload_digest` from its prepared
    outbox, binds it with the returned target id, and must reject a deliberately
    wrong target without moving the PREPARED outbox to `SENT`. If an optional

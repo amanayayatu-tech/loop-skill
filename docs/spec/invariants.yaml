@@ -272,6 +272,23 @@ invariants:
     adr: [docs/adr/0010-mcp-state-gateway.md]
     introduced_version: 3.3.0
 
+  - id: INV-TARGET-VALIDATION-EVIDENCE-001
+    title: Target-owned validation bytes archive with the original report
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [schema-v3 Worker PASS, runtime report staging, Gateway ACK and report recovery]
+    rationale: Requiring validation evidence to pre-exist in the artifact ledger before the first Worker ACK creates an impossible ordering cycle, while Controller-authored evidence would break role ownership.
+    normative_statement: A registered target role may stage at most 15 exact report-referenced validation files only from its authorized worktree and never from any case-insensitive alias of a .codex-loop subtree. Runtime size-checks before bounded reading, binds destination path source path digest media type current outbox target thread current artifact and report, persists immutable staging, and ACK_ROUTE_RESULT or REPORT_RECOVERY archives the same bytes atomically with the report on the original outbox. Missing foreign stale symlinked wrong-digest unreferenced oversized over-count or Controller-substituted evidence has zero canonical side effects, and send evidence is never validation evidence.
+    non_goals: [allowing Controller-authored validation output, creating a report-only product dispatch, weakening current artifact dispatch report binding]
+    allowed_evolution: [add bounded evidence media types or runtime-owned compression while retaining target ownership exact-byte binding and atomic original-outbox archive]
+    authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_mcp.py, codex-loop-prompt-architect/scripts/loop_architect/state_runtime.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
+    test_surfaces: [tests/test_adaptive_state_mcp.py, tests/test_state_runtime_reports.py]
+    evidence_surfaces: [README.md, README.en.md, docs/RELEASING.md]
+    adr: [docs/adr/0009-typed-mcp-runtime-codec.md, docs/adr/0010-mcp-state-gateway.md]
+    introduced_version: 3.3.1
+
   - id: INV-CAPTURED-GIT-DIFF-001
     title: Raw Git patch bytes stay runtime-owned through Worker PASS evidence
     level: CORE_INVARIANT

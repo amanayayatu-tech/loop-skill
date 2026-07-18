@@ -5,7 +5,23 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.1] - 2026-07-18
+
 ### Fixed
+
+- Closed the first-Worker-report validation-evidence cycle exposed by the
+  life-blueprint G06 long run. A target-owned `STAGE_REPORT` may now capture
+  exact UTF-8 validation files from the registered target worktree into
+  immutable runtime staging. `ACK_ROUTE_RESULT` or `REPORT_RECOVERY` archives
+  those same bytes atomically with the formal report on the original outbox.
+- Validation evidence is bound to the report path, digest, media type, current
+  dispatch, current artifact and target-role MCP attestation. Missing, foreign,
+  stale, symlinked, wrong-digest or unreferenced evidence rejects with no
+  canonical side effect; the Controller neither authors nor transports the
+  evidence content. Staging is capped at 15 evidence files, size-checked before
+  bounded reading, and rejects case-insensitive `.codex-loop/**` aliases.
+- Added independent-process Worker-stage to Controller-ACK coverage and crash
+  recovery at every immutable evidence-staging write boundary.
 
 - Made schema-v3 target-report attestation durable across independent Codex
   App MCP bridge processes. After an attested Worker, Reviewer, or Local
@@ -383,7 +399,9 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.8...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.1...HEAD
+[3.3.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.1
+[3.3.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.0
 [3.3.0-candidate]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.8...HEAD
 [3.2.8]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.8
 [3.2.7]: https://github.com/amanayayatu-tech/loop-skill/pull/11

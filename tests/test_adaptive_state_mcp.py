@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
 import os
@@ -15,6 +16,7 @@ from unittest import mock
 from state_runtime_support import *  # noqa: F403
 
 import adaptive_state_mcp as mcp  # noqa: E402
+from loop_architect import state_runtime as state_runtime_module  # noqa: E402
 
 
 _ISOLATED_MCP_BRIDGE = """
@@ -606,7 +608,17 @@ class AdaptiveStateMcpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state = Harness(root)  # noqa: F405
+            definition = goal("g1", "m1")  # noqa: F405
+            definition["validation_matrix"] = complete_validation_matrix(  # noqa: F405
+                required_dimensions=(
+                    "functional", "regression", "static_quality", "change_impact",
+                )
+            )
+            definition["payload_template_digest"] = goal_definition_digest(  # noqa: F405
+                definition
+            )
             initialized, _ = state.initialize(
+                definitions={"g1": definition},
                 state_gateway=True,
                 bootstrap_threads=[
                     {
@@ -1147,6 +1159,308 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "ACKED",
             )
             self.assertNotIn("g1", completed["validation_results"])
+
+    def test_cross_process_worker_evidence_is_archived_with_original_outbox(self) -> None:
+        """A target stages real validation bytes; the Controller only ACKs its handle."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            worker_root = root / "worker"
+            worker_root.mkdir()
+            state = Harness(root)  # noqa: F405
+            definition = goal("g1", "m1")  # noqa: F405
+            definition["validation_matrix"] = complete_validation_matrix(  # noqa: F405
+                required_dimensions=(
+                    "functional",
+                    "regression",
+                    "static_quality",
+                    "change_impact",
+                )
+            )
+            definition["payload_template_digest"] = goal_definition_digest(  # noqa: F405
+                definition
+            )
+            initialized, _ = state.initialize(
+                definitions={"g1": definition},
+                state_gateway=True,
+                bootstrap_threads=[
+                    {
+                        "thread_id": "worker-evidence",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest(  # noqa: F405
+                            "worker-evidence-bootstrap"
+                        ),
+                        "worktree_path": str(root.resolve()),
+                    }
+                ],
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "init-evidence",
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18"},
+                }
+            )
+            prepared = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "prepare-evidence-route",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "route_id": "dispatch-evidence-route",
+                        "goal_id": "g1",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-evidence",
+                        "observed_at": T1,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(prepared["ok"], prepared)
+            sent = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "send-evidence-route",
+                    "operation": "RECORD_ROUTE_SENT",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "route_id": "dispatch-evidence-route",
+                        "returned_thread_id": "worker-evidence",
+                        "observed_at": T2,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(sent["ok"], sent)
+
+            evidence_source = worker_root / "worker-validation.json"
+            evidence_content = json.dumps(
+                {"commands": ["focused"], "status": "PASS"},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            evidence_source.write_text(evidence_content, encoding="utf-8")
+            evidence_digest = digest(evidence_content)  # noqa: F405
+            evidence_path = (
+                ".codex-loop/reports/dispatch-evidence-route-validation.json"
+            )
+            result = {
+                "status": "PASS",
+                "artifact_digest": digest("evidence-current-artifact"),  # noqa: F405
+            }
+            report = json.loads(
+                state.formal_report_content(
+                    "DISPATCH", "dispatch-evidence-route", result
+                )
+            )
+            evidence_artifacts = [
+                {
+                    "path": evidence_path,
+                    "digest": evidence_digest,
+                    "media_type": "application/json",
+                    "sha256": evidence_digest.removeprefix("sha256:"),
+                    "size_bytes": len(evidence_content.encode("utf-8")),
+                }
+            ]
+            evidence_sources = [
+                {
+                    "path": evidence_path,
+                    "source_path": str(evidence_source),
+                    "digest": evidence_digest,
+                    "media_type": "application/json",
+                }
+            ]
+            for index in range(1, state_runtime_module.MAX_STAGED_REPORT_EVIDENCE):
+                extra_content = json.dumps(
+                    {"index": index, "status": "PASS"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                extra_source = worker_root / f"worker-validation-{index}.json"
+                extra_source.write_text(extra_content, encoding="utf-8")
+                extra_digest = digest(extra_content)  # noqa: F405
+                extra_path = (
+                    ".codex-loop/reports/"
+                    f"dispatch-evidence-route-validation-{index}.json"
+                )
+                evidence_artifacts.append(
+                    {
+                        "path": extra_path,
+                        "digest": extra_digest,
+                        "media_type": "application/json",
+                        "sha256": extra_digest.removeprefix("sha256:"),
+                        "size_bytes": len(extra_content.encode("utf-8")),
+                    }
+                )
+                evidence_sources.append(
+                    {
+                        "path": extra_path,
+                        "source_path": str(extra_source),
+                        "digest": extra_digest,
+                        "media_type": "application/json",
+                    }
+                )
+            report["evidence_artifacts"] = evidence_artifacts
+            for validation in report["validation_results"]:
+                validation["evidence_path"] = evidence_path
+                validation["evidence_digest"] = evidence_digest
+                validation["evidence_media_type"] = "application/json"
+            report_text = json.dumps(
+                report, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            request = {
+                "outbox_id": "dispatch-evidence-route",
+                "result": result,
+                "report_text": report_text,
+                "evidence_sources": evidence_sources,
+            }
+
+            before_rejection = copy.deepcopy(state.state())
+            def assert_stage_rejected(
+                name: str, candidate: dict[str, object]
+            ) -> None:
+                rejected = call_isolated_mcp_bridge(
+                    mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                    {
+                        "operation": "STAGE_REPORT",
+                        "root": str(root),
+                        "request": candidate,
+                    },
+                    thread_id="worker-evidence",
+                    turn_id=f"worker-evidence-rejected-{name}",
+                )
+                self.assertFalse(rejected["ok"], (name, rejected))
+                self.assertEqual(state.state(), before_rejection)
+
+            wrong_digest = copy.deepcopy(request)
+            wrong_digest["evidence_sources"][0]["digest"] = "sha256:" + "0" * 64
+            assert_stage_rejected("wrong-digest", wrong_digest)
+
+            unreferenced = copy.deepcopy(request)
+            unreferenced["evidence_sources"][0]["path"] = (
+                ".codex-loop/reports/unreferenced-validation.json"
+            )
+            assert_stage_rejected("unreferenced", unreferenced)
+
+            wrong_media = copy.deepcopy(request)
+            wrong_media["evidence_sources"][0]["media_type"] = (
+                "application/octet-stream"
+            )
+            assert_stage_rejected("wrong-media", wrong_media)
+
+            symlink_source = worker_root / "worker-validation-link.json"
+            symlink_source.symlink_to(evidence_source.name)
+            symlinked = copy.deepcopy(request)
+            symlinked["evidence_sources"][0]["source_path"] = str(symlink_source)
+            assert_stage_rejected("symlink", symlinked)
+
+            invalid_utf8_source = worker_root / "invalid-utf8.json"
+            invalid_utf8_bytes = b"\xff\xfe"
+            invalid_utf8_source.write_bytes(invalid_utf8_bytes)
+            invalid_utf8 = copy.deepcopy(request)
+            invalid_utf8["evidence_sources"][0]["source_path"] = str(
+                invalid_utf8_source
+            )
+            invalid_utf8["evidence_sources"][0]["digest"] = (
+                "sha256:" + hashlib.sha256(invalid_utf8_bytes).hexdigest()
+            )
+            assert_stage_rejected("invalid-utf8", invalid_utf8)
+
+            oversized_source = worker_root / "oversized-validation.json"
+            with oversized_source.open("wb") as stream:
+                stream.truncate(state_runtime_module.MAX_ARTIFACT_CONTENT_SIZE + 1)
+            oversized = copy.deepcopy(request)
+            oversized["evidence_sources"][0]["source_path"] = str(
+                oversized_source
+            )
+            oversized["evidence_sources"][0]["digest"] = "sha256:" + "0" * 64
+            assert_stage_rejected("oversized", oversized)
+
+            nested_control_source = (
+                worker_root / ".CODEX-LOOP" / "reports" / "send.json"
+            )
+            nested_control_source.parent.mkdir(parents=True)
+            nested_control_source.write_text(evidence_content, encoding="utf-8")
+            nested_control = copy.deepcopy(request)
+            nested_control["evidence_sources"][0]["source_path"] = str(
+                nested_control_source
+            )
+            assert_stage_rejected("nested-control", nested_control)
+
+            too_many = copy.deepcopy(request)
+            too_many["evidence_sources"].append(
+                copy.deepcopy(request["evidence_sources"][0])
+            )
+            assert_stage_rejected("too-many", too_many)
+
+            staging = root / ".codex-loop" / "report-staging"
+            self.assertFalse(staging.exists() and any(staging.iterdir()))
+
+            staged = call_isolated_mcp_bridge(
+                mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                {
+                    "operation": "STAGE_REPORT",
+                    "root": str(root),
+                    "request": request,
+                },
+                thread_id="worker-evidence",
+                turn_id="worker-evidence-stage",
+            )
+            self.assertTrue(staged["ok"], staged)
+            self.assertEqual(
+                len(staged["evidence_artifacts"]),
+                state_runtime_module.MAX_STAGED_REPORT_EVIDENCE,
+            )
+            staged_report = {
+                **staged["artifact"],
+                "result": staged["result"],
+                "evidence_artifacts": staged["evidence_artifacts"],
+            }
+            acked = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                {
+                    "request_id": "recover-evidence-route",
+                    "operation": "REPORT_RECOVERY",
+                    "occurred_at": T3,  # noqa: F405
+                    "parameters": {
+                        "outbox_id": "dispatch-evidence-route",
+                        "staged_report": staged_report,
+                    },
+                },
+                thread_id="controller-1",
+                turn_id="controller-evidence-ack",
+                root=root,
+            )
+            self.assertTrue(acked["ok"], acked)
+            self.assertEqual(
+                acked["operation_status"], "GATEWAY_REPORT_RECOVERY_ACKED"
+            )
+            completed = state.state()
+            self.assertEqual(
+                completed["artifact_ledger"][evidence_path]["digest"],
+                evidence_digest,
+            )
+            self.assertEqual(
+                sum(
+                    path.startswith(
+                        ".codex-loop/reports/dispatch-evidence-route-validation"
+                    )
+                    for path in completed["artifact_ledger"]
+                ),
+                state_runtime_module.MAX_STAGED_REPORT_EVIDENCE,
+            )
+            self.assertEqual(
+                (root / evidence_path).read_text(encoding="utf-8"),
+                evidence_content,
+            )
+            self.assertEqual(
+                set(completed["validation_results"]["g1"].values()), {"PASS"}
+            )
 
     def test_state_gateway_completes_finalization_without_a_native_goal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

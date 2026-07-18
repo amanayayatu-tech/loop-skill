@@ -28,7 +28,10 @@ EOF arrives before any frame bytes.
 Codec work no longer depends on a shell session id or writable child-process
 stdin. The MCP server remains the authenticated installed process boundary.
 Report and external-receipt staging still writes only runtime-owned confined
-spool paths. State mutation remains on its existing v3.2 compatibility path;
+spool paths. Starting in v3.3.1, target-owned `STAGE_REPORT` can also copy exact
+validation files from the registered target worktree into immutable confined
+staging; the State Gateway archives them atomically with the report rather than
+requiring a pre-existing artifact-ledger entry. State mutation remains on its existing v3.2 compatibility path;
 v3.3 moves canonical writes to a separate State Gateway decision.
 
 ## Evolution

@@ -233,6 +233,7 @@ PHASE_PERMISSION_FIELDS = (
     "external_write",
 )
 MAX_ARTIFACT_CONTENT_SIZE = 4_000_000
+MAX_STAGED_REPORT_EVIDENCE = 15
 
 ZERO_EXECUTION_BLOCKER_CODES = {
     "DISPATCH_VALIDATION_MATRIX_MISMATCH",
@@ -421,6 +422,11 @@ REPORT_STAGE_STAGES = (
     "REPORT_STAGE_REPLACED",
     "REPORT_STAGE_DIR_FSYNCED",
 )
+REPORT_EVIDENCE_STAGE_STAGES = (
+    "REPORT_EVIDENCE_STAGE_TEMP_FSYNCED",
+    "REPORT_EVIDENCE_STAGE_REPLACED",
+    "REPORT_EVIDENCE_STAGE_DIR_FSYNCED",
+)
 REPORT_ATTESTATION_STAGES = (
     "REPORT_ATTESTATION_TEMP_FSYNCED",
     "REPORT_ATTESTATION_REPLACED",
@@ -471,6 +477,7 @@ CRASH_STAGES = (
     PERSISTENT_STAGES
     + ARTIFACT_STAGES
     + REPORT_STAGE_STAGES
+    + REPORT_EVIDENCE_STAGE_STAGES
     + REPORT_ATTESTATION_STAGES
     + EXTERNAL_RECEIPT_STAGES
     + WORKER_ACK_CANDIDATE_STAGES
@@ -2344,7 +2351,8 @@ class AdaptiveStateRuntime:
             or (
                 exact_required_keys.issubset(request)
                 and set(request).issubset(
-                    exact_required_keys | {"provided_report_digest"}
+                    exact_required_keys
+                    | {"provided_report_digest", "evidence_sources"}
                 )
             )
         ):
@@ -2523,8 +2531,72 @@ class AdaptiveStateRuntime:
                     {"actual": record["status"]},
                 )
             self._validate_identity_tokens(result, "/result")
-            self._validate_formal_report(state, record, result, report)
+            pending_evidence = self._collect_report_evidence_locked(
+                state,
+                record,
+                report,
+                request.get("evidence_sources", []),
+            )
+            self._validate_formal_report(
+                state,
+                record,
+                result,
+                report,
+                pending_artifacts=pending_evidence,
+            )
             self._ensure_report_staging_locked()
+            staged_evidence: list[dict[str, Any]] = []
+            for evidence_path, evidence in sorted(pending_evidence.items()):
+                suffix = {
+                    "application/json": ".json",
+                    "text/markdown": ".md",
+                    "text/plain": ".txt",
+                }[evidence["media_type"]]
+                path_locator = hashlib.sha256(
+                    evidence_path.encode("utf-8")
+                ).hexdigest()[:16]
+                evidence_source = self.report_staging_dir / (
+                    f"{outbox_id}.{evidence['digest'].removeprefix('sha256:')}"
+                    f".evidence-{path_locator}{suffix}"
+                )
+                self._assert_confined(
+                    evidence_source,
+                    self.report_staging_dir,
+                    "/evidence_sources",
+                )
+                evidence_payload = evidence["content"].encode("utf-8")
+                if evidence_source.exists() or evidence_source.is_symlink():
+                    existing = self._require_staged_report_file(
+                        evidence_source,
+                        evidence["digest"],
+                        "/evidence_sources",
+                    )
+                    if existing != evidence_payload:
+                        raise RuntimeRejection(
+                            "FORMAL_REPORT_EVIDENCE_STAGE_CONFLICT",
+                            "/evidence_sources",
+                        )
+                else:
+                    self._atomic_replace_bytes(
+                        evidence_source,
+                        evidence_payload,
+                        f"report-evidence-stage-{outbox_id}-{path_locator}",
+                        "REPORT_EVIDENCE_STAGE",
+                        final_mode=0o444,
+                    )
+                    self._require_staged_report_file(
+                        evidence_source,
+                        evidence["digest"],
+                        "/evidence_sources",
+                    )
+                staged_evidence.append(
+                    {
+                        "path": evidence_path,
+                        "source_path": str(evidence_source),
+                        "digest": evidence["digest"],
+                        "media_type": evidence["media_type"],
+                    }
+                )
             source = self.report_staging_dir / (
                 f"{outbox_id}.{report_digest.removeprefix('sha256:')}.json"
             )
@@ -2570,9 +2642,235 @@ class AdaptiveStateRuntime:
                     "digest": report_digest,
                     "media_type": "application/json",
                 },
+                "evidence_artifacts": staged_evidence,
                 "external_actions": [],
                 "external_action_count": 0,
             }
+
+    def _collect_report_evidence_locked(
+        self,
+        state: dict[str, Any],
+        record: dict[str, Any],
+        report: dict[str, Any],
+        evidence_sources: Any,
+    ) -> dict[str, dict[str, Any]]:
+        """Capture target-owned validation evidence without mutating canonical state.
+
+        The target role supplies only exact source identities.  Bytes are read from
+        its registered worktree, validated against the role-authored report and
+        copied to immutable report staging.  ACK_ROUTE_RESULT later archives the
+        same staged bytes atomically with the formal report.
+        """
+
+        if not isinstance(evidence_sources, list):
+            raise RuntimeRejection(
+                "FORMAL_REPORT_EVIDENCE_INPUT_INVALID", "/evidence_sources"
+            )
+        if len(evidence_sources) > MAX_STAGED_REPORT_EVIDENCE:
+            raise RuntimeRejection(
+                "FORMAL_REPORT_EVIDENCE_COUNT_EXCEEDED",
+                "/evidence_sources",
+                {"max_items": MAX_STAGED_REPORT_EVIDENCE},
+            )
+        report_evidence: dict[str, dict[str, Any] | None] = {}
+        for index, item in enumerate(report.get("evidence_artifacts", [])):
+            if isinstance(item, str):
+                path = item
+                claim = None
+            elif isinstance(item, dict):
+                path = item.get("path")
+                claim = item
+            else:
+                path = None
+                claim = None
+            if not isinstance(path, str) or not path:
+                raise RuntimeRejection(
+                    "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID",
+                    f"/report/evidence_artifacts/{index}",
+                )
+            report_evidence[path] = claim
+
+        target = state.get("thread_registry", {}).get(record.get("target_id"))
+        if not isinstance(target, dict):
+            raise RuntimeRejection(
+                "FORMAL_REPORT_EVIDENCE_TARGET_INVALID", "/evidence_sources"
+            )
+        worktree = Path(target.get("worktree_path", ""))
+        if not worktree.is_absolute():
+            worktree = self.root / worktree
+        worktree = self._assert_authorized_worktree(
+            state, worktree, "/evidence_sources"
+        )
+
+        pending: dict[str, dict[str, Any]] = {}
+        required_keys = {"path", "source_path", "digest", "media_type"}
+        for index, item in enumerate(evidence_sources):
+            item_path = f"/evidence_sources/{index}"
+            if not isinstance(item, dict) or set(item) != required_keys:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_INPUT_INVALID", item_path
+                )
+            destination = item["path"]
+            if destination not in report_evidence or destination in pending:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_UNBOUND", f"{item_path}/path"
+                )
+            if not self._is_canonical_control_evidence_path(
+                destination, f"{item_path}/path"
+            ):
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_PATH_INVALID", f"{item_path}/path"
+                )
+            media_type = item["media_type"]
+            suffix = {
+                "application/json": ".json",
+                "text/markdown": ".md",
+                "text/plain": ".txt",
+            }.get(media_type)
+            if suffix is None:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_MEDIA_TYPE_INVALID",
+                    f"{item_path}/media_type",
+                )
+            target_path = self.root / destination
+            self._reject_symlink(target_path, f"{item_path}/path")
+            resolved_target = target_path.resolve(strict=False)
+            self._assert_confined(
+                resolved_target, self.reports_dir, f"{item_path}/path"
+            )
+            if (
+                resolved_target.parent != self.reports_dir.resolve(strict=False)
+                or resolved_target.suffix != suffix
+            ):
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_PATH_INVALID", f"{item_path}/path"
+                )
+            digest = item["digest"]
+            if not isinstance(digest, str) or DIGEST_RE.fullmatch(digest) is None:
+                raise RuntimeRejection("DIGEST_INVALID", f"{item_path}/digest")
+            raw_source = Path(item["source_path"]).expanduser()
+            if not raw_source.is_absolute() or raw_source.is_symlink():
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+                    f"{item_path}/source_path",
+                )
+            try:
+                source = raw_source.resolve(strict=True)
+                relative_source = source.relative_to(worktree)
+            except (OSError, ValueError) as exc:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+                    f"{item_path}/source_path",
+                    {"error_type": type(exc).__name__},
+                ) from exc
+            if any(
+                part.casefold() == ".codex-loop"
+                for part in relative_source.parts
+            ):
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_CONTROL_SOURCE_FORBIDDEN",
+                    f"{item_path}/source_path",
+                )
+            try:
+                descriptor = os.open(
+                    source,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
+            except OSError as exc:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+                    f"{item_path}/source_path",
+                    {"error_type": type(exc).__name__},
+                ) from exc
+            try:
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_size > MAX_ARTIFACT_CONTENT_SIZE
+                ):
+                    raise RuntimeRejection(
+                        "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+                        f"{item_path}/source_path",
+                    )
+                chunks: list[bytes] = []
+                remaining = MAX_ARTIFACT_CONTENT_SIZE + 1
+                while remaining:
+                    chunk = os.read(descriptor, min(65536, remaining))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                payload = b"".join(chunks)
+            except RuntimeRejection:
+                raise
+            except OSError as exc:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+                    f"{item_path}/source_path",
+                    {"error_type": type(exc).__name__},
+                ) from exc
+            finally:
+                os.close(descriptor)
+            if (
+                len(payload) > MAX_ARTIFACT_CONTENT_SIZE
+                or _bytes_digest(payload) != digest
+            ):
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+                    f"{item_path}/source_path",
+                )
+            try:
+                content = payload.decode("utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_UTF8_INVALID",
+                    f"{item_path}/source_path",
+                ) from exc
+            if media_type == "application/json":
+                _strict_json_loads(
+                    content,
+                    code="FORMAL_REPORT_EVIDENCE_JSON_INVALID",
+                    path=f"{item_path}/source_path",
+                )
+            claim = report_evidence[destination]
+            if claim is not None:
+                expected_claims = {
+                    "digest": digest,
+                    "media_type": media_type,
+                    "sha256": digest.removeprefix("sha256:"),
+                    "size_bytes": len(payload),
+                }
+                for field, expected in expected_claims.items():
+                    if field in claim and claim[field] != expected:
+                        raise RuntimeRejection(
+                            "WORKER_REVIEW_HANDOFF_EVIDENCE_CLAIM_MISMATCH",
+                            f"/report/evidence_artifacts/{index}/{field}",
+                        )
+            pending[destination] = {
+                "path": destination,
+                "digest": digest,
+                "media_type": media_type,
+                "content": content,
+            }
+
+        missing = []
+        for path in report_evidence:
+            if (
+                self._is_canonical_control_evidence_path(
+                    path, "/report/evidence_artifacts"
+                )
+                and path not in state.get("artifact_ledger", {})
+                and path not in pending
+            ):
+                missing.append(path)
+        missing.sort()
+        if missing:
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_UNARCHIVED",
+                "/report/evidence_artifacts",
+                {"paths": missing},
+            )
+        return pending
 
     def stage_codec_report_attestation(self, attestation: Any) -> dict[str, Any]:
         """Persist the host-bound target identity for one staged formal report.
@@ -3434,6 +3732,35 @@ class AdaptiveStateRuntime:
         except ValueError:
             return False
         return common == parent
+
+    @staticmethod
+    def _is_canonical_control_evidence_path(
+        path: str,
+        json_path: str,
+    ) -> bool:
+        """Classify evidence paths without permitting control-plane aliases."""
+
+        if (
+            not path
+            or "\x00" in path
+            or "\\" in path
+            or path.startswith("/")
+        ):
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID", json_path
+            )
+        parts = path.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID", json_path
+            )
+        if parts[0].casefold() != ".codex-loop":
+            return False
+        if parts[0] != ".codex-loop":
+            raise RuntimeRejection(
+                "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID", json_path
+            )
+        return True
 
     def _assert_authorized_worktree(
         self,
@@ -9422,11 +9749,20 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("OUTBOX_NOT_SENT", "/outbox_id")
         if route is None or route["status"] != "SENT":
             raise RuntimeRejection("STATE_GATEWAY_ROUTE_NOT_SENT", "/route_id")
-        staged = self._gateway_exact_keys(
-            item["staged_report"],
-            {"path", "source_path", "digest", "media_type", "result"},
-            "/staged_report",
-        )
+        staged_value = item["staged_report"]
+        staged_required = {"path", "source_path", "digest", "media_type", "result"}
+        if (
+            not isinstance(staged_value, dict)
+            or frozenset(staged_value)
+            not in {
+                frozenset(staged_required),
+                frozenset(staged_required | {"evidence_artifacts"}),
+            }
+        ):
+            raise RuntimeRejection(
+                "STATE_GATEWAY_STAGED_REPORT_INVALID", "/staged_report"
+            )
+        staged = copy.deepcopy(staged_value)
         expected_path = f".codex-loop/reports/{outbox_id}-ack.json"
         if staged["path"] != expected_path or staged["media_type"] != "application/json":
             raise RuntimeRejection("STATE_GATEWAY_STAGED_REPORT_INVALID", "/staged_report")
@@ -9462,7 +9798,49 @@ class AdaptiveStateRuntime:
             or SAFE_ID_RE.fullmatch(attestation["turn_id"]) is None
         ):
             raise RuntimeRejection("STATE_GATEWAY_REPORT_TARGET_ATTESTATION_INVALID", "/codec_report_attestation")
-        review_handoff = self._validate_formal_report(state, record, result, report)
+        pending_artifacts = {
+            artifact["path"]: artifact
+            for artifact in request.get("artifacts", [])
+            if artifact.get("path") != expected_path
+        }
+        staged_evidence = staged.get("evidence_artifacts", [])
+        if not isinstance(staged_evidence, list):
+            raise RuntimeRejection(
+                "STATE_GATEWAY_STAGED_EVIDENCE_INVALID",
+                "/staged_report/evidence_artifacts",
+            )
+        staged_evidence_identity: dict[str, tuple[str, str]] = {}
+        for index, evidence in enumerate(staged_evidence):
+            if (
+                not isinstance(evidence, dict)
+                or set(evidence)
+                != {"path", "source_path", "digest", "media_type"}
+                or evidence.get("path") in staged_evidence_identity
+            ):
+                raise RuntimeRejection(
+                    "STATE_GATEWAY_STAGED_EVIDENCE_INVALID",
+                    f"/staged_report/evidence_artifacts/{index}",
+                )
+            staged_evidence_identity[evidence["path"]] = (
+                evidence["digest"],
+                evidence["media_type"],
+            )
+        pending_identity = {
+            path: (artifact.get("digest"), artifact.get("media_type"))
+            for path, artifact in pending_artifacts.items()
+        }
+        if staged_evidence_identity != pending_identity:
+            raise RuntimeRejection(
+                "STATE_GATEWAY_STAGED_EVIDENCE_INVALID",
+                "/staged_report/evidence_artifacts",
+            )
+        review_handoff = self._validate_formal_report(
+            state,
+            record,
+            result,
+            report,
+            pending_artifacts=pending_artifacts,
+        )
         self._observe_time(state, request["occurred_at"], "/occurred_at")
         record["ack_evidence_paths"] = [expected_path]
         record["result"] = copy.deepcopy(result)
@@ -9470,7 +9848,12 @@ class AdaptiveStateRuntime:
         if outbox_kind == "DISPATCH":
             projection = (
                 self._build_worker_validation_projection(
-                    state, record, result, report, checked_at=request["occurred_at"]
+                    state,
+                    record,
+                    result,
+                    report,
+                    checked_at=request["occurred_at"],
+                    pending_artifacts=pending_artifacts,
                 )
                 if result.get("status") == "PASS"
                 else None
@@ -15742,6 +16125,8 @@ class AdaptiveStateRuntime:
         record: dict[str, Any],
         result: dict[str, Any],
         report: dict[str, Any],
+        *,
+        pending_artifacts: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         kind = record["outbox_kind"]
         identity = record["identity"]
@@ -15869,13 +16254,16 @@ class AdaptiveStateRuntime:
             )
         review_handoff = None
         if kind == "DISPATCH" and result["status"] == "PASS":
-            review_handoff = self._validate_worker_review_handoff(state, report)
+            review_handoff = self._validate_worker_review_handoff(
+                state, report, pending_artifacts=pending_artifacts
+            )
             self._build_worker_validation_projection(
                 state,
                 record,
                 result,
                 report,
                 checked_at=None,
+                pending_artifacts=pending_artifacts,
             )
         proposal_required = bool(
             kind == "ASSURANCE"
@@ -15934,6 +16322,8 @@ class AdaptiveStateRuntime:
         self,
         state: dict[str, Any],
         report: dict[str, Any],
+        *,
+        pending_artifacts: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Validate and project the exact artifact surface needed by CODE_REVIEW."""
 
@@ -16042,25 +16432,40 @@ class AdaptiveStateRuntime:
                     "WORKER_REVIEW_HANDOFF_EVIDENCE_INVALID",
                     f"/artifacts/report/evidence_artifacts/{index}",
                 )
-            if evidence_path.startswith(".codex-loop/"):
-                evidence_record = state["artifact_ledger"].get(evidence_path)
-                evidence_target = self.root / evidence_path
-                self._assert_confined(
-                    evidence_target,
-                    self.control_dir,
-                    f"/artifacts/report/evidence_artifacts/{index}",
+            if self._is_canonical_control_evidence_path(
+                evidence_path,
+                f"/artifacts/report/evidence_artifacts/{index}",
+            ):
+                pending = (pending_artifacts or {}).get(evidence_path)
+                evidence_record = (
+                    {
+                        "path": evidence_path,
+                        "digest": pending["digest"],
+                        "media_type": pending["media_type"],
+                    }
+                    if pending is not None
+                    else state["artifact_ledger"].get(evidence_path)
                 )
-                self._reject_symlink(
-                    evidence_target,
-                    f"/artifacts/report/evidence_artifacts/{index}",
-                )
-                try:
-                    evidence_payload = evidence_target.read_bytes()
-                except OSError as exc:
-                    raise RuntimeRejection(
-                        "WORKER_REVIEW_HANDOFF_EVIDENCE_UNARCHIVED",
+                if pending is not None:
+                    evidence_payload = pending["content"].encode("utf-8")
+                else:
+                    evidence_target = self.root / evidence_path
+                    self._assert_confined(
+                        evidence_target,
+                        self.control_dir,
                         f"/artifacts/report/evidence_artifacts/{index}",
-                    ) from exc
+                    )
+                    self._reject_symlink(
+                        evidence_target,
+                        f"/artifacts/report/evidence_artifacts/{index}",
+                    )
+                    try:
+                        evidence_payload = evidence_target.read_bytes()
+                    except OSError as exc:
+                        raise RuntimeRejection(
+                            "WORKER_REVIEW_HANDOFF_EVIDENCE_UNARCHIVED",
+                            f"/artifacts/report/evidence_artifacts/{index}",
+                        ) from exc
                 actual_digest = _bytes_digest(evidence_payload)
                 if (
                     evidence_record is None
@@ -16130,6 +16535,7 @@ class AdaptiveStateRuntime:
         report: dict[str, Any],
         *,
         checked_at: str | None,
+        pending_artifacts: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         """Validate new-Pack Worker evidence and build one atomic projection."""
 
@@ -16235,7 +16641,16 @@ class AdaptiveStateRuntime:
                     "WORKER_VALIDATION_EVIDENCE_UNBOUND",
                     f"{path}/evidence_path",
                 )
-            ledger_record = state["artifact_ledger"].get(evidence_path)
+            pending = (pending_artifacts or {}).get(evidence_path)
+            ledger_record = (
+                {
+                    "path": evidence_path,
+                    "digest": pending["digest"],
+                    "media_type": pending["media_type"],
+                }
+                if pending is not None
+                else state["artifact_ledger"].get(evidence_path)
+            )
             if (
                 ledger_record is None
                 or ledger_record.get("digest") != evidence_digest
@@ -17782,6 +18197,7 @@ __all__ = [
     "PACK_MIGRATION_CANDIDATE_STAGES",
     "PERSISTENT_STAGES",
     "REPORT_ATTESTATION_STAGES",
+    "REPORT_EVIDENCE_STAGE_STAGES",
     "REPORT_STAGE_STAGES",
     "REVIEW_CLOSEOUT_CANDIDATE_STAGES",
     "STATUS_PROJECTION_STAGES",
