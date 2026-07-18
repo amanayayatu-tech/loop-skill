@@ -125,6 +125,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.number || github.run_id", workflow)
         self.assertIn("github.event_name == 'pull_request'", workflow)
         self.assertIn("current main Mac's complete", workflow)
+        self.assertIn("Main push repeats", workflow)
         self.assertIn("coverage run --parallel-mode", workflow)
         self.assertIn("coverage combine", workflow)
         self.assertIn("verify-gate", workflow)
