@@ -50,6 +50,10 @@ unchanged canonical registry, while finalization records the local
 `GATEWAY_NO_NATIVE_GOAL` sentinel and a verified pause/readback record rather
 than claiming an external Goal-tool outcome. Target report staging is bound to
 the host-attested Worker/Reviewer/Verifier identity, not merely Controller text.
+For Worker PASS, validation files are captured by that target-owned stage from
+the registered worktree, then archived by ACK or REPORT_RECOVERY in the same
+canonical transaction as the report. This avoids both a pre-ACK artifact-ledger
+cycle and Controller-authored validation evidence.
 
 Schema v1/v2 state remains readable. Moving it to v3 requires explicit
 `MIGRATE_V2_TO_V3` at a PAUSED, lease-free, outbox-quiescent safe point. A

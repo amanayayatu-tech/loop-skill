@@ -172,7 +172,12 @@ Once that threshold reaches `WAITING_TRANSPORT_RECOVERY`, every
 original failed outbox remain available only to their bounded recovery/ACK
 operations; no new product or report-only dispatch is created.
 Target role reports likewise require the target's MCP-attested `STAGE_REPORT`
-call before the Controller can ACK them. v3 disables native Goal adapters and
+call before the Controller can ACK them. A Worker PASS may bind exact validation
+files through `evidence_sources`; runtime reads them only from the registered
+target worktree, stages immutable bytes, and the Gateway archives those bytes
+atomically with the report on the original outbox. An unarchived, unreferenced,
+wrong-digest, wrong-thread, or stale evidence file has no canonical side effect.
+v3 disables native Goal adapters and
 records `GATEWAY_NO_NATIVE_GOAL` as a local sentinel, never an external
 Goal-tool receipt.
 

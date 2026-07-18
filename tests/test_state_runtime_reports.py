@@ -1041,6 +1041,70 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
                     "replay must consume the deterministic staging temp",
                 )
 
+    def test_report_evidence_stage_recovers_each_atomic_replace_boundary(
+        self,
+    ) -> None:
+        for stage in state_runtime_module.REPORT_EVIDENCE_STAGE_STAGES:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness, _, dispatch_id, _, result, report_text = (
+                    self._prepare_worker_validation_projection(root)
+                )
+                evidence_source = root / "focused-validation.json"
+                evidence_content = '{"status":"PASS","suite":"focused"}'
+                evidence_source.write_text(evidence_content, encoding="utf-8")
+                evidence_digest = digest(evidence_content)
+                evidence_path = (
+                    f".codex-loop/reports/{dispatch_id}-focused-validation.json"
+                )
+                report = json.loads(report_text)
+                report["evidence_artifacts"] = [
+                    {
+                        "path": evidence_path,
+                        "digest": evidence_digest,
+                        "media_type": "application/json",
+                    }
+                ]
+                for validation in report["validation_results"]:
+                    validation["evidence_path"] = evidence_path
+                    validation["evidence_digest"] = evidence_digest
+                    validation["evidence_media_type"] = "application/json"
+                request = {
+                    "outbox_id": dispatch_id,
+                    "result": result,
+                    "report_text": json.dumps(
+                        report,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    "evidence_sources": [
+                        {
+                            "path": evidence_path,
+                            "source_path": str(evidence_source),
+                            "digest": evidence_digest,
+                            "media_type": "application/json",
+                        }
+                    ],
+                }
+
+                crashing = state_runtime_module.AdaptiveStateRuntime(
+                    root, crash_at=stage
+                )
+                with self.assertRaises(state_runtime_module.InjectedCrash):
+                    crashing.stage_formal_report(request)
+
+                recovered = state_runtime_module.AdaptiveStateRuntime(root)
+                staged = recovered.stage_formal_report(request)
+                self.assertEqual(len(staged["evidence_artifacts"]), 1)
+                source = Path(staged["evidence_artifacts"][0]["source_path"])
+                self.assertEqual(source.read_text(encoding="utf-8"), evidence_content)
+                self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o444)
+                self.assertFalse(
+                    list(source.parent.glob("*.REPORT_EVIDENCE_STAGE.tmp")),
+                    "replay must consume the deterministic evidence staging temp",
+                )
+
     def test_codec_report_attestation_recovers_each_atomic_replace_boundary(
         self,
     ) -> None:

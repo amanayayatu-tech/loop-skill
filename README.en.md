@@ -131,7 +131,7 @@ Do not use it when:
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
 
-## Adaptive v3.3.0: who writes state and who advances a route
+## Adaptive v3.3.1: who writes state and who advances a route
 
 New Adaptive Packs default to schema v3. They do not create a session State-Writer task. The installed MCP `state_gateway({root, request})` is the sole canonical writer. The Controller remains read-only, Workers perform product work, Reviewer/Local Verifier tasks submit evidence, and an outer Supervisor is not a product role.
 
@@ -144,6 +144,15 @@ Controller (read-only)
   -> App send once -> RECORD_ROUTE_SENT
   -> role-owned STAGE_REPORT -> ACK_ROUTE_RESULT
 ```
+
+When a formal Worker PASS cites validation files from the current run, the
+target-owned `STAGE_REPORT` supplies their exact source path, SHA-256, and media
+type. Runtime reads bytes only from the registered Worker's worktree and first
+places them in immutable staging; the Gateway then archives those same bytes
+atomically with the formal report on the original outbox. Missing, wrong-digest,
+wrong-thread, unreferenced, or stale-artifact evidence rejects with zero
+canonical side effects. The Controller neither copies test output nor reuses a
+send receipt as validation evidence.
 
 The Gateway derives the lease, repository snapshot, freshness, validation matrix, review handoff, current artifact, and outbox from canonical state. The Controller does not copy those objects. A PASS projection requires all three current identities for one Goal: **current artifact + current Worker dispatch + PASS formal report**. A `BLOCKED` report, stale artifact, or stale dispatch cannot become PASS.
 

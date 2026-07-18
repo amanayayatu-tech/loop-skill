@@ -3234,9 +3234,11 @@ def formal_role_delegation_boundary(adaptive: bool = False) -> str:
         "evidence instead of delegating. Worker/Reviewer/Local builds strict exact report_text "
         "with report_digest=PENDING_CONTROLLER_ARCHIVE and, before App reply, sends "
         "{outbox_id,result:{status,artifact_digest},report_text} through installed "
-        "runtime_codec operation STAGE_REPORT. "
+        "runtime_codec operation STAGE_REPORT. A Worker PASS with new validation files also "
+        "supplies evidence_sources entries containing exact destination path, target-worktree "
+        "source path, digest, and media type; never reuse send evidence as validation. "
         "Runtime preserves/validates exact UTF-8 JSON bytes and returns FORMAL_REPORT_STAGED "
-        "with confined source_path, media type, computed digest/size, and result. Controller "
+        "with confined report/evidence source handles, media type, computed digest/size, and result. Controller "
         "forwards that handle only; never read, write, transport, or hash REPORT bytes."
     )
 

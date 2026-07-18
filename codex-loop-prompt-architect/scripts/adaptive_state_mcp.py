@@ -1215,7 +1215,10 @@ class AdaptiveStateMcpServer:
                         self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
                     staged = copy.deepcopy(payload["staged_report"])
                     required_stage = {"path", "source_path", "digest", "media_type", "result"}
-                    if set(staged) != required_stage:
+                    if frozenset(staged) not in {
+                        frozenset(required_stage),
+                        frozenset(required_stage | {"evidence_artifacts"}),
+                    }:
                         self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/staged_report")
                     source = Path(staged["source_path"]).resolve(strict=False)
                     staging_root = (Path(root) / ".codex-loop" / "report-staging").resolve(strict=False)
@@ -1274,6 +1277,90 @@ class AdaptiveStateMcpServer:
                         "path": staged["path"], "content": content,
                         "digest": staged["digest"], "media_type": staged["media_type"],
                     }]
+                    staged_evidence = staged.get("evidence_artifacts", [])
+                    if not isinstance(staged_evidence, list):
+                        self._gateway_error(
+                            "STATE_GATEWAY_REQUEST_INVALID",
+                            "/params/arguments/request/parameters/staged_report/evidence_artifacts",
+                        )
+                    seen_evidence_paths: set[str] = set()
+                    for index, evidence in enumerate(staged_evidence):
+                        evidence_path = (
+                            "/params/arguments/request/parameters/staged_report/"
+                            f"evidence_artifacts/{index}"
+                        )
+                        if (
+                            not isinstance(evidence, dict)
+                            or set(evidence)
+                            != {"path", "source_path", "digest", "media_type"}
+                            or evidence.get("path") in seen_evidence_paths
+                        ):
+                            self._gateway_error(
+                                "STATE_GATEWAY_REQUEST_INVALID", evidence_path
+                            )
+                        media_suffix = {
+                            "application/json": ".json",
+                            "text/markdown": ".md",
+                            "text/plain": ".txt",
+                        }.get(evidence["media_type"])
+                        destination = Path(evidence["path"])
+                        if (
+                            media_suffix is None
+                            or destination.parent.as_posix() != ".codex-loop/reports"
+                            or destination.suffix != media_suffix
+                        ):
+                            self._gateway_error(
+                                "STATE_GATEWAY_STAGED_EVIDENCE_INVALID",
+                                f"{evidence_path}/path",
+                            )
+                        evidence_source = Path(evidence["source_path"]).resolve(
+                            strict=False
+                        )
+                        path_locator = hashlib.sha256(
+                            evidence["path"].encode("utf-8")
+                        ).hexdigest()[:16]
+                        expected_evidence_name = (
+                            f"{route_id}."
+                            f"{str(evidence['digest']).removeprefix('sha256:')}"
+                            f".evidence-{path_locator}{media_suffix}"
+                        )
+                        try:
+                            evidence_source.relative_to(staging_root)
+                            if evidence_source.name != expected_evidence_name:
+                                raise ValueError("unexpected staged evidence name")
+                            evidence_content = evidence_source.read_text(
+                                encoding="utf-8"
+                            )
+                        except (OSError, UnicodeDecodeError, ValueError):
+                            self._gateway_error(
+                                "STATE_GATEWAY_STAGED_EVIDENCE_UNAVAILABLE",
+                                f"{evidence_path}/source_path",
+                            )
+                        evidence_digest = "sha256:" + hashlib.sha256(
+                            evidence_content.encode("utf-8")
+                        ).hexdigest()
+                        if evidence_digest != evidence["digest"]:
+                            self._gateway_error(
+                                "STATE_GATEWAY_STAGED_EVIDENCE_DIGEST_MISMATCH",
+                                f"{evidence_path}/digest",
+                            )
+                        if evidence["media_type"] == "application/json":
+                            try:
+                                json.loads(evidence_content)
+                            except (TypeError, ValueError):
+                                self._gateway_error(
+                                    "STATE_GATEWAY_STAGED_EVIDENCE_INVALID",
+                                    f"{evidence_path}/source_path",
+                                )
+                        seen_evidence_paths.add(evidence["path"])
+                        artifacts.append(
+                            {
+                                "path": evidence["path"],
+                                "content": evidence_content,
+                                "digest": evidence["digest"],
+                                "media_type": evidence["media_type"],
+                            }
+                        )
                     gateway_payload = {
                         key: route_id,
                         "staged_report": staged,

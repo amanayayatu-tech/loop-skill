@@ -325,6 +325,16 @@ Controller only forwards it and never reads, copies, parses, or transports
 REPORT bytes. The same outbox identity may be restaged after
 an archive failure without re-executing product work.
 
+When a Worker PASS introduces validation evidence that is not yet in the
+canonical artifact ledger, the same target-owned `STAGE_REPORT` request adds
+`evidence_sources`, each with exact destination path, source path, digest, and
+media type. Runtime accepts a source only from the registered target worktree,
+rejects symlinks/path escape/non-UTF-8/wrong digest/unreferenced paths, and
+copies the bytes to immutable report staging. `ACK_ROUTE_RESULT` or
+`REPORT_RECOVERY` then archives the staged evidence and report in one canonical
+transaction on the original outbox. A send observation is never a substitute
+for validation evidence.
+
 Heartbeat identity uses the exact UTF-8 body between its BEGIN/END delimiter
 lines, excluding the LF adjacent to each delimiter. That same no-trailing-LF
 string is passed to `automation_update.prompt` and hashed for the PREPARED
