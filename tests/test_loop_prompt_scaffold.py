@@ -921,7 +921,7 @@ class GeneratedPackTests(unittest.TestCase):
         for marker in (
             "MIGRATE_V2_TO_V3",
             "paused quiescent v2 state",
-            "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE",
+            "optional stronger receipt",
             "Do not create a replacement heartbeat",
         ):
             self.assertIn(marker, pack)
@@ -929,7 +929,7 @@ class GeneratedPackTests(unittest.TestCase):
         self.assertNotIn("MIGRATE_CONTROLLER_PACK", pack)
 
     @mock.patch.dict(os.environ, {"CODEX_HOME": "/workspace/.codex"})
-    def test_schema_v3_user_guide_stops_before_unreceipted_bootstrap(self) -> None:
+    def test_schema_v3_user_guide_uses_host_cooperative_operation_evidence(self) -> None:
         payload = scaffold.load_payload(
             scaffold.build_parser().parse_args(
                 ["--input", str(ROOT / "examples/03-adaptive-passkey-input.json")]
@@ -939,11 +939,11 @@ class GeneratedPackTests(unittest.TestCase):
             payload, "examples/03-adaptive-passkey-controller-pack.md"
         )
         for marker in (
-            "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE",
-            "THREAD_CREATE_OR_READ",
-            "APP_TRANSPORT_OBSERVATION",
+            "host-attested turn",
+            "真实 App 返回或 readback",
+            "PAUSED readback",
             "REGISTER_TASK` / `REGISTER_HEARTBEAT",
-            "PREPARE_FINALIZATION -> App-owned PAUSED receipt -> ACK_FINALIZATION",
+            "PREPARE_FINALIZATION -> PAUSED readback -> ACK_FINALIZATION",
             "Gateway runtime 的 PREPARED/APPLIED 恢复日志",
         ):
             self.assertIn(marker, guide)

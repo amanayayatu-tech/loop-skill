@@ -125,7 +125,7 @@ invariants:
     status: ACTIVE
     scope: [successful completion, blocked completion, external adapter sync]
     rationale: Passing work or preparing finalization does not prove the external and canonical closeout identities agree.
-    normative_statement: A Loop is closed only at canonical FINALIZATION_ACKED with matching one-use capability, paused heartbeat observation, review chain, artifact identities, and receipt. A legacy native adapter requires its exact Goal outcome; schema-v3 records GATEWAY_NO_NATIVE_GOAL because native Goal adapters are disabled. Schema-v3 PREPARE_FINALIZATION keeps terminal_status null, locks routing pending the receipt, and must render WAITING_FINALIZATION_ACK; only receipt-bound ACK_FINALIZATION creates the terminal projection.
+    normative_statement: A Loop is closed only at canonical FINALIZATION_ACKED with matching one-use capability, real paused-heartbeat readback bound to the registered heartbeat and host turn, review chain, and artifact identities. A legacy native adapter requires its exact Goal outcome; schema-v3 records GATEWAY_NO_NATIVE_GOAL because native Goal adapters are disabled. Schema-v3 PREPARE_FINALIZATION keeps terminal_status null, locks routing pending pause/readback, and must render WAITING_FINALIZATION_ACK; only pause/readback-bound ACK_FINALIZATION creates the terminal projection.
     non_goals: [requiring every Loop to end successfully, treating review PASS alone as closeout]
     allowed_evolution: [change adapter mechanics while preserving atomic evidence-bound acknowledgement]
     authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
@@ -227,7 +227,7 @@ invariants:
     status: ACTIVE
     scope: [schema-v3 initialization, canonical state mutation, State-Writer migration]
     rationale: A session State-Writer made canonical progress depend on a single App message wakeup channel.
-    normative_statement: New schema-v3 Adaptive loops write canonical state only through an App-attested MCP State Gateway, create no session State-Writer task, and permit v1/v2 migration only by explicit paused lease-free outbox-quiescent MIGRATE_V2_TO_V3.
+    normative_statement: New schema-v3 Adaptive loops write canonical state only through a host-attested MCP State Gateway, create no session State-Writer task, and permit v1/v2 migration only by explicit paused lease-free outbox-quiescent MIGRATE_V2_TO_V3.
     non_goals: [removing legacy state readability, claiming App message delivery is bug-free, automatically migrating a live loop]
     allowed_evolution: [add Gateway operations with reviewed schemas and equivalent atomicity, replace the MCP implementation while retaining attested single-writer semantics]
     authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
@@ -255,15 +255,15 @@ invariants:
     adr: [docs/adr/0010-mcp-state-gateway.md]
     introduced_version: 3.3.0
 
-  - id: INV-APP-ACTION-RECEIPT-001
-    title: Gateway never treats a Controller assertion as an App action result
+  - id: INV-HOST-COOPERATIVE-OPERATION-001
+    title: Gateway binds every operation to its prepared route and host turn
     level: CORE_INVARIANT
     status: ACTIVE
     scope: [schema-v3 task bootstrap, heartbeat observations, transport observations, route sending, heartbeat pausing, finalization]
-    rationale: An attested Gateway caller identity does not prove that a different App subtool completed earlier in the same turn.
-    normative_statement: REGISTER_TASK REGISTER_HEARTBEAT RECORD_HEARTBEAT_OBSERVATION RECORD_ROUTE_SENT RECORD_TRANSPORT_OBSERVATION ACK_TRANSPORT_PAUSE and ACK_FINALIZATION consume only a non-argument App-owned action-result receipt bound to the attested Controller thread and turn. RECORD_ROUTE_SENT additionally requires the App-computed exact materialized payload_digest to equal the PREPARED outbox. A missing malformed or mismatched receipt returns APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE APP_ACTION_RECEIPT_ATTESTATION_INVALID or APP_SEND_RECEIPT_PAYLOAD_MISMATCH with no canonical mutation; Controller-provided task automation send transport-failure JSON natural-heartbeat flag and manual canary observation are not evidence.
-    non_goals: [claiming current Codex App provides the required receipt carrier, treating a task transcript as a signed subtool result]
-    allowed_evolution: [replace the reserved metadata carrier with an equally non-forgeable App capability while retaining zero-side-effect failure]
+    rationale: Current Codex hosts expose task and automation identifiers and send return thread ids, but no provider-signed subtool receipt. The Gateway must resist ordinary crashes duplication stale observations and route mismatches without claiming Byzantine resistance against a Controller that can forge every App call.
+    normative_statement: REGISTER_TASK REGISTER_HEARTBEAT RECORD_HEARTBEAT_OBSERVATION RECORD_ROUTE_SENT RECORD_TRANSPORT_OBSERVATION ACK_TRANSPORT_PAUSE and ACK_FINALIZATION bind real App return values or readback to the current host-attested Controller turn and exact canonical identity. RECORD_ROUTE_SENT requires the returned target thread id to equal its one PREPARED outbox and obtains the exact payload digest only from that outbox. ACK_TRANSPORT_PAUSE and ACK_FINALIZATION require a PAUSED readback that exactly matches the one registered heartbeat. Missing malformed stale wrong-target wrong-outbox wrong-heartbeat or mismatched optional stronger-receipt evidence returns a specific zero-side-effect rejection. A present x-codex-app-action-receipt-v1 carrier is strictly validated as stronger evidence, but its absence is not a normal-path blocker and no operation claims a provider-signed receipt that the host does not expose.
+    non_goals: [Byzantine resistance to a malicious Controller that can forge every App call, treating a transcript as provider-signed evidence, promoting a send observation itself to PASS]
+    allowed_evolution: [adopt a provider-signed action-result carrier as optional stronger evidence while preserving host-cooperative route and readback binding]
     authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]
     implementation_surfaces: [codex-loop-prompt-architect/scripts/adaptive_state_mcp.py, codex-loop-prompt-architect/scripts/loop_architect/state_runtime.py]
     schema_surfaces: [codex-loop-prompt-architect/references/adaptive-mutation.schema.json]
@@ -295,7 +295,7 @@ invariants:
     status: ACTIVE
     scope: [schema-v3 transport observation, heartbeat, user notification]
     rationale: Repeating the same failing App transport action indefinitely consumes control-plane budget without new evidence.
-    normative_statement: Only an App-owned APP_TRANSPORT_OBSERVATION can bind a matching outbox/fingerprint failure, observed time, and registered-heartbeat flag. The first such failure retains that outbox; two natural heartbeat observations or fifteen minutes enter WAITING_TRANSPORT_RECOVERY, immediately block every PREPARE_ROUTE, require an App-owned verified pause receipt before projecting the business heartbeat PAUSED, and require one user notification. A later matching observation has zero side effects until authorized recovery.
+    normative_statement: A host-cooperative observation binds one matching outbox/fingerprint failure, observed time, and registered-heartbeat flag to the current host turn. The first such failure retains that outbox; two natural heartbeat observations or fifteen minutes enter WAITING_TRANSPORT_RECOVERY, immediately block every PREPARE_ROUTE, require a real matching PAUSED readback before projecting the business heartbeat PAUSED, and require one user notification. A later matching observation has zero side effects until authorized recovery.
     non_goals: [pretending a transport fault is a product repair, using an outer Supervisor as a second route channel]
     allowed_evolution: [tighten an evidence-backed threshold or notification representation through a reviewed public-contract change]
     authoritative_sources: [SPEC.md, codex-loop-prompt-architect/references/adaptive-loop-contract.md]

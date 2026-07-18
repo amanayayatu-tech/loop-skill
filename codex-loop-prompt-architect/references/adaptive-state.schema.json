@@ -2160,9 +2160,10 @@
     "gatewaySendObservation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["message_id", "target_thread_id", "payload_digest", "observed_at", "evidence_path", "evidence_digest", "source_thread_id", "source_turn_id"],
+      "required": ["returned_thread_id", "provider_observation_id", "target_thread_id", "payload_digest", "observed_at", "evidence_path", "evidence_digest", "source_thread_id", "source_turn_id"],
       "properties": {
-        "message_id": {"$ref": "#/$defs/safeId"},
+        "returned_thread_id": {"$ref": "#/$defs/safeId"},
+        "provider_observation_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
         "target_thread_id": {"$ref": "#/$defs/safeId"},
         "payload_digest": {"$ref": "#/$defs/digest"},
         "observed_at": {"$ref": "#/$defs/timestamp"},

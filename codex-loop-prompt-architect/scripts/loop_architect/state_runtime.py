@@ -9008,14 +9008,24 @@ class AdaptiveStateRuntime:
         observation = self._gateway_exact_keys(
             item["send_observation"],
             {
-                "message_id", "target_thread_id", "payload_digest", "observed_at", "evidence_path",
-                "evidence_digest", "source_thread_id", "source_turn_id",
+                "returned_thread_id", "provider_observation_id", "target_thread_id",
+                "payload_digest", "observed_at", "evidence_path", "evidence_digest",
+                "source_thread_id", "source_turn_id",
             },
             "/send_observation",
         )
-        self._gateway_safe_id(observation["message_id"], "/send_observation/message_id")
+        self._gateway_safe_id(
+            observation["returned_thread_id"], "/send_observation/returned_thread_id"
+        )
+        provider_observation_id = observation["provider_observation_id"]
+        if provider_observation_id is not None:
+            self._gateway_safe_id(
+                provider_observation_id, "/send_observation/provider_observation_id"
+            )
         if observation["target_thread_id"] != record["target_id"]:
             raise RuntimeRejection("OUTBOX_TARGET_MISMATCH", "/send_observation/target_thread_id")
+        if observation["returned_thread_id"] != record["target_id"]:
+            raise RuntimeRejection("OUTBOX_TARGET_MISMATCH", "/send_observation/returned_thread_id")
         self._gateway_safe_id(observation["target_thread_id"], "/send_observation/target_thread_id")
         if observation["payload_digest"] != record["payload_digest"]:
             raise RuntimeRejection("APP_SEND_RECEIPT_PAYLOAD_MISMATCH", "/send_observation/payload_digest")
@@ -9047,11 +9057,12 @@ class AdaptiveStateRuntime:
         except (TypeError, ValueError) as exc:
             raise RuntimeRejection("STATE_GATEWAY_SEND_OBSERVATION_INVALID", "/send_observation") from exc
         expected = {
-            "observation_kind": "APP_SEND_OBSERVATION",
+            "observation_kind": "HOST_COOPERATIVE_SEND_OBSERVATION",
             "outbox_id": route_id,
             "payload_digest": record["payload_digest"],
             "target_thread_id": record["target_id"],
-            "message_id": observation["message_id"],
+            "returned_thread_id": observation["returned_thread_id"],
+            "provider_observation_id": observation["provider_observation_id"],
             "observed_at": observation["observed_at"],
             "source_thread_id": observation["source_thread_id"],
             "source_turn_id": observation["source_turn_id"],
@@ -9311,8 +9322,8 @@ class AdaptiveStateRuntime:
         if threshold:
             recovery["status"] = "WAITING_TRANSPORT_RECOVERY"
             # A state write can request a user notice but cannot claim the
-            # notice or App automation pause happened.  Those require a later
-            # App-observed receipt.
+            # notice or App automation pause happened. Those require a later
+            # real pause plus matching PAUSED readback bound to the heartbeat.
             recovery["notified_at"] = None
             recovery["notification_required"] = True
             recovery["heartbeat_pause_required"] = True
@@ -9323,7 +9334,7 @@ class AdaptiveStateRuntime:
             }
             return {
                 "code": "WAITING_TRANSPORT_RECOVERY",
-                "next_action_code": "PAUSE_HEARTBEAT_WITH_APP_RECEIPT_AND_NOTIFY_USER",
+                "next_action_code": "PAUSE_HEARTBEAT_WITH_READBACK_AND_NOTIFY_USER",
             }
         return {"code": "TRANSPORT_FAILURE_RECORDED", "next_action_code": "WAIT_SAME_OUTBOX"}
 
@@ -9387,9 +9398,11 @@ class AdaptiveStateRuntime:
         if (
             not isinstance(receipt, dict)
             or set(receipt) != {
-                "observation_kind", "controller_thread_id", "controller_turn_id", "automation"
+                "observation_kind", "evidence_model", "controller_thread_id",
+                "controller_turn_id", "automation",
             }
-            or receipt.get("observation_kind") != "APP_AUTOMATION_UPDATE_OBSERVATION"
+            or receipt.get("observation_kind") != "HOST_COOPERATIVE_AUTOMATION_UPDATE_OBSERVATION"
+            or receipt.get("evidence_model") not in {"HOST_COOPERATIVE", "APP_ACTION_ATTESTED"}
             or receipt.get("controller_thread_id") != request["thread_id"]
             or not isinstance(receipt.get("controller_turn_id"), str)
             or SAFE_ID_RE.fullmatch(receipt["controller_turn_id"]) is None
@@ -9770,9 +9783,11 @@ class AdaptiveStateRuntime:
         if (
             not isinstance(app_receipt, dict)
             or set(app_receipt) != {
-                "observation_kind", "controller_thread_id", "controller_turn_id", "automation"
+                "observation_kind", "evidence_model", "controller_thread_id",
+                "controller_turn_id", "automation",
             }
-            or app_receipt.get("observation_kind") != "APP_AUTOMATION_UPDATE_OBSERVATION"
+            or app_receipt.get("observation_kind") != "HOST_COOPERATIVE_AUTOMATION_UPDATE_OBSERVATION"
+            or app_receipt.get("evidence_model") not in {"HOST_COOPERATIVE", "APP_ACTION_ATTESTED"}
             or app_receipt.get("controller_thread_id") != request["thread_id"]
             or not isinstance(app_receipt.get("controller_turn_id"), str)
             or SAFE_ID_RE.fullmatch(app_receipt["controller_turn_id"]) is None

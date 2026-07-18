@@ -1305,7 +1305,7 @@ def heartbeat_cadence(data: dict[str, Any]) -> str:
     ):
         return (
             f"heartbeat every {interval} minutes; max {max_wakeups} total wakeups; "
-            "the Gateway pauses the heartbeat only through a protected App receipt: "
+            "the Gateway pauses the heartbeat only after a real App pause and matching PAUSED readback: "
             "on transport degradation after two same-fingerprint natural observations or 15 minutes, "
             "or after PREPARE_FINALIZATION; ACK_FINALIZATION alone creates the terminal status"
         )
@@ -2291,7 +2291,7 @@ def repo_and_worktree_gate_block(
 
 def review_runtime_mapping_block(state_gateway: bool = False) -> str:
     completion = (
-        "before the Gateway's PREPARE_FINALIZATION and App-owned PAUSED receipt; only ACK_FINALIZATION yields FINALIZATION_ACKED."
+        "before the Gateway's PREPARE_FINALIZATION and real PAUSED heartbeat readback; only ACK_FINALIZATION yields FINALIZATION_ACKED."
         if state_gateway
         else "before LOOP_COMPLETE."
     )
@@ -3715,10 +3715,10 @@ def _render_controller_pack_base(data: dict[str, Any], mode: str) -> str:
     runtime_retry_attempts = int_value(data, "runtime_retry_attempts", 10)
     cadence = heartbeat_cadence(data)
     automation_stop_line = (
-        "- Finalization uses `PREPARE_FINALIZATION`, then a protected App "
-        "`automation_update(... status=\"PAUSED\" ...)` receipt, then "
+        "- Finalization uses `PREPARE_FINALIZATION`, then a real App "
+        "`automation_update(... status=\"PAUSED\" ...)` plus PAUSED readback, then "
         "`ACK_FINALIZATION`; no terminal status exists before that ACK. "
-        "Transport degradation uses the same receipt-bound pause after two same-fingerprint natural observations or 15 minutes."
+        "Transport degradation uses the same pause/readback-bound transition after two same-fingerprint natural observations or 15 minutes."
         if state_gateway
         else (
             "- To stop after terminal completion, call automation_update(mode=\"update\", "
@@ -3904,13 +3904,13 @@ Required Report Fields:
             "Gateway Heartbeat Contract:\n"
             f"- One business heartbeat may observe and route at most one Gateway transition every {heartbeat_interval} minutes.\n"
             "- It reads canonical state, observes an existing outbox first, and never retries a matching transport fault after WAITING_TRANSPORT_RECOVERY.\n"
-            "- After WAITING_TRANSPORT_RECOVERY, ACK_TRANSPORT_PAUSE only with the non-argument App-owned verified pause receipt; do not claim heartbeat PAUSED before it. If the host cannot provide that receipt, stop with APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE. FINALIZATION_ACKED requires the same evidence; only an explicit authorized successor may create a new heartbeat."
+            "- After WAITING_TRANSPORT_RECOVERY, ACK_TRANSPORT_PAUSE only after one real pause and a matching PAUSED automation readback bound to the registered heartbeat; do not claim heartbeat PAUSED before it. FINALIZATION_ACKED requires the same readback-bound evidence; only an explicit authorized successor may create a new heartbeat."
         )
         transition_table = (
             "Gateway Transition Contract:\n"
             "| Canonical condition | One permitted action | Never do |\n"
             "| --- | --- | --- |\n"
-            "| Reconciled formal task or first heartbeat | REGISTER_TASK or REGISTER_HEARTBEAT with its non-argument App-owned receipt | Create a State-Writer or a duplicate heartbeat |\n"
+            "| Reconciled formal task or first heartbeat | REGISTER_TASK or REGISTER_HEARTBEAT with its real App return/readback bound to the current host turn | Create a State-Writer or a duplicate heartbeat |\n"
             "| Ready Goal | PREPARE_ROUTE then one send/RECORD_ROUTE_SENT | Create a State-Writer or duplicate dispatch |\n"
             "| SENT outbox with staged report | ACK_ROUTE_RESULT on that outbox | Make a report-only product dispatch |\n"
             "| ROADMAP_AUDIT_PASS on unchanged canonical Goals | ADVANCE_ROADMAP | Rebuild freshness, validation, or future Goal objects in Controller prose |\n"
@@ -3929,7 +3929,7 @@ Required Report Fields:
             "Gateway startup:\n"
             "1. Verify the installed `codex-loop-state` MCP server and its schemas read-only.\n"
             "2. Resolve the real Controller identity and initialize schema v3 through the Gateway; no session State-Writer or pre-state task is allowed.\n"
-            "3. Before any task/heartbeat create or read, require the App-owned result carrier; otherwise stop APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE. Reconcile/create the one business heartbeat and current Worker only after the Gateway initialization receipt; bind their actual App observations through REGISTER_HEARTBEAT and REGISTER_TASK.\n"
+            "3. Reconcile/create the one business heartbeat and current Worker only after Gateway initialization; bind their actual App return/readback through REGISTER_HEARTBEAT and REGISTER_TASK. An optional stronger receipt is strictly checked when present but is never a prerequisite.\n"
             "4. Route First Goal only through PREPARE_ROUTE -> runtime_codec -> one App send -> RECORD_ROUTE_SENT."
         )
     else:
@@ -3998,7 +3998,7 @@ Required Report Fields:
         adaptive_authorization_text = (
             "Adaptive v3 Runtime Handoff:\n"
             "- Verify the installed `codex-loop-state` MCP server exposes `state_gateway` and `runtime_codec`; do not invoke a shell runtime or create a State-Writer task.\n"
-            "- New schema-v3 canonical state is written only through App-attested `state_gateway` requests. Legacy `route_state_mutation` is compatibility-only and prohibited for this Pack.\n"
+            "- New schema-v3 canonical state is written only through host-attested `state_gateway` requests. Legacy `route_state_mutation` is compatibility-only and prohibited for this Pack.\n"
             "- `INITIALIZE_SUCCESSOR` is allowed only from immutable terminal predecessor evidence into a fresh root; it never revives a predecessor.\n\n"
             "Adaptive Canonical Authorization Envelope (bootstrap this exact closed object into LOOP_STATE.md):\n"
             "AUTHORIZATION_ENVELOPE_JSON_BEGIN\n"
@@ -4024,7 +4024,7 @@ Required Report Fields:
     )
     if adaptive and state_gateway:
         adaptive_automation_identity_lines = (
-            "- Gateway heartbeat identity stores automation_name, kind=HEARTBEAT, real Controller target_thread_id, exact rrule, canonical prompt_digest, and prompt_normalization=LF_NORMALIZED_NO_TRAILING_NEWLINE. REGISTER_HEARTBEAT and RECORD_HEARTBEAT_OBSERVATION consume only App-owned AUTOMATION_OBSERVATION receipts; ACK_FINALIZATION consumes an App-owned AUTOMATION_UPDATE receipt.\n"
+            "- Gateway heartbeat identity stores automation_name, kind=HEARTBEAT, real Controller target_thread_id, exact rrule, canonical prompt_digest, and prompt_normalization=LF_NORMALIZED_NO_TRAILING_NEWLINE. REGISTER_HEARTBEAT and RECORD_HEARTBEAT_OBSERVATION bind actual automation create/readback to the current host turn; ACK_FINALIZATION requires an actual PAUSED update/readback for that identity.\n"
             "- The canonical heartbeat body has no trailing newline. On tool/config readback normalize CRLF or CR to LF, verify there is still no trailing newline, and hash those exact UTF-8 bytes. Never hash delimiter lines or silently trim arbitrary whitespace.\n"
         )
     automation_setup_lines = (
@@ -4038,8 +4038,8 @@ Required Report Fields:
     )
     if adaptive and state_gateway:
         automation_setup_lines = (
-            "- Reconcile/create only one business heartbeat after the schema-v3 Gateway initialization receipt and only when the App-owned result carrier is available. After the actual App create/adopt call, bind its real Controller target, exact rrule, prompt digest, status=ACTIVE, and App-owned observation through REGISTER_HEARTBEAT before First Goal.\n"
-            "- A transport degradation threshold or PREPARE_FINALIZATION requires a protected App pause receipt for that exact heartbeat; only the subsequent Gateway ACK projects PAUSED or terminal state. Do not create a replacement heartbeat, revive an old successor, or add an outer Supervisor loop."
+            "- Reconcile/create only one business heartbeat after schema-v3 Gateway initialization. After the actual App create/adopt call, bind its real Controller target, exact rrule, prompt digest, status=ACTIVE, and readback through REGISTER_HEARTBEAT before First Goal. An optional stronger result carrier is strictly validated when present but never required.\n"
+            "- A transport degradation threshold or PREPARE_FINALIZATION requires a real pause and PAUSED readback for that exact heartbeat; only the subsequent Gateway ACK projects PAUSED or terminal state. Do not create a replacement heartbeat, revive an old successor, or add an outer Supervisor loop."
         )
     heartbeat_budget_lines = (
         f"- max_routing_turns: {max_wakeups}; ACQUIRE_LEASE counts both Goal turns and heartbeat wakes\n"
@@ -4074,7 +4074,7 @@ Required Report Fields:
         )
     controller_terminal_statuses = (
         "Controller Canonical Terminal Statuses: FINALIZATION_ACKED | LOOP_BLOCKED\n"
-        "Only PREPARE_FINALIZATION followed by an App-owned verified PAUSED receipt and ACK_FINALIZATION may set FINALIZATION_ACKED. LOOP_BLOCKED preserves immutable hard-block evidence; transient blockers remain nonterminal report evidence or safe wait states."
+        "Only PREPARE_FINALIZATION followed by a real verified PAUSED readback and ACK_FINALIZATION may set FINALIZATION_ACKED. LOOP_BLOCKED preserves immutable hard-block evidence; transient blockers remain nonterminal report evidence or safe wait states."
         if adaptive and state_gateway
         else
         "Controller Canonical Terminal Statuses: LOOP_COMPLETE | LOOP_COMPLETE_WITH_LIMITATION | LOOP_BLOCKED\n"
@@ -4233,7 +4233,7 @@ Canonical Control-Plane Observability:
 Budget And Automation:
 - declared_automation_intent: {automation_intent}
 - max_parallel_execution_workers: 1
-- max_goals_per_round: 1 by default; {"one Gateway PREPARE_ROUTE owns the only current route and an App-owned receipt records its one send" if state_gateway else "every outbound message requires a prepared and acknowledged dispatch outbox entry"}
+- max_goals_per_round: 1 by default; {"one Gateway PREPARE_ROUTE owns the only current route and its real send return is bound to that outbox" if state_gateway else "every outbound message requires a prepared and acknowledged dispatch outbox entry"}
 - max_repair_attempts_per_goal: {max_repair_attempts}
 - heartbeat_interval_minutes: {heartbeat_interval}
 {heartbeat_budget_lines.rstrip()}

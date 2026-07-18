@@ -142,32 +142,31 @@ For a new Adaptive Pack, the installed MCP `state_gateway` is the only writer
 of canonical control-plane state. Controller, Worker, Reviewer, Local Verifier,
 and any external Supervisor have no authority to patch `.codex-loop/**` or
 create a session State-Writer. The public route sequence is `INITIALIZE` or
-`INITIALIZE_SUCCESSOR`, narrow App-receipt-bound bootstrap `REGISTER_TASK` /
+`INITIALIZE_SUCCESSOR`, narrow host-cooperative bootstrap `REGISTER_TASK` /
 `REGISTER_HEARTBEAT`,
 `PREPARE_ROUTE`, `RECORD_ROUTE_SENT`, and `ACK_ROUTE_RESULT`; `REPORT_RECOVERY`
 may ACK the same existing outbox after a lost task index or stdout, but cannot
 create another product dispatch. `ADVANCE_ROADMAP` derives a nonfinal next Goal
 from the unchanged canonical registry. `PREPARE_FINALIZATION` followed by an
-App-owned, externally attested `automation_update` pause receipt and
-`ACK_FINALIZATION` is the schema-v3 finalization path. `PREPARE_FINALIZATION`
-leaves `terminal_status` null and creates only a PREPARED finalization outbox;
-only the receipt-bound ACK creates the terminal projection. The Gateway neither
-manufactures nor accepts a Controller-provided receipt. Current Codex MCP turn
-metadata does not expose that receipt, so `REGISTER_TASK` (task create/read),
-`REGISTER_HEARTBEAT` / `RECORD_HEARTBEAT_OBSERVATION` (automation observation),
-`RECORD_ROUTE_SENT` (message send), and pause/finalization (automation update)
-operations fail closed with
-`APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE`; manual canary observation cannot
-upgrade into canonical evidence.
-For `RECORD_ROUTE_SENT`, the App-owned `SEND_MESSAGE_TO_THREAD` result must
-also include the exact materialized `payload_digest` computed from the real
-send input. Gateway compares it to the PREPARED outbox before it records
-`SENT`; a Gateway-derived digest, a message id alone, or a digest for another
-payload is not a route-send receipt.
-`RECORD_TRANSPORT_OBSERVATION` likewise consumes only an App-owned transport
-failure receipt that binds its fingerprint, outbox, observed time and whether
-the trigger was the registered business heartbeat; Controller parameters cannot
-manufacture a natural observation or the fifteen-minute threshold.
+actual `automation_update` pause and readback, bound to the host-attested
+Controller turn, and `ACK_FINALIZATION` is the schema-v3 finalization path.
+`PREPARE_FINALIZATION` leaves `terminal_status` null and creates only a
+PREPARED finalization outbox; only the pause/readback-bound ACK creates the
+terminal projection. Schema v3 is host-cooperative rather than Byzantine: it
+binds real App return values and readback to the current host-attested
+Controller turn, but does not claim a provider-signed subtool result which the
+App does not expose. A future `x-codex-app-action-receipt-v1` carrier is an
+optional stronger attestation; its absence is not a normal-path blocker.
+For `RECORD_ROUTE_SENT`, the Controller submits only the returned target thread
+id and observation time from one real send. Gateway compares that target to the
+single PREPARED outbox and supplies the canonical exact materialized
+`payload_digest`; a bare route id, wrong returned target, stale outbox, or a
+present-but-mismatched stronger receipt leaves the route unchanged. Send
+observation never itself creates PASS.
+`RECORD_TRANSPORT_OBSERVATION` likewise binds a real registered-heartbeat
+observation to the active heartbeat identity, fingerprint, outbox and observed
+time. It cannot fabricate a natural observation without that registered
+identity; the optional stronger receipt is validated when present.
 Once that threshold reaches `WAITING_TRANSPORT_RECOVERY`, every
 `PREPARE_ROUTE` rejects with zero side effects. Existing staged reports and the
 original failed outbox remain available only to their bounded recovery/ACK

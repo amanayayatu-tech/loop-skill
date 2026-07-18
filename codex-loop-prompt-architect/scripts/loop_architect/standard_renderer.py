@@ -74,7 +74,7 @@ def render_full_mode_sections(
         else ""
     )
     completion_flow = (
-        "  -> App-owned verified heartbeat PAUSED receipt -> ACK_FINALIZATION -> FINALIZATION_ACKED"
+        "  -> actual heartbeat PAUSED readback -> ACK_FINALIZATION -> FINALIZATION_ACKED"
         if gateway_v3
         else
         "  -> exact Goal COMPLETE + exact heartbeat PAUSED readbacks\n"
@@ -107,7 +107,7 @@ def render_full_mode_sections(
         else "WAITING_ACTIVE, idle budget, total wake budget, terminal-only pause"
     )
     outbox_control = (
-        "Gateway registration receipts plus one canonical route outbox with exact identities"
+        "Gateway host-cooperative registrations plus one canonical route outbox with exact identities"
         if gateway_v3
         else
         "generic THREAD/AUTOMATION/GOAL/DISPATCH outboxes with exact identities"
@@ -116,7 +116,7 @@ def render_full_mode_sections(
     )
     startup_flow = (
         "  -> MCP State Gateway INITIALIZE -> no State-Writer task\n"
-        "  -> protected App task/heartbeat receipts -> REGISTER_TASK/REGISTER_HEARTBEAT\n"
+        "  -> real App task/heartbeat return/readback -> REGISTER_TASK/REGISTER_HEARTBEAT\n"
         if gateway_v3
         else
         "  -> State-Writer recovery/create -> full LOOP_INITIALIZED + GOALS projection ACK\n"
@@ -274,8 +274,8 @@ def render_standard_user_guide(
     )
     guide_steps = (
         "9. 每次 Worker/Reviewer 只通过目标角色的 `runtime_codec STAGE_REPORT` stage 报告，再由 Gateway `ACK_ROUTE_RESULT` 或 `REPORT_RECOVERY` ACK 原 outbox；不得等待或伪造 `STATE_WRITE_APPLIED`。\n"
-        f"10. 宿主具备受保护回执后，唯一业务 heartbeat 才能每 {heartbeat_interval} 分钟观察一次；同一失败最多记录两次自然 heartbeat 或累计 15 分钟，然后进入 `WAITING_TRANSPORT_RECOVERY`。未获 App 暂停回执前不得宣称 PAUSED。\n"
-        "11. Goal Queue 全部通过后做完整 FINAL_AUDIT；只经 `PREPARE_FINALIZATION -> App-owned PAUSED receipt -> ACK_FINALIZATION` 到达 `FINALIZATION_ACKED`，不使用 native Goal 或 `LOOP_COMPLETE` 代称。"
+        f"10. 唯一业务 heartbeat 每 {heartbeat_interval} 分钟最多观察一次；同一失败最多记录两次自然 heartbeat 或累计 15 分钟，然后进入 `WAITING_TRANSPORT_RECOVERY`。未获真实 pause 后的 PAUSED readback 前不得宣称 PAUSED。\n"
+        "11. Goal Queue 全部通过后做完整 FINAL_AUDIT；只经 `PREPARE_FINALIZATION -> PAUSED readback -> ACK_FINALIZATION` 到达 `FINALIZATION_ACKED`，不使用 native Goal 或 `LOOP_COMPLETE` 代称。"
         if gateway_v3
         else "9. 每次 Worker/Reviewer 回报先写状态并等待 `STATE_WRITE_APPLIED`，再进入 review、repair 或下一 Goal。\n"
         f"10. heartbeat 每 {heartbeat_interval} 分钟唤醒，最多 {max_wakeups} 次；Worker 正在运行时记录 `WAITING_ACTIVE`，不能 NOOP 关闭。只有终态或无 inflight/queue 且连续 {max_idle} 次 idle 才允许暂停。\n"
@@ -292,21 +292,21 @@ def render_standard_user_guide(
         else f"- `{audit_paths['transactions']}`：State-Writer 的 PREPARED/APPLIED 恢复日志；用于判断中断后缺哪一步，不能当作第二份 canonical state。"
     )
     manual_boundary = (
-        "当前 Codex App 缺少受保护 action-result receipt 时，不存在可安全的手动降级：记录 `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE` 并停止；不要以 State-Writer、参数、transcript 或 Supervisor 替代 Gateway 证据。"
+        "schema v3 使用宿主协作证据：真实 App 返回或 readback 绑定当前宿主认证 turn、唯一 outbox 与 heartbeat 身份。它不声称能抵御可伪造所有 App 调用的恶意 Controller；可选 `x-codex-app-action-receipt-v1` 仅增强而非前置条件。不要以 State-Writer、手写 canonical 或 Supervisor 替代 Gateway。"
         if gateway_v3
         else "只有真实 Codex App 线程或 heartbeat 工具不可用时才使用。手动模式仍需真实项目线程、版本化单写者状态、精确 worktree 审查和相同停止条件。"
     )
     if gateway_v3:
         task_setup_steps = (
-            "5. 先确认当前 Codex App 能注入受保护的 `x-codex-app-action-receipt-v1`，覆盖 `THREAD_CREATE_OR_READ`、`AUTOMATION_OBSERVATION`、`SEND_MESSAGE_TO_THREAD`、`APP_TRANSPORT_OBSERVATION` 与 `AUTOMATION_UPDATE`。当前 App 缺少该能力时，在创建/读取 Worker 或 heartbeat 前以 `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE` 零副作用停止；不能用 transcript、参数或 Supervisor 绕过。\n"
-            "6. 能力存在时，Controller 仅通过 `state_gateway INITIALIZE` 建立 schema v3 canonical state；随后以 App 回执注册唯一当前 Worker/heartbeat（`REGISTER_TASK` / `REGISTER_HEARTBEAT`），不创建 State-Writer 或 native Goal。\n"
+            "5. 先通过 `state_gateway INITIALIZE` 建立 schema v3 canonical state。真实 create/read 的 task/threadId、automation create/readback、send 返回 target threadId 与 PAUSED readback 是宿主协作 operation evidence；它们各自绑定当前 host-attested turn 和 Gateway 已准备的对象，不能只报 route id、标题或 transcript。\n"
+            "6. Controller 以真实 App 返回注册唯一当前 Worker/heartbeat（`REGISTER_TASK` / `REGISTER_HEARTBEAT`），不创建 State-Writer 或 native Goal。当前 App 缺少可选 `x-codex-app-action-receipt-v1` 不阻断该路径；若存在则 Gateway 额外严格校验。\n"
             "7. 每条产品路线只用 `PREPARE_ROUTE -> runtime_codec MATERIALIZE_DISPATCH -> 一次 App send -> RECORD_ROUTE_SENT -> target STAGE_REPORT -> ACK_ROUTE_RESULT`。所有 lease、freshness、matrix、artifact 与 payload 由 Gateway 从 canonical state 原子生成，Controller 不复制。"
         )
-        controller_check = "- 控制线程：看 Pack identity、真实 Controller/Worker identity、Gateway route ledger、原 outbox、当前 Goal、派生 metrics 和下一动作；当前 App 无 receipt carrier 时只应看到零副作用能力阻断。"
-        heartbeat_check = "- heartbeat 卡片：看经 App `AUTOMATION_OBSERVATION` 证明的 automation id、ACTIVE/PAUSED、rrule、目标 Controller 任务和 transport recovery；缺回执时不是 ACTIVE 证据。"
-        state_check = f"- `{audit_paths['state']}`：schema-v3 canonical roadmap、Goal/route ledger、一个路线 outbox、lease、receipt-bound heartbeat、transport recovery、预算、审批与 finalization receipt；它没有 State-Writer/Goal outbox 身份。"
-        normal_signal = "正常信号：Gateway `GATEWAY_LOOP_INITIALIZED` 后，App receipt-bound `REGISTER_TASK` / `REGISTER_HEARTBEAT` 各登记一次；每个 Goal 只保留同一 route/outbox，报告仅由目标角色 stage 后 ACK；最终出现 `PREPARE_FINALIZATION`、已验证 heartbeat PAUSED receipt 与 `FINALIZATION_ACKED`。"
-        runtime_blockers = "- `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE`、`RUNTIME_CODEC_TOOL_UNAVAILABLE`、`RUNTIME_DEPENDENCY_BLOCKED`、`VALIDATION_BLOCKED`、`REPAIR_BUDGET_EXHAUSTED`、`WAITING_TRANSPORT_RECOVERY`、无法调和的 `STATE_VERSION_CONFLICT`/`RECOVERY_REQUIRED`、`ROUTING_BUDGET_EXHAUSTED`、`HARD_BLOCK`。"
+        controller_check = "- 控制线程：看 Pack identity、真实 Controller/Worker identity、Gateway route ledger、原 outbox、当前 Goal、派生 metrics 和下一动作；send/automation evidence 必须绑定当前 turn 与对应 prepared 对象。"
+        heartbeat_check = "- heartbeat 卡片：看真实 automation create/readback 的 automation id、ACTIVE/PAUSED、rrule、目标 Controller 任务和 transport recovery；终态必须有 pause 成功后的 PAUSED readback。"
+        state_check = f"- `{audit_paths['state']}`：schema-v3 canonical roadmap、Goal/route ledger、一个路线 outbox、lease、host-cooperative heartbeat、transport recovery、预算、审批与 finalization receipt；它没有 State-Writer/Goal outbox 身份。"
+        normal_signal = "正常信号：Gateway `GATEWAY_LOOP_INITIALIZED` 后，真实返回绑定的 `REGISTER_TASK` / `REGISTER_HEARTBEAT` 各登记一次；每个 Goal 只保留同一 route/outbox，报告仅由目标角色 stage 后 ACK；最终出现 `PREPARE_FINALIZATION`、已验证 heartbeat PAUSED readback 与 `FINALIZATION_ACKED`。"
+        runtime_blockers = "- `RUNTIME_CODEC_TOOL_UNAVAILABLE`、`RUNTIME_DEPENDENCY_BLOCKED`、`VALIDATION_BLOCKED`、`REPAIR_BUDGET_EXHAUSTED`、`WAITING_TRANSPORT_RECOVERY`、无法调和的 `STATE_VERSION_CONFLICT`/`RECOVERY_REQUIRED`、`ROUTING_BUDGET_EXHAUSTED`、`HARD_BLOCK`。"
     pack_line = (
         f"已生成 Controller Pack：`{controller_pack_path}`。"
         if controller_pack_path

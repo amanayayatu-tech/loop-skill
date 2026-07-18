@@ -5,7 +5,7 @@ from state_runtime_support import *  # noqa: F403
 
 class AdaptiveStateRuntimeRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
     def test_schema_v3_gateway_send_artifact_crash_recovers_without_duplicate_route(self) -> None:
-        """Gateway-owned App-observation artifacts share the transaction journal."""
+        """Gateway-owned host-operation artifacts share the transaction journal."""
 
         for stage in ARTIFACT_STAGES:
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
@@ -39,11 +39,12 @@ class AdaptiveStateRuntimeRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                 self.assertTrue(prepared["ok"], prepared)
                 route = harness.state()["gateway_route_ledger"]["gateway-artifact-route"]
                 observation = {
-                    "observation_kind": "APP_SEND_OBSERVATION",
+                    "observation_kind": "HOST_COOPERATIVE_SEND_OBSERVATION",
                     "outbox_id": "gateway-artifact-route",
                     "payload_digest": route["payload_digest"],
                     "target_thread_id": "worker-1",
-                    "message_id": "gateway-artifact-message",
+                    "returned_thread_id": "worker-1",
+                    "provider_observation_id": "gateway-artifact-message",
                     "observed_at": T2,
                     "source_thread_id": "controller-1",
                     "source_turn_id": "gateway-artifact-send-turn",
@@ -56,7 +57,8 @@ class AdaptiveStateRuntimeRecoveryTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                     "gateway_request": {
                         "route_id": "gateway-artifact-route",
                         "send_observation": {
-                            "message_id": observation["message_id"],
+                            "returned_thread_id": observation["returned_thread_id"],
+                            "provider_observation_id": observation["provider_observation_id"],
                             "target_thread_id": observation["target_thread_id"],
                             "payload_digest": observation["payload_digest"],
                             "observed_at": observation["observed_at"],

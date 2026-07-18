@@ -32,17 +32,17 @@ All notable changes to this project are documented here. The project follows
   new repair attempt.
 - Repeated matching transport failures no longer spin indefinitely: the first
   observation retains the outbox, while two natural heartbeats or fifteen
-  minutes move to `WAITING_TRANSPORT_RECOVERY`, require a verified App pause
-  receipt before projecting the business heartbeat PAUSED, and request one
+  minutes move to `WAITING_TRANSPORT_RECOVERY`, require a real App pause plus
+  matching PAUSED readback before projecting the business heartbeat PAUSED, and request one
   user notification.
 - `PREPARE_FINALIZATION` now remains explicitly nonterminal in schema v3:
   it renders `WAITING_FINALIZATION_ACK`, keeps `terminal_status=null`, and
-  locks routing until the protected App pause receipt reaches
+  locks routing until the pause/readback acknowledgement reaches
   `ACK_FINALIZATION`.
-- `RECORD_ROUTE_SENT` now accepts only an App-computed exact materialized
-  `payload_digest` that equals the PREPARED outbox digest. A receipt for a
-  different payload rejects with zero side effects; the Gateway cannot
-  self-supply that binding.
+- `RECORD_ROUTE_SENT` now requires the real returned target thread to equal the
+  PREPARED outbox; Gateway supplies the exact materialized `payload_digest`
+  from that canonical outbox. A wrong target or a present stronger receipt for
+  a different payload rejects with zero side effects.
 - `PREPARE_ROUTE` now stops at the transport safe point, while the retained
   failed outbox remains eligible only for its recovery/ACK path. Metrics now
   keep Worker, Reviewer, and Local Verifier active windows separate.
@@ -62,16 +62,21 @@ All notable changes to this project are documented here. The project follows
   `INITIALIZE_SUCCESSOR` in a fresh root and records a predecessor handoff.
 - Updated Chinese and English README files, the Adaptive contract, SPEC,
   invariants, ADR 0010 and release guidance for the v3 architecture.
+- Replaced the unavailable private App action-receipt hard gate with an explicit
+  host-cooperative evidence model. Optional `x-codex-app-action-receipt-v1`
+  remains stricter when present; normal task/heartbeat registration, send,
+  transport pause and finalization bind real App returns/readback to the
+  host-attested turn and canonical route/heartbeat identity instead.
 
 ### Release boundary
 
 v3.3.0 is not released until the exact protected-main merge SHA passes the
 same-SHA real Codex App Gateway canary, is installed with zero drift, has an
 independent P0/P1/P2=0 review, and is then tagged and published as a GitHub
-Release. The current Codex App cannot emit the App-owned result receipt needed
-to pass that canary; result-consuming Gateway operations therefore fail closed
-and this entry is not a release candidate. Repository tests and CI remain
-prerequisite evidence, not a release claim.
+Release. The real canary records host-cooperative task/heartbeat/send/report/
+successor/pause observations on that SHA; an optional private App receipt is
+not a release precondition. Repository tests and CI remain prerequisite
+evidence, not a release claim.
 
 ## [3.2.8] - 2026-07-17
 

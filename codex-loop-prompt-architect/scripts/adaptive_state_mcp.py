@@ -45,10 +45,11 @@ MCP_STATE_GATEWAY_TOOL_NAME = "state_gateway"
 MCP_TURN_META_KEY = "x-codex-turn-metadata"
 MCP_THREAD_META_KEY = "threadId"
 # This reserved top-level metadata field is intentionally not an MCP tool
-# argument.  Only a future Codex App/app-server integration that can attest a
-# completed subtool call may provide it.  Current App versions do not provide
-# it, so result-consuming Gateway operations fail closed instead of treating a
-# Controller's retelling of a tool result as evidence.
+# argument.  A future Codex App/app-server integration may provide it as a
+# stronger, completed-subtool attestation.  Current hosts are cooperative, not
+# Byzantine: they bind real App return values and readback to the host-attested
+# Controller turn, but do not claim a provider-signed result that the App does
+# not expose.
 MCP_APP_ACTION_RECEIPT_META_KEY = "x-codex-app-action-receipt-v1"
 MCP_INPUT_MAX_BYTES = 4_000_000
 MCP_PARTIAL_FRAME_TIMEOUT_SECONDS = 30.0
@@ -440,6 +441,34 @@ def _extract_app_action_result(
     return copy.deepcopy(raw["result"])
 
 
+def _optional_app_action_result(
+    params: dict[str, Any],
+    metadata: TrustedTurnMetadata,
+    *,
+    action: str,
+    result_fields: set[str],
+) -> dict[str, Any] | None:
+    """Return a future App attestation when present, otherwise use host evidence.
+
+    The absent-carrier branch is deliberately *not* an error.  Schema-v3
+    protects against operational faults (crashes, duplication, stale or
+    mismatched evidence) on today's cooperative Codex host; it does not claim
+    Byzantine resistance against a Controller that can forge every App call.
+    When a future App injects the reserved result carrier, retain its stricter
+    validation rather than widening the accepted result shape.
+    """
+
+    meta = params.get("_meta")
+    if not isinstance(meta, dict) or MCP_APP_ACTION_RECEIPT_META_KEY not in meta:
+        return None
+    return _extract_app_action_result(
+        params,
+        metadata,
+        action=action,
+        result_fields=result_fields,
+    )
+
+
 @dataclass
 class AdaptiveStateMcpServer:
     host_attestation: TrustedHostAttestation | None
@@ -768,6 +797,7 @@ class AdaptiveStateMcpServer:
         metadata: TrustedTurnMetadata,
         *,
         stem: str,
+        evidence_model: str = "HOST_COOPERATIVE",
     ) -> tuple[dict[str, Any], list[dict[str, str]], dict[str, str]]:
         required = {
             "automation_id", "status", "automation_name", "kind",
@@ -802,7 +832,8 @@ class AdaptiveStateMcpServer:
         heartbeat_digest = "sha256:" + hashlib.sha256(heartbeat_content.encode("utf-8")).hexdigest()
         heartbeat_path = f".codex-loop/reports/{stem}-heartbeat-{heartbeat_digest.removeprefix('sha256:')}.json"
         app_receipt = {
-            "observation_kind": "APP_AUTOMATION_UPDATE_OBSERVATION",
+            "observation_kind": "HOST_COOPERATIVE_AUTOMATION_UPDATE_OBSERVATION",
+            "evidence_model": evidence_model,
             "controller_thread_id": metadata.thread_id,
             "controller_turn_id": metadata.turn_id,
             "automation": copy.deepcopy(paused_receipt),
@@ -936,40 +967,76 @@ class AdaptiveStateMcpServer:
                     gateway_payload = copy.deepcopy(payload)
                     artifacts = []
                 elif operation == "REGISTER_TASK":
-                    if payload:
-                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
-                    gateway_payload = _extract_app_action_result(
+                    result_fields = {
+                        "thread_id", "role_kind", "bootstrap_role_kind",
+                        "bootstrap_prompt_digest", "worktree_path",
+                    }
+                    attested = _optional_app_action_result(
                         params,
                         metadata,
                         action="THREAD_CREATE_OR_READ",
-                        result_fields={
-                            "thread_id", "role_kind", "bootstrap_role_kind",
-                            "bootstrap_prompt_digest", "worktree_path",
-                        },
+                        result_fields=result_fields,
                     )
+                    if attested is not None:
+                        if payload:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        gateway_payload = attested
+                    else:
+                        if set(payload) != result_fields:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        gateway_payload = copy.deepcopy(payload)
                     artifacts = []
                 elif operation in {"REGISTER_HEARTBEAT", "RECORD_HEARTBEAT_OBSERVATION"}:
-                    if payload:
-                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
                     required_observation = {
                         "automation_id", "status", "automation_name", "kind",
                         "target_thread_id", "rrule", "prompt_digest",
                         "prompt_normalization", "observed_at",
                     }
-                    observation = _extract_app_action_result(
+                    attested = _optional_app_action_result(
                         params,
                         metadata,
                         action="AUTOMATION_OBSERVATION",
                         result_fields=required_observation,
                     )
+                    if attested is not None:
+                        if payload:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        observation = attested
+                    elif operation == "REGISTER_HEARTBEAT":
+                        required_direct = {
+                            "automation_id", "automation_name", "rrule", "prompt_digest",
+                            "status", "observed_at",
+                        }
+                        if set(payload) != required_direct:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        observation = {
+                            "automation_id": payload["automation_id"],
+                            "status": payload["status"],
+                            "automation_name": payload["automation_name"],
+                            "kind": "HEARTBEAT",
+                            "target_thread_id": metadata.thread_id,
+                            "rrule": payload["rrule"],
+                            "prompt_digest": payload["prompt_digest"],
+                            "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+                            "observed_at": payload["observed_at"],
+                        }
+                    else:
+                        required_direct = {"automation_id", "status", "observed_at"}
+                        if set(payload) != required_direct:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        identity = state.get("heartbeat_prompt_identity")
+                        if not isinstance(identity, dict):
+                            self._gateway_error("STATE_GATEWAY_HEARTBEAT_UNREGISTERED", "/params/arguments/request")
+                        observation = {
+                            **copy.deepcopy(identity),
+                            "automation_id": payload["automation_id"],
+                            "status": payload["status"],
+                            "observed_at": payload["observed_at"],
+                        }
                     if operation == "REGISTER_HEARTBEAT":
                         controller = state.get("thread_registry", {}).get(metadata.thread_id, {})
                         if controller.get("role_kind") != "CONTROLLER":
                             self._gateway_error("STEERING_ACTOR_INVALID", "/params/arguments/request")
-                    else:
-                        identity = state.get("heartbeat_prompt_identity")
-                        if not isinstance(identity, dict):
-                            self._gateway_error("STATE_GATEWAY_HEARTBEAT_UNREGISTERED", "/params/arguments/request")
                     content = json.dumps(observation, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
                     digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
                     evidence_path = (
@@ -986,21 +1053,35 @@ class AdaptiveStateMcpServer:
                         "automation_observation_digest": digest,
                     }
                 elif operation == "RECORD_ROUTE_SENT":
-                    if set(payload) != {"route_id"}:
-                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
-                    route_id = payload["route_id"]
                     required_receipt = {
                         "message_id", "target_thread_id", "observed_at", "payload_digest",
                     }
-                    app_send_receipt = {
-                        **_extract_app_action_result(
-                            params,
-                            metadata,
-                            action="SEND_MESSAGE_TO_THREAD",
-                            result_fields=required_receipt,
-                        ),
-                        "source_turn_id": metadata.turn_id,
-                    }
+                    attested = _optional_app_action_result(
+                        params,
+                        metadata,
+                        action="SEND_MESSAGE_TO_THREAD",
+                        result_fields=required_receipt,
+                    )
+                    if attested is not None:
+                        if set(payload) != {"route_id"}:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        route_id = payload["route_id"]
+                        returned_thread_id = attested["target_thread_id"]
+                        provider_observation_id: str | None = attested["message_id"]
+                        observed_at = attested["observed_at"]
+                        supplied_payload_digest = attested["payload_digest"]
+                    else:
+                        required_direct = {"route_id", "returned_thread_id", "observed_at"}
+                        legacy_direct = {
+                            "route_id", "message_id", "target_thread_id", "observed_at",
+                        }
+                        if set(payload) != required_direct and set(payload) != legacy_direct:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        route_id = payload["route_id"]
+                        returned_thread_id = payload.get("returned_thread_id", payload.get("target_thread_id"))
+                        provider_observation_id = payload.get("message_id")
+                        observed_at = payload["observed_at"]
+                        supplied_payload_digest = None
                     route = state.get("gateway_route_ledger", {}).get(route_id, {})
                     outbox_field = {
                         "DISPATCH": "dispatch_outbox",
@@ -1012,18 +1093,27 @@ class AdaptiveStateMcpServer:
                         if outbox_field is not None
                         else {}
                     )
-                    if app_send_receipt["payload_digest"] != outbox.get("payload_digest"):
+                    if (
+                        supplied_payload_digest is not None
+                        and supplied_payload_digest != outbox.get("payload_digest")
+                    ):
                         self._gateway_error(
                             "APP_SEND_RECEIPT_PAYLOAD_MISMATCH",
                             f"/params/_meta/{MCP_APP_ACTION_RECEIPT_META_KEY}/result/payload_digest",
                         )
+                    if returned_thread_id != outbox.get("target_id"):
+                        self._gateway_error(
+                            "OUTBOX_TARGET_MISMATCH",
+                            "/params/arguments/request/parameters/returned_thread_id",
+                        )
                     observation = {
-                        "observation_kind": "APP_SEND_OBSERVATION",
+                        "observation_kind": "HOST_COOPERATIVE_SEND_OBSERVATION",
                         "outbox_id": route_id,
-                        "payload_digest": app_send_receipt["payload_digest"],
-                        "target_thread_id": app_send_receipt["target_thread_id"],
-                        "message_id": app_send_receipt["message_id"],
-                        "observed_at": app_send_receipt["observed_at"],
+                        "payload_digest": outbox["payload_digest"],
+                        "target_thread_id": outbox["target_id"],
+                        "returned_thread_id": returned_thread_id,
+                        "provider_observation_id": provider_observation_id,
+                        "observed_at": observed_at,
                         "source_thread_id": metadata.thread_id,
                         "source_turn_id": metadata.turn_id,
                     }
@@ -1034,10 +1124,11 @@ class AdaptiveStateMcpServer:
                     gateway_payload = {
                         "route_id": route_id,
                         "send_observation": {
-                            "message_id": app_send_receipt["message_id"],
-                            "target_thread_id": app_send_receipt["target_thread_id"],
-                            "payload_digest": app_send_receipt["payload_digest"],
-                            "observed_at": app_send_receipt["observed_at"],
+                            "returned_thread_id": returned_thread_id,
+                            "provider_observation_id": provider_observation_id,
+                            "target_thread_id": outbox["target_id"],
+                            "payload_digest": outbox["payload_digest"],
+                            "observed_at": observed_at,
                             "source_thread_id": metadata.thread_id,
                             "source_turn_id": metadata.turn_id,
                             "evidence_path": evidence_path,
@@ -1103,39 +1194,78 @@ class AdaptiveStateMcpServer:
                         "codec_report_attestation": copy.deepcopy(report_attestation),
                     }
                 elif operation == "RECORD_TRANSPORT_OBSERVATION":
-                    if payload:
-                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
-                    gateway_payload = _extract_app_action_result(
+                    required_observation = {
+                        "fingerprint", "outbox_id", "observed_at",
+                        "natural_heartbeat", "heartbeat_automation_id",
+                    }
+                    attested = _optional_app_action_result(
                         params,
                         metadata,
                         action="APP_TRANSPORT_OBSERVATION",
-                        result_fields={
-                            "fingerprint", "outbox_id", "observed_at",
-                            "natural_heartbeat", "heartbeat_automation_id",
-                        },
+                        result_fields=required_observation,
                     )
+                    if attested is not None:
+                        if payload:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        gateway_payload = attested
+                    else:
+                        required_direct = {
+                            "fingerprint", "outbox_id", "observed_at", "natural_heartbeat",
+                        }
+                        if set(payload) != required_direct:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        identity = state.get("heartbeat_prompt_identity")
+                        if payload["natural_heartbeat"] and not isinstance(identity, dict):
+                            self._gateway_error("STATE_GATEWAY_HEARTBEAT_UNREGISTERED", "/params/arguments/request")
+                        gateway_payload = {
+                            **copy.deepcopy(payload),
+                            "heartbeat_automation_id": (
+                                identity["automation_id"] if payload["natural_heartbeat"] else None
+                            ),
+                        }
                     artifacts = []
                 elif operation == "ACK_TRANSPORT_PAUSE":
-                    if set(payload) != set():
-                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
-                    paused_receipt = {
-                        **_extract_app_action_result(
-                            params,
-                            metadata,
-                            action="AUTOMATION_UPDATE",
-                            result_fields={
-                                "automation_id", "status", "automation_name", "kind",
-                                "target_thread_id", "rrule", "prompt_digest",
-                                "prompt_normalization", "observed_at",
-                            },
-                        ),
-                        "source_turn_id": metadata.turn_id,
+                    required_receipt = {
+                        "automation_id", "status", "automation_name", "kind",
+                        "target_thread_id", "rrule", "prompt_digest",
+                        "prompt_normalization", "observed_at",
                     }
+                    attested = _optional_app_action_result(
+                        params,
+                        metadata,
+                        action="AUTOMATION_UPDATE",
+                        result_fields=required_receipt,
+                    )
+                    if attested is not None:
+                        if payload:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        paused_receipt = copy.deepcopy(attested)
+                        evidence_model = "APP_ACTION_ATTESTED"
+                    else:
+                        if set(payload) != {"paused_automation_receipt"}:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        paused_receipt = copy.deepcopy(payload["paused_automation_receipt"])
+                        if (
+                            not isinstance(paused_receipt, dict)
+                            or (
+                                set(paused_receipt) != required_receipt
+                                and set(paused_receipt) != required_receipt | {"source_turn_id"}
+                            )
+                        ):
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/paused_automation_receipt")
+                        if (
+                            paused_receipt.get("source_turn_id") is not None
+                            and paused_receipt["source_turn_id"] != metadata.turn_id
+                        ):
+                            self._gateway_error("APP_AUTOMATION_RECEIPT_TURN_MISMATCH", "/params/arguments/request/parameters/paused_automation_receipt/source_turn_id")
+                        evidence_model = "HOST_COOPERATIVE"
+                    paused_receipt["source_turn_id"] = metadata.turn_id
                     heartbeat_observation, artifacts, pause_receipt = self._gateway_paused_automation_artifacts(
                         state,
                         paused_receipt,
                         metadata,
                         stem="gateway-transport",
+                        evidence_model=evidence_model,
                     )
                     gateway_payload = {
                         "heartbeat_observation": heartbeat_observation,
@@ -1152,22 +1282,41 @@ class AdaptiveStateMcpServer:
                     gateway_payload = copy.deepcopy(payload)
                     artifacts = []
                 elif operation == "ACK_FINALIZATION":
-                    if set(payload) != {"finalization_id"}:
-                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
                     required_receipt = {
                         "automation_id", "status", "automation_name", "kind",
                         "target_thread_id", "rrule", "prompt_digest",
                         "prompt_normalization", "observed_at",
                     }
-                    paused_receipt = {
-                        **_extract_app_action_result(
-                            params,
-                            metadata,
-                            action="AUTOMATION_UPDATE",
-                            result_fields=required_receipt,
-                        ),
-                        "source_turn_id": metadata.turn_id,
-                    }
+                    attested = _optional_app_action_result(
+                        params,
+                        metadata,
+                        action="AUTOMATION_UPDATE",
+                        result_fields=required_receipt,
+                    )
+                    if attested is not None:
+                        if set(payload) != {"finalization_id"}:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        paused_receipt = copy.deepcopy(attested)
+                        evidence_model = "APP_ACTION_ATTESTED"
+                    else:
+                        if set(payload) != {"finalization_id", "paused_automation_receipt"}:
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
+                        paused_receipt = copy.deepcopy(payload["paused_automation_receipt"])
+                        if (
+                            not isinstance(paused_receipt, dict)
+                            or (
+                                set(paused_receipt) != required_receipt
+                                and set(paused_receipt) != required_receipt | {"source_turn_id"}
+                            )
+                        ):
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/paused_automation_receipt")
+                        if (
+                            paused_receipt.get("source_turn_id") is not None
+                            and paused_receipt["source_turn_id"] != metadata.turn_id
+                        ):
+                            self._gateway_error("APP_AUTOMATION_RECEIPT_TURN_MISMATCH", "/params/arguments/request/parameters/paused_automation_receipt/source_turn_id")
+                        evidence_model = "HOST_COOPERATIVE"
+                    paused_receipt["source_turn_id"] = metadata.turn_id
                     identity = state.get("heartbeat_prompt_identity")
                     if not isinstance(identity, dict):
                         self._gateway_error("STATE_GATEWAY_HEARTBEAT_UNREGISTERED", "/params/arguments/request")
@@ -1207,7 +1356,8 @@ class AdaptiveStateMcpServer:
                         f"{goal_digest.removeprefix('sha256:')}.json"
                     )
                     app_receipt = {
-                        "observation_kind": "APP_AUTOMATION_UPDATE_OBSERVATION",
+                        "observation_kind": "HOST_COOPERATIVE_AUTOMATION_UPDATE_OBSERVATION",
+                        "evidence_model": evidence_model,
                         "controller_thread_id": metadata.thread_id,
                         "controller_turn_id": metadata.turn_id,
                         "automation": copy.deepcopy(paused_receipt),

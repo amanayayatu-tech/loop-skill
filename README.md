@@ -128,7 +128,7 @@ python3 -m pip install -r requirements-test.txt
 
 新生成的 Adaptive Pack 默认使用 schema v3。它不再创建会话式 State-Writer 任务；已安装的 MCP `state_gateway({root, request})` 是唯一 canonical writer。Controller 仍然只读，Worker 只做产品工作，Reviewer/Local Verifier 只提交证据，任何外层 Supervisor 都不属于产品角色。
 
-**当前平台边界：**MCP 的 host-attested turn 只能证明“谁调用了 Gateway”，不能证明该 turn 更早前是否真的完成创建/读取任务、`send_message_to_thread`、传输失败/自然 heartbeat 观察，或 `automation_update`/读取自动化。因此消费外部结果的 Gateway 调用必须收到 App 自己注入、不能由 tool 参数提供的 `x-codex-app-action-receipt-v1` 回执。`RECORD_ROUTE_SENT` 的回执还必须带 App 从实际发送输入计算的 exact materialized `payload_digest`，并与 PREPARED outbox 一致；Gateway 绝不自行补造该绑定。当前 Codex App 尚未暴露这种回执；`REGISTER_TASK`、`REGISTER_HEARTBEAT`、`RECORD_HEARTBEAT_OBSERVATION`、`RECORD_ROUTE_SENT`、`RECORD_TRANSPORT_OBSERVATION`、`ACK_TRANSPORT_PAUSE` 与 `ACK_FINALIZATION` 会以 `APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE` 零副作用停止。v3.3 在该宿主能力出现前不是可运行的生产 Loop，也不是可发布候选；人工观察到的 canary 不能替代 canonical 证据。
+**当前平台边界：**schema v3 是 **host-cooperative evidence**，不是声称防御“恶意 Controller 可伪造全部 App 调用”的 Byzantine 系统。Gateway 将一次真实 App 的 task/thread、automation、send 返回 target 或 PAUSED readback，绑定到当前 host-attested turn、唯一 PREPARED outbox 和已登记 heartbeat；由 Gateway 自己取得 canonical payload digest，且 send observation 本身绝不产生 PASS。它防止崩溃、重复发送、陈旧/错配/重放报告、错误 artifact/dispatch 与误终态。未来若 App 提供 `x-codex-app-action-receipt-v1`，会作为可选 stronger attestation 严格校验；当前缺失不阻断正常运行、canary 或发布。
 
 ```text
 Controller (read-only)
@@ -140,14 +140,14 @@ Controller (read-only)
 
 Gateway 从 canonical state 原子取得 lease、仓库快照、freshness、validation matrix、review handoff、当前 artifact 与 outbox；Controller 不复制这些对象。PASS 投影同时要求同一 Goal 的**当前 artifact + 当前 Worker dispatch + PASS 正式报告**。`BLOCKED`、旧 artifact 或旧 dispatch 不能越级成为 PASS。
 
-Worker PASS 后固定经过 Code Review、必要的 Local Verification、Roadmap Audit。非最终的 audit PASS 只能由 `ADVANCE_ROADMAP` 在既有 canonical registry 内推进；最终候选还要经过 Final Audit、`PREPARE_FINALIZATION`、由 App 自身验证的 `automation_update` 暂停回执与 `ACK_FINALIZATION`，才到达 `FINALIZATION_ACKED`。schema v3 禁用 native Goal adapter，receipt 会明确记录本地 `GATEWAY_NO_NATIVE_GOAL` sentinel；它不是外部 Goal 工具 receipt。Gateway 不会自行制造 heartbeat `PAUSED` 证据，也不接受 Controller 自报的回执。报告已 staged 但 stdout 或任务索引丢失时，用 `REPORT_RECOVERY` ACK 原 outbox，不创建第二个“补报告”的产品派发；该 report 必须由目标 Worker/Reviewer/Verifier 的 MCP-attested 调用重新 stage。
+Worker PASS 后固定经过 Code Review、必要的 Local Verification、Roadmap Audit。非最终的 audit PASS 只能由 `ADVANCE_ROADMAP` 在既有 canonical registry 内推进；最终候选还要经过 Final Audit、`PREPARE_FINALIZATION`、一次真实 `automation_update` pause 与 PAUSED readback、`ACK_FINALIZATION`，才到达 `FINALIZATION_ACKED`。schema v3 禁用 native Goal adapter，记录会明确写出本地 `GATEWAY_NO_NATIVE_GOAL` sentinel；它不是外部 Goal 工具 receipt。Gateway 不会自行制造 heartbeat `PAUSED` 证据，也不接受不匹配当前 heartbeat 的 Controller JSON。报告已 staged 但 stdout 或任务索引丢失时，用 `REPORT_RECOVERY` ACK 原 outbox，不创建第二个“补报告”的产品派发；该 report 必须由目标 Worker/Reviewer/Verifier 的 MCP-attested 调用重新 stage。
 
 schema v1/v2 与 `route_state_mutation` / State-Writer 只保留兼容读取和显式 `MIGRATE_V2_TO_V3`。迁移只能在 PAUSED、无 lease、无活跃 outbox 的安全点进行。终态 predecessor 永久保留；续跑只能在新 root 使用 `INITIALIZE_SUCCESSOR`。
 
 ## 如何读“慢”、传输退化与终态
 
 - **正常慢**：同一 SENT outbox 仍有活跃角色或新证据；观察同一条路线，不重复派发。
-- **传输退化**：只有 App 自身验证的同一 outbox/fingerprint 失败和自然-heartbeat 标记才会进入 canonical；第一次失败仍保留原 outbox；两次自然 heartbeat 或累计 15 分钟后进入 `WAITING_TRANSPORT_RECOVERY`。canonical 立即停止路由；`ACK_TRANSPORT_PAUSE` 同样必须有 App 自身验证的暂停回执，否则安全地保持阻断；在回执前不把 heartbeat 说成已经暂停。
+- **传输退化**：真实注册 heartbeat 的同一 outbox/fingerprint 失败，会绑定当前 host turn 后进入 canonical；第一次失败仍保留原 outbox；两次自然 heartbeat 或累计 15 分钟后进入 `WAITING_TRANSPORT_RECOVERY`。canonical 立即停止路由；`ACK_TRANSPORT_PAUSE` 必须有真实 pause 后、精确匹配该 heartbeat 的 PAUSED readback，否则安全地保持阻断；在 readback 前不把 heartbeat 说成已经暂停。
 - **真正终态**：只有 canonical `FINALIZATION_ACKED`，或有独立硬阻断证据的 `LOOP_BLOCKED`。投影的旧 `RUNNING` 字段不能复活终态。
 
 `LOOP_METRICS.json` 是派生观察：按 Goal 展示总时长、彼此分开的已观测 Worker/Reviewer/Local Verifier 窗口、控制面等待、派发/审查/拒绝次数、消息故障、Steering 和可得 token 使用。它不是第二 canonical，也不能授权路由。

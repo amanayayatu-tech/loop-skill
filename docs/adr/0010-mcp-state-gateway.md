@@ -15,7 +15,7 @@ remain writable after process launch.
 
 The existing State-Writer path remains important historical evidence and a
 compatibility surface. It is not a safe default for a new loop when the
-installed MCP server can perform one atomic, App-attested canonical mutation.
+installed MCP server can perform one atomic, host-attested canonical mutation.
 
 ## Decision
 
@@ -33,8 +33,9 @@ from canonical state and exposes bounded operations:
   `ACK_TRANSPORT_PAUSE`, and bounded transport observations.
 
 `PREPARE_FINALIZATION` is a nonterminal reservation. It records a PREPARED
-outbox but leaves `terminal_status` null; only `ACK_FINALIZATION`, after the
-App-owned PAUSED receipt, projects the terminal state.
+outbox but leaves `terminal_status` null; only `ACK_FINALIZATION`, after an
+actual PAUSED automation-update readback bound to the current Controller turn,
+projects the terminal state.
 
 The runtime codec remains the typed transport for materialization, verification,
 staging, fingerprint normalization and raw complete-diff capture. A binary
@@ -46,9 +47,9 @@ and PASS formal report. A `BLOCKED` report is never a PASS input.
 
 Schema v3 disables native Goal adapters. A nonfinal audit can advance only the
 unchanged canonical registry, while finalization records the local
-`GATEWAY_NO_NATIVE_GOAL` sentinel and an App-owned verified pause receipt rather than
-claiming an external Goal-tool outcome. Target report staging is bound to the
-App-attested Worker/Reviewer/Verifier identity, not merely Controller text.
+`GATEWAY_NO_NATIVE_GOAL` sentinel and a verified pause/readback record rather
+than claiming an external Goal-tool outcome. Target report staging is bound to
+the host-attested Worker/Reviewer/Verifier identity, not merely Controller text.
 
 Schema v1/v2 state remains readable. Moving it to v3 requires explicit
 `MIGRATE_V2_TO_V3` at a PAUSED, lease-free, outbox-quiescent safe point. A
@@ -68,12 +69,15 @@ terminal predecessor is immutable: a continuation is a new root with
   before it is claimed. An outer Supervisor is not a recovery channel.
 - `LOOP_METRICS.json` is derived observation only and never a second canonical
   state source; Worker, Reviewer, and Local Verifier windows remain separate.
-- A host-attested MCP turn alone is not an App subtool-result receipt. Until
-  Codex injects non-argument `x-codex-app-action-receipt-v1` metadata after a
-  completed send or automation update, `RECORD_ROUTE_SENT`,
-  `ACK_TRANSPORT_PAUSE`, and `ACK_FINALIZATION` fail closed with no canonical
-  mutation. Manual canary observation is not a substitute, so schema-v3 cannot
-  be released as a runnable Loop on the current App capability.
+- Schema v3 is host-cooperative, not Byzantine. It binds a real App return
+  value or readback to the current host-attested turn, the prepared outbox and
+  the registered task/heartbeat identity. It therefore prevents ordinary
+  crashes, duplicate sends, stale/mismatched reports, wrong artifact or
+  dispatch, and premature terminal projection; it does not claim to resist a
+  malicious Controller that can forge every App invocation. A future
+  non-argument `x-codex-app-action-receipt-v1` carrier is optional stronger
+  evidence and is strictly verified when present, but lack of that carrier does
+  not block a runnable Loop.
 
 ## Rejected alternatives
 
@@ -86,7 +90,7 @@ terminal predecessor is immutable: a continuation is a new root with
 ## Evolution
 
 The MCP SDK, Gateway implementation, route record layout and derived metrics
-may change. Replacements must preserve App-attested single-writer mutation,
+may change. Replacements must preserve host-attested single-writer mutation,
 original-outbox recovery without reexecution, current artifact/dispatch/PASS
 binding, explicit-only migration, immutable predecessor evidence, and bounded
 transport degradation.

@@ -28,13 +28,20 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "route_tool_visible": True,
             "signed_direct_parent": True,
             "metadata_parser_negative_cases": True,
+            "task_return_bound_to_host_turn": True,
+            "heartbeat_create_readback_bound": True,
             "first_route_succeeded": True,
+            "send_return_bound_to_prepared_outbox": True,
+            "wrong_send_target_rejected_zero_effect": True,
+            "target_staged_report_acked": True,
             "same_turn_second_route_rejected_before_side_effect": True,
             "same_turn_second_route_zero_effect": True,
             "next_turn_route_succeeded": True,
             "partial_frame_process_cleanup": True,
             "control_plane_responsive_after_partial_frame": True,
             "lost_stdout_recovered_without_second_send": True,
+            "successor_initialized_from_terminal_predecessor": True,
+            "transport_pause_readback_bound": True,
             "pack_migration_same_heartbeat_reconciled": True,
             "native_goal_generation_recovery_status": "DEFERRED_UNAVAILABLE",
             "native_goal_generation_recovery_cli": {
@@ -54,7 +61,7 @@ class AppCanaryReceiptTests(unittest.TestCase):
             "finalization_acked": True,
         }
         self.receipt = {
-            "schema_version": "app-canary-receipt-v4",
+            "schema_version": "app-canary-receipt-v5",
             "evidence_layer": "local-main-mac",
             "status": "PASS",
             "started_at": "2026-07-15T15:00:00+08:00",
@@ -130,6 +137,15 @@ class AppCanaryReceiptTests(unittest.TestCase):
                 },
             },
             "checks": checks,
+            "operation_evidence": {
+                "task_thread_return_digest": "a" * 64,
+                "heartbeat_create_readback_digest": "b" * 64,
+                "send_return_digest": "c" * 64,
+                "target_staged_report_digest": "d" * 64,
+                "lost_stdout_recovery_digest": "e" * 64,
+                "successor_initialization_digest": "f" * 64,
+                "pause_readback_digest": "0" * 64,
+            },
             "error_classification": None,
             "contains_sensitive_content": False,
         }
@@ -338,7 +354,7 @@ class AppCanaryReceiptTests(unittest.TestCase):
                         expected_compatibility_identity_digest=stale_digest,
                     )
 
-    def test_v3_receipt_is_not_silently_accepted_by_v4_schema(self) -> None:
+    def test_v3_receipt_is_not_silently_accepted_by_v5_schema(self) -> None:
         self.receipt["schema_version"] = "app-canary-receipt-v3"
         self.receipt["mcp"]["protocol_version"] = "2025-11-25"
         for field in (

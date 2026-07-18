@@ -37,113 +37,6 @@ def call_state_gateway(
 ) -> dict[str, object]:
     request = copy.deepcopy(request)
     meta = McpHarness.metadata()
-
-    def attach_app_result(action: str, result: dict[str, object]) -> None:
-        # This is a synthetic stand-in for a future App-owned top-level receipt
-        # injection.  Production App calls without this reserved metadata must
-        # fail closed; no request argument can substitute for it.
-        meta[mcp.MCP_APP_ACTION_RECEIPT_META_KEY] = {
-            "schema_version": 1,
-            "action": action,
-            "source_thread_id": "controller-1",
-            "source_turn_id": "real-app-turn-1",
-            "result": result,
-        }
-
-    # Keep route fixtures readable while ensuring the result comes from the
-    # synthetic App metadata carrier, not the public Gateway arguments.
-    if request.get("operation") == "RECORD_ROUTE_SENT":
-        parameters = request.get("parameters")
-        if isinstance(parameters, dict) and set(parameters) == {
-            "route_id", "message_id", "target_thread_id", "observed_at"
-        }:
-            state = AdaptiveStateRuntime(root).read_state()  # noqa: F405
-            route = (
-                state.get("gateway_route_ledger", {}).get(parameters["route_id"], {})
-                if isinstance(state, dict)
-                else {}
-            )
-            outbox_field = {
-                "DISPATCH": "dispatch_outbox",
-                "ASSURANCE": "assurance_dispatch_outbox",
-                "LOCAL": "local_verification_outbox",
-            }.get(route.get("outbox_kind"))
-            outbox = (
-                state.get(outbox_field, {}).get(parameters["route_id"], {})
-                if isinstance(state, dict) and outbox_field is not None
-                else {}
-            )
-            request["parameters"] = {"route_id": parameters["route_id"]}
-            attach_app_result("SEND_MESSAGE_TO_THREAD", {
-                "message_id": parameters["message_id"],
-                "target_thread_id": parameters["target_thread_id"],
-                "observed_at": parameters["observed_at"],
-                "payload_digest": outbox.get("payload_digest"),
-            })
-    if request.get("operation") == "REGISTER_TASK":
-        parameters = request.get("parameters")
-        if isinstance(parameters, dict) and set(parameters) == {
-            "thread_id", "role_kind", "bootstrap_role_kind",
-            "bootstrap_prompt_digest", "worktree_path",
-        }:
-            request["parameters"] = {}
-            attach_app_result("THREAD_CREATE_OR_READ", parameters)
-    if request.get("operation") == "REGISTER_HEARTBEAT":
-        parameters = request.get("parameters")
-        if isinstance(parameters, dict) and set(parameters) == {
-            "automation_id", "automation_name", "rrule", "prompt_digest",
-            "status", "observed_at",
-        }:
-            request["parameters"] = {}
-            attach_app_result("AUTOMATION_OBSERVATION", {
-                "automation_id": parameters["automation_id"],
-                "status": parameters["status"],
-                "automation_name": parameters["automation_name"],
-                "kind": "HEARTBEAT",
-                "target_thread_id": "controller-1",
-                "rrule": parameters["rrule"],
-                "prompt_digest": parameters["prompt_digest"],
-                "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
-                "observed_at": parameters["observed_at"],
-            })
-    if request.get("operation") == "RECORD_HEARTBEAT_OBSERVATION":
-        parameters = request.get("parameters")
-        if isinstance(parameters, dict) and set(parameters) == {
-            "automation_id", "status", "observed_at",
-        }:
-            state = AdaptiveStateRuntime(root).read_state()  # noqa: F405
-            identity = state.get("heartbeat_prompt_identity") if isinstance(state, dict) else None
-            if isinstance(identity, dict):
-                request["parameters"] = {}
-                attach_app_result("AUTOMATION_OBSERVATION", {
-                    **copy.deepcopy(identity),
-                    "automation_id": parameters["automation_id"],
-                    "status": parameters["status"],
-                    "observed_at": parameters["observed_at"],
-                })
-    if request.get("operation") == "RECORD_TRANSPORT_OBSERVATION":
-        parameters = request.get("parameters")
-        if isinstance(parameters, dict) and set(parameters) == {
-            "fingerprint", "outbox_id", "observed_at", "natural_heartbeat",
-        }:
-            request["parameters"] = {}
-            attach_app_result("APP_TRANSPORT_OBSERVATION", {
-                **copy.deepcopy(parameters),
-                "heartbeat_automation_id": (
-                    "transport-heartbeat-1" if parameters["natural_heartbeat"] else None
-                ),
-            })
-    if request.get("operation") in {"ACK_TRANSPORT_PAUSE", "ACK_FINALIZATION"}:
-        parameters = request.get("parameters")
-        if isinstance(parameters, dict) and isinstance(parameters.get("paused_automation_receipt"), dict):
-            receipt = copy.deepcopy(parameters["paused_automation_receipt"])
-            receipt.pop("source_turn_id", None)
-            attach_app_result("AUTOMATION_UPDATE", receipt)
-            request["parameters"] = (
-                {"finalization_id": parameters["finalization_id"]}
-                if request["operation"] == "ACK_FINALIZATION"
-                else {}
-            )
     response = server.handle(
         {
             "jsonrpc": "2.0",
@@ -401,7 +294,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             self.assertEqual(current["state_gateway_mode"], "MCP_CANONICAL_WRITER")
             self.assertNotIn("state-writer-1", current["thread_registry"])
 
-    def test_state_gateway_registers_only_attested_tasks_and_one_heartbeat(self) -> None:
+    def test_state_gateway_registers_bound_host_observations_and_one_heartbeat(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state = Harness(root)  # noqa: F405
@@ -412,7 +305,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "jsonrpc": "2.0", "id": "init", "method": "initialize",
                 "params": {"protocolVersion": "2025-06-18"},
             })
-            before_unattested = copy.deepcopy(state.state())
+            before_invalid = copy.deepcopy(state.state())
             for operation in (
                 "REGISTER_TASK",
                 "REGISTER_HEARTBEAT",
@@ -421,7 +314,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 response = server.handle(
                     {
                         "jsonrpc": "2.0",
-                        "id": f"gateway-{operation.lower()}-missing-receipt",
+                "id": f"gateway-{operation.lower()}-invalid-operation-evidence",
                         "method": "tools/call",
                         "params": {
                             "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
@@ -429,7 +322,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                             "arguments": {
                                 "root": str(root),
                                 "request": {
-                                    "request_id": f"gateway-{operation.lower()}-missing-receipt",
+                                    "request_id": f"gateway-{operation.lower()}-invalid-operation-evidence",
                                     "operation": operation,
                                     "occurred_at": T1,  # noqa: F405
                                     "parameters": {},
@@ -441,10 +334,8 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 self.assertIsNotNone(response)
                 payload = response["result"]["structuredContent"]
                 self.assertFalse(payload["ok"], payload)
-                self.assertEqual(
-                    payload["status"], "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE"
-                )
-                self.assertEqual(state.state(), before_unattested)
+                self.assertEqual(payload["status"], "STATE_GATEWAY_REQUEST_INVALID")
+                self.assertEqual(state.state(), before_invalid)
             registered = call_state_gateway(
                 server,
                 root,
@@ -568,13 +459,14 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             self.assertTrue(materialized["ok"], materialized)
             self.assertEqual(materialized["payload_digest"], outbox["payload_digest"])
 
-            # Current Codex does not inject a signed completed-send receipt.
-            # A caller's route id alone must not turn the outbox into SENT.
-            before_missing_receipt = copy.deepcopy(state.state())
+            # A route id alone must not turn the outbox into SENT.  The
+            # host-cooperative path still requires the returned target from
+            # the real send and binds it to the prepared outbox and this turn.
+            before_operation_evidence = copy.deepcopy(state.state())
             missing_receipt = server.handle(
                 {
                     "jsonrpc": "2.0",
-                    "id": "gateway-send-missing-receipt",
+                    "id": "gateway-send-missing-operation-evidence",
                     "method": "tools/call",
                     "params": {
                         "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
@@ -582,7 +474,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                         "arguments": {
                             "root": str(root),
                             "request": {
-                                "request_id": "gateway-send-missing-receipt",
+                                    "request_id": "gateway-send-missing-operation-evidence",
                                 "operation": "RECORD_ROUTE_SENT",
                                 "occurred_at": T2,  # noqa: F405
                                 "parameters": {"route_id": "gateway-dispatch-1"},
@@ -594,14 +486,12 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             self.assertIsNotNone(missing_receipt)
             missing_payload = missing_receipt["result"]["structuredContent"]
             self.assertFalse(missing_payload["ok"], missing_payload)
-            self.assertEqual(
-                missing_payload["status"], "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE"
-            )
-            self.assertEqual(state.state(), before_missing_receipt)
-            controller_supplied_receipt = server.handle(
+            self.assertEqual(missing_payload["status"], "STATE_GATEWAY_REQUEST_INVALID")
+            self.assertEqual(state.state(), before_operation_evidence)
+            malformed_operation_evidence = server.handle(
                 {
                     "jsonrpc": "2.0",
-                    "id": "gateway-send-controller-receipt",
+                    "id": "gateway-send-malformed-operation-evidence",
                     "method": "tools/call",
                     "params": {
                         "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
@@ -609,23 +499,23 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                         "arguments": {
                             "root": str(root),
                             "request": {
-                                "request_id": "gateway-send-controller-receipt",
+                                    "request_id": "gateway-send-malformed-operation-evidence",
                                 "operation": "RECORD_ROUTE_SENT",
                                 "occurred_at": T2,  # noqa: F405
                                 "parameters": {
                                     "route_id": "gateway-dispatch-1",
-                                    "app_send_receipt": {"message_id": "forged"},
+                                    "returned_thread_id": "worker-1",
                                 },
                             },
                         },
                     },
                 }
             )
-            self.assertIsNotNone(controller_supplied_receipt)
-            supplied_payload = controller_supplied_receipt["result"]["structuredContent"]
+            self.assertIsNotNone(malformed_operation_evidence)
+            supplied_payload = malformed_operation_evidence["result"]["structuredContent"]
             self.assertFalse(supplied_payload["ok"], supplied_payload)
             self.assertEqual(supplied_payload["status"], "STATE_GATEWAY_REQUEST_INVALID")
-            self.assertEqual(state.state(), before_missing_receipt)
+            self.assertEqual(state.state(), before_operation_evidence)
 
             # A real send receipt must bind the bytes that the App actually
             # materialized, not merely prove a message id and target.  A
@@ -669,7 +559,25 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             self.assertEqual(
                 wrong_payload["status"], "APP_SEND_RECEIPT_PAYLOAD_MISMATCH"
             )
-            self.assertEqual(state.state(), before_missing_receipt)
+            self.assertEqual(state.state(), before_operation_evidence)
+
+            wrong_target = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-send-wrong-target",
+                    "operation": "RECORD_ROUTE_SENT",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "route_id": "gateway-dispatch-1",
+                        "returned_thread_id": "reviewer-1",
+                        "observed_at": T2,  # noqa: F405
+                    },
+                },
+            )
+            self.assertFalse(wrong_target["ok"], wrong_target)
+            self.assertEqual(wrong_target["status"], "OUTBOX_TARGET_MISMATCH")
+            self.assertEqual(state.state(), before_operation_evidence)
 
             sent = call_state_gateway(
                 server,
@@ -680,8 +588,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                     "occurred_at": T2,  # noqa: F405
                     "parameters": {
                         "route_id": "gateway-dispatch-1",
-                        "message_id": "app-message-1",
-                        "target_thread_id": "worker-1",
+                        "returned_thread_id": "worker-1",
                         "observed_at": T2,  # noqa: F405
                     },
                 },
@@ -1819,9 +1726,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             self.assertIsNotNone(missing_transport_receipt)
             missing_payload = missing_transport_receipt["result"]["structuredContent"]
             self.assertFalse(missing_payload["ok"], missing_payload)
-            self.assertEqual(
-                missing_payload["status"], "APP_ACTION_RECEIPT_ATTESTATION_UNAVAILABLE"
-            )
+            self.assertEqual(missing_payload["status"], "STATE_GATEWAY_REQUEST_INVALID")
             self.assertEqual(state.state(), before_unattested_transport)
             first = call_state_gateway(
                 server,
@@ -1857,6 +1762,10 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             self.assertTrue(second["ok"], second)
             self.assertEqual(second["operation_status"], "WAITING_TRANSPORT_RECOVERY")
+            self.assertEqual(
+                event_lines(root)[-1]["next_action_code"],  # noqa: F405
+                "PAUSE_HEARTBEAT_WITH_READBACK_AND_NOTIFY_USER",
+            )
             recovery = state.state()["transport_recovery"]
             self.assertEqual(recovery["status"], "WAITING_TRANSPORT_RECOVERY")
             self.assertEqual(recovery["failure_count"], 2)
