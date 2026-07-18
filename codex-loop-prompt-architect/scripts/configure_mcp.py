@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -56,11 +57,53 @@ def _expected(command: Path, script: Path) -> dict[str, Any]:
 
 
 def _assert_exact(existing: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
-    if existing.get("command") != expected["command"] or existing.get("args") != expected["args"]:
-        raise RegistrationError("MCP_REGISTRATION_IDENTITY_CONFLICT")
     unexpected = sorted(set(existing) - {"command", "args"})
     if unexpected:
         raise RegistrationError("MCP_REGISTRATION_IDENTITY_CONFLICT: " + ",".join(unexpected))
+    if existing.get("command") != expected["command"] or existing.get("args") != expected["args"]:
+        raise RegistrationError("MCP_REGISTRATION_IDENTITY_CONFLICT")
+
+
+def _managed_existing_command(existing: Mapping[str, Any], expected: Mapping[str, Any]) -> Path:
+    """Return a previous managed runtime only for the same installed bridge.
+
+    The live skill directory is atomically replaced before registration.  A
+    prior installer can therefore legitimately leave the same bridge path but
+    a different absolute Python runtime.  Preserve that explicit runtime
+    choice; never reinterpret a different script or extra execution setting
+    as a managed upgrade.
+    """
+    unexpected = sorted(set(existing) - {"command", "args"})
+    if unexpected or existing.get("args") != expected["args"]:
+        suffix = (": " + ",".join(unexpected)) if unexpected else ""
+        raise RegistrationError("MCP_REGISTRATION_IDENTITY_CONFLICT" + suffix)
+    value = existing.get("command")
+    if not isinstance(value, str):
+        raise RegistrationError("MCP_REGISTRATION_IDENTITY_CONFLICT")
+    command = Path(value)
+    if not command.is_absolute() or not command.is_file() or not os.access(command, os.X_OK):
+        raise RegistrationError("MCP_PYTHON_EXECUTABLE_INVALID")
+    try:
+        probe = subprocess.run(
+            [
+                str(command),
+                "-c",
+                "import jsonschema, yaml; import importlib.util; "
+                "assert importlib.util.find_spec('tomllib') or importlib.util.find_spec('tomli'); "
+                "print('LOOPSKILL_PYTHON_RUNTIME_OK_V1')",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RegistrationError("MCP_PYTHON_RUNTIME_INVALID") from exc
+    if probe.returncode != 0 or probe.stdout != "LOOPSKILL_PYTHON_RUNTIME_OK_V1\n":
+        raise RegistrationError("MCP_PYTHON_RUNTIME_INVALID")
+    return command
 
 
 def _toml_string(value: str) -> str:
@@ -133,7 +176,14 @@ def registration_identity(config_path: Path, command: Path, script: Path, server
     }
 
 
-def register(config_path: Path, command: Path, script: Path, server_name: str = MCP_SERVER_NAME) -> tuple[bool, dict[str, Any]]:
+def register(
+    config_path: Path,
+    command: Path,
+    script: Path,
+    server_name: str = MCP_SERVER_NAME,
+    *,
+    allow_existing_managed_command: bool = False,
+) -> tuple[bool, dict[str, Any]]:
     if not command.is_absolute() or not script.is_absolute():
         raise RegistrationError("MCP_REGISTRATION_PATH_NOT_ABSOLUTE")
     if not command.is_file() or not os.access(command, os.X_OK):
@@ -147,14 +197,18 @@ def register(config_path: Path, command: Path, script: Path, server_name: str = 
     existing = _registration(config, server_name)
     expected = _expected(command, script)
     changed = False
+    effective_command = command
     if existing is not None:
-        _assert_exact(existing, expected)
+        if existing.get("command") != expected["command"] and allow_existing_managed_command:
+            effective_command = _managed_existing_command(existing, expected)
+        else:
+            _assert_exact(existing, expected)
     else:
         separator = b"" if not before or before.endswith(b"\n\n") else (b"\n" if before.endswith(b"\n") else b"\n\n")
         mode = stat.S_IMODE(config_path.stat().st_mode) if config_path.exists() else 0o600
         _atomic_replace(config_path, before, before + separator + _block(server_name, command, script), mode)
         changed = True
-    return changed, registration_identity(config_path, command, script, server_name)
+    return changed, registration_identity(config_path, effective_command, script, server_name)
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -163,6 +217,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--python", required=True, type=Path)
     parser.add_argument("--script", required=True, type=Path)
     parser.add_argument("--server-name", default=MCP_SERVER_NAME)
+    parser.add_argument("--allow-existing-managed-command", action="store_true")
     parser.add_argument("--check", action="store_true")
     return parser.parse_args(argv)
 
@@ -174,7 +229,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             identity = registration_identity(args.config, args.python, args.script, args.server_name)
             changed = False
         else:
-            changed, identity = register(args.config, args.python, args.script, args.server_name)
+            changed, identity = register(
+                args.config,
+                args.python,
+                args.script,
+                args.server_name,
+                allow_existing_managed_command=args.allow_existing_managed_command,
+            )
         print(json.dumps({"ok": True, "changed": changed, "registration": identity}, sort_keys=True, separators=(",", ":")))
     except (OSError, RegistrationError) as exc:
         print(json.dumps({"ok": False, "status": str(exc)}, sort_keys=True, separators=(",", ":")), file=sys.stderr)

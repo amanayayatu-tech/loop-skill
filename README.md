@@ -32,6 +32,10 @@ python3 -m pip install -r requirements-test.txt
 ./scripts/install.sh
 ```
 
+如果已安装的 `codex-loop-state` 正好仍指向同一 skill bridge，安装器会保留
+那个已登记的绝对 Python runtime 并原子替换 skill；不同 bridge、额外执行字段或
+失效 runtime 一律保持冲突并回滚，不能用手改 config 绕过。
+
 安装后，在 Codex App 中新建一个任务。先做只读需求质检：
 
 ```text

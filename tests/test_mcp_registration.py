@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,9 +27,12 @@ class McpRegistrationTests(unittest.TestCase):
         self.python = self.root / "stable-python"
         self.script = self.root / "skills/codex-loop-prompt-architect/scripts/adaptive_state_mcp.py"
         self.python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        self.non_python = self.root / "non-python-runtime"
+        self.non_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         self.script.parent.mkdir(parents=True)
         self.script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
         self.python.chmod(0o755)
+        self.non_python.chmod(0o755)
         self.script.chmod(0o755)
 
     def tearDown(self) -> None:
@@ -79,6 +83,51 @@ class McpRegistrationTests(unittest.TestCase):
         with self.assertRaisesRegex(configure_mcp.RegistrationError, "MCP_REGISTRATION_IDENTITY_CONFLICT"):
             configure_mcp.register(self.config, self.python, self.script)
         self.assertEqual(self.config.read_bytes(), original)
+
+    def test_managed_same_bridge_preserves_prior_runtime_only_when_explicitly_allowed(self) -> None:
+        previous_python = Path(sys.executable)
+        original = (
+            f'[mcp_servers.codex-loop-state]\n'
+            f'command = {json.dumps(str(previous_python))}\n'
+            f'args = [{json.dumps(str(self.script))}]\n'
+        ).encode("utf-8")
+        self.config.write_bytes(original)
+
+        changed, identity = configure_mcp.register(
+            self.config,
+            self.python,
+            self.script,
+            allow_existing_managed_command=True,
+        )
+
+        self.assertFalse(changed)
+        self.assertEqual(self.config.read_bytes(), original)
+        self.assertEqual(identity["command"], str(previous_python))
+        with self.assertRaisesRegex(configure_mcp.RegistrationError, "MCP_REGISTRATION_IDENTITY_CONFLICT"):
+            configure_mcp.register(self.config, self.python, self.script)
+
+    def test_managed_upgrade_rejects_extra_execution_semantics_or_invalid_runtime(self) -> None:
+        for command, extra, expected_error in (
+            (self.root / "missing-python", "", "MCP_PYTHON_EXECUTABLE_INVALID"),
+            (self.non_python, "", "MCP_PYTHON_RUNTIME_INVALID"),
+            (Path(sys.executable), 'cwd = "/tmp"\n', "MCP_REGISTRATION_IDENTITY_CONFLICT"),
+        ):
+            with self.subTest(command=command, extra=extra):
+                original = (
+                    f'[mcp_servers.codex-loop-state]\n'
+                    f'command = {json.dumps(str(command))}\n'
+                    f'args = [{json.dumps(str(self.script))}]\n'
+                    f'{extra}'
+                ).encode("utf-8")
+                self.config.write_bytes(original)
+                with self.assertRaisesRegex(configure_mcp.RegistrationError, expected_error):
+                    configure_mcp.register(
+                        self.config,
+                        self.python,
+                        self.script,
+                        allow_existing_managed_command=True,
+                    )
+                self.assertEqual(self.config.read_bytes(), original)
 
     def test_registration_with_extra_execution_semantics_is_rejected(self) -> None:
         for field in ('enabled = false', 'cwd = "/tmp"', 'env = { TOKEN = "not-used" }'):

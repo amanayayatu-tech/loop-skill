@@ -146,11 +146,19 @@ registration_json="$(
   "$PYTHON_RESOLVED" "$TARGET_DIR/scripts/configure_mcp.py" \
     --config "$CODEX_HOME_DIR/config.toml" \
     --python "$PYTHON_RESOLVED" \
-    --script "$TARGET_DIR/scripts/adaptive_state_mcp.py"
+    --script "$TARGET_DIR/scripts/adaptive_state_mcp.py" \
+    --allow-existing-managed-command
 )"
+MCP_PYTHON_RESOLVED="$(
+  "$PYTHON_RESOLVED" -c 'import json, sys; print(json.load(sys.stdin)["registration"]["command"])' <<<"$registration_json"
+)"
+if [[ "$MCP_PYTHON_RESOLVED" != /* || ! -x "$MCP_PYTHON_RESOLVED" ]]; then
+  echo "Managed MCP Python did not resolve to a stable absolute executable: $MCP_PYTHON_RESOLVED" >&2
+  exit 1
+fi
 "$PYTHON_RESOLVED" "$TARGET_DIR/scripts/configure_mcp.py" \
   --config "$CODEX_HOME_DIR/config.toml" \
-  --python "$PYTHON_RESOLVED" \
+  --python "$MCP_PYTHON_RESOLVED" \
   --script "$TARGET_DIR/scripts/adaptive_state_mcp.py" \
   --check >/dev/null
 
@@ -180,17 +188,41 @@ fi
 skill_version="$(tr -d '[:space:]' <"$ROOT_DIR/VERSION")"
 mkdir -p "$INSTALL_RECEIPT_DIR"
 manifest_json="$(
-  "$PYTHON_RESOLVED" "$TARGET_DIR/scripts/verify_installation.py" \
+  "$MCP_PYTHON_RESOLVED" "$TARGET_DIR/scripts/verify_installation.py" \
     --source "$SOURCE_DIR" \
     --installed "$TARGET_DIR" \
     --config "$CODEX_HOME_DIR/config.toml" \
-    --python "$PYTHON_RESOLVED" \
+    --python "$MCP_PYTHON_RESOLVED" \
     --script "$TARGET_DIR/scripts/adaptive_state_mcp.py" \
     --schema "$TARGET_DIR/references/install-manifest.schema.json" \
     --version "$skill_version" \
     --repo-commit "$repo_commit" \
     --output "$INSTALL_RECEIPT"
 )"
+if ! "$PYTHON_RESOLVED" -c '
+import json
+import sys
+from pathlib import Path
+
+try:
+    receipt = json.loads(sys.stdin.read())
+    persisted = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    registration = persisted["mcp_registration"]
+    if (
+        receipt != {"ok": True, "manifest_digest": persisted["manifest_digest"]}
+        or registration["command"] != sys.argv[2]
+        or registration["args"] != [sys.argv[3]]
+        or registration["config_readback"] is not True
+        or persisted["source_install_drift"] != []
+        or persisted["source_manifest_digest"] != persisted["installed_manifest_digest"]
+    ):
+        raise ValueError("identity")
+except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+    raise SystemExit("MCP_MANAGED_RUNTIME_VERIFICATION_INVALID")
+' "$INSTALL_RECEIPT" "$MCP_PYTHON_RESOLVED" "$TARGET_DIR/scripts/adaptive_state_mcp.py" <<<"$manifest_json"; then
+  echo "MCP_MANAGED_RUNTIME_VERIFICATION_INVALID" >&2
+  exit 1
+fi
 
 install_complete=1
 trap - EXIT
