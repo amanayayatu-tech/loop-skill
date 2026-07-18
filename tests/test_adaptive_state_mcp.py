@@ -1165,6 +1165,8 @@ class AdaptiveStateMcpTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            worker_root = root / "worker"
+            worker_root.mkdir()
             state = Harness(root)  # noqa: F405
             definition = goal("g1", "m1")  # noqa: F405
             definition["validation_matrix"] = complete_validation_matrix(  # noqa: F405
@@ -1186,7 +1188,9 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                         "thread_id": "worker-evidence",
                         "role_kind": "WORKER",
                         "bootstrap_role_kind": "implementation",
-                        "bootstrap_prompt_digest": digest("worker-evidence-bootstrap"),  # noqa: F405
+                        "bootstrap_prompt_digest": digest(  # noqa: F405
+                            "worker-evidence-bootstrap"
+                        ),
                         "worktree_path": str(root.resolve()),
                     }
                 ],
@@ -1234,7 +1238,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             self.assertTrue(sent["ok"], sent)
 
-            evidence_source = root / "worker-validation.json"
+            evidence_source = worker_root / "worker-validation.json"
             evidence_content = json.dumps(
                 {"commands": ["focused"], "status": "PASS"},
                 sort_keys=True,
@@ -1254,7 +1258,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                     "DISPATCH", "dispatch-evidence-route", result
                 )
             )
-            report["evidence_artifacts"] = [
+            evidence_artifacts = [
                 {
                     "path": evidence_path,
                     "digest": evidence_digest,
@@ -1263,6 +1267,45 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                     "size_bytes": len(evidence_content.encode("utf-8")),
                 }
             ]
+            evidence_sources = [
+                {
+                    "path": evidence_path,
+                    "source_path": str(evidence_source),
+                    "digest": evidence_digest,
+                    "media_type": "application/json",
+                }
+            ]
+            for index in range(1, state_runtime_module.MAX_STAGED_REPORT_EVIDENCE):
+                extra_content = json.dumps(
+                    {"index": index, "status": "PASS"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                extra_source = worker_root / f"worker-validation-{index}.json"
+                extra_source.write_text(extra_content, encoding="utf-8")
+                extra_digest = digest(extra_content)  # noqa: F405
+                extra_path = (
+                    ".codex-loop/reports/"
+                    f"dispatch-evidence-route-validation-{index}.json"
+                )
+                evidence_artifacts.append(
+                    {
+                        "path": extra_path,
+                        "digest": extra_digest,
+                        "media_type": "application/json",
+                        "sha256": extra_digest.removeprefix("sha256:"),
+                        "size_bytes": len(extra_content.encode("utf-8")),
+                    }
+                )
+                evidence_sources.append(
+                    {
+                        "path": extra_path,
+                        "source_path": str(extra_source),
+                        "digest": extra_digest,
+                        "media_type": "application/json",
+                    }
+                )
+            report["evidence_artifacts"] = evidence_artifacts
             for validation in report["validation_results"]:
                 validation["evidence_path"] = evidence_path
                 validation["evidence_digest"] = evidence_digest
@@ -1274,14 +1317,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "outbox_id": "dispatch-evidence-route",
                 "result": result,
                 "report_text": report_text,
-                "evidence_sources": [
-                    {
-                        "path": evidence_path,
-                        "source_path": str(evidence_source),
-                        "digest": evidence_digest,
-                        "media_type": "application/json",
-                    }
-                ],
+                "evidence_sources": evidence_sources,
             }
 
             before_rejection = copy.deepcopy(state.state())
@@ -1317,13 +1353,13 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             assert_stage_rejected("wrong-media", wrong_media)
 
-            symlink_source = root / "worker-validation-link.json"
+            symlink_source = worker_root / "worker-validation-link.json"
             symlink_source.symlink_to(evidence_source.name)
             symlinked = copy.deepcopy(request)
             symlinked["evidence_sources"][0]["source_path"] = str(symlink_source)
             assert_stage_rejected("symlink", symlinked)
 
-            invalid_utf8_source = root / "invalid-utf8.json"
+            invalid_utf8_source = worker_root / "invalid-utf8.json"
             invalid_utf8_bytes = b"\xff\xfe"
             invalid_utf8_source.write_bytes(invalid_utf8_bytes)
             invalid_utf8 = copy.deepcopy(request)
@@ -1335,7 +1371,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             assert_stage_rejected("invalid-utf8", invalid_utf8)
 
-            oversized_source = root / "oversized-validation.json"
+            oversized_source = worker_root / "oversized-validation.json"
             with oversized_source.open("wb") as stream:
                 stream.truncate(state_runtime_module.MAX_ARTIFACT_CONTENT_SIZE + 1)
             oversized = copy.deepcopy(request)
@@ -1346,7 +1382,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             assert_stage_rejected("oversized", oversized)
 
             nested_control_source = (
-                root / "external-worker" / ".codex-loop" / "reports" / "send.json"
+                worker_root / ".CODEX-LOOP" / "reports" / "send.json"
             )
             nested_control_source.parent.mkdir(parents=True)
             nested_control_source.write_text(evidence_content, encoding="utf-8")
@@ -1357,10 +1393,9 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             assert_stage_rejected("nested-control", nested_control)
 
             too_many = copy.deepcopy(request)
-            too_many["evidence_sources"] = [
+            too_many["evidence_sources"].append(
                 copy.deepcopy(request["evidence_sources"][0])
-                for _ in range(state_runtime_module.MAX_STAGED_REPORT_EVIDENCE + 1)
-            ]
+            )
             assert_stage_rejected("too-many", too_many)
 
             staging = root / ".codex-loop" / "report-staging"
@@ -1377,7 +1412,10 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 turn_id="worker-evidence-stage",
             )
             self.assertTrue(staged["ok"], staged)
-            self.assertEqual(len(staged["evidence_artifacts"]), 1)
+            self.assertEqual(
+                len(staged["evidence_artifacts"]),
+                state_runtime_module.MAX_STAGED_REPORT_EVIDENCE,
+            )
             staged_report = {
                 **staged["artifact"],
                 "result": staged["result"],
@@ -1406,6 +1444,15 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             self.assertEqual(
                 completed["artifact_ledger"][evidence_path]["digest"],
                 evidence_digest,
+            )
+            self.assertEqual(
+                sum(
+                    path.startswith(
+                        ".codex-loop/reports/dispatch-evidence-route-validation"
+                    )
+                    for path in completed["artifact_ledger"]
+                ),
+                state_runtime_module.MAX_STAGED_REPORT_EVIDENCE,
             )
             self.assertEqual(
                 (root / evidence_path).read_text(encoding="utf-8"),

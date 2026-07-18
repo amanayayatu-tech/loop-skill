@@ -152,7 +152,9 @@ places them in immutable staging; the Gateway then archives those same bytes
 atomically with the formal report on the original outbox. Missing, wrong-digest,
 wrong-thread, unreferenced, or stale-artifact evidence rejects with zero
 canonical side effects. The Controller neither copies test output nor reuses a
-send receipt as validation evidence.
+send receipt as validation evidence. One report may introduce at most 15
+validation files, and every case-insensitive `.codex-loop/**` control-source
+alias is rejected.
 
 The Gateway derives the lease, repository snapshot, freshness, validation matrix, review handoff, current artifact, and outbox from canonical state. The Controller does not copy those objects. A PASS projection requires all three current identities for one Goal: **current artifact + current Worker dispatch + PASS formal report**. A `BLOCKED` report, stale artifact, or stale dispatch cannot become PASS.
 

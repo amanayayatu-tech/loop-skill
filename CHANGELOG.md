@@ -18,7 +18,8 @@ All notable changes to this project are documented here. The project follows
   dispatch, current artifact and target-role MCP attestation. Missing, foreign,
   stale, symlinked, wrong-digest or unreferenced evidence rejects with no
   canonical side effect; the Controller neither authors nor transports the
-  evidence content.
+  evidence content. Staging is capped at 15 evidence files, size-checked before
+  bounded reading, and rejects case-insensitive `.codex-loop/**` aliases.
 - Added independent-process Worker-stage to Controller-ACK coverage and crash
   recovery at every immutable evidence-staging write boundary.
 

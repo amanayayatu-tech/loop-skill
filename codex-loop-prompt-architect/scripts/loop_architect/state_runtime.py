@@ -2757,7 +2757,10 @@ class AdaptiveStateRuntime:
                     f"{item_path}/source_path",
                     {"error_type": type(exc).__name__},
                 ) from exc
-            if ".codex-loop" in relative_source.parts:
+            if any(
+                part.casefold() == ".codex-loop"
+                for part in relative_source.parts
+            ):
                 raise RuntimeRejection(
                     "FORMAL_REPORT_EVIDENCE_CONTROL_SOURCE_FORBIDDEN",
                     f"{item_path}/source_path",

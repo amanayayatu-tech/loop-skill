@@ -147,7 +147,8 @@ Worker 的正式 PASS 若引用本轮验证文件，会在同一次 target-owned
 只从已登记 Worker 的 worktree 读取字节，先写入不可变 staging；Gateway
 随后把这些字节与正式报告原子归档到原 outbox。证据缺失、错 digest、错
 线程、未被报告引用或陈旧 artifact 都会零副作用拒绝。Controller 不复制
-测试输出，也不能用 send receipt 代替验证证据。
+测试输出，也不能用 send receipt 代替验证证据。每份报告最多引入 15 个
+验证文件；任何大小写形式的 `.codex-loop/**` 控制面来源都被拒绝。
 
 Gateway 从 canonical state 原子取得 lease、仓库快照、freshness、validation matrix、review handoff、当前 artifact 与 outbox；Controller 不复制这些对象。PASS 投影同时要求同一 Goal 的**当前 artifact + 当前 Worker dispatch + PASS 正式报告**。`BLOCKED`、旧 artifact 或旧 dispatch 不能越级成为 PASS。
 

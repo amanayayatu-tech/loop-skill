@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import stat
+from unittest import mock
 
 from state_runtime_support import *  # noqa: F403
 
@@ -1104,6 +1105,181 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
                     list(source.parent.glob("*.REPORT_EVIDENCE_STAGE.tmp")),
                     "replay must consume the deterministic evidence staging temp",
                 )
+
+    def test_oversized_report_evidence_is_rejected_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _, dispatch_id, _, result, report_text = (
+                self._prepare_worker_validation_projection(root)
+            )
+            evidence_source = root / "oversized-validation.json"
+            with evidence_source.open("wb") as stream:
+                stream.truncate(
+                    state_runtime_module.MAX_ARTIFACT_CONTENT_SIZE + 1
+                )
+            evidence_path = (
+                f".codex-loop/reports/{dispatch_id}-oversized-validation.json"
+            )
+            evidence_digest = "sha256:" + "0" * 64
+            report = json.loads(report_text)
+            report["evidence_artifacts"] = [
+                {
+                    "path": evidence_path,
+                    "digest": evidence_digest,
+                    "media_type": "application/json",
+                }
+            ]
+            for validation in report["validation_results"]:
+                validation["evidence_path"] = evidence_path
+                validation["evidence_digest"] = evidence_digest
+                validation["evidence_media_type"] = "application/json"
+            request = {
+                "outbox_id": dispatch_id,
+                "result": result,
+                "report_text": json.dumps(
+                    report,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "evidence_sources": [
+                    {
+                        "path": evidence_path,
+                        "source_path": str(evidence_source),
+                        "digest": evidence_digest,
+                        "media_type": "application/json",
+                    }
+                ],
+            }
+            before = persisted_snapshot(root)
+            with mock.patch.object(
+                state_runtime_module.os,
+                "read",
+                side_effect=AssertionError("oversized evidence must not be read"),
+            ), self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                harness.runtime.stage_formal_report(request)
+            self.assertEqual(
+                context.exception.code,
+                "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+            )
+            self.assertEqual(before, persisted_snapshot(root))
+
+    def test_external_worker_control_alias_is_never_validation_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "canonical"
+            worker_root = base / "worker"
+            root.mkdir()
+            worker_root.mkdir()
+            definition = goal("g1", "m1")
+            definitions = {"g1": definition}
+            milestones = [milestone("m1", "ACTIVE")]
+            authorization = authorization_envelope(definitions, milestones)
+            authorization["control_plane_limits"][
+                "allowed_external_worktree_roots"
+            ] = [str(worker_root.resolve())]
+            harness = Harness(root)
+            initialized, _ = harness.initialize(
+                definitions=definitions,
+                milestones=milestones,
+                authorization=authorization,
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            harness.ensure_controller_goal()
+            harness.register_control_result(
+                "THREAD",
+                "external-worker-create",
+                "controller-1",
+                {"role_kind": "WORKER"},
+                {
+                    "thread_id": "external-worker",
+                    "role_kind": "WORKER",
+                    "worktree_path": str(worker_root.resolve()),
+                },
+            )
+            claim = harness.acquire()
+            dispatch_id = "external-worker-dispatch"
+            prepared, payload = harness.prepare_outbox(
+                claim,
+                "DISPATCH",
+                dispatch_id,
+                {
+                    "goal_id": "g1",
+                    "goal_definition_digest": definition[
+                        "payload_template_digest"
+                    ],
+                },
+                target_id="external-worker",
+            )
+            self.assertTrue(prepared["ok"], prepared)
+            sent = harness.mark_sent(
+                claim,
+                "DISPATCH",
+                dispatch_id,
+                payload,
+                target_id="external-worker",
+            )
+            self.assertTrue(sent["ok"], sent)
+            result = {
+                "status": "PASS",
+                "artifact_digest": digest("external-worker-artifact"),
+            }
+            report = json.loads(
+                harness.formal_report_content("DISPATCH", dispatch_id, result)
+            )
+            evidence_content = '{"status":"PASS"}'
+            evidence_digest = digest(evidence_content)
+            evidence_path = (
+                f".codex-loop/reports/{dispatch_id}-validation.json"
+            )
+            report["evidence_artifacts"] = [
+                {
+                    "path": evidence_path,
+                    "digest": evidence_digest,
+                    "media_type": "application/json",
+                }
+            ]
+            for validation in report["validation_results"]:
+                validation["evidence_path"] = evidence_path
+                validation["evidence_digest"] = evidence_digest
+                validation["evidence_media_type"] = "application/json"
+            control_source = (
+                worker_root / ".CODEX-LOOP" / "reports" / "send.json"
+            )
+            control_source.parent.mkdir(parents=True)
+            control_source.write_text(evidence_content, encoding="utf-8")
+            request = {
+                "outbox_id": dispatch_id,
+                "result": result,
+                "report_text": json.dumps(
+                    report,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "evidence_sources": [
+                    {
+                        "path": evidence_path,
+                        "source_path": str(control_source),
+                        "digest": evidence_digest,
+                        "media_type": "application/json",
+                    }
+                ],
+            }
+            before = persisted_snapshot(root)
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                harness.runtime.stage_formal_report(request)
+            self.assertEqual(
+                context.exception.code,
+                "FORMAL_REPORT_EVIDENCE_CONTROL_SOURCE_FORBIDDEN",
+            )
+            self.assertEqual(before, persisted_snapshot(root))
 
     def test_codec_report_attestation_recovers_each_atomic_replace_boundary(
         self,
