@@ -58,6 +58,22 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 ],
             }
             before = persisted_snapshot(root)
+            for invalid_sources, expected_code in (
+                ({}, "FORMAL_REPORT_EVIDENCE_INPUT_INVALID"),
+                (
+                    request["evidence_sources"]
+                    * (state_runtime_module.MAX_STAGED_REPORT_EVIDENCE + 1),
+                    "FORMAL_REPORT_EVIDENCE_COUNT_EXCEEDED",
+                ),
+            ):
+                with self.subTest(expected_code=expected_code), self.assertRaises(
+                    state_runtime_module.RuntimeRejection
+                ) as input_context:
+                    harness.runtime.stage_formal_report(
+                        {**request, "evidence_sources": invalid_sources}
+                    )
+                self.assertEqual(input_context.exception.code, expected_code)
+                self.assertEqual(before, persisted_snapshot(root))
             with mock.patch.object(
                 state_runtime_module.os,
                 "read",
@@ -75,6 +91,15 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
     def test_external_worker_control_alias_is_never_validation_evidence(
         self,
     ) -> None:
+        for invalid_path in ("", "artifact/\x00result.md"):
+            with self.subTest(classifier_path=invalid_path), self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ):
+                state_runtime_module.AdaptiveStateRuntime(
+                    Path(tempfile.gettempdir())
+                )._is_canonical_control_evidence_path(  # noqa: SLF001
+                    invalid_path, "/test/evidence_path"
+                )
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             root = base / "canonical"
