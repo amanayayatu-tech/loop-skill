@@ -22,6 +22,10 @@ All notable changes to this project are documented here. The project follows
   bounded reading, and rejects case-insensitive `.codex-loop/**` aliases.
 - Added independent-process Worker-stage to Controller-ACK coverage and crash
   recovery at every immutable evidence-staging write boundary.
+- Restored the documented zero-repair policy for schema-v3 loops. A validation
+  matrix may initialize with `max_repair_attempts_per_goal=0`; the first failed
+  product attempt then exhausts the strategy directly instead of being rejected
+  during initialization by the two-sample same-strategy threshold.
 
 - Made schema-v3 target-report attestation durable across independent Codex
   App MCP bridge processes. After an attested Worker, Reviewer, or Local

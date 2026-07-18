@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "expected_total_tests": 629,
+  "expected_total_tests": 630,
   "expected_shard_counts": {
     "1": 179,
     "2": 168,
     "3": 141,
-    "4": 141
+    "4": 142
   },
   "shards": {
     "1": [

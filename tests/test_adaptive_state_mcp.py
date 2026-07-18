@@ -382,6 +382,9 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             _, template_request = template.initialize(state_gateway=True)
             initialize_mutation = copy.deepcopy(template_request["mutation"])
             initialize_mutation["controller_pack_digest"] = source_digest
+            initialize_mutation["authorization_envelope"]["repair_policy"][
+                "max_repair_attempts_per_goal"
+            ] = 0
             server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
             server.handle({
                 "jsonrpc": "2.0", "id": "init", "method": "initialize",
@@ -408,6 +411,12 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             current = AdaptiveStateRuntime(root).read_state()  # noqa: F405
             self.assertEqual(current["schema_version"], 3)
             self.assertEqual(current["state_gateway_mode"], "MCP_CANONICAL_WRITER")
+            self.assertEqual(
+                current["authorization_envelope"]["repair_policy"][
+                    "max_repair_attempts_per_goal"
+                ],
+                0,
+            )
             self.assertNotIn("state-writer-1", current["thread_registry"])
 
     def test_state_gateway_registers_bound_host_observations_and_one_heartbeat(self) -> None:

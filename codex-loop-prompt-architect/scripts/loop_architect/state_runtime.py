@@ -5150,7 +5150,7 @@ class AdaptiveStateRuntime:
         repair_limit = state["authorization_envelope"]["repair_policy"][
             "max_repair_attempts_per_goal"
         ]
-        if any(
+        if repair_limit > 0 and any(
             "validation_matrix" in definition
             for definition in state["goal_definition_registry"].values()
         ) and threshold > 1 + repair_limit:
