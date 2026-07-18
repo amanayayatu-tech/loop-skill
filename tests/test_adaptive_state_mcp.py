@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
 import os
@@ -15,6 +16,7 @@ from unittest import mock
 from state_runtime_support import *  # noqa: F403
 
 import adaptive_state_mcp as mcp  # noqa: E402
+from loop_architect import state_runtime as state_runtime_module  # noqa: E402
 
 
 _ISOLATED_MCP_BRIDGE = """
@@ -1283,22 +1285,84 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             }
 
             before_rejection = copy.deepcopy(state.state())
+            def assert_stage_rejected(
+                name: str, candidate: dict[str, object]
+            ) -> None:
+                rejected = call_isolated_mcp_bridge(
+                    mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                    {
+                        "operation": "STAGE_REPORT",
+                        "root": str(root),
+                        "request": candidate,
+                    },
+                    thread_id="worker-evidence",
+                    turn_id=f"worker-evidence-rejected-{name}",
+                )
+                self.assertFalse(rejected["ok"], (name, rejected))
+                self.assertEqual(state.state(), before_rejection)
+
             wrong_digest = copy.deepcopy(request)
-            wrong_digest["evidence_sources"][0]["digest"] = (
-                "sha256:" + "0" * 64
+            wrong_digest["evidence_sources"][0]["digest"] = "sha256:" + "0" * 64
+            assert_stage_rejected("wrong-digest", wrong_digest)
+
+            unreferenced = copy.deepcopy(request)
+            unreferenced["evidence_sources"][0]["path"] = (
+                ".codex-loop/reports/unreferenced-validation.json"
             )
-            rejected = call_isolated_mcp_bridge(
-                mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
-                {
-                    "operation": "STAGE_REPORT",
-                    "root": str(root),
-                    "request": wrong_digest,
-                },
-                thread_id="worker-evidence",
-                turn_id="worker-evidence-rejected",
+            assert_stage_rejected("unreferenced", unreferenced)
+
+            wrong_media = copy.deepcopy(request)
+            wrong_media["evidence_sources"][0]["media_type"] = (
+                "application/octet-stream"
             )
-            self.assertFalse(rejected["ok"], rejected)
-            self.assertEqual(state.state(), before_rejection)
+            assert_stage_rejected("wrong-media", wrong_media)
+
+            symlink_source = root / "worker-validation-link.json"
+            symlink_source.symlink_to(evidence_source.name)
+            symlinked = copy.deepcopy(request)
+            symlinked["evidence_sources"][0]["source_path"] = str(symlink_source)
+            assert_stage_rejected("symlink", symlinked)
+
+            invalid_utf8_source = root / "invalid-utf8.json"
+            invalid_utf8_bytes = b"\xff\xfe"
+            invalid_utf8_source.write_bytes(invalid_utf8_bytes)
+            invalid_utf8 = copy.deepcopy(request)
+            invalid_utf8["evidence_sources"][0]["source_path"] = str(
+                invalid_utf8_source
+            )
+            invalid_utf8["evidence_sources"][0]["digest"] = (
+                "sha256:" + hashlib.sha256(invalid_utf8_bytes).hexdigest()
+            )
+            assert_stage_rejected("invalid-utf8", invalid_utf8)
+
+            oversized_source = root / "oversized-validation.json"
+            with oversized_source.open("wb") as stream:
+                stream.truncate(state_runtime_module.MAX_ARTIFACT_CONTENT_SIZE + 1)
+            oversized = copy.deepcopy(request)
+            oversized["evidence_sources"][0]["source_path"] = str(
+                oversized_source
+            )
+            oversized["evidence_sources"][0]["digest"] = "sha256:" + "0" * 64
+            assert_stage_rejected("oversized", oversized)
+
+            nested_control_source = (
+                root / "external-worker" / ".codex-loop" / "reports" / "send.json"
+            )
+            nested_control_source.parent.mkdir(parents=True)
+            nested_control_source.write_text(evidence_content, encoding="utf-8")
+            nested_control = copy.deepcopy(request)
+            nested_control["evidence_sources"][0]["source_path"] = str(
+                nested_control_source
+            )
+            assert_stage_rejected("nested-control", nested_control)
+
+            too_many = copy.deepcopy(request)
+            too_many["evidence_sources"] = [
+                copy.deepcopy(request["evidence_sources"][0])
+                for _ in range(state_runtime_module.MAX_STAGED_REPORT_EVIDENCE + 1)
+            ]
+            assert_stage_rejected("too-many", too_many)
+
             staging = root / ".codex-loop" / "report-staging"
             self.assertFalse(staging.exists() and any(staging.iterdir()))
 
@@ -1322,11 +1386,11 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             acked = call_isolated_mcp_bridge(
                 mcp.MCP_STATE_GATEWAY_TOOL_NAME,
                 {
-                    "request_id": "ack-evidence-route",
-                    "operation": "ACK_ROUTE_RESULT",
+                    "request_id": "recover-evidence-route",
+                    "operation": "REPORT_RECOVERY",
                     "occurred_at": T3,  # noqa: F405
                     "parameters": {
-                        "route_id": "dispatch-evidence-route",
+                        "outbox_id": "dispatch-evidence-route",
                         "staged_report": staged_report,
                     },
                 },
@@ -1335,6 +1399,9 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 root=root,
             )
             self.assertTrue(acked["ok"], acked)
+            self.assertEqual(
+                acked["operation_status"], "GATEWAY_REPORT_RECOVERY_ACKED"
+            )
             completed = state.state()
             self.assertEqual(
                 completed["artifact_ledger"][evidence_path]["digest"],

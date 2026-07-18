@@ -177,6 +177,9 @@ files through `evidence_sources`; runtime reads them only from the registered
 target worktree, stages immutable bytes, and the Gateway archives those bytes
 atomically with the report on the original outbox. An unarchived, unreferenced,
 wrong-digest, wrong-thread, or stale evidence file has no canonical side effect.
+One report may introduce at most 15 evidence files so the report plus evidence
+bundle remains within the canonical 16-artifact transaction bound; every file
+is size-checked before bounded reading, and any `.codex-loop/**` source is forbidden.
 v3 disables native Goal adapters and
 records `GATEWAY_NO_NATIVE_GOAL` as a local sentinel, never an external
 Goal-tool receipt.

@@ -233,6 +233,7 @@ PHASE_PERMISSION_FIELDS = (
     "external_write",
 )
 MAX_ARTIFACT_CONTENT_SIZE = 4_000_000
+MAX_STAGED_REPORT_EVIDENCE = 15
 
 ZERO_EXECUTION_BLOCKER_CODES = {
     "DISPATCH_VALIDATION_MATRIX_MISMATCH",
@@ -2665,6 +2666,12 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection(
                 "FORMAL_REPORT_EVIDENCE_INPUT_INVALID", "/evidence_sources"
             )
+        if len(evidence_sources) > MAX_STAGED_REPORT_EVIDENCE:
+            raise RuntimeRejection(
+                "FORMAL_REPORT_EVIDENCE_COUNT_EXCEEDED",
+                "/evidence_sources",
+                {"max_items": MAX_STAGED_REPORT_EVIDENCE},
+            )
         report_evidence: dict[str, dict[str, Any] | None] = {}
         for index, item in enumerate(report.get("evidence_artifacts", [])):
             if isinstance(item, str):
@@ -2743,19 +2750,60 @@ class AdaptiveStateRuntime:
                 )
             try:
                 source = raw_source.resolve(strict=True)
-                source.relative_to(worktree)
-                metadata = source.lstat()
-                payload = source.read_bytes()
+                relative_source = source.relative_to(worktree)
             except (OSError, ValueError) as exc:
                 raise RuntimeRejection(
                     "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
                     f"{item_path}/source_path",
                     {"error_type": type(exc).__name__},
                 ) from exc
+            if ".codex-loop" in relative_source.parts:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_CONTROL_SOURCE_FORBIDDEN",
+                    f"{item_path}/source_path",
+                )
+            try:
+                descriptor = os.open(
+                    source,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
+            except OSError as exc:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+                    f"{item_path}/source_path",
+                    {"error_type": type(exc).__name__},
+                ) from exc
+            try:
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_size > MAX_ARTIFACT_CONTENT_SIZE
+                ):
+                    raise RuntimeRejection(
+                        "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+                        f"{item_path}/source_path",
+                    )
+                chunks: list[bytes] = []
+                remaining = MAX_ARTIFACT_CONTENT_SIZE + 1
+                while remaining:
+                    chunk = os.read(descriptor, min(65536, remaining))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                payload = b"".join(chunks)
+            except RuntimeRejection:
+                raise
+            except OSError as exc:
+                raise RuntimeRejection(
+                    "FORMAL_REPORT_EVIDENCE_SOURCE_INVALID",
+                    f"{item_path}/source_path",
+                    {"error_type": type(exc).__name__},
+                ) from exc
+            finally:
+                os.close(descriptor)
             if (
-                not stat.S_ISREG(metadata.st_mode)
-                or self._path_is_within(source, self.control_dir)
-                or len(payload) > MAX_ARTIFACT_CONTENT_SIZE
+                len(payload) > MAX_ARTIFACT_CONTENT_SIZE
                 or _bytes_digest(payload) != digest
             ):
                 raise RuntimeRejection(

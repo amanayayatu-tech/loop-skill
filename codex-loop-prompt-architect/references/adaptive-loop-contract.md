@@ -333,7 +333,10 @@ rejects symlinks/path escape/non-UTF-8/wrong digest/unreferenced paths, and
 copies the bytes to immutable report staging. `ACK_ROUTE_RESULT` or
 `REPORT_RECOVERY` then archives the staged evidence and report in one canonical
 transaction on the original outbox. A send observation is never a substitute
-for validation evidence.
+for validation evidence. The target may introduce at most 15 evidence files,
+leaving the sixteenth canonical artifact slot for the formal report; runtime
+checks file size before bounded reading and forbids every `.codex-loop/**`
+source even when it belongs to a separately registered worktree.
 
 Heartbeat identity uses the exact UTF-8 body between its BEGIN/END delimiter
 lines, excluding the LF adjacent to each delimiter. That same no-trailing-LF
