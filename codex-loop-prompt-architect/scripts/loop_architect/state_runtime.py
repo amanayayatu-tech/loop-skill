@@ -9171,6 +9171,10 @@ class AdaptiveStateRuntime:
             return self._gateway_ack_transport_pause(
                 state, request, gateway_request, after_version
             )
+        if operation == "ACK_TRANSPORT_RECOVERY":
+            return self._gateway_ack_transport_recovery(
+                state, request, gateway_request, after_version
+            )
         if operation == "ADVANCE_ROADMAP":
             return self._gateway_advance_roadmap(state, gateway_request, after_version)
         if operation == "PREPARE_FINALIZATION":
@@ -10034,13 +10038,15 @@ class AdaptiveStateRuntime:
             }
         return {"code": "TRANSPORT_FAILURE_RECORDED", "next_action_code": "WAIT_SAME_OUTBOX"}
 
-    def _gateway_ack_transport_pause(
+    def _gateway_transport_automation_evidence(
         self,
         state: dict[str, Any],
         request: dict[str, Any],
         value: Any,
         after_version: int,
-    ) -> dict[str, Any]:
+        *,
+        required_status: str,
+    ) -> tuple[dict[str, Any], str, str]:
         item = self._gateway_exact_keys(
             value,
             {
@@ -10050,13 +10056,6 @@ class AdaptiveStateRuntime:
             },
             "/mutation/gateway_request",
         )
-        recovery = state["transport_recovery"]
-        if (
-            recovery.get("status") != "WAITING_TRANSPORT_RECOVERY"
-            or recovery.get("heartbeat_pause_required") is not True
-            or recovery.get("heartbeat_pause_receipt_path") is not None
-        ):
-            raise RuntimeRejection("TRANSPORT_PAUSE_NOT_REQUIRED", "/transport_recovery")
         observation, heartbeat_path, heartbeat_digest = self._gateway_heartbeat_observation(
             state,
             request,
@@ -10065,7 +10064,7 @@ class AdaptiveStateRuntime:
                 "automation_observation_path": item["automation_observation_path"],
                 "automation_observation_digest": item["automation_observation_digest"],
             },
-            required_status="PAUSED",
+            required_status=required_status,
         )
         receipt_path = item["app_automation_receipt_path"]
         receipt_digest = self._gateway_digest(
@@ -10112,13 +10111,125 @@ class AdaptiveStateRuntime:
             state, observation, heartbeat_path, heartbeat_digest, after_version
         )
         heartbeat = self._registered_heartbeat_record(state)
-        heartbeat["result"] = {**heartbeat["result"], "status": "PAUSED"}
+        heartbeat["result"] = {**heartbeat["result"], "status": required_status}
+        return observation, receipt_path, receipt_digest
+
+    def _gateway_ack_transport_pause(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        value: Any,
+        after_version: int,
+    ) -> dict[str, Any]:
+        recovery = state["transport_recovery"]
+        if (
+            recovery.get("status") != "WAITING_TRANSPORT_RECOVERY"
+            or recovery.get("heartbeat_pause_required") is not True
+            or recovery.get("heartbeat_pause_receipt_path") is not None
+        ):
+            raise RuntimeRejection("TRANSPORT_PAUSE_NOT_REQUIRED", "/transport_recovery")
+        _, receipt_path, receipt_digest = self._gateway_transport_automation_evidence(
+            state,
+            request,
+            value,
+            after_version,
+            required_status="PAUSED",
+        )
         recovery["heartbeat_pause_required"] = False
         recovery["heartbeat_pause_receipt_path"] = receipt_path
         recovery["heartbeat_pause_receipt_digest"] = receipt_digest
         return {
             "code": "TRANSPORT_HEARTBEAT_PAUSED",
             "next_action_code": "NOTIFY_USER_ONCE_AND_WAIT_FOR_TRANSPORT_RECOVERY",
+        }
+
+    def _gateway_ack_transport_recovery(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        value: Any,
+        after_version: int,
+    ) -> dict[str, Any]:
+        """Resume only after the retained transport outbox completed safely.
+
+        The App first updates the same registered heartbeat to ACTIVE and reads
+        it back.  This mutation binds that host-cooperative observation and the
+        recovered original outbox in one canonical CAS; it cannot manufacture
+        a PASS result or route a second product dispatch.
+        """
+
+        recovery = state["transport_recovery"]
+        if (
+            recovery.get("status") != "WAITING_TRANSPORT_RECOVERY"
+            or recovery.get("heartbeat_pause_required") is not False
+            or recovery.get("heartbeat_pause_receipt_path") is None
+            or recovery.get("heartbeat_pause_receipt_digest") is None
+            or state.get("run_control", {}).get("status") != "PAUSED_AT_SAFE_POINT"
+            or state.get("run_control", {}).get("reason")
+            != "WAITING_TRANSPORT_RECOVERY"
+        ):
+            raise RuntimeRejection(
+                "TRANSPORT_RECOVERY_NOT_READY", "/transport_recovery"
+            )
+        outbox_id = recovery.get("outbox_id")
+        route = state.get("gateway_route_ledger", {}).get(outbox_id)
+        record = (
+            state[OUTBOX_FIELDS[route["outbox_kind"]]].get(outbox_id)
+            if isinstance(route, dict) and route.get("outbox_kind") in OUTBOX_FIELDS
+            else None
+        )
+        if (
+            not isinstance(route, dict)
+            or route.get("status") not in {"ACKED", "RECOVERED"}
+            or not isinstance(record, dict)
+            or record.get("status") not in {"ACKED", "COMPLETED"}
+            or not isinstance(route.get("report_digest"), str)
+        ):
+            raise RuntimeRejection(
+                "TRANSPORT_RECOVERY_OUTBOX_UNRESOLVED", "/transport_recovery/outbox_id"
+            )
+        if any(
+            candidate.get("status") in {"PREPARED", "SENT"}
+            for field in OUTBOX_FIELDS.values()
+            for candidate in state[field].values()
+        ):
+            raise RuntimeRejection(
+                "STATE_GATEWAY_ACTIVE_OUTBOX", "/gateway_route_ledger"
+            )
+        self._gateway_transport_automation_evidence(
+            state,
+            request,
+            value,
+            after_version,
+            required_status="ACTIVE",
+        )
+        failure_count = recovery["failure_count"]
+        state["transport_recovery"] = {
+            "status": "HEALTHY",
+            "fingerprint": None,
+            "first_failed_at": None,
+            "natural_observation_count": 0,
+            "failure_count": failure_count,
+            "outbox_id": None,
+            "notified_at": None,
+            "notification_required": False,
+            "heartbeat_pause_required": False,
+            "heartbeat_pause_receipt_path": None,
+            "heartbeat_pause_receipt_digest": None,
+        }
+        state["run_control"] = {
+            "status": "RUNNING",
+            "reason": None,
+            "effective_state_version": after_version,
+        }
+        return {
+            "code": "TRANSPORT_RECOVERY_ACKED",
+            "next_action_code": "PREPARE_NEXT_CANONICAL_ROUTE",
+            "result": {
+                "outbox_id": outbox_id,
+                "heartbeat_status": "ACTIVE",
+                "transport_status": "HEALTHY",
+            },
         }
 
     def _gateway_advance_roadmap(

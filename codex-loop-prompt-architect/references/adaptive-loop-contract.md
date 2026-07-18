@@ -17,7 +17,8 @@ are `INITIALIZE`, `INITIALIZE_SUCCESSOR`, `MIGRATE_V2_TO_V3`, bootstrap-only
 `REGISTER_TASK` and `REGISTER_HEARTBEAT`, `RECORD_HEARTBEAT_OBSERVATION`,
 `PREPARE_ROUTE`, `RECORD_ROUTE_SENT`, `ACK_ROUTE_RESULT`, `REPORT_RECOVERY`,
 `ADVANCE_ROADMAP`, `PREPARE_FINALIZATION`, `ACK_FINALIZATION`,
-`ACK_TRANSPORT_PAUSE`, and bounded transport observation. `INITIALIZE` requires
+`ACK_TRANSPORT_PAUSE`, `ACK_TRANSPORT_RECOVERY`, and bounded transport
+observation. `INITIALIZE` requires
 an exact Pack source in a fresh root. `INITIALIZE_SUCCESSOR` additionally binds
 the terminal predecessor's receipt/root digest, product snapshot/base, exact
 ACK evidence and a repair backlog; it never changes that predecessor.
@@ -71,7 +72,20 @@ Two natural heartbeat observations or fifteen minutes enter
 notification. The Controller must pause the one business heartbeat in the App
 and submit `ACK_TRANSPORT_PAUSE`; until a matching PAUSED readback exists the
 runtime never claims PAUSED. Later matching observations are zero-side-effect
-until an authorized recovery. `LOOP_METRICS.json` is derived observation only.
+until an authorized recovery. Once that retained outbox is `ACKED`/`COMPLETED`
+and its route is `ACKED`/`RECOVERED`, the Controller may update the same
+heartbeat to ACTIVE, read it back, and submit `ACK_TRANSPORT_RECOVERY`. Gateway
+binds that observation and the recovered outbox in one CAS before it restores
+`RUNNING`; unresolved/foreign outboxes or wrong heartbeat evidence remain
+zero-side-effect. The public parameters are exactly
+`{active_automation_receipt:{automation_id,status,automation_name,kind,target_thread_id,rrule,prompt_digest,prompt_normalization,observed_at}}`;
+`status=ACTIVE`, `kind=HEARTBEAT`, and all identity fields match the registered
+heartbeat; current source-turn identity is Gateway-derived. Since the App
+becomes ACTIVE before the ACK, a rejection is classified from post-call
+canonical state with routing forbidden. WAITING/PAUSED returns
+`PAUSE_SAME_HEARTBEAT_AND_READBACK`; HEALTHY/RUNNING returns
+`READ_STATE_ALREADY_RECOVERED` and must not pause; an unreadable state returns
+`READ_STATE_AND_RECONCILE_HEARTBEAT`. `LOOP_METRICS.json` is derived observation only.
 
 Schema v1/v2 State-Writer state remains readable for history. Its only route to
 v3 is explicit `MIGRATE_V2_TO_V3` while PAUSED with no lease or active outbox;

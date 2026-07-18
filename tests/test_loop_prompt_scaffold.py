@@ -973,6 +973,9 @@ class GeneratedPackTests(unittest.TestCase):
             "retained outbox storage remains actively written and validated only by State Gateway operations",
             "no terminal status exists before that ACK",
             "two same-fingerprint natural observations or 15 minutes",
+            "active_automation_receipt:{automation_id,status,automation_name,kind,target_thread_id,rrule,prompt_digest,prompt_normalization,observed_at}",
+            "PAUSE_SAME_HEARTBEAT_AND_READBACK",
+            "routing forbidden",
         ):
             self.assertIn(marker, pack)
         for legacy_instruction in (

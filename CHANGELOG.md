@@ -5,6 +5,30 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.2] - 2026-07-19
+
+### Fixed
+
+- Added the schema-v3 `ACK_TRANSPORT_RECOVERY` Gateway operation. After the
+  retained outbox has been completed or recovered, the earlier heartbeat pause
+  was acknowledged, and the same registered heartbeat has a real ACTIVE App
+  update/readback, Gateway atomically clears the transient transport blocker
+  and restores `run_control=RUNNING`.
+- Recovery cannot create a PASS, dispatch or repair attempt. An unresolved or
+  foreign outbox, missing pause receipt, wrong heartbeat identity/status,
+  active outbox, stale observation or replay with changed identity rejects with
+  zero canonical side effect. The historical fault remains in the event ledger
+  and the derived failure count is retained.
+- Generated Packs freeze the exact public `active_automation_receipt` field set.
+  A rejected ACTIVE ACK derives its fail-safe from post-call canonical state,
+  so a still-paused loop re-pauses the same heartbeat while an already-recovered
+  loop never does. App canary receipt v6 makes both paths and the no-new-attempt
+  guarantee mandatory release evidence.
+- Closed the long-run state where a successful v3.3.1 `REPORT_RECOVERY` left
+  `WAITING_TRANSPORT_RECOVERY / PAUSED_AT_SAFE_POINT` permanently blocking the
+  next Reviewer route even though the original G06 outbox was already safely
+  recovered.
+
 ## [3.3.1] - 2026-07-18
 
 ### Fixed
@@ -403,7 +427,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.1...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.2...HEAD
+[3.3.2]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.2
 [3.3.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.1
 [3.3.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.0
 [3.3.0-candidate]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.2.8...HEAD

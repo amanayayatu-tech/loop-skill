@@ -502,6 +502,36 @@ class AdaptiveStateMcpServer:
             "isError": not response.get("ok", False),
         }
 
+    @staticmethod
+    def _transport_recovery_fail_safe(
+        response: dict[str, Any], operation: Any, post_state: Any = None
+    ) -> dict[str, Any]:
+        """Expose the external rollback required after a rejected resume ACK."""
+
+        if operation == "ACK_TRANSPORT_RECOVERY" and not response.get("ok", False):
+            response = copy.deepcopy(response)
+            waiting = (
+                isinstance(post_state, dict)
+                and post_state.get("transport_recovery", {}).get("status")
+                == "WAITING_TRANSPORT_RECOVERY"
+                and post_state.get("run_control", {}).get("status")
+                == "PAUSED_AT_SAFE_POINT"
+            )
+            recovered = (
+                isinstance(post_state, dict)
+                and post_state.get("transport_recovery", {}).get("status") == "HEALTHY"
+                and post_state.get("run_control", {}).get("status") == "RUNNING"
+            )
+            response["next_action_code"] = (
+                "PAUSE_SAME_HEARTBEAT_AND_READBACK"
+                if waiting
+                else "READ_STATE_ALREADY_RECOVERED"
+                if recovered
+                else "READ_STATE_AND_RECONCILE_HEARTBEAT"
+            )
+            response["routing_permitted"] = False
+        return response
+
     def _call_route_tool(self, params: dict[str, Any]) -> dict[str, Any]:
         if self.host_attestation is None:
             error = self.host_error or McpBridgeError(
@@ -843,13 +873,15 @@ class AdaptiveStateMcpServer:
         )
         return f".codex-loop/reports/gateway-heartbeat-{locator}.json"
 
-    def _gateway_paused_automation_artifacts(
+    def _gateway_automation_artifacts(
         self,
         state: dict[str, Any],
-        paused_receipt: Any,
+        automation_receipt: Any,
         metadata: TrustedTurnMetadata,
         *,
         stem: str,
+        required_status: str,
+        parameter_name: str,
         evidence_model: str = "HOST_COOPERATIVE",
     ) -> tuple[dict[str, Any], list[dict[str, str]], dict[str, str]]:
         required = {
@@ -857,30 +889,31 @@ class AdaptiveStateMcpServer:
             "target_thread_id", "rrule", "prompt_digest",
             "prompt_normalization", "observed_at", "source_turn_id",
         }
-        if not isinstance(paused_receipt, dict) or set(paused_receipt) != required:
-            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/paused_automation_receipt")
-        if paused_receipt.get("source_turn_id") != metadata.turn_id:
-            self._gateway_error("APP_AUTOMATION_RECEIPT_TURN_MISMATCH", "/params/arguments/request/parameters/paused_automation_receipt/source_turn_id")
+        parameter_path = f"/params/arguments/request/parameters/{parameter_name}"
+        if not isinstance(automation_receipt, dict) or set(automation_receipt) != required:
+            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", parameter_path)
+        if automation_receipt.get("source_turn_id") != metadata.turn_id:
+            self._gateway_error("APP_AUTOMATION_RECEIPT_TURN_MISMATCH", f"{parameter_path}/source_turn_id")
         identity = state.get("heartbeat_prompt_identity")
         if not isinstance(identity, dict):
             self._gateway_error("STATE_GATEWAY_HEARTBEAT_UNREGISTERED", "/params/arguments/request")
         heartbeat_observation = {
             **copy.deepcopy(identity),
-            "automation_id": paused_receipt["automation_id"],
-            "status": paused_receipt["status"],
-            "observed_at": paused_receipt["observed_at"],
+            "automation_id": automation_receipt["automation_id"],
+            "status": automation_receipt["status"],
+            "observed_at": automation_receipt["observed_at"],
         }
         if (
-            paused_receipt.get("status") != "PAUSED"
+            automation_receipt.get("status") != required_status
             or any(
-                paused_receipt.get(key) != heartbeat_observation.get(key)
+                automation_receipt.get(key) != heartbeat_observation.get(key)
                 for key in (
                     "automation_id", "automation_name", "kind", "target_thread_id",
                     "rrule", "prompt_digest", "prompt_normalization", "observed_at",
                 )
             )
         ):
-            self._gateway_error("APP_AUTOMATION_RECEIPT_IDENTITY_MISMATCH", "/params/arguments/request/parameters/paused_automation_receipt")
+            self._gateway_error("APP_AUTOMATION_RECEIPT_IDENTITY_MISMATCH", parameter_path)
         heartbeat_content = json.dumps(heartbeat_observation, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         heartbeat_digest = "sha256:" + hashlib.sha256(heartbeat_content.encode("utf-8")).hexdigest()
         heartbeat_path = f".codex-loop/reports/{stem}-heartbeat-{heartbeat_digest.removeprefix('sha256:')}.json"
@@ -889,7 +922,7 @@ class AdaptiveStateMcpServer:
             "evidence_model": evidence_model,
             "controller_thread_id": metadata.thread_id,
             "controller_turn_id": metadata.turn_id,
-            "automation": copy.deepcopy(paused_receipt),
+            "automation": copy.deepcopy(automation_receipt),
         }
         app_content = json.dumps(app_receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         app_digest = "sha256:" + hashlib.sha256(app_content.encode("utf-8")).hexdigest()
@@ -912,9 +945,23 @@ class AdaptiveStateMcpServer:
         the runtime, so Controller cannot copy a stale matrix or handoff.
         """
 
+        arguments_hint = params.get("arguments")
+        public_hint = (
+            arguments_hint.get("request")
+            if isinstance(arguments_hint, dict)
+            else None
+        )
+        operation_hint = (
+            public_hint.get("operation") if isinstance(public_hint, dict) else None
+        )
         if self.host_attestation is None:
             error = self.host_error or McpBridgeError("BLOCKED_BY_APP_ATTESTATION")
-            return self._tool_result(_runtime_error(error.code, error.path, error.details))
+            response = _runtime_error(error.code, error.path, error.details)
+            return self._tool_result(
+                self._transport_recovery_fail_safe(response, operation_hint)
+            )
+        runtime: AdaptiveStateRuntime | None = None
+        state: dict[str, Any] | None = None
         try:
             metadata = _extract_turn_metadata(params, self.host_attestation)
             arguments = params.get("arguments")
@@ -1397,7 +1444,15 @@ class AdaptiveStateMcpServer:
                             ),
                         }
                     artifacts = []
-                elif operation == "ACK_TRANSPORT_PAUSE":
+                elif operation in {"ACK_TRANSPORT_PAUSE", "ACK_TRANSPORT_RECOVERY"}:
+                    receipt_field = (
+                        "paused_automation_receipt"
+                        if operation == "ACK_TRANSPORT_PAUSE"
+                        else "active_automation_receipt"
+                    )
+                    required_status = (
+                        "PAUSED" if operation == "ACK_TRANSPORT_PAUSE" else "ACTIVE"
+                    )
                     required_receipt = {
                         "automation_id", "status", "automation_name", "kind",
                         "target_thread_id", "rrule", "prompt_digest",
@@ -1415,9 +1470,9 @@ class AdaptiveStateMcpServer:
                         paused_receipt = copy.deepcopy(attested)
                         evidence_model = "APP_ACTION_ATTESTED"
                     else:
-                        if set(payload) != {"paused_automation_receipt"}:
+                        if set(payload) != {receipt_field}:
                             self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
-                        paused_receipt = copy.deepcopy(payload["paused_automation_receipt"])
+                        paused_receipt = copy.deepcopy(payload[receipt_field])
                         if (
                             not isinstance(paused_receipt, dict)
                             or (
@@ -1425,19 +1480,25 @@ class AdaptiveStateMcpServer:
                                 and set(paused_receipt) != required_receipt | {"source_turn_id"}
                             )
                         ):
-                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/paused_automation_receipt")
+                            self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", f"/params/arguments/request/parameters/{receipt_field}")
                         if (
                             paused_receipt.get("source_turn_id") is not None
                             and paused_receipt["source_turn_id"] != metadata.turn_id
                         ):
-                            self._gateway_error("APP_AUTOMATION_RECEIPT_TURN_MISMATCH", "/params/arguments/request/parameters/paused_automation_receipt/source_turn_id")
+                            self._gateway_error("APP_AUTOMATION_RECEIPT_TURN_MISMATCH", f"/params/arguments/request/parameters/{receipt_field}/source_turn_id")
                         evidence_model = "HOST_COOPERATIVE"
                     paused_receipt["source_turn_id"] = metadata.turn_id
-                    heartbeat_observation, artifacts, pause_receipt = self._gateway_paused_automation_artifacts(
+                    heartbeat_observation, artifacts, pause_receipt = self._gateway_automation_artifacts(
                         state,
                         paused_receipt,
                         metadata,
-                        stem="gateway-transport",
+                        stem=(
+                            "gateway-transport"
+                            if operation == "ACK_TRANSPORT_PAUSE"
+                            else "gateway-transport-recovery"
+                        ),
+                        required_status=required_status,
+                        parameter_name=receipt_field,
                         evidence_model=evidence_model,
                     )
                     gateway_payload = {
@@ -1586,7 +1647,15 @@ class AdaptiveStateMcpServer:
             response = runtime.apply(runtime_request, trusted_turn_metadata=metadata)
         except McpBridgeError as exc:
             response = _runtime_error(exc.code, exc.path, exc.details)
-        return self._tool_result(response)
+        post_state = state
+        if runtime is not None:
+            try:
+                post_state = runtime.read_state()
+            except (OSError, RuntimeRejection):
+                post_state = None
+        return self._tool_result(
+            self._transport_recovery_fail_safe(response, operation_hint, post_state)
+        )
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
         request_id = message.get("id")
@@ -1743,7 +1812,8 @@ class AdaptiveStateMcpServer:
                                 "a staged report on the original outbox, registers bootstrap "
                                 "tasks and the sole heartbeat, advances an unchanged roadmap, "
                                 "finalizes a v3 loop, initializes a fresh loop or successor, "
-                                "or records bounded transport degradation. "
+                                "records bounded transport degradation, or atomically resumes "
+                                "after the retained outbox and same heartbeat recover. "
                                 "It derives leases, freshness, validation and artifact "
                                 "identities from canonical state; callers cannot supply them."
                             ),
@@ -1772,7 +1842,7 @@ class AdaptiveStateMcpServer:
                                                     "ACK_ROUTE_RESULT", "REPORT_RECOVERY", "ADVANCE_ROADMAP",
                                                     "PREPARE_FINALIZATION", "ACK_FINALIZATION",
                                                     "INITIALIZE_SUCCESSOR", "RECORD_TRANSPORT_OBSERVATION",
-                                                    "ACK_TRANSPORT_PAUSE"
+                                                    "ACK_TRANSPORT_PAUSE", "ACK_TRANSPORT_RECOVERY"
                                                 ]
                                             },
                                             "occurred_at": {"type": "string"},

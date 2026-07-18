@@ -30,7 +30,8 @@ from canonical state and exposes bounded operations:
 - `PREPARE_ROUTE`, `RECORD_ROUTE_SENT`, and `ACK_ROUTE_RESULT` for one route;
 - `REPORT_RECOVERY` for a staged report on the original outbox; and
 - `ADVANCE_ROADMAP`, `PREPARE_FINALIZATION`, `ACK_FINALIZATION`,
-  `ACK_TRANSPORT_PAUSE`, and bounded transport observations.
+  `ACK_TRANSPORT_PAUSE`, `ACK_TRANSPORT_RECOVERY`, and bounded transport
+  observations.
 
 `PREPARE_FINALIZATION` is a nonterminal reservation. It records a PREPARED
 outbox but leaves `terminal_status` null; only `ACK_FINALIZATION`, after an
@@ -70,7 +71,10 @@ terminal predecessor is immutable: a continuation is a new root with
 - A matching transport fault retains its original outbox. Two natural
   observations or fifteen minutes stop canonical routing and require one user
   notice; `ACK_TRANSPORT_PAUSE` records the actual business-heartbeat pause
-  before it is claimed. An outer Supervisor is not a recovery channel.
+  before it is claimed. Once the retained outbox resolves,
+  `ACK_TRANSPORT_RECOVERY` binds the same heartbeat's real ACTIVE readback and
+  restores RUNNING in one canonical CAS. An outer Supervisor is not a recovery
+  channel.
 - `LOOP_METRICS.json` is derived observation only and never a second canonical
   state source; Worker, Reviewer, and Local Verifier windows remain separate.
 - Schema v3 is host-cooperative, not Byzantine. It binds a real App return

@@ -2449,6 +2449,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             state = Harness(root)  # noqa: F405
             initialized, _ = state.initialize(
                 state_gateway=True,
+                dashboard_required=True,
                 definitions={
                     "g1": goal("g1", "m1"),  # noqa: F405
                     "g2": goal("g2", "m1"),  # noqa: F405
@@ -2508,6 +2509,21 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 },
             )
             self.assertTrue(prepared["ok"], prepared)
+            sent = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-sent",
+                    "operation": "RECORD_ROUTE_SENT",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "route_id": "transport-dispatch-1",
+                        "returned_thread_id": "worker-1",
+                        "observed_at": T1,  # noqa: F405
+                    },
+                },
+            )
+            self.assertTrue(sent["ok"], sent)
             fingerprint = digest("app-message-failure")  # noqa: F405
             before_unattested_transport = copy.deepcopy(state.state())
             missing_transport_receipt = server.handle(
@@ -2630,6 +2646,39 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             self.assertEqual(
                 state.state()["heartbeat_live_observation"]["status"], "PAUSED"
             )
+            active_receipt = {
+                "automation_id": "transport-heartbeat-1",
+                "status": "ACTIVE",
+                "automation_name": "transport heartbeat",
+                "kind": "HEARTBEAT",
+                "target_thread_id": "controller-1",
+                "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                "prompt_digest": digest("transport-heartbeat-prompt"),  # noqa: F405
+                "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
+                "observed_at": T4,  # noqa: F405
+            }
+            before_unresolved_resume = copy.deepcopy(state.state())
+            unresolved_resume = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-resume-before-report",
+                    "operation": "ACK_TRANSPORT_RECOVERY",
+                    "occurred_at": T4,  # noqa: F405
+                    "parameters": {"active_automation_receipt": active_receipt},
+                },
+            )
+            self.assertFalse(unresolved_resume["ok"], unresolved_resume)
+            self.assertEqual(
+                unresolved_resume["status"],
+                "TRANSPORT_RECOVERY_OUTBOX_UNRESOLVED",
+            )
+            self.assertEqual(
+                unresolved_resume["next_action_code"],
+                "PAUSE_SAME_HEARTBEAT_AND_READBACK",
+            )
+            self.assertFalse(unresolved_resume["routing_permitted"])
+            self.assertEqual(state.state(), before_unresolved_resume)
             repeated = call_state_gateway(
                 server,
                 root,
@@ -2647,6 +2696,230 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             self.assertFalse(repeated["ok"], repeated)
             self.assertEqual(repeated["status"], "TRANSPORT_RECOVERY_ALREADY_WAITING")
+
+            report_result = {
+                "status": "BLOCKED",
+                "artifact_digest": digest("transport-recovered-artifact"),  # noqa: F405
+                "execution_started": False,
+                "blocker_code": "PAYLOAD_VERIFY_FAILED",
+            }
+            report_text = state.formal_report_content(
+                "DISPATCH", "transport-dispatch-1", report_result
+            )
+            before_report_stage = state.state()
+            self.assertEqual(
+                before_report_stage["dispatch_outbox"]["transport-dispatch-1"]["status"],
+                "SENT",
+            )
+            self.assertEqual(
+                before_report_stage["dispatch_outbox"]["transport-dispatch-1"]["target_id"],
+                "worker-1",
+            )
+            self.assertEqual(
+                before_report_stage["thread_registry"]["worker-1"]["role_kind"],
+                "WORKER",
+            )
+            staged = call_isolated_mcp_bridge(
+                mcp.MCP_RUNTIME_CODEC_TOOL_NAME,
+                {
+                    "operation": "STAGE_REPORT",
+                    "root": str(root),
+                    "request": {
+                        "outbox_id": "transport-dispatch-1",
+                        "result": report_result,
+                        "report_text": report_text,
+                    },
+                },
+                thread_id="worker-1",
+                turn_id="transport-worker-report",
+            )
+            self.assertTrue(staged["ok"], staged)
+            recovered = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-report-recovery",
+                    "operation": "REPORT_RECOVERY",
+                    "occurred_at": T4,  # noqa: F405
+                    "parameters": {
+                        "outbox_id": "transport-dispatch-1",
+                        "staged_report": {
+                            **staged["artifact"],
+                            "result": staged["result"],
+                        },
+                    },
+                },
+            )
+            self.assertTrue(recovered["ok"], recovered)
+            self.assertEqual(recovered["operation_status"], "GATEWAY_REPORT_RECOVERY_ACKED")
+            self.assertEqual(
+                state.state()["transport_recovery"]["status"],
+                "WAITING_TRANSPORT_RECOVERY",
+            )
+            active_receipt["observed_at"] = "2026-01-01T01:01:00Z"
+            before_wrong_heartbeat = copy.deepcopy(state.state())
+            wrong_heartbeat = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-recovery-wrong-heartbeat",
+                    "operation": "ACK_TRANSPORT_RECOVERY",
+                    "occurred_at": "2026-01-01T01:01:00Z",
+                    "parameters": {
+                        "active_automation_receipt": {
+                            **active_receipt,
+                            "automation_id": "foreign-heartbeat",
+                        }
+                    },
+                },
+            )
+            self.assertFalse(wrong_heartbeat["ok"], wrong_heartbeat)
+            self.assertEqual(
+                wrong_heartbeat["status"],
+                "HEARTBEAT_LIVE_OBSERVATION_INVALID",
+            )
+            self.assertEqual(
+                wrong_heartbeat["next_action_code"],
+                "PAUSE_SAME_HEARTBEAT_AND_READBACK",
+            )
+            self.assertFalse(wrong_heartbeat["routing_permitted"])
+            self.assertEqual(state.state(), before_wrong_heartbeat)
+            crash_request = {
+                "request_id": "transport-recovery-crash",
+                "operation": "ACK_TRANSPORT_RECOVERY",
+                "occurred_at": "2026-01-01T01:01:00Z",
+                "parameters": {"active_automation_receipt": active_receipt},
+            }
+            crash_event_id = (
+                "gateway-event-"
+                + mcp.AdaptiveStateMcpServer._gateway_request_locator(
+                    crash_request["request_id"]
+                )
+            )
+            crash_stages = tuple(
+                dict.fromkeys(
+                    (*PERSISTENT_STAGES, *ARTIFACT_STAGES, *state_runtime_module.METRICS_STAGES)  # noqa: F405
+                )
+            )
+            with tempfile.TemporaryDirectory() as snapshot_directory:
+                control_snapshot = Path(snapshot_directory) / ".codex-loop"
+                shutil.copytree(root / ".codex-loop", control_snapshot)  # noqa: F405
+                for stage in crash_stages:
+                    with self.subTest(recovery_crash_stage=stage):
+                        shutil.rmtree(root / ".codex-loop")  # noqa: F405
+                        shutil.copytree(control_snapshot, root / ".codex-loop")  # noqa: F405
+                        crashing_runtime = AdaptiveStateRuntime(  # noqa: F405
+                            root, crash_at=stage
+                        )
+                        with mock.patch.object(
+                            mcp, "AdaptiveStateRuntime", return_value=crashing_runtime
+                        ), self.assertRaises(InjectedCrash):  # noqa: F405
+                            call_state_gateway(
+                                server, root, copy.deepcopy(crash_request)
+                            )
+                        recovered_runtime = AdaptiveStateRuntime(root)  # noqa: F405
+                        recovery_result = recovered_runtime.recover()
+                        self.assertTrue(recovery_result["ok"], recovery_result)
+                        crash_state = recovered_runtime.read_state()
+                        assert crash_state is not None
+                        if crash_state["transport_recovery"]["status"] != "HEALTHY":
+                            replayed = call_state_gateway(
+                                server, root, copy.deepcopy(crash_request)
+                            )
+                            self.assertTrue(replayed["ok"], replayed)
+                            crash_state = recovered_runtime.read_state()
+                            assert crash_state is not None
+                        self.assertEqual(
+                            crash_state["transport_recovery"]["status"], "HEALTHY"
+                        )
+                        self.assertEqual(
+                            crash_state["transport_recovery"]["failure_count"], 2
+                        )
+                        self.assertEqual(crash_state["run_control"]["status"], "RUNNING")
+                        self.assertEqual(
+                            crash_state["heartbeat_live_observation"]["status"],
+                            "ACTIVE",
+                        )
+                        self.assertEqual(
+                            len(crash_state["dispatch_outbox"]),
+                            len(before_wrong_heartbeat["dispatch_outbox"]),
+                        )
+                        self.assertEqual(
+                            crash_state["goal_execution_ledger"],
+                            before_wrong_heartbeat["goal_execution_ledger"],
+                        )
+                        recovery_events = [
+                            event
+                            for event in event_lines(root)  # noqa: F405
+                            if event["event_id"] == crash_event_id
+                        ]
+                        self.assertEqual(len(recovery_events), 1)
+                shutil.rmtree(root / ".codex-loop")  # noqa: F405
+                shutil.copytree(control_snapshot, root / ".codex-loop")  # noqa: F405
+            before_resume = copy.deepcopy(state.state())
+            resumed = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-recovery-ack",
+                    "operation": "ACK_TRANSPORT_RECOVERY",
+                    "occurred_at": "2026-01-01T01:01:00Z",
+                    "parameters": {"active_automation_receipt": active_receipt},
+                },
+            )
+            self.assertTrue(resumed["ok"], resumed)
+            self.assertEqual(resumed["operation_status"], "TRANSPORT_RECOVERY_ACKED")
+            resumed_state = state.state()
+            self.assertEqual(resumed_state["run_control"]["status"], "RUNNING")
+            self.assertEqual(resumed_state["transport_recovery"]["status"], "HEALTHY")
+            self.assertEqual(resumed_state["transport_recovery"]["failure_count"], 2)
+            self.assertEqual(
+                resumed_state["heartbeat_live_observation"]["status"], "ACTIVE"
+            )
+            self.assertEqual(
+                len(resumed_state["dispatch_outbox"]),
+                len(before_resume["dispatch_outbox"]),
+            )
+            self.assertEqual(
+                resumed_state["goal_execution_ledger"],
+                before_resume["goal_execution_ledger"],
+            )
+            before_replay = copy.deepcopy(resumed_state)
+            replay = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-recovery-after-ack",
+                    "operation": "ACK_TRANSPORT_RECOVERY",
+                    "occurred_at": "2026-01-01T01:01:00Z",
+                    "parameters": {"active_automation_receipt": active_receipt},
+                },
+            )
+            self.assertFalse(replay["ok"], replay)
+            self.assertEqual(replay["status"], "TRANSPORT_RECOVERY_NOT_READY")
+            self.assertEqual(
+                replay["next_action_code"],
+                "READ_STATE_ALREADY_RECOVERED",
+            )
+            self.assertFalse(replay["routing_permitted"])
+            self.assertEqual(state.state(), before_replay)
+            next_route = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "transport-next-route",
+                    "operation": "PREPARE_ROUTE",
+                    "occurred_at": "2026-01-01T01:02:00Z",
+                    "parameters": {
+                        "route_id": "transport-dispatch-after-recovery",
+                        "goal_id": "g2",
+                        "route_kind": "WORKER",
+                        "target_thread_id": "worker-1",
+                        "observed_at": "2026-01-01T01:02:00Z",
+                    },
+                },
+            )
+            self.assertTrue(next_route["ok"], next_route)
 
     def test_runtime_codec_normalizes_without_shell_stdin(self) -> None:
         server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
@@ -3721,8 +3994,13 @@ class McpBridgeBoundaryTests(unittest.TestCase):
             "observed_at": T1,  # noqa: F405
             "source_turn_id": metadata.turn_id,
         }
-        observation, artifacts, paths = server._gateway_paused_automation_artifacts(
-            state, receipt, metadata, stem="unit"
+        observation, artifacts, paths = server._gateway_automation_artifacts(
+            state,
+            receipt,
+            metadata,
+            stem="unit",
+            required_status="PAUSED",
+            parameter_name="paused_automation_receipt",
         )
         self.assertEqual(observation["status"], "PAUSED")
         self.assertEqual(len(artifacts), 2)
@@ -3732,8 +4010,13 @@ class McpBridgeBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(
             mcp.McpBridgeError, "APP_AUTOMATION_RECEIPT_IDENTITY_MISMATCH"
         ):
-            server._gateway_paused_automation_artifacts(
-                state, mismatched, metadata, stem="unit"
+            server._gateway_automation_artifacts(
+                state,
+                mismatched,
+                metadata,
+                stem="unit",
+                required_status="PAUSED",
+                parameter_name="paused_automation_receipt",
             )
 
 
