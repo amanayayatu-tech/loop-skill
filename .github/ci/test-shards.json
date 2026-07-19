@@ -1,14 +1,15 @@
 {
   "schema_version": 1,
-  "expected_total_tests": 630,
+  "expected_total_tests": 631,
   "expected_shard_counts": {
-    "1": 179,
+    "1": 180,
     "2": 168,
     "3": 141,
     "4": 142
   },
   "shards": {
     "1": [
+      "tests.test_state_runtime_evidence",
       "tests.test_state_runtime_reports",
       "tests.test_state_runtime_recovery",
       "tests.test_adaptive_loop",

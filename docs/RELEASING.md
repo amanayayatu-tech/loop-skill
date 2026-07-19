@@ -124,8 +124,9 @@ Supervisor as a routing dependency.
      tests.test_adaptive_fuzz.AdaptiveMalformedInputFuzzTests.test_malformed_nested_values_never_crash_validation_or_render -v
    ADAPTIVE_STATE_FUZZ_CASES=5000 python3 -W error -m unittest \
      tests.test_adaptive_state_runtime.AdaptiveStateRuntimeTests.test_malformed_and_random_sequences_never_mutate_or_corrupt -v
-   coverage run -m unittest discover -s tests
-   coverage report
+   # Same reviewed manifest, four shards, combine step and raw 80% branch gate
+   # as GitHub Compatibility CI. Dedicated-only state/fuzz entry points stay out.
+   python3 .github/ci/compatibility.py canonical-coverage
    ```
 
 3. Record the complete-gate result as a minimized structured local receipt with
