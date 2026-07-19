@@ -372,6 +372,8 @@ DECISION_EFFECT_CAPABILITY = {
     "APPLY_ROADMAP_REVISION": "none",
     "REVIEW_SURFACE_ACCEPTED": "none",
     "STOP_LOOP_CONFIRMED": "none",
+    "INCREASE_REPAIR_BUDGET_TO_5": "none",
+    "INCREASE_REPAIR_BUDGET": "none",
 }
 ROADMAP_OPERATION_TYPES = {
     "ADD_MILESTONE",
@@ -11226,6 +11228,7 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("DECISION_CARDS_DISABLED", "/human_control_policy")
         self._require_controller_actor(state, request)
         self._validate_review_surface_decision(state, mutation)
+        self._validate_repair_policy_decision(state, mutation)
         decision_id = mutation["decision_id"]
         existing = state["pending_decisions"].get(decision_id)
         if existing is not None:
@@ -11395,6 +11398,59 @@ class AdaptiveStateRuntime:
             )
 
     @staticmethod
+    def _validate_repair_policy_decision(
+        state: dict[str, Any], mutation: Mapping[str, Any]
+    ) -> None:
+        """Accept only a decision-bound monotonic repair-budget increase."""
+
+        legacy_effect = "INCREASE_REPAIR_BUDGET_TO_5"
+        generic_effect = "INCREASE_REPAIR_BUDGET"
+        changing = [
+            option
+            for option in mutation["options"]
+            if option["option_effect"] in {legacy_effect, generic_effect}
+        ]
+        scope = mutation["scope"]
+        policy_keys = {
+            "repair_policy_max_attempts_from",
+            "repair_policy_max_attempts_to",
+        }
+        if not changing and not policy_keys.intersection(scope):
+            return
+        current = state["authorization_envelope"]["repair_policy"][
+            "max_repair_attempts_per_goal"
+        ]
+        source = scope.get("repair_policy_max_attempts_from")
+        target = scope.get("repair_policy_max_attempts_to")
+        valid_generic = (
+            len(changing) == 1
+            and changing[0]["option_effect"] == generic_effect
+            and set(scope) == policy_keys
+            and type(source) is int
+            and type(target) is int
+            and source == current
+            and 0 <= source < target <= 20
+        )
+        valid_legacy = (
+            len(changing) == 1
+            and changing[0]["option_effect"] == legacy_effect
+            and set(scope) == policy_keys
+            and source == current == 2
+            and target == 5
+        )
+        if not (valid_generic or valid_legacy):
+            raise RuntimeRejection(
+                "REPAIR_POLICY_DECISION_INVALID",
+                "/mutation/scope",
+                {
+                    "required_from": current,
+                    "minimum_to": current + 1,
+                    "maximum_to": 20,
+                    "current": current,
+                },
+            )
+
+    @staticmethod
     def _equivalent_local_preview_url(
         configured: Any, observed: Any
     ) -> bool:
@@ -11432,6 +11488,26 @@ class AdaptiveStateRuntime:
     def _refresh_decision_staleness(self, state: dict[str, Any]) -> None:
         for decision in state.get("pending_decisions", {}).values():
             if decision.get("status") not in {"PENDING", "APPLIED"}:
+                continue
+            selected = next(
+                (
+                    option
+                    for option in decision.get("options", [])
+                    if option.get("option_id") == decision.get("selected_option_id")
+                ),
+                None,
+            )
+            if (
+                decision.get("status") == "APPLIED"
+                and isinstance(selected, Mapping)
+                and selected.get("option_effect") in {
+                    "INCREASE_REPAIR_BUDGET_TO_5",
+                    "INCREASE_REPAIR_BUDGET",
+                }
+            ):
+                # The applied effect intentionally changes the authorization
+                # envelope that its original context digest bound.  Preserve
+                # that immutable decision receipt instead of self-staling it.
                 continue
             if (
                 self._decision_context_digest(state, decision)
@@ -11603,6 +11679,15 @@ class AdaptiveStateRuntime:
         option = next((item for item in decision["options"] if item["option_id"] == mutation["option_id"]), None)
         if option is None:
             raise RuntimeRejection("DECISION_OPTION_INVALID", "/mutation/option_id")
+        self._validate_repair_policy_decision(state, decision)
+        if option["option_effect"] == "INCREASE_REPAIR_BUDGET_TO_5":
+            state["authorization_envelope"]["repair_policy"][
+                "max_repair_attempts_per_goal"
+            ] = 5
+        elif option["option_effect"] == "INCREASE_REPAIR_BUDGET":
+            state["authorization_envelope"]["repair_policy"][
+                "max_repair_attempts_per_goal"
+            ] = decision["scope"]["repair_policy_max_attempts_to"]
         decision["status"] = "APPLIED"
         decision["selected_option_id"] = option["option_id"]
         decision["applied_state_version"] = after_version
