@@ -48,7 +48,7 @@ def needs_for(plan: dict[str, object]) -> dict[str, object]:
     for job, should_run in expected.items():
         outputs: dict[str, str] = {}
         if job == "coverage" and should_run:
-            outputs = {"total_tests": "630", "coverage_percent": "80.02"}
+            outputs = {"total_tests": "631", "coverage_percent": "80.02"}
         if job == "fuzz-generator" and should_run:
             outputs = {"case_count": "5000", "seed": "20260710"}
         if job == "fuzz-state" and should_run:
@@ -154,6 +154,70 @@ class ClassificationTests(unittest.TestCase):
         invalid = compatibility.build_plan(REPO, "workflow_dispatch", {"inputs": {"profile": "quick"}}, "bad", "")
         self.assertEqual(invalid["tier"], "release")
 
+    def test_tag_reuses_only_exact_successful_main_proof(self) -> None:
+        sha = "a" * 40
+        proof = {"verified": True, "head_sha": sha, "run_id": 123}
+        tag = compatibility.build_plan(
+            REPO, "push", {"ref": "refs/tags/v1.2.3"}, sha, "", proof
+        )
+        self.assertFalse(tag["run_quick"])
+        self.assertFalse(tag["run_full"])
+        self.assertFalse(tag["run_install"])
+        self.assertTrue(tag["run_state_fuzz"])
+        self.assertTrue(tag["run_generator_fuzz"])
+        wrong_sha = compatibility.build_plan(
+            REPO,
+            "push",
+            {"ref": "refs/tags/v1.2.3"},
+            sha,
+            "",
+            {**proof, "head_sha": "b" * 40},
+        )
+        self.assertTrue(wrong_sha["run_quick"])
+        self.assertTrue(wrong_sha["run_full"])
+
+    def test_main_proof_requires_exact_successful_main_workflow_identity(self) -> None:
+        sha = "a" * 40
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = json.dumps(
+            {
+                "workflow_runs": [
+                    {
+                        "id": 123,
+                        "head_sha": sha,
+                        "head_branch": "main",
+                        "event": "push",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "path": ".github/workflows/compatibility.yml",
+                        "html_url": "https://github.example/runs/123",
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        with mock.patch.object(compatibility.urllib.request, "urlopen", return_value=response):
+            proof = compatibility.verify_successful_main_run(
+                repository="owner/repo",
+                workflow=".github/workflows/compatibility.yml",
+                tested_sha=sha,
+                token="token",
+            )
+        self.assertTrue(proof["verified"])
+        self.assertEqual(proof["run_id"], 123)
+
+        response.read.return_value = json.dumps(
+            {"workflow_runs": [{**json.loads(response.read.return_value)["workflow_runs"][0], "path": "other.yml"}]}
+        ).encode("utf-8")
+        with mock.patch.object(compatibility.urllib.request, "urlopen", return_value=response):
+            rejected = compatibility.verify_successful_main_run(
+                repository="owner/repo",
+                workflow=".github/workflows/compatibility.yml",
+                tested_sha=sha,
+                token="token",
+            )
+        self.assertFalse(rejected["verified"])
+
 
 class ManifestAndArtifactTests(unittest.TestCase):
     @classmethod
@@ -164,10 +228,10 @@ class ManifestAndArtifactTests(unittest.TestCase):
         ).stdout.strip()
 
     def test_canonical_inventory(self) -> None:
-        self.assertEqual(self.inventory["expected_total_tests"], 630)
+        self.assertEqual(self.inventory["expected_total_tests"], 631)
         self.assertEqual(
             {key: value["test_count"] for key, value in self.inventory["shards"].items()},
-            {"1": 179, "2": 168, "3": 141, "4": 142},
+            {"1": 180, "2": 168, "3": 141, "4": 142},
         )
         self.assertEqual(set(self.inventory["dedicated_only"]), {
             "tests.test_adaptive_state_runtime",
@@ -176,8 +240,8 @@ class ManifestAndArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             inventory_path = Path(temporary) / "inventory.json"
             inventory_path.write_text(json.dumps(self.inventory), encoding="utf-8")
-            self.assertEqual(compatibility._inventory_total(inventory_path), 630)
-            malformed = {**self.inventory, "expected_total_tests": 631}
+            self.assertEqual(compatibility._inventory_total(inventory_path), 631)
+            malformed = {**self.inventory, "expected_total_tests": 632}
             inventory_path.write_text(json.dumps(malformed), encoding="utf-8")
             with self.assertRaises(compatibility.CompatibilityError):
                 compatibility._inventory_total(inventory_path)
@@ -200,7 +264,7 @@ class ManifestAndArtifactTests(unittest.TestCase):
                 (artifact_dir / f".ci-shard-{shard}.json").write_text(json.dumps(payload), encoding="utf-8")
                 (artifact_dir / f".coverage.shard-{shard}.host.1").touch()
             summary = compatibility.verify_shard_artifacts(REPO, MANIFEST_PATH, artifact_dir, self.sha)
-        self.assertEqual(summary["total_tests"], 630)
+        self.assertEqual(summary["total_tests"], 631)
 
     def test_artifact_verifier_rejects_wrong_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -271,6 +335,67 @@ class ManifestAndArtifactTests(unittest.TestCase):
             self.assertTrue(execution["successful"])
             self.assertEqual(execution["tests_run"], 1)
 
+    def test_canonical_coverage_excludes_dedicated_only_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            (repo / ".github" / "ci").mkdir(parents=True)
+            (repo / "tests").mkdir()
+            (repo / "tests" / "__init__.py").write_text("", encoding="utf-8")
+            for index in range(1, 5):
+                (repo / "tests" / f"test_s{index}.py").write_text(
+                    "import unittest\n\nclass Sample(unittest.TestCase):\n"
+                    "    def test_ok(self):\n        self.assertTrue(True)\n",
+                    encoding="utf-8",
+                )
+            (repo / "tests" / "test_dedicated.py").write_text(
+                "import unittest\n\nclass Dedicated(unittest.TestCase):\n"
+                "    def test_must_not_run(self):\n        raise RuntimeError('dedicated test ran')\n",
+                encoding="utf-8",
+            )
+            (repo / ".github" / "ci" / "compatibility.py").write_text(
+                HELPER_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            manifest = {
+                "schema_version": 1,
+                "expected_total_tests": 4,
+                "expected_shard_counts": {str(index): 1 for index in range(1, 5)},
+                "shards": {str(index): [f"tests.test_s{index}"] for index in range(1, 5)},
+                "dedicated_only": {"tests.test_dedicated": "state-fuzz"},
+            }
+            manifest_path = repo / ".github" / "ci" / "test-shards.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "-c", "user.name=CI", "-c", "user.email=ci@example.invalid", "commit", "-qm", "fixture"],
+                cwd=repo,
+                check=True,
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(repo / ".github" / "ci" / "compatibility.py"),
+                    "canonical-coverage",
+                    "--repo",
+                    str(repo),
+                    "--manifest",
+                    str(manifest_path),
+                    "--artifact-dir",
+                    str(repo / ".ci-canonical-coverage"),
+                    "--minimum",
+                    "0",
+                ],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            evidence = json.loads(
+                (repo / ".ci-canonical-coverage" / "coverage-evidence-v1.json").read_text()
+            )
+            self.assertEqual(evidence["total_tests"], 4)
+
 
 class WhitespaceScheduleTests(unittest.TestCase):
     def test_schedule_records_an_explicit_empty_range(self) -> None:
@@ -309,7 +434,7 @@ class CoverageAndGateTests(unittest.TestCase):
         plan = compatibility.classify_entries(
             [entry("README.md")], base_sha="a" * 40, head_sha="b" * 40, merge_sha="c" * 40
         )
-        plan["expected_total_tests"] = 630
+        plan["expected_total_tests"] = 631
         errors, report = compatibility.gate_report(plan, needs_for(plan))
         self.assertEqual(errors, [])
         self.assertIn("PASS", report)
@@ -321,7 +446,7 @@ class CoverageAndGateTests(unittest.TestCase):
             head_sha="b" * 40,
             merge_sha="c" * 40,
         )
-        plan["expected_total_tests"] = 630
+        plan["expected_total_tests"] = 631
         errors, _ = compatibility.gate_report(plan, needs_for(plan))
         self.assertEqual(errors, [])
 
@@ -332,7 +457,7 @@ class CoverageAndGateTests(unittest.TestCase):
             head_sha="b" * 40,
             merge_sha="c" * 40,
         )
-        plan["expected_total_tests"] = 630
+        plan["expected_total_tests"] = 631
         for job, result in (("quick", "failure"), ("full", "cancelled"), ("coverage", "skipped")):
             with self.subTest(job=job, result=result):
                 needs = needs_for(plan)
@@ -344,7 +469,7 @@ class CoverageAndGateTests(unittest.TestCase):
         plan = compatibility.classify_entries(
             [entry("README.md")], base_sha="a" * 40, head_sha="b" * 40, merge_sha="c" * 40
         )
-        plan["expected_total_tests"] = 630
+        plan["expected_total_tests"] = 631
         needs = needs_for(plan)
         needs["fuzz-state"] = {
             "result": "success",

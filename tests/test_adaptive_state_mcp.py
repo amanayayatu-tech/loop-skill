@@ -1350,6 +1350,45 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             wrong_digest["evidence_sources"][0]["digest"] = "sha256:" + "0" * 64
             assert_stage_rejected("wrong-digest", wrong_digest)
 
+            missing_list = copy.deepcopy(request)
+            missing_list["evidence_sources"] = None
+            assert_stage_rejected("non-list", missing_list)
+
+            malformed_item = copy.deepcopy(request)
+            malformed_item["evidence_sources"] = [{"path": evidence_path}]
+            assert_stage_rejected("malformed-item", malformed_item)
+
+            duplicate = copy.deepcopy(request)
+            duplicate["evidence_sources"] = [
+                copy.deepcopy(request["evidence_sources"][0]),
+                copy.deepcopy(request["evidence_sources"][0]),
+            ]
+            assert_stage_rejected("duplicate", duplicate)
+
+            invalid_destination = copy.deepcopy(request)
+            invalid_path = ".codex-loop/reports/nested/evidence.json"
+            invalid_destination["evidence_sources"][0]["path"] = invalid_path
+            invalid_report = json.loads(invalid_destination["report_text"])
+            invalid_report["evidence_artifacts"][0]["path"] = invalid_path
+            invalid_destination["report_text"] = json.dumps(
+                invalid_report, sort_keys=True, separators=(",", ":")
+            )
+            assert_stage_rejected("invalid-destination", invalid_destination)
+
+            invalid_digest = copy.deepcopy(request)
+            invalid_digest["evidence_sources"][0]["digest"] = "not-a-digest"
+            assert_stage_rejected("invalid-digest", invalid_digest)
+
+            relative_source = copy.deepcopy(request)
+            relative_source["evidence_sources"][0]["source_path"] = "relative.json"
+            assert_stage_rejected("relative-source", relative_source)
+
+            missing_source = copy.deepcopy(request)
+            missing_source["evidence_sources"][0]["source_path"] = str(
+                worker_root / "missing.json"
+            )
+            assert_stage_rejected("missing-source", missing_source)
+
             unreferenced = copy.deepcopy(request)
             unreferenced["evidence_sources"][0]["path"] = (
                 ".codex-loop/reports/unreferenced-validation.json"
@@ -1379,6 +1418,38 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "sha256:" + hashlib.sha256(invalid_utf8_bytes).hexdigest()
             )
             assert_stage_rejected("invalid-utf8", invalid_utf8)
+
+            invalid_json_source = worker_root / "invalid-json.json"
+            invalid_json_content = "{not-json}"
+            invalid_json_source.write_text(invalid_json_content, encoding="utf-8")
+            invalid_json = copy.deepcopy(request)
+            invalid_json_digest = digest(invalid_json_content)  # noqa: F405
+            invalid_json["evidence_sources"][0]["source_path"] = str(
+                invalid_json_source
+            )
+            invalid_json["evidence_sources"][0]["digest"] = invalid_json_digest
+            invalid_json_report = json.loads(invalid_json["report_text"])
+            invalid_json_report["evidence_artifacts"][0]["digest"] = (
+                invalid_json_digest
+            )
+            invalid_json_report["evidence_artifacts"][0]["sha256"] = (
+                invalid_json_digest.removeprefix("sha256:")
+            )
+            invalid_json_report["evidence_artifacts"][0]["size_bytes"] = len(
+                invalid_json_content.encode("utf-8")
+            )
+            invalid_json["report_text"] = json.dumps(
+                invalid_json_report, sort_keys=True, separators=(",", ":")
+            )
+            assert_stage_rejected("invalid-json", invalid_json)
+
+            claim_mismatch = copy.deepcopy(request)
+            claim_report = json.loads(claim_mismatch["report_text"])
+            claim_report["evidence_artifacts"][0]["size_bytes"] += 1
+            claim_mismatch["report_text"] = json.dumps(
+                claim_report, sort_keys=True, separators=(",", ":")
+            )
+            assert_stage_rejected("claim-mismatch", claim_mismatch)
 
             oversized_source = worker_root / "oversized-validation.json"
             with oversized_source.open("wb") as stream:
@@ -1430,6 +1501,93 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "result": staged["result"],
                 "evidence_artifacts": staged["evidence_artifacts"],
             }
+            before_recovery_rejection = copy.deepcopy(state.state())
+
+            def assert_recovery_rejected(
+                name: str, candidate: dict[str, object]
+            ) -> None:
+                rejected = call_state_gateway(
+                    server,
+                    root,
+                    {
+                        "request_id": f"recover-evidence-rejected-{name}",
+                        "operation": "REPORT_RECOVERY",
+                        "occurred_at": T3,  # noqa: F405
+                        "parameters": {
+                            "outbox_id": "dispatch-evidence-route",
+                            "staged_report": candidate,
+                        },
+                    },
+                )
+                self.assertFalse(rejected["ok"], (name, rejected))
+                self.assertEqual(state.state(), before_recovery_rejection)
+
+            evidence_not_list = copy.deepcopy(staged_report)
+            evidence_not_list["evidence_artifacts"] = None
+            assert_recovery_rejected("evidence-not-list", evidence_not_list)
+
+            malformed_staged = copy.deepcopy(staged_report)
+            malformed_staged["evidence_artifacts"] = [{"path": evidence_path}]
+            assert_recovery_rejected("malformed-staged", malformed_staged)
+
+            duplicate_staged = copy.deepcopy(staged_report)
+            duplicate_staged["evidence_artifacts"] = [
+                copy.deepcopy(staged_report["evidence_artifacts"][0]),
+                copy.deepcopy(staged_report["evidence_artifacts"][0]),
+            ]
+            assert_recovery_rejected("duplicate-staged", duplicate_staged)
+
+            invalid_staged_path = copy.deepcopy(staged_report)
+            invalid_staged_path["evidence_artifacts"][0]["path"] = (
+                ".codex-loop/reports/nested/evidence.json"
+            )
+            assert_recovery_rejected("invalid-staged-path", invalid_staged_path)
+
+            missing_staged_source = copy.deepcopy(staged_report)
+            missing_staged_source["evidence_artifacts"][0]["source_path"] = str(
+                root / "missing-staged-evidence.json"
+            )
+            assert_recovery_rejected("missing-staged-source", missing_staged_source)
+
+            staged_source = Path(
+                staged_report["evidence_artifacts"][0]["source_path"]
+            )
+            original_staged_content = staged_source.read_text(encoding="utf-8")
+            staged_source.chmod(0o644)
+            staged_source.write_text('{"tampered":true}', encoding="utf-8")
+            staged_source.chmod(0o444)
+            try:
+                assert_recovery_rejected(
+                    "staged-digest-mismatch", copy.deepcopy(staged_report)
+                )
+            finally:
+                staged_source.chmod(0o644)
+                staged_source.write_text(original_staged_content, encoding="utf-8")
+                staged_source.chmod(0o444)
+
+            invalid_json_text = "{not-json}"
+            invalid_json_digest = digest(invalid_json_text)  # noqa: F405
+            invalid_json_staged = copy.deepcopy(staged_report)
+            invalid_json_item = invalid_json_staged["evidence_artifacts"][0]
+            invalid_json_item["digest"] = invalid_json_digest
+            path_locator = hashlib.sha256(
+                invalid_json_item["path"].encode("utf-8")
+            ).hexdigest()[:16]
+            invalid_json_source = (
+                root
+                / ".codex-loop"
+                / "report-staging"
+                / (
+                    "dispatch-evidence-route."
+                    f"{invalid_json_digest.removeprefix('sha256:')}"
+                    f".evidence-{path_locator}.json"
+                )
+            )
+            invalid_json_source.write_text(invalid_json_text, encoding="utf-8")
+            invalid_json_source.chmod(0o444)
+            invalid_json_item["source_path"] = str(invalid_json_source)
+            assert_recovery_rejected("staged-invalid-json", invalid_json_staged)
+
             acked = call_isolated_mcp_bridge(
                 mcp.MCP_STATE_GATEWAY_TOOL_NAME,
                 {

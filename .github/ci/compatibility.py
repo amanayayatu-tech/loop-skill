@@ -12,6 +12,9 @@ import subprocess
 import sys
 import time
 import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -220,6 +223,8 @@ def _plan(
     run_generator_fuzz: bool,
     run_install: bool,
     run_tag_identity: bool,
+    run_quick: bool = True,
+    main_proof: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -230,12 +235,13 @@ def _plan(
         "head_sha": head_sha,
         "merge_sha": merge_sha,
         "changed_entries": [dict(entry) for entry in entries],
-        "run_quick": True,
+        "run_quick": run_quick,
         "run_full": run_full,
         "run_state_fuzz": run_state_fuzz,
         "run_generator_fuzz": run_generator_fuzz,
         "run_install": run_install,
         "run_tag_identity": run_tag_identity,
+        "main_proof": dict(main_proof or {"verified": False, "reason": "not-applicable"}),
     }
 
 
@@ -362,6 +368,7 @@ def build_plan(
     event: Mapping[str, Any],
     github_sha: str,
     manual_profile: str,
+    main_proof: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a plan from a GitHub event, escalating malformed evidence to release."""
 
@@ -434,6 +441,25 @@ def build_plan(
         ref = event.get("ref", "")
         tag_identity = isinstance(ref, str) and ref.startswith("refs/tags/v")
         if tag_identity:
+            if (
+                isinstance(main_proof, Mapping)
+                and main_proof.get("verified") is True
+                and main_proof.get("head_sha") == safe_merge_sha
+            ):
+                return _plan(
+                    tier="release",
+                    event_name=event_name,
+                    reasons=[f"tag-reuses-successful-main-run:{main_proof.get('run_id')}"],
+                    head_sha=safe_merge_sha,
+                    merge_sha=safe_merge_sha,
+                    run_quick=False,
+                    run_full=False,
+                    run_state_fuzz=True,
+                    run_generator_fuzz=True,
+                    run_install=False,
+                    run_tag_identity=True,
+                    main_proof=main_proof,
+                )
             return _release_plan(
                 event_name,
                 "tag-push-release-profile",
@@ -497,8 +523,8 @@ def _plan_markdown(plan: Mapping[str, Any]) -> str:
             f"- Reasons: {reasons or '<missing>'}",
             f"- Head SHA: `{plan.get('head_sha') or '<none>'}`",
             f"- Merge SHA: `{plan.get('merge_sha') or '<none>'}`",
-            f"- Full / generator fuzz / state fuzz / install / tag identity: "
-            f"`{plan.get('run_full')}` / `{plan.get('run_generator_fuzz')}` / "
+            f"- Quick / full / generator fuzz / state fuzz / install / tag identity: "
+            f"`{plan.get('run_quick')}` / `{plan.get('run_full')}` / `{plan.get('run_generator_fuzz')}` / "
             f"`{plan.get('run_state_fuzz')}` / `{plan.get('run_install')}` / "
             f"`{plan.get('run_tag_identity')}`",
             "",
@@ -747,6 +773,204 @@ def coverage_summary(
     }
 
 
+def verify_successful_main_run(
+    *, repository: str, workflow: str, tested_sha: str, token: str
+) -> dict[str, Any]:
+    """Return exact-SHA successful-main evidence, or a fail-closed negative result."""
+
+    sha = _validate_sha(tested_sha, "tested_sha")
+    negative: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "verified": False,
+        "head_sha": sha,
+        "reason": "successful-main-run-not-proven",
+    }
+    if not repository or not token:
+        negative["reason"] = "repository-or-token-missing"
+        return negative
+    query = urllib.parse.urlencode(
+        {"branch": "main", "event": "push", "status": "success", "head_sha": sha, "per_page": "20"}
+    )
+    workflow_id = urllib.parse.quote(Path(workflow).name, safe="")
+    url = f"https://api.github.com/repos/{repository}/actions/workflows/{workflow_id}/runs?{query}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "loop-skill-compatibility-ci",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.load(response)
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        negative["reason"] = f"github-api-unavailable:{type(exc).__name__}"
+        return negative
+    runs = payload.get("workflow_runs") if isinstance(payload, Mapping) else None
+    if not isinstance(runs, list):
+        negative["reason"] = "github-api-response-invalid"
+        return negative
+    for run in runs:
+        if not isinstance(run, Mapping):
+            continue
+        path = str(run.get("path", "")).lstrip("/")
+        if (
+            run.get("head_sha") == sha
+            and run.get("head_branch") == "main"
+            and run.get("event") == "push"
+            and run.get("status") == "completed"
+            and run.get("conclusion") == "success"
+            and path == workflow
+            and isinstance(run.get("id"), int)
+        ):
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "verified": True,
+                "head_sha": sha,
+                "run_id": run["id"],
+                "html_url": run.get("html_url", ""),
+                "workflow_path": path,
+                "reason": "exact-sha-successful-main-push",
+            }
+    return negative
+
+
+def canonical_coverage(
+    repo: Path,
+    manifest_path: Path,
+    artifact_dir: Path,
+    tested_sha: str,
+    *,
+    mode: str,
+    shard: str = "",
+    minimum: float = 80.0,
+    github_output: Path | None = None,
+) -> dict[str, Any]:
+    """Run or combine the exact canonical coverage contract used locally and in CI."""
+
+    repo = repo.resolve()
+    manifest_path = manifest_path.resolve()
+    artifact_dir = artifact_dir.resolve()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    sha = _validate_sha(tested_sha, "tested_sha")
+    if _commit_oid(repo, "HEAD") != sha:
+        raise CompatibilityError("canonical coverage checkout SHA does not match tested_sha")
+    if mode in {"all", "shard"}:
+        selected = (shard,) if mode == "shard" else ("1", "2", "3", "4")
+        if any(value not in {"1", "2", "3", "4"} for value in selected):
+            raise CompatibilityError("canonical coverage shard must be 1 through 4")
+        helper = repo / ".github" / "ci" / "compatibility.py"
+        for value in selected:
+            env = {
+                **os.environ,
+                "COVERAGE_FILE": str(artifact_dir / f".coverage.shard-{value}"),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-W",
+                    "error",
+                    "-m",
+                    "coverage",
+                    "run",
+                    "--parallel-mode",
+                    str(helper),
+                    "run-shard",
+                    "--repo",
+                    str(repo),
+                    "--manifest",
+                    str(manifest_path),
+                    "--shard",
+                    value,
+                    "--tested-sha",
+                    sha,
+                    "--output",
+                    str(artifact_dir / f".ci-shard-{value}.json"),
+                ],
+                cwd=repo,
+                env=env,
+            )
+            if completed.returncode:
+                raise CompatibilityError(f"canonical shard {value} failed")
+        if mode == "shard":
+            execution = _load_json(artifact_dir / f".ci-shard-{shard}.json")
+            return {"tested_sha": sha, "shard": shard, "tests_run": execution.get("tests_run")}
+
+    verified = verify_shard_artifacts(repo, manifest_path, artifact_dir, sha)
+    data_file = artifact_dir / ".coverage"
+    env = {**os.environ, "COVERAGE_FILE": str(data_file)}
+    commands = (
+        [sys.executable, "-m", "coverage", "combine", str(artifact_dir)],
+        [sys.executable, "-m", "coverage", "report", "--fail-under=0"],
+        [sys.executable, "-m", "coverage", "json", "--fail-under=0", "-o", str(artifact_dir / "coverage.json")],
+        [sys.executable, "-m", "coverage", "xml", "--fail-under=0", "-o", str(artifact_dir / "coverage.xml")],
+    )
+    for command in commands:
+        subprocess.run(command, cwd=repo, env=env, check=True)
+    coverage_data = _load_json(artifact_dir / "coverage.json")
+    summary = coverage_summary(artifact_dir / "coverage.json", expected_minimum=0)
+    totals = coverage_data.get("totals", {})
+    raw_percent = totals.get("percent_covered") if isinstance(totals, Mapping) else None
+    if not isinstance(raw_percent, (int, float)):
+        raise CompatibilityError("coverage JSON raw percent_covered is missing")
+    files = coverage_data.get("files", {})
+    top_uncovered: list[dict[str, Any]] = []
+    if isinstance(files, Mapping):
+        for path, data in files.items():
+            file_summary = data.get("summary", {}) if isinstance(data, Mapping) else {}
+            missing_lines = int(file_summary.get("missing_lines", 0) or 0)
+            missing_branches = int(file_summary.get("missing_branches", 0) or 0)
+            top_uncovered.append(
+                {
+                    "path": path,
+                    "missing_lines": missing_lines,
+                    "missing_branches": missing_branches,
+                    "missing_units": missing_lines + missing_branches,
+                    "percent_covered": file_summary.get("percent_covered"),
+                }
+            )
+    top_uncovered.sort(key=lambda item: (-item["missing_units"], item["path"]))
+    evidence = {
+        "schema_version": SCHEMA_VERSION,
+        "tested_sha": sha,
+        "total_tests": verified["total_tests"],
+        "shards": verified["shards"],
+        **summary,
+        "coverage_percent_raw": raw_percent,
+        "minimum_percent": minimum,
+        "gate_passed": float(raw_percent) >= minimum,
+        "top_uncovered_files": top_uncovered[:10],
+    }
+    _write_json(artifact_dir / "coverage-evidence-v1.json", evidence)
+    _append_outputs(
+        github_output,
+        {"total_tests": verified["total_tests"], "coverage_percent": f"{float(raw_percent):.6f}"},
+    )
+    print(
+        "CANONICAL_COVERAGE "
+        f"tests={verified['total_tests']} "
+        + " ".join(f"shard_{key}={value['test_count']}" for key, value in verified["shards"].items())
+        + f" lines={summary['covered_lines']}/{summary['num_statements']}"
+        + f" branches={summary['covered_branches']}/{summary['num_branches']}"
+        + f" coverage={float(raw_percent):.6f}%"
+    )
+    print("CANONICAL_TOP_UNCOVERED")
+    for item in evidence["top_uncovered_files"]:
+        print(
+            f"  {item['path']} missing_lines={item['missing_lines']} "
+            f"missing_branches={item['missing_branches']} "
+            f"coverage={float(item['percent_covered'] or 0):.2f}%"
+        )
+    if not evidence["gate_passed"]:
+        raise CompatibilityError(
+            f"coverage {float(raw_percent):.6f}% is below {minimum:.2f}%"
+        )
+    return evidence
+
+
 def gate_report(plan: Mapping[str, Any], needs: Mapping[str, Any]) -> tuple[list[str], str]:
     errors: list[str] = []
     if plan.get("schema_version") != SCHEMA_VERSION:
@@ -782,7 +1006,7 @@ def gate_report(plan: Mapping[str, Any], needs: Mapping[str, Any]) -> tuple[list
         errors.append(f"needs JSON is missing jobs: {missing_jobs}")
     expected_results = {
         "plan": "success",
-        "quick": "success",
+        "quick": "success" if plan.get("run_quick") is True else "skipped",
         "full": "success" if plan.get("run_full") is True else "skipped",
         "coverage": "success" if plan.get("run_full") is True else "skipped",
         "fuzz-generator": "success" if plan.get("run_generator_fuzz") is True else "skipped",
@@ -792,12 +1016,28 @@ def gate_report(plan: Mapping[str, Any], needs: Mapping[str, Any]) -> tuple[list
         "tag-identity": "success" if plan.get("run_tag_identity") is True else "skipped",
     }
     rows: list[str] = []
+    failure_classes: list[str] = []
     for job, expected in expected_results.items():
         job_data = needs.get(job, {})
         actual = job_data.get("result") if isinstance(job_data, Mapping) else None
         rows.append(f"| `{job}` | `{expected}` | `{actual or '<missing>'}` |")
         if actual != expected:
             errors.append(f"job {job} expected {expected} but was {actual or '<missing>'}")
+            if actual == "cancelled":
+                if event_name == "pull_request":
+                    failure_classes.append(f"{job}: timeout or superseded PR cancellation")
+                else:
+                    failure_classes.append(
+                        f"{job}: timeout/external cancellation; non-PR concurrency groups are unique"
+                    )
+            elif actual == "skipped":
+                failure_classes.append(f"{job}: unexpected skipped lane")
+            elif job == "coverage":
+                failure_classes.append("coverage: threshold or canonical artifact failure")
+            elif job in {"quick", "full", "fuzz-generator", "fuzz-state"}:
+                failure_classes.append(f"{job}: product test or lane configuration failure")
+            else:
+                failure_classes.append(f"{job}: infrastructure or contract failure")
 
     coverage_outputs = needs.get("coverage", {}).get("outputs", {}) if isinstance(needs.get("coverage"), Mapping) else {}
     if plan.get("run_full") is True and expected_results["coverage"] == "success":
@@ -843,6 +1083,11 @@ def gate_report(plan: Mapping[str, Any], needs: Mapping[str, Any]) -> tuple[list
             "| --- | --- | --- |",
             *rows,
             "",
+            "### Failure classification",
+            "",
+            *(f"- {value}" for value in failure_classes),
+            *(["- None"] if not failure_classes else []),
+            "",
             "### Errors",
             "",
             *(f"- {error}" for error in errors),
@@ -884,7 +1129,15 @@ def _inventory_total(path: Path) -> int:
 
 def _cmd_classify(args: argparse.Namespace) -> int:
     event = _load_json(Path(args.event_path))
-    plan = build_plan(Path(args.repo).resolve(), args.event_name, event, args.github_sha, args.manual_profile)
+    main_proof = _load_json(Path(args.main_proof)) if args.main_proof else None
+    plan = build_plan(
+        Path(args.repo).resolve(),
+        args.event_name,
+        event,
+        args.github_sha,
+        args.manual_profile,
+        main_proof,
+    )
     plan["expected_total_tests"] = _inventory_total(Path(args.inventory))
     output = Path(args.output)
     _write_json(output, plan)
@@ -892,6 +1145,7 @@ def _cmd_classify(args: argparse.Namespace) -> int:
         _path_or_none(args.github_output),
         {
             "tier": plan["tier"],
+            "run_quick": plan["run_quick"],
             "run_full": plan["run_full"],
             "run_state_fuzz": plan["run_state_fuzz"],
             "run_generator_fuzz": plan["run_generator_fuzz"],
@@ -903,6 +1157,28 @@ def _cmd_classify(args: argparse.Namespace) -> int:
         with Path(args.summary).open("a", encoding="utf-8") as handle:
             handle.write(_plan_markdown(plan))
     print(json.dumps(plan, sort_keys=True))
+    return 0
+
+
+def _cmd_main_proof(args: argparse.Namespace) -> int:
+    event = _load_json(Path(args.event_path))
+    ref = event.get("ref", "")
+    if args.event_name == "push" and isinstance(ref, str) and ref.startswith("refs/tags/v"):
+        proof = verify_successful_main_run(
+            repository=args.repository,
+            workflow=args.workflow,
+            tested_sha=args.github_sha,
+            token=args.token,
+        )
+    else:
+        proof = {
+            "schema_version": SCHEMA_VERSION,
+            "verified": False,
+            "head_sha": args.github_sha if SHA_RE.fullmatch(args.github_sha or "") else "",
+            "reason": "not-a-version-tag",
+        }
+    _write_json(Path(args.output), proof)
+    print(json.dumps(proof, sort_keys=True))
     return 0
 
 
@@ -949,6 +1225,21 @@ def _cmd_coverage_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_canonical_coverage(args: argparse.Namespace) -> int:
+    tested_sha = args.tested_sha or _commit_oid(Path(args.repo).resolve(), "HEAD")
+    canonical_coverage(
+        Path(args.repo),
+        Path(args.manifest),
+        Path(args.artifact_dir),
+        tested_sha,
+        mode=args.mode,
+        shard=args.shard,
+        minimum=args.minimum,
+        github_output=_path_or_none(args.github_output),
+    )
+    return 0
+
+
 def _cmd_verify_gate(args: argparse.Namespace) -> int:
     try:
         plan = _load_json(Path(args.plan))
@@ -976,11 +1267,22 @@ def _parser() -> argparse.ArgumentParser:
     classify.add_argument("--event-path", required=True)
     classify.add_argument("--github-sha", required=True)
     classify.add_argument("--manual-profile", default="release")
+    classify.add_argument("--main-proof", default="")
     classify.add_argument("--inventory", required=True)
     classify.add_argument("--output", default=PLAN_NAME)
     classify.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT", ""))
     classify.add_argument("--summary", default=os.environ.get("GITHUB_STEP_SUMMARY", ""))
     classify.set_defaults(func=_cmd_classify)
+
+    main_proof = subparsers.add_parser("main-proof")
+    main_proof.add_argument("--event-name", required=True)
+    main_proof.add_argument("--event-path", required=True)
+    main_proof.add_argument("--github-sha", required=True)
+    main_proof.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
+    main_proof.add_argument("--workflow", default=".github/workflows/compatibility.yml")
+    main_proof.add_argument("--token", default=os.environ.get("GITHUB_TOKEN", ""))
+    main_proof.add_argument("--output", default="main-proof-v1.json")
+    main_proof.set_defaults(func=_cmd_main_proof)
 
     validate_manifest = subparsers.add_parser("validate-manifest")
     validate_manifest.add_argument("--repo", default=".")
@@ -1012,6 +1314,17 @@ def _parser() -> argparse.ArgumentParser:
     summarize.add_argument("--tolerance", type=float, default=0.01)
     summarize.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT", ""))
     summarize.set_defaults(func=_cmd_coverage_summary)
+
+    canonical = subparsers.add_parser("canonical-coverage")
+    canonical.add_argument("--repo", default=".")
+    canonical.add_argument("--manifest", default=".github/ci/test-shards.json")
+    canonical.add_argument("--artifact-dir", default=".ci-canonical-coverage")
+    canonical.add_argument("--tested-sha", default="")
+    canonical.add_argument("--mode", choices=("all", "shard", "combine"), default="all")
+    canonical.add_argument("--shard", default="")
+    canonical.add_argument("--minimum", type=float, default=80.0)
+    canonical.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT", ""))
+    canonical.set_defaults(func=_cmd_canonical_coverage)
 
     gate = subparsers.add_parser("verify-gate")
     gate.add_argument("--plan", required=True)

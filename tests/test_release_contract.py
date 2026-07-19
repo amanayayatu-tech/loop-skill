@@ -126,8 +126,17 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request'", workflow)
         self.assertIn("current main Mac's complete", workflow)
         self.assertIn("Main push repeats", workflow)
-        self.assertIn("coverage run --parallel-mode", workflow)
-        self.assertIn("coverage combine", workflow)
+        self.assertIn("canonical-coverage", workflow)
+        helper = (ROOT / ".github" / "ci" / "compatibility.py").read_text()
+        self.assertIn('"--parallel-mode"', helper)
+        self.assertIn('"combine", str(artifact_dir)', helper)
+        self.assertIn("timeout-minutes: 10", workflow)
+        quick_block = workflow.split("  quick:", 1)[1].split("\n  full:", 1)[0]
+        self.assertNotIn("tests.test_adaptive_state_mcp", quick_block)
+        self.assertNotIn("tests.test_adaptive_runtime_transport", quick_block)
+        self.assertIn("tests.test_incident_p0_negative", quick_block)
+        self.assertIn("main-proof-v1.json", workflow)
+        self.assertIn("actions: read", workflow)
         self.assertIn("verify-gate", workflow)
         self.assertIn("if: always()", workflow)
         self.assertNotIn("full-fuzz:", workflow)
@@ -187,7 +196,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertLess(len(compatibility.read_text().splitlines()), 30)
         self.assertIn("Stable CI entrypoint", compatibility.read_text())
         modules = sorted((ROOT / "tests").glob("test_state_runtime_*.py"))
-        self.assertEqual(len(modules), 6)
+        self.assertEqual(len(modules), 7)
         names: list[str] = []
         for path in modules:
             self.assertLess(len(path.read_text().splitlines()), 3000)
@@ -198,8 +207,8 @@ class ReleaseContractTests(unittest.TestCase):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                 and node.name.startswith("test_")
             )
-        self.assertEqual(len(names), 125)
-        self.assertEqual(len(set(names)), 125)
+        self.assertEqual(len(names), 126)
+        self.assertEqual(len(set(names)), 126)
         self.assertTrue((ROOT / "tests" / "state_runtime_support.py").is_file())
 
 

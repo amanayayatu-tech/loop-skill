@@ -23,6 +23,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: compatibility-ci-${{ github.event.pull_request.number || github.run_id }}
@@ -40,6 +41,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       tier: ${{ steps.classify.outputs.tier }}
+      run_quick: ${{ steps.classify.outputs.run_quick }}
       run_full: ${{ steps.classify.outputs.run_full }}
       run_state_fuzz: ${{ steps.classify.outputs.run_state_fuzz }}
       run_generator_fuzz: ${{ steps.classify.outputs.run_generator_fuzz }}
@@ -67,6 +69,17 @@ jobs:
           python .github/ci/compatibility.py validate-manifest
           --manifest .github/ci/test-shards.json
           --output inventory-v1.json
+      - name: Prove an exact-SHA successful main run for version tags
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python .github/ci/compatibility.py main-proof
+          --event-name "$GITHUB_EVENT_NAME"
+          --event-path "$GITHUB_EVENT_PATH"
+          --github-sha "$GITHUB_SHA"
+          --repository "$GITHUB_REPOSITORY"
+          --output main-proof-v1.json
       - name: Classify this run fail closed
         id: classify
         env:
@@ -78,6 +91,7 @@ jobs:
           --github-sha "$GITHUB_SHA"
           --manual-profile "${{ inputs.profile || 'release' }}"
           --inventory inventory-v1.json
+          --main-proof main-proof-v1.json
           --output plan-v1.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -85,15 +99,16 @@ jobs:
           path: |
             plan-v1.json
             inventory-v1.json
+            main-proof-v1.json
           if-no-files-found: error
           retention-days: 7
 
   quick:
     name: Quick semantic regression (Python 3.9)
     needs: plan
-    if: needs.plan.result == 'success'
+    if: needs.plan.result == 'success' && needs.plan.outputs.run_quick == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
       ADAPTIVE_FUZZ_CASES: "25"
       ADAPTIVE_STATE_FUZZ_CASES: "25"
@@ -121,9 +136,7 @@ jobs:
       - name: Run required quick semantic tests
         run: >-
           python -W error -m unittest -v
-          tests.test_adaptive_runtime_transport
           tests.test_incident_p0_negative
-          tests.test_adaptive_state_mcp
           tests.test_mcp_registration
           tests.test_runtime_python_binding
           tests.test_release_contract
@@ -159,12 +172,12 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r requirements-test.txt
       - name: Run the reviewed shard once under branch coverage
         run: >-
-          python -W error -m coverage run --parallel-mode
-          .github/ci/compatibility.py run-shard
+          python .github/ci/compatibility.py canonical-coverage
+          --mode shard
           --manifest .github/ci/test-shards.json
           --shard "${{ matrix.shard }}"
           --tested-sha "$GITHUB_SHA"
-          --output ".ci-shard-${{ matrix.shard }}.json"
+          --artifact-dir .
       - name: Upload unique shard evidence even after failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -246,7 +259,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      total_tests: ${{ steps.verify.outputs.total_tests }}
+      total_tests: ${{ steps.summary.outputs.total_tests }}
       coverage_percent: ${{ steps.summary.outputs.coverage_percent }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -262,35 +275,23 @@ jobs:
           pattern: compatibility-shard-*
           path: .coverage-data
           merge-multiple: true
-      - name: Verify all four execution manifests before combining coverage
-        id: verify
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
+      - name: Verify, combine, report, and enforce canonical coverage
+        id: summary
         run: >-
-          python .github/ci/compatibility.py verify-artifacts
+          python .github/ci/compatibility.py canonical-coverage
+          --mode combine
           --manifest .github/ci/test-shards.json
           --artifact-dir .coverage-data
           --tested-sha "$GITHUB_SHA"
-          --output shard-summary-v1.json
-      - name: Combine coverage without rerunning tests
-        run: |
-          coverage combine .coverage-data
-          coverage report
-          coverage json -o coverage.json
-          coverage xml
-      - name: Enforce branch coverage
-        id: summary
-        run: >-
-          python .github/ci/compatibility.py coverage-summary
-          --coverage-json coverage.json
           --minimum 80
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: compatibility-coverage
           path: |
-            coverage.xml
-            coverage.json
-            shard-summary-v1.json
+            .coverage-data/coverage.xml
+            .coverage-data/coverage.json
+            .coverage-data/coverage-evidence-v1.json
           if-no-files-found: error
           retention-days: 7
 
