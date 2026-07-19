@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Mapping
+from urllib.parse import urlsplit
 
 from .human_control import (
     VALIDATION_DIMENSIONS,
@@ -1991,6 +1992,14 @@ class AdaptiveStateRuntime:
                     )
                     if closeout_replay is not None:
                         return closeout_replay
+                if state is not None and mutation_type == "STATE_GATEWAY":
+                    decision_replay = self._gateway_decision_response_replay_locked(
+                        state,
+                        normalized,
+                        trusted_turn_metadata=trusted_turn_metadata,
+                    )
+                    if decision_replay is not None:
+                        return decision_replay
 
                 expected = normalized["expected_state_version"]
                 if expected != state_version:
@@ -7748,6 +7757,83 @@ class AdaptiveStateRuntime:
             "external_action_count": 0,
         }
 
+    def _gateway_decision_response_replay_locked(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        *,
+        trusted_turn_metadata: TrustedTurnMetadata | None,
+    ) -> dict[str, Any] | None:
+        """Return a no-write response for one already-applied Gateway decision.
+
+        Public request ids describe transport attempts, while a Decision response
+        is owned by the attested Controller turn.  Replaying that same semantic
+        identity under a fresh request id must therefore bypass the transaction,
+        event, projection, and state-version commit path entirely.
+        """
+
+        mutation = request["mutation"]
+        if mutation.get("operation") != "RECORD_DECISION_RESPONSE":
+            return None
+        if trusted_turn_metadata is None:
+            return None
+        gateway_request = mutation.get("gateway_request")
+        if not isinstance(gateway_request, dict):
+            return None
+        required = {
+            "decision_id",
+            "option_id",
+            "normalized_digest",
+            "summary",
+            "classification_reason",
+        }
+        if set(gateway_request) != required:
+            return None
+        if not all(
+            isinstance(gateway_request.get(field), str)
+            for field in ("decision_id", "option_id", "normalized_digest")
+        ):
+            return None
+
+        steering_id = self._gateway_decision_response_steering_id(
+            trusted_turn_metadata
+        )
+        existing = state.get("steering_ledger", {}).get(steering_id)
+        if existing is None:
+            return None
+        identity = {
+            "message_item_id": None,
+            "observed_turn_cursor": trusted_turn_metadata.turn_id,
+            "normalized_digest": gateway_request["normalized_digest"],
+            "identity_algorithm": "turn-cursor-v1",
+        }
+        expected_resolution = (
+            f"{gateway_request['decision_id']}:{gateway_request['option_id']}"
+        )
+        if (
+            existing.get("steering_type") != "DECISION_RESPONSE"
+            or existing.get("identity") != identity
+            or existing.get("resolution") != expected_resolution
+        ):
+            raise RuntimeRejection(
+                "STEERING_IDENTITY_CONFLICT", "/mutation/gateway_request"
+            )
+        return {
+            "ok": True,
+            "status": "STATE_WRITE_ALREADY_APPLIED",
+            "operation_status": "DECISION_RESPONSE_ALREADY_APPLIED",
+            "state_request_id": request["state_request_id"],
+            "event_id": request["event_id"],
+            "state_version_after": state["state_version"],
+            "roadmap_version": state["roadmap_version"],
+            "terminal_status": state["terminal_status"],
+            "next_action_code": "READ_STATE",
+            "result": {"steering_id": existing["steering_id"]},
+            "evidence_paths": self._base_evidence_paths(),
+            "external_actions": [],
+            "external_action_count": 0,
+        }
+
     def _applied_response(
         self,
         request: dict[str, Any],
@@ -9175,6 +9261,22 @@ class AdaptiveStateRuntime:
             return self._gateway_ack_transport_recovery(
                 state, request, gateway_request, after_version
             )
+        if operation == "REGISTER_DECISION":
+            return self._gateway_register_decision(
+                state, request, gateway_request
+            )
+        if operation == "RECORD_DECISION_RESPONSE":
+            if trusted_turn_metadata is None:
+                raise RuntimeRejection(
+                    "STATE_GATEWAY_APP_ATTESTATION_REQUIRED", "/"
+                )
+            return self._gateway_record_decision_response(
+                state,
+                request,
+                gateway_request,
+                after_version,
+                trusted_turn_metadata=trusted_turn_metadata,
+            )
         if operation == "ADVANCE_ROADMAP":
             return self._gateway_advance_roadmap(state, gateway_request, after_version)
         if operation == "PREPARE_FINALIZATION":
@@ -9186,6 +9288,123 @@ class AdaptiveStateRuntime:
                 state, request, gateway_request, after_version
             )
         raise RuntimeRejection("STATE_GATEWAY_OPERATION_UNSUPPORTED", "/mutation/operation")
+
+    def _gateway_register_decision(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        value: Any,
+    ) -> dict[str, Any]:
+        """Register a Decision Card without reopening the legacy writer path.
+
+        The Gateway derives the source state version and context digest from
+        canonical state.  The Controller supplies only the bounded card shape;
+        it cannot hand-author either derived identity.
+        """
+
+        item = self._gateway_exact_keys(
+            value,
+            {
+                "decision_id", "valid_for_state_versions", "options",
+                "scope", "exclusions",
+            },
+            "/mutation/gateway_request",
+        )
+        validity = item["valid_for_state_versions"]
+        if (
+            not isinstance(validity, int)
+            or isinstance(validity, bool)
+            or not 1 <= validity <= 100
+        ):
+            raise RuntimeRejection(
+                "STATE_GATEWAY_DECISION_VALIDITY_INVALID",
+                "/valid_for_state_versions",
+            )
+        mutation = {
+            "type": "REGISTER_DECISION",
+            "decision_id": item["decision_id"],
+            "decision_context_digest": "sha256:" + "0" * 64,
+            "source_state_version": state["state_version"],
+            "valid_through_state_version": state["state_version"] + validity,
+            "options": copy.deepcopy(item["options"]),
+            "scope": copy.deepcopy(item["scope"]),
+            "exclusions": copy.deepcopy(item["exclusions"]),
+        }
+        self._validate_gateway_decision_mutation(request, mutation)
+        mutation["decision_context_digest"] = self._decision_context_digest(
+            state, mutation
+        )
+        return self._register_decision(state, request, mutation)
+
+    def _gateway_record_decision_response(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        value: Any,
+        after_version: int,
+        *,
+        trusted_turn_metadata: TrustedTurnMetadata,
+    ) -> dict[str, Any]:
+        """Apply one response bound to the current host-attested turn."""
+
+        item = self._gateway_exact_keys(
+            value,
+            {
+                "decision_id", "option_id", "normalized_digest", "summary",
+                "classification_reason",
+            },
+            "/mutation/gateway_request",
+        )
+        normalized_digest = self._gateway_digest(
+            item["normalized_digest"], "/normalized_digest"
+        )
+        decision_id = self._gateway_safe_id(item["decision_id"], "/decision_id")
+        decision = state.get("pending_decisions", {}).get(decision_id)
+        if not isinstance(decision, dict):
+            raise RuntimeRejection("DECISION_NOT_PENDING", "/decision_id")
+        mutation = {
+            "type": "RECORD_DECISION_RESPONSE",
+            "steering_id": self._gateway_decision_response_steering_id(
+                trusted_turn_metadata
+            ),
+            "normalized_digest": normalized_digest,
+            "identity_algorithm": "turn-cursor-v1",
+            "observed_turn_cursor": trusted_turn_metadata.turn_id,
+            "summary": item["summary"],
+            "classification_reason": item["classification_reason"],
+            "decision_id": decision_id,
+            "option_id": item["option_id"],
+            "decision_context_digest": decision["decision_context_digest"],
+        }
+        self._validate_gateway_decision_mutation(request, mutation)
+        return self._record_decision_response(
+            state, request, mutation, after_version
+        )
+
+    @staticmethod
+    def _gateway_decision_response_steering_id(
+        trusted_turn_metadata: TrustedTurnMetadata,
+    ) -> str:
+        turn_digest = hashlib.sha256(
+            (
+                trusted_turn_metadata.thread_id
+                + "\n"
+                + trusted_turn_metadata.turn_id
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        return f"decision-response-{turn_digest}"
+
+    def _validate_gateway_decision_mutation(
+        self, request: dict[str, Any], mutation: dict[str, Any]
+    ) -> None:
+        validator, _ = self._load_validators()
+        validation_request = copy.deepcopy(request)
+        validation_request["mutation"] = copy.deepcopy(mutation)
+        self._validate_schema(
+            validator,
+            validation_request,
+            "STATE_GATEWAY_DECISION_REQUEST_INVALID",
+        )
 
     def _gateway_register_task(
         self,
@@ -11153,8 +11372,17 @@ class AdaptiveStateRuntime:
         }
         if surface.get("artifact_path") is not None:
             expected["artifact_path"] = surface["artifact_path"]
-        if surface.get("preview_url") is not None:
-            expected["preview_url"] = surface["preview_url"]
+        configured_preview_url = surface.get("preview_url")
+        if configured_preview_url is not None:
+            observed_preview_url = scope.get("preview_url")
+            if not self._equivalent_local_preview_url(
+                configured_preview_url, observed_preview_url
+            ):
+                raise RuntimeRejection(
+                    "REVIEW_SURFACE_DECISION_IDENTITY_MISMATCH",
+                    "/mutation/scope/preview_url",
+                )
+            expected["preview_url"] = observed_preview_url
         if (
             not isinstance(latest_worker, dict)
             or latest_worker.get("status") != "PASS"
@@ -11165,6 +11393,41 @@ class AdaptiveStateRuntime:
                 "/mutation/scope",
                 {"required_fields": sorted(expected)},
             )
+
+    @staticmethod
+    def _equivalent_local_preview_url(
+        configured: Any, observed: Any
+    ) -> bool:
+        """Allow only a loopback port substitution for the same preview path."""
+
+        if configured == observed:
+            return True
+        if not isinstance(configured, str) or not isinstance(observed, str):
+            return False
+        try:
+            expected = urlsplit(configured)
+            actual = urlsplit(observed)
+            expected_port = expected.port
+            actual_port = actual.port
+        except ValueError:
+            return False
+        loopback_hosts = {"localhost", "127.0.0.1"}
+        return bool(
+            expected.scheme in {"http", "https"}
+            and actual.scheme == expected.scheme
+            and expected.hostname in loopback_hosts
+            and actual.hostname == expected.hostname
+            and expected.username is None
+            and actual.username is None
+            and expected.password is None
+            and actual.password is None
+            and expected.path == actual.path
+            and expected.query == actual.query == ""
+            and expected.fragment == actual.fragment == ""
+            and expected_port is not None
+            and actual_port is not None
+            and expected_port != actual_port
+        )
 
     def _refresh_decision_staleness(self, state: dict[str, Any]) -> None:
         for decision in state.get("pending_decisions", {}).values():
@@ -17747,8 +18010,10 @@ class AdaptiveStateRuntime:
                 )
                 or (
                     surface.get("preview_url") is not None
-                    and decision.get("scope", {}).get("preview_url")
-                    != surface["preview_url"]
+                    and not AdaptiveStateRuntime._equivalent_local_preview_url(
+                        surface["preview_url"],
+                        decision.get("scope", {}).get("preview_url"),
+                    )
                 )
             ):
                 missing_surface_decisions.append(candidate_goal_id)

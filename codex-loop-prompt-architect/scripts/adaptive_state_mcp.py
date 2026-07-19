@@ -1505,6 +1505,57 @@ class AdaptiveStateMcpServer:
                         "heartbeat_observation": heartbeat_observation,
                         **pause_receipt,
                     }
+                elif operation == "REGISTER_DECISION":
+                    required = {
+                        "decision_id", "valid_for_state_versions", "options",
+                        "scope", "exclusions",
+                    }
+                    if set(payload) != required:
+                        self._gateway_error(
+                            "STATE_GATEWAY_REQUEST_INVALID",
+                            "/params/arguments/request/parameters",
+                        )
+                    gateway_payload = copy.deepcopy(payload)
+                    artifacts = []
+                elif operation == "RECORD_DECISION_RESPONSE":
+                    required = {
+                        "decision_id", "option_id", "response_text", "summary",
+                        "classification_reason",
+                    }
+                    if set(payload) != required:
+                        self._gateway_error(
+                            "STATE_GATEWAY_REQUEST_INVALID",
+                            "/params/arguments/request/parameters",
+                        )
+                    response_text = payload["response_text"]
+                    if (
+                        not isinstance(response_text, str)
+                        or not 1 <= len(response_text) <= 4096
+                    ):
+                        self._gateway_error(
+                            "STATE_GATEWAY_DECISION_RESPONSE_INVALID",
+                            "/params/arguments/request/parameters/response_text",
+                        )
+                    normalized = response_text.replace("\r\n", "\n").replace(
+                        "\r", "\n"
+                    )
+                    if normalized.endswith("\n"):
+                        normalized = normalized[:-1]
+                    if not normalized:
+                        self._gateway_error(
+                            "STATE_GATEWAY_DECISION_RESPONSE_INVALID",
+                            "/params/arguments/request/parameters/response_text",
+                        )
+                    gateway_payload = {
+                        key: copy.deepcopy(value)
+                        for key, value in payload.items()
+                        if key != "response_text"
+                    }
+                    gateway_payload["normalized_digest"] = (
+                        "sha256:"
+                        + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+                    )
+                    artifacts = []
                 elif operation == "ADVANCE_ROADMAP":
                     if set(payload) != {"goal_id", "roadmap_audit_id", "observed_at"}:
                         self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
@@ -1842,7 +1893,8 @@ class AdaptiveStateMcpServer:
                                                     "ACK_ROUTE_RESULT", "REPORT_RECOVERY", "ADVANCE_ROADMAP",
                                                     "PREPARE_FINALIZATION", "ACK_FINALIZATION",
                                                     "INITIALIZE_SUCCESSOR", "RECORD_TRANSPORT_OBSERVATION",
-                                                    "ACK_TRANSPORT_PAUSE", "ACK_TRANSPORT_RECOVERY"
+                                                    "ACK_TRANSPORT_PAUSE", "ACK_TRANSPORT_RECOVERY",
+                                                    "REGISTER_DECISION", "RECORD_DECISION_RESPONSE"
                                                 ]
                                             },
                                             "occurred_at": {"type": "string"},
