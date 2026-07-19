@@ -373,6 +373,7 @@ DECISION_EFFECT_CAPABILITY = {
     "REVIEW_SURFACE_ACCEPTED": "none",
     "STOP_LOOP_CONFIRMED": "none",
     "INCREASE_REPAIR_BUDGET_TO_5": "none",
+    "INCREASE_REPAIR_BUDGET": "none",
 }
 ROADMAP_OPERATION_TYPES = {
     "ADD_MILESTONE",
@@ -11400,13 +11401,14 @@ class AdaptiveStateRuntime:
     def _validate_repair_policy_decision(
         state: dict[str, Any], mutation: Mapping[str, Any]
     ) -> None:
-        """Accept only the explicitly supported monotonic 2-to-5 policy change."""
+        """Accept only a decision-bound monotonic repair-budget increase."""
 
-        effect = "INCREASE_REPAIR_BUDGET_TO_5"
+        legacy_effect = "INCREASE_REPAIR_BUDGET_TO_5"
+        generic_effect = "INCREASE_REPAIR_BUDGET"
         changing = [
             option
             for option in mutation["options"]
-            if option["option_effect"] == effect
+            if option["option_effect"] in {legacy_effect, generic_effect}
         ]
         scope = mutation["scope"]
         policy_keys = {
@@ -11415,25 +11417,36 @@ class AdaptiveStateRuntime:
         }
         if not changing and not policy_keys.intersection(scope):
             return
-        if (
-            len(changing) != 1
-            or set(scope) != policy_keys
-            or scope["repair_policy_max_attempts_from"] != 2
-            or scope["repair_policy_max_attempts_to"] != 5
-            or state["authorization_envelope"]["repair_policy"][
-                "max_repair_attempts_per_goal"
-            ]
-            != 2
-        ):
+        current = state["authorization_envelope"]["repair_policy"][
+            "max_repair_attempts_per_goal"
+        ]
+        source = scope.get("repair_policy_max_attempts_from")
+        target = scope.get("repair_policy_max_attempts_to")
+        valid_generic = (
+            len(changing) == 1
+            and changing[0]["option_effect"] == generic_effect
+            and set(scope) == policy_keys
+            and type(source) is int
+            and type(target) is int
+            and source == current
+            and 0 <= source < target <= 20
+        )
+        valid_legacy = (
+            len(changing) == 1
+            and changing[0]["option_effect"] == legacy_effect
+            and set(scope) == policy_keys
+            and source == current == 2
+            and target == 5
+        )
+        if not (valid_generic or valid_legacy):
             raise RuntimeRejection(
                 "REPAIR_POLICY_DECISION_INVALID",
                 "/mutation/scope",
                 {
-                    "required_from": 2,
-                    "required_to": 5,
-                    "current": state["authorization_envelope"]["repair_policy"][
-                        "max_repair_attempts_per_goal"
-                    ],
+                    "required_from": current,
+                    "minimum_to": current + 1,
+                    "maximum_to": 20,
+                    "current": current,
                 },
             )
 
@@ -11487,8 +11500,10 @@ class AdaptiveStateRuntime:
             if (
                 decision.get("status") == "APPLIED"
                 and isinstance(selected, Mapping)
-                and selected.get("option_effect")
-                == "INCREASE_REPAIR_BUDGET_TO_5"
+                and selected.get("option_effect") in {
+                    "INCREASE_REPAIR_BUDGET_TO_5",
+                    "INCREASE_REPAIR_BUDGET",
+                }
             ):
                 # The applied effect intentionally changes the authorization
                 # envelope that its original context digest bound.  Preserve
@@ -11669,6 +11684,10 @@ class AdaptiveStateRuntime:
             state["authorization_envelope"]["repair_policy"][
                 "max_repair_attempts_per_goal"
             ] = 5
+        elif option["option_effect"] == "INCREASE_REPAIR_BUDGET":
+            state["authorization_envelope"]["repair_policy"][
+                "max_repair_attempts_per_goal"
+            ] = decision["scope"]["repair_policy_max_attempts_to"]
         decision["status"] = "APPLIED"
         decision["selected_option_id"] = option["option_id"]
         decision["applied_state_version"] = after_version

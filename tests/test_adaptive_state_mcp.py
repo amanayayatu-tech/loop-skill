@@ -2536,9 +2536,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 },
             )
             self.assertFalse(malformed["ok"], malformed)
-            self.assertEqual(
-                malformed["status"], "STATE_GATEWAY_DECISION_REQUEST_INVALID"
-            )
+            self.assertEqual(malformed["status"], "REPAIR_POLICY_DECISION_INVALID")
             self.assertEqual(malformed_before, persisted_snapshot(root))  # noqa: F405
 
             registered = call_state_gateway(
@@ -2630,6 +2628,166 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 replay["operation_status"], "DECISION_RESPONSE_ALREADY_APPLIED"
             )
             self.assertEqual(replay_before, persisted_snapshot(root))  # noqa: F405
+
+    def test_state_gateway_applies_decision_bound_monotonic_repair_policy_to_20(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            definition = goal("g1", "m1")  # noqa: F405
+            milestones = [milestone("m1", "ACTIVE")]  # noqa: F405
+            authorization = authorization_envelope(  # noqa: F405
+                {"g1": definition}, milestones
+            )
+            authorization["repair_policy"]["max_repair_attempts_per_goal"] = 5
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(
+                definitions={"g1": definition},
+                milestones=milestones,
+                authorization=authorization,
+                state_gateway=True,
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "init-generic-repair-policy-decision",
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18"},
+                }
+            )
+            options = [
+                {
+                    "option_id": "increase-to-twenty",
+                    "option_effect": "INCREASE_REPAIR_BUDGET",
+                    "preauthorized_capability": "none",
+                },
+                {
+                    "option_id": "wait",
+                    "option_effect": "WAIT",
+                    "preauthorized_capability": "none",
+                },
+            ]
+
+            for decision_id, source, target in (
+                ("repair-policy-decrease", 5, 4),
+                ("repair-policy-stale-source", 4, 20),
+            ):
+                before = persisted_snapshot(root)  # noqa: F405
+                rejected = call_state_gateway(
+                    server,
+                    root,
+                    {
+                        "request_id": f"register-{decision_id}",
+                        "operation": "REGISTER_DECISION",
+                        "occurred_at": "2026-01-01T00:01:00Z",
+                        "parameters": {
+                            "decision_id": decision_id,
+                            "valid_for_state_versions": 20,
+                            "options": options,
+                            "scope": {
+                                "repair_policy_max_attempts_from": source,
+                                "repair_policy_max_attempts_to": target,
+                            },
+                            "exclusions": ["all-other-authorization-changes"],
+                        },
+                    },
+                )
+                self.assertFalse(rejected["ok"], rejected)
+                self.assertEqual(
+                    rejected["status"], "REPAIR_POLICY_DECISION_INVALID"
+                )
+                self.assertEqual(before, persisted_snapshot(root))  # noqa: F405
+
+            before_above_cap = persisted_snapshot(root)  # noqa: F405
+            above_cap = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "register-repair-policy-above-cap",
+                    "operation": "REGISTER_DECISION",
+                    "occurred_at": "2026-01-01T00:01:30Z",
+                    "parameters": {
+                        "decision_id": "repair-policy-above-cap",
+                        "valid_for_state_versions": 20,
+                        "options": options,
+                        "scope": {
+                            "repair_policy_max_attempts_from": 5,
+                            "repair_policy_max_attempts_to": 21,
+                        },
+                        "exclusions": ["all-other-authorization-changes"],
+                    },
+                },
+            )
+            self.assertFalse(above_cap["ok"], above_cap)
+            self.assertEqual(
+                above_cap["status"], "STATE_GATEWAY_DECISION_REQUEST_INVALID"
+            )
+            self.assertEqual(before_above_cap, persisted_snapshot(root))  # noqa: F405
+
+            registered = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "register-repair-policy-5-to-20",
+                    "operation": "REGISTER_DECISION",
+                    "occurred_at": "2026-01-01T00:02:00Z",
+                    "parameters": {
+                        "decision_id": "repair-policy-5-to-20",
+                        "valid_for_state_versions": 20,
+                        "options": options,
+                        "scope": {
+                            "repair_policy_max_attempts_from": 5,
+                            "repair_policy_max_attempts_to": 20,
+                        },
+                        "exclusions": ["all-other-authorization-changes"],
+                    },
+                },
+            )
+            self.assertTrue(registered["ok"], registered)
+            before_response = state.state()
+            ledger_before = copy.deepcopy(before_response["goal_execution_ledger"])
+            failures_before = copy.deepcopy(before_response["failure_history"])
+            events_before = (root / ".codex-loop" / "LOOP_EVENTS.jsonl").read_bytes()
+            applied = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                {
+                    "request_id": "apply-repair-policy-5-to-20",
+                    "operation": "RECORD_DECISION_RESPONSE",
+                    "occurred_at": "2026-01-01T00:03:00Z",
+                    "parameters": {
+                        "decision_id": "repair-policy-5-to-20",
+                        "option_id": "increase-to-twenty",
+                        "response_text": "Increase the canonical repair budget from 5 to 20.",
+                        "summary": "User authorized the exact monotonic repair policy increase.",
+                        "classification_reason": "explicit bounded policy decision",
+                    },
+                },
+                thread_id="controller-1",
+                turn_id="repair-policy-5-to-20-turn",
+                root=root,
+            )
+            self.assertTrue(applied["ok"], applied)
+            self.assertEqual(
+                applied["operation_status"], "DECISION_RESPONSE_APPLIED"
+            )
+            current = state.state()
+            self.assertEqual(
+                current["authorization_envelope"]["repair_policy"][
+                    "max_repair_attempts_per_goal"
+                ],
+                20,
+            )
+            self.assertEqual(
+                current["pending_decisions"]["repair-policy-5-to-20"]["status"],
+                "APPLIED",
+            )
+            self.assertEqual(current["goal_execution_ledger"], ledger_before)
+            self.assertEqual(current["failure_history"], failures_before)
+            self.assertTrue(
+                (root / ".codex-loop" / "LOOP_EVENTS.jsonl")
+                .read_bytes()
+                .startswith(events_before)
+            )
 
     def test_state_gateway_migrates_only_a_quiescent_paused_v2_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
