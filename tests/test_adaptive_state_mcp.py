@@ -2134,6 +2134,349 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             self.assertFalse(legacy["ok"])
             self.assertEqual(legacy["status"], "STATE_GATEWAY_REQUIRED")
 
+    def test_state_gateway_registers_and_applies_review_surface_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            definition = goal("g1", "m1")  # noqa: F405
+            definition["review_surface"] = {
+                "required": True,
+                "type": "browser_preview",
+                "artifact_path": None,
+                "preview_url": "http://127.0.0.1:3000/review",
+                "evidence_refs": ["artifacts/review/**"],
+                "review_questions": ["Is this exact artifact acceptable?"],
+                "decision_gate_id": "surface-gate",
+            }
+            definition["payload_template_digest"] = goal_definition_digest(  # noqa: F405
+                definition
+            )
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(definitions={"g1": definition})
+            self.assertTrue(initialized["ok"], initialized)
+            worker = state.worker_pass("g1")
+
+            pause_id = "decision-gateway-migration-pause"
+            self.assertTrue(
+                state.apply(
+                    {
+                        "type": "RECORD_STEERING",
+                        "steering_id": pause_id,
+                        "steering_type": "PAUSE",
+                        "normalized_digest": digest(pause_id),  # noqa: F405
+                        "identity_algorithm": "message-item-v1",
+                        "message_item_id": "decision-gateway-migration-message",
+                        "summary": "pause for explicit schema migration",
+                        "classification_reason": "decision Gateway fixture",
+                    }
+                )["ok"]
+            )
+            self.assertTrue(
+                state.apply(
+                    {
+                        "type": "SET_RUN_CONTROL",
+                        "steering_id": pause_id,
+                        "requested_status": "PAUSE",
+                        "reason": "decision Gateway fixture",
+                    }
+                )["ok"]
+            )
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "init",
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18"},
+                }
+            )
+            source_digest = "sha256:" + hashlib.sha256(
+                state.runtime._render_state(state.state())  # noqa: SLF001
+            ).hexdigest()
+            migrated = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "decision-gateway-migrate",
+                    "operation": "MIGRATE_V2_TO_V3",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {"source_state_digest": source_digest},
+                },
+            )
+            self.assertTrue(migrated["ok"], migrated)
+            replay_guard_request = {
+                "thread_id": "controller-1",
+                "state_request_id": "decision-replay-guard",
+                "event_id": "decision-replay-guard-event",
+                "mutation": {
+                    "type": "STATE_GATEWAY",
+                    "operation": "NOT_A_DECISION_RESPONSE",
+                    "controller_turn_id": "decision-replay-guard-turn",
+                },
+            }
+            replay_guard_metadata = trusted_metadata_for_request(  # noqa: F405
+                replay_guard_request
+            )
+            replay_guard = state.runtime._gateway_decision_response_replay_locked  # noqa: SLF001
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
+            replay_guard_request["mutation"]["operation"] = (
+                "RECORD_DECISION_RESPONSE"
+            )
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=None,
+                )
+            )
+            replay_guard_request["mutation"]["gateway_request"] = []
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
+            replay_guard_request["mutation"]["gateway_request"] = {}
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
+            replay_guard_request["mutation"]["gateway_request"] = {
+                "decision_id": 1,
+                "option_id": "accept",
+                "normalized_digest": digest("response"),  # noqa: F405
+                "summary": "summary",
+                "classification_reason": "reason",
+            }
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
+            replay_guard_request["mutation"]["gateway_request"][
+                "decision_id"
+            ] = "not-recorded"
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
+            before_register = state.state()
+            options = [
+                {
+                    "option_id": "accept",
+                    "option_effect": "REVIEW_SURFACE_ACCEPTED",
+                    "preauthorized_capability": "none",
+                },
+                {
+                    "option_id": "wait",
+                    "option_effect": "WAIT",
+                    "preauthorized_capability": "none",
+                },
+            ]
+            before_malformed = persisted_snapshot(root)  # noqa: F405
+            malformed = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "malformed-surface-decision",
+                    "operation": "REGISTER_DECISION",
+                    "occurred_at": "2026-01-01T00:02:30Z",
+                    "parameters": {
+                        "decision_id": "surface-gate",
+                        "valid_for_state_versions": 20,
+                        "options": [{}],
+                        "scope": {},
+                        "exclusions": [],
+                    },
+                },
+            )
+            self.assertFalse(malformed["ok"], malformed)
+            self.assertEqual(
+                malformed["status"],
+                "STATE_GATEWAY_DECISION_REQUEST_INVALID",
+            )
+            self.assertEqual(
+                before_malformed, persisted_snapshot(root)  # noqa: F405
+            )
+            registered = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "register-surface-decision",
+                    "operation": "REGISTER_DECISION",
+                    "occurred_at": "2026-01-01T00:03:00Z",
+                    "parameters": {
+                        "decision_id": "surface-gate",
+                        "valid_for_state_versions": 20,
+                        "options": options,
+                        "scope": {
+                            "goal_id": "g1",
+                            "dispatch_id": worker["dispatch_id"],
+                            "artifact_digest": worker["artifact_digest"],
+                            "preview_url": "http://127.0.0.1:3100/review",
+                            "review_surface_type": "browser_preview",
+                        },
+                        "exclusions": ["merge", "deploy"],
+                    },
+                },
+            )
+            self.assertTrue(registered["ok"], registered)
+            self.assertEqual(registered["operation_status"], "DECISION_REGISTERED")
+            pending = state.state()["pending_decisions"]["surface-gate"]
+            self.assertEqual(
+                pending["source_state_version"], before_register["state_version"]
+            )
+            self.assertEqual(
+                pending["scope"]["preview_url"],
+                "http://127.0.0.1:3100/review",
+            )
+
+            response_request = {
+                "request_id": "apply-surface-decision",
+                "operation": "RECORD_DECISION_RESPONSE",
+                "occurred_at": "2026-01-01T00:04:00Z",
+                "parameters": {
+                    "decision_id": "surface-gate",
+                    "option_id": "accept",
+                    "response_text": "接受 DECISION_FINAL_UI\r\n",
+                    "summary": "User accepted the exact review surface.",
+                    "classification_reason": "explicit visual decision",
+                },
+            }
+            before_wrong_option = persisted_snapshot(root)  # noqa: F405
+            wrong_option_request = copy.deepcopy(response_request)
+            wrong_option_request["request_id"] = "reject-surface-decision-option"
+            wrong_option_request["parameters"]["option_id"] = "missing-option"
+            wrong_option = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                wrong_option_request,
+                thread_id="controller-1",
+                turn_id="wrong-decision-response-turn",
+                root=root,
+            )
+            self.assertFalse(wrong_option["ok"], wrong_option)
+            self.assertEqual(wrong_option["status"], "DECISION_OPTION_INVALID")
+            self.assertEqual(
+                before_wrong_option, persisted_snapshot(root)  # noqa: F405
+            )
+            applied = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                response_request,
+                thread_id="controller-1",
+                turn_id="decision-response-turn-1",
+                root=root,
+            )
+            self.assertTrue(applied["ok"], applied)
+            self.assertEqual(
+                applied["operation_status"], "DECISION_RESPONSE_APPLIED"
+            )
+            current = state.state()
+            self.assertEqual(
+                current["pending_decisions"]["surface-gate"]["status"], "APPLIED"
+            )
+            self.assertEqual(
+                current["pending_decisions"]["surface-gate"]["selected_option_id"],
+                "accept",
+            )
+            self.assertEqual(
+                AdaptiveStateRuntime._missing_required_surface_decisions(current),  # noqa: SLF001
+                [],
+            )
+            steering = next(
+                item
+                for item in current["steering_ledger"].values()
+                if item["steering_type"] == "DECISION_RESPONSE"
+            )
+            self.assertEqual(
+                steering["identity"]["observed_turn_cursor"],
+                "decision-response-turn-1",
+            )
+            self.assertEqual(
+                steering["identity"]["normalized_digest"],
+                digest("接受 DECISION_FINAL_UI"),  # noqa: F405
+            )
+            transaction_text = "\n".join(
+                path.read_text(encoding="utf-8")
+                for path in (root / ".codex-loop" / "transactions").glob("*.json")
+            )
+            self.assertNotIn("接受 DECISION_FINAL_UI", transaction_text)
+
+            before_replay = persisted_snapshot(root)  # noqa: F405
+            replay_request = copy.deepcopy(response_request)
+            replay_request["request_id"] = "apply-surface-decision-replay"
+            replay_request["occurred_at"] = "2026-01-01T00:04:30Z"
+            replayed = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                replay_request,
+                thread_id="controller-1",
+                turn_id="decision-response-turn-1",
+                root=root,
+            )
+            self.assertTrue(replayed["ok"], replayed)
+            self.assertEqual(
+                replayed["operation_status"],
+                "DECISION_RESPONSE_ALREADY_APPLIED",
+            )
+            self.assertEqual(replayed["state_version_after"], current["state_version"])
+            self.assertEqual(before_replay, persisted_snapshot(root))  # noqa: F405
+
+            conflicting_request = copy.deepcopy(response_request)
+            conflicting_request["request_id"] = "conflicting-surface-decision-replay"
+            conflicting_request["occurred_at"] = "2026-01-01T00:04:45Z"
+            conflicting_request["parameters"]["response_text"] = "等待"
+            conflicting = call_isolated_mcp_bridge(
+                mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                conflicting_request,
+                thread_id="controller-1",
+                turn_id="decision-response-turn-1",
+                root=root,
+            )
+            self.assertFalse(conflicting["ok"], conflicting)
+            self.assertEqual(conflicting["status"], "STEERING_IDENTITY_CONFLICT")
+            self.assertEqual(before_replay, persisted_snapshot(root))  # noqa: F405
+
+            before_invalid = persisted_snapshot(root)  # noqa: F405
+            invalid = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "invalid-surface-decision",
+                    "operation": "REGISTER_DECISION",
+                    "occurred_at": "2026-01-01T00:05:00Z",
+                    "parameters": {
+                        "decision_id": "other-surface-gate",
+                        "valid_for_state_versions": 20,
+                        "options": options,
+                        "scope": {
+                            "goal_id": "g1",
+                            "dispatch_id": worker["dispatch_id"],
+                            "artifact_digest": worker["artifact_digest"],
+                            "preview_url": "http://127.0.0.1:3100/other",
+                        },
+                        "exclusions": ["merge", "deploy"],
+                    },
+                },
+            )
+            self.assertFalse(invalid["ok"], invalid)
+            self.assertEqual(
+                invalid["status"], "REVIEW_SURFACE_DECISION_IDENTITY_MISMATCH"
+            )
+            self.assertEqual(before_invalid, persisted_snapshot(root))  # noqa: F405
+
     def test_state_gateway_migrates_only_a_quiescent_paused_v2_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

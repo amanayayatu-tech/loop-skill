@@ -18,7 +18,8 @@ are `INITIALIZE`, `INITIALIZE_SUCCESSOR`, `MIGRATE_V2_TO_V3`, bootstrap-only
 `PREPARE_ROUTE`, `RECORD_ROUTE_SENT`, `ACK_ROUTE_RESULT`, `REPORT_RECOVERY`,
 `ADVANCE_ROADMAP`, `PREPARE_FINALIZATION`, `ACK_FINALIZATION`,
 `ACK_TRANSPORT_PAUSE`, `ACK_TRANSPORT_RECOVERY`, and bounded transport
-observation. `INITIALIZE` requires
+observation, plus `REGISTER_DECISION` and `RECORD_DECISION_RESPONSE` for real
+user gates. `INITIALIZE` requires
 an exact Pack source in a fresh root. `INITIALIZE_SUCCESSOR` additionally binds
 the terminal predecessor's receipt/root digest, product snapshot/base, exact
 ACK evidence and a repair backlog; it never changes that predecessor.
@@ -46,6 +47,21 @@ Controller that can forge all App calls.
 When a role has completed/staged a report but task stdout or indexing is lost,
 `REPORT_RECOVERY` ACKs that same outbox and never adds a report-only product
 dispatch or repair attempt.
+
+`REGISTER_DECISION` accepts exactly
+`{decision_id,valid_for_state_versions,options,scope,exclusions}`. Gateway
+derives `source_state_version`, `valid_through_state_version`, and the decision
+context digest from current canonical state. `RECORD_DECISION_RESPONSE` accepts
+exactly `{decision_id,option_id,response_text,summary,classification_reason}`;
+the MCP boundary normalizes the bounded response text and forwards only its
+digest to the crash-journaled runtime. Gateway binds the current host-attested
+Controller turn cursor and reuses the stored decision context. Neither
+operation reopens legacy mutation access. Required review
+surfaces remain bound to the current Goal, Worker dispatch, artifact and
+configured surface. For a local browser preview only, an observed port may
+differ when explicit loopback host, scheme, and path match and both URLs omit
+credentials, query, and fragment; the configured and observed URLs both remain
+in the canonical decision context.
 
 A v3 PASS projection requires the same Goal's current artifact, current Worker
 dispatch and a matching PASS formal report. `BLOCKED`, stale dispatch, stale

@@ -48,7 +48,7 @@ def needs_for(plan: dict[str, object]) -> dict[str, object]:
     for job, should_run in expected.items():
         outputs: dict[str, str] = {}
         if job == "coverage" and should_run:
-            outputs = {"total_tests": "631", "coverage_percent": "80.02"}
+            outputs = {"total_tests": "632", "coverage_percent": "80.02"}
         if job == "fuzz-generator" and should_run:
             outputs = {"case_count": "5000", "seed": "20260710"}
         if job == "fuzz-state" and should_run:
@@ -228,10 +228,10 @@ class ManifestAndArtifactTests(unittest.TestCase):
         ).stdout.strip()
 
     def test_canonical_inventory(self) -> None:
-        self.assertEqual(self.inventory["expected_total_tests"], 631)
+        self.assertEqual(self.inventory["expected_total_tests"], 632)
         self.assertEqual(
             {key: value["test_count"] for key, value in self.inventory["shards"].items()},
-            {"1": 180, "2": 168, "3": 141, "4": 142},
+            {"1": 180, "2": 168, "3": 142, "4": 142},
         )
         self.assertEqual(set(self.inventory["dedicated_only"]), {
             "tests.test_adaptive_state_runtime",
@@ -240,8 +240,8 @@ class ManifestAndArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             inventory_path = Path(temporary) / "inventory.json"
             inventory_path.write_text(json.dumps(self.inventory), encoding="utf-8")
-            self.assertEqual(compatibility._inventory_total(inventory_path), 631)
-            malformed = {**self.inventory, "expected_total_tests": 632}
+            self.assertEqual(compatibility._inventory_total(inventory_path), 632)
+            malformed = {**self.inventory, "expected_total_tests": 633}
             inventory_path.write_text(json.dumps(malformed), encoding="utf-8")
             with self.assertRaises(compatibility.CompatibilityError):
                 compatibility._inventory_total(inventory_path)
@@ -264,7 +264,7 @@ class ManifestAndArtifactTests(unittest.TestCase):
                 (artifact_dir / f".ci-shard-{shard}.json").write_text(json.dumps(payload), encoding="utf-8")
                 (artifact_dir / f".coverage.shard-{shard}.host.1").touch()
             summary = compatibility.verify_shard_artifacts(REPO, MANIFEST_PATH, artifact_dir, self.sha)
-        self.assertEqual(summary["total_tests"], 631)
+        self.assertEqual(summary["total_tests"], 632)
 
     def test_artifact_verifier_rejects_wrong_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -396,6 +396,33 @@ class ManifestAndArtifactTests(unittest.TestCase):
             )
             self.assertEqual(evidence["total_tests"], 4)
 
+    def test_canonical_coverage_all_clears_only_generated_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_dir = Path(temporary)
+            stale = (
+                ".coverage",
+                ".coverage.shard-1.host.old",
+                ".ci-shard-1.json",
+                "coverage.json",
+                "coverage.xml",
+                "coverage-evidence-v1.json",
+            )
+            for name in stale:
+                (artifact_dir / name).write_text("stale", encoding="utf-8")
+            sentinel = artifact_dir / "keep-me.txt"
+            sentinel.write_text("keep", encoding="utf-8")
+            with mock.patch.object(compatibility, "_validate_sha", side_effect=RuntimeError("stop after cleanup")):
+                with self.assertRaisesRegex(RuntimeError, "stop after cleanup"):
+                    compatibility.canonical_coverage(
+                        REPO,
+                        MANIFEST_PATH,
+                        artifact_dir,
+                        self.sha,
+                        mode="all",
+                    )
+            self.assertTrue(sentinel.is_file())
+            self.assertTrue(all(not (artifact_dir / name).exists() for name in stale))
+
 
 class WhitespaceScheduleTests(unittest.TestCase):
     def test_schedule_records_an_explicit_empty_range(self) -> None:
@@ -434,7 +461,7 @@ class CoverageAndGateTests(unittest.TestCase):
         plan = compatibility.classify_entries(
             [entry("README.md")], base_sha="a" * 40, head_sha="b" * 40, merge_sha="c" * 40
         )
-        plan["expected_total_tests"] = 631
+        plan["expected_total_tests"] = 632
         errors, report = compatibility.gate_report(plan, needs_for(plan))
         self.assertEqual(errors, [])
         self.assertIn("PASS", report)
@@ -446,7 +473,7 @@ class CoverageAndGateTests(unittest.TestCase):
             head_sha="b" * 40,
             merge_sha="c" * 40,
         )
-        plan["expected_total_tests"] = 631
+        plan["expected_total_tests"] = 632
         errors, _ = compatibility.gate_report(plan, needs_for(plan))
         self.assertEqual(errors, [])
 
@@ -457,7 +484,7 @@ class CoverageAndGateTests(unittest.TestCase):
             head_sha="b" * 40,
             merge_sha="c" * 40,
         )
-        plan["expected_total_tests"] = 631
+        plan["expected_total_tests"] = 632
         for job, result in (("quick", "failure"), ("full", "cancelled"), ("coverage", "skipped")):
             with self.subTest(job=job, result=result):
                 needs = needs_for(plan)
@@ -469,7 +496,7 @@ class CoverageAndGateTests(unittest.TestCase):
         plan = compatibility.classify_entries(
             [entry("README.md")], base_sha="a" * 40, head_sha="b" * 40, merge_sha="c" * 40
         )
-        plan["expected_total_tests"] = 631
+        plan["expected_total_tests"] = 632
         needs = needs_for(plan)
         needs["fuzz-state"] = {
             "result": "success",

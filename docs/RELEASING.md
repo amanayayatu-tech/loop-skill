@@ -92,6 +92,13 @@ following checks are additional, not substitutes:
    `WAITING_FINALIZATION_ACK`; only the pause/readback-bound ACK may become terminal,
    recording the local `GATEWAY_NO_NATIVE_GOAL` sentinel rather than claiming a
    synthetic external Goal outcome.
+   For v3.3.3+, a required review surface must also prove public Gateway
+   `REGISTER_DECISION` derives its source/context identity and an independent
+   Controller turn can apply one real response through
+   `RECORD_DECISION_RESPONSE`. Wrong option, stale artifact/context, wrong
+   preview path, and replayed identity must be zero-effect. A same-host local
+   preview port substitution is allowed only under the documented loopback
+   equivalence rule and must still unlock the exact artifact-bound final audit.
 6. A disposable terminal predecessor must remain byte-identical while a fresh
    root is initialized by `INITIALIZE_SUCCESSOR`; only the successor may route
    further. The canary itself reaches `FINALIZATION_ACKED`.

@@ -5,6 +5,29 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.3] - 2026-07-19
+
+### Fixed
+
+- Exposed schema-v3 `REGISTER_DECISION` and `RECORD_DECISION_RESPONSE`
+  through the sole MCP State Gateway. Gateway derives the source state,
+  decision-context digest, current host-attested turn identity and normalized
+  response digest at the MCP boundary without journaling raw response text;
+  schema v3 no longer needs a legacy State-Writer or direct
+  canonical mutation to cross a real user Decision Card.
+- Decision registration remains bound to the current Goal, Worker dispatch,
+  artifact, review surface, options and exclusions. Missing, stale, wrong
+  option, wrong route/artifact, changed context and replayed response identities
+  reject atomically with zero canonical side effect.
+- A browser review surface may use a different port only when both configured
+  and observed URLs are on the same explicit loopback host, scheme and path
+  with no credentials, query or fragment. Both canonical configuration and
+  the observed URL remain in the decision context, so a local port collision
+  no longer makes an otherwise exact product artifact impossible to accept.
+- Closed the life-blueprint final-candidate state where the real
+  `DECISION_FINAL_UI` response existed but schema-v3 canonical state had no
+  public operation capable of recording it before `FINAL_AUDIT`.
+
 ## [3.3.2] - 2026-07-19
 
 ### Fixed
@@ -427,7 +450,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.2...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.3...HEAD
+[3.3.3]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.3
 [3.3.2]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.2
 [3.3.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.1
 [3.3.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.0

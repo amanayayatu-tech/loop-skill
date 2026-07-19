@@ -87,6 +87,10 @@ id, option id, current context digest, and stable message/turn Steering identity
 Controller may act on its returned option effect. Changed scope, SHA, artifact,
 validation, blocker, or state range returns `DECISION_STALE` with zero side
 effects. A Decision Card cannot mint authority.
+In schema v3, call only the public Gateway operations. `REGISTER_DECISION`
+derives source version and context digest from canonical; after a real user
+response, `RECORD_DECISION_RESPONSE` derives the current host-attested turn
+cursor and normalized response digest. Legacy mutation calls remain rejected.
 Repair exhaustion is a deterministic special case. Register one stable card
 whose only effects are `STOP_LOOP_CONFIRMED` and `WAIT`, then pause the exact
 heartbeat. STOP binds the applied card, current context digest, and exact
@@ -102,6 +106,10 @@ Review-surface acceptance additionally binds `scope.goal_id`, the exact latest
 Worker dispatch and `artifact_digest`, and the configured artifact path or local
 preview URL. Registration rejects an incomplete or mismatched binding before a
 user response can be recorded.
+When a configured local preview port is occupied, scope may bind an observed
+port only for the same explicit loopback host, scheme and path with no
+credentials, query or fragment. A host, scheme or path change is never treated
+as the same review surface.
 An unrelated Decision cannot unlock finalization. When a later Worker artifact
 changes that identity, runtime marks the prior card `STALE`; the same stable
 decision id may be registered again only with the newly derived context and a

@@ -128,7 +128,7 @@ python3 -m pip install -r requirements-test.txt
 
 输出详细度 `compact` / `full` / `minimal_patch` 与协作模式 `standard` / `adaptive` 是两条独立轴，不要混为一谈。
 
-## Adaptive v3.3.2：谁写状态、谁推进路线
+## Adaptive v3.3.3：谁写状态、谁推进路线
 
 新生成的 Adaptive Pack 默认使用 schema v3。它不再创建会话式 State-Writer 任务；已安装的 MCP `state_gateway({root, request})` 是唯一 canonical writer。Controller 仍然只读，Worker 只做产品工作，Reviewer/Local Verifier 只提交证据，任何外层 Supervisor 都不属于产品角色。
 
@@ -151,6 +151,14 @@ Worker 的正式 PASS 若引用本轮验证文件，会在同一次 target-owned
 验证文件；任何大小写形式的 `.codex-loop/**` 控制面来源都被拒绝。
 
 Gateway 从 canonical state 原子取得 lease、仓库快照、freshness、validation matrix、review handoff、当前 artifact 与 outbox；Controller 不复制这些对象。PASS 投影同时要求同一 Goal 的**当前 artifact + 当前 Worker dispatch + PASS 正式报告**。`BLOCKED`、旧 artifact 或旧 dispatch 不能越级成为 PASS。
+
+真实用户 Decision Card 也只通过 Gateway：`REGISTER_DECISION` 从当前
+canonical 派生 source version 与 context digest；`RECORD_DECISION_RESPONSE`
+把选择绑定到当前 host-attested Controller turn，并只保存摘要与规范化响应
+digest。对必需浏览器 review surface，实际预览端口可因本机占用而变化，
+但仅允许同一 loopback 主机、协议与路径且无凭证/query/fragment；Goal、
+Worker dispatch、artifact、配置 URL 和实际 URL 仍共同进入决策上下文。
+错误选项、陈旧 artifact、错路径或重放响应均零副作用拒绝。
 
 Worker PASS 后固定经过 Code Review、必要的 Local Verification、Roadmap Audit。非最终的 audit PASS 只能由 `ADVANCE_ROADMAP` 在既有 canonical registry 内推进；最终候选还要经过 Final Audit、`PREPARE_FINALIZATION`、一次真实 `automation_update` pause 与 PAUSED readback、`ACK_FINALIZATION`，才到达 `FINALIZATION_ACKED`。schema v3 禁用 native Goal adapter，记录会明确写出本地 `GATEWAY_NO_NATIVE_GOAL` sentinel；它不是外部 Goal 工具 receipt。Gateway 不会自行制造 heartbeat `PAUSED` 证据，也不接受不匹配当前 heartbeat 的 Controller JSON。目标 Worker/Reviewer/Verifier 每次 MCP-attested stage 成功后，runtime 会按 SENT outbox 与 report digest 写入只读 target-stage sidecar；Controller 只可派生读取并验证该证明，不能从参数转交或伪造。报告已 staged 但 stdout 或任务索引丢失时，用 `REPORT_RECOVERY` ACK 原 outbox，不创建第二个“补报告”的产品派发；同一目标角色重新 stage 即可恢复跨 bridge 的证明。
 

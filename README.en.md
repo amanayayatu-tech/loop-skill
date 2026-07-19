@@ -131,7 +131,7 @@ Do not use it when:
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
 
-## Adaptive v3.3.2: who writes state and who advances a route
+## Adaptive v3.3.3: who writes state and who advances a route
 
 New Adaptive Packs default to schema v3. They do not create a session State-Writer task. The installed MCP `state_gateway({root, request})` is the sole canonical writer. The Controller remains read-only, Workers perform product work, Reviewer/Local Verifier tasks submit evidence, and an outer Supervisor is not a product role.
 
@@ -157,6 +157,17 @@ validation files, and every case-insensitive `.codex-loop/**` control-source
 alias is rejected.
 
 The Gateway derives the lease, repository snapshot, freshness, validation matrix, review handoff, current artifact, and outbox from canonical state. The Controller does not copy those objects. A PASS projection requires all three current identities for one Goal: **current artifact + current Worker dispatch + PASS formal report**. A `BLOCKED` report, stale artifact, or stale dispatch cannot become PASS.
+
+Real user Decision Cards also go only through the Gateway. `REGISTER_DECISION`
+derives the source version and context digest from current canonical state;
+`RECORD_DECISION_RESPONSE` binds the selection to the current host-attested
+Controller turn and stores only the supplied summary and normalized response digest. A required
+browser review surface may move ports because of a local collision only when
+the explicit loopback host, scheme, and path are unchanged and neither URL has
+credentials, query, or fragment. Goal, Worker dispatch, artifact, configured
+URL, and observed URL remain in the decision context. Wrong options, stale
+artifacts, wrong paths, and replayed response identities reject with zero side
+effect.
 
 After a Worker PASS, the route is Code Review, required Local Verification, then Roadmap Audit. A nonfinal audit PASS can only use `ADVANCE_ROADMAP` over the unchanged canonical registry. A final candidate needs Final Audit, `PREPARE_FINALIZATION`, one real `automation_update` pause and matching PAUSED readback, and `ACK_FINALIZATION` before `FINALIZATION_ACKED`. Schema v3 disables the native Goal adapter and records the local `GATEWAY_NO_NATIVE_GOAL` sentinel; it is not an external Goal-tool receipt. The Gateway never manufactures `PAUSED` heartbeat evidence or accepts Controller JSON that does not exactly match the registered heartbeat. After every target Worker/Reviewer/Verifier MCP-attested stage, the runtime writes a read-only target-stage sidecar derived from the SENT outbox and report digest; the Controller can only derive and validate that proof, never forward or forge it in parameters. When stdout or task indexing is lost, `REPORT_RECOVERY` ACKs the original outbox; it never creates a second product dispatch, and the same target role can re-stage to recover cross-bridge proof.
 
