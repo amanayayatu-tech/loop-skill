@@ -854,6 +854,21 @@ def canonical_coverage(
     manifest_path = manifest_path.resolve()
     artifact_dir = artifact_dir.resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    if mode == "all":
+        generated = {
+            artifact_dir / ".coverage",
+            artifact_dir / "coverage.json",
+            artifact_dir / "coverage.xml",
+            artifact_dir / "coverage-evidence-v1.json",
+            *(artifact_dir.glob(".coverage.shard-*")),
+            *(artifact_dir.glob(".ci-shard-*.json")),
+        }
+        for candidate in generated:
+            if candidate.is_dir() and not candidate.is_symlink():
+                raise CompatibilityError(
+                    f"canonical coverage generated path is a directory: {candidate.name}"
+                )
+            candidate.unlink(missing_ok=True)
     sha = _validate_sha(tested_sha, "tested_sha")
     if _commit_oid(repo, "HEAD") != sha:
         raise CompatibilityError("canonical coverage checkout SHA does not match tested_sha")

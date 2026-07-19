@@ -396,6 +396,33 @@ class ManifestAndArtifactTests(unittest.TestCase):
             )
             self.assertEqual(evidence["total_tests"], 4)
 
+    def test_canonical_coverage_all_clears_only_generated_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_dir = Path(temporary)
+            stale = (
+                ".coverage",
+                ".coverage.shard-1.host.old",
+                ".ci-shard-1.json",
+                "coverage.json",
+                "coverage.xml",
+                "coverage-evidence-v1.json",
+            )
+            for name in stale:
+                (artifact_dir / name).write_text("stale", encoding="utf-8")
+            sentinel = artifact_dir / "keep-me.txt"
+            sentinel.write_text("keep", encoding="utf-8")
+            with mock.patch.object(compatibility, "_validate_sha", side_effect=RuntimeError("stop after cleanup")):
+                with self.assertRaisesRegex(RuntimeError, "stop after cleanup"):
+                    compatibility.canonical_coverage(
+                        REPO,
+                        MANIFEST_PATH,
+                        artifact_dir,
+                        self.sha,
+                        mode="all",
+                    )
+            self.assertTrue(sentinel.is_file())
+            self.assertTrue(all(not (artifact_dir / name).exists() for name in stale))
+
 
 class WhitespaceScheduleTests(unittest.TestCase):
     def test_schedule_records_an_explicit_empty_range(self) -> None:

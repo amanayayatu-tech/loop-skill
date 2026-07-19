@@ -2203,6 +2203,77 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 },
             )
             self.assertTrue(migrated["ok"], migrated)
+            replay_guard_request = {
+                "thread_id": "controller-1",
+                "state_request_id": "decision-replay-guard",
+                "event_id": "decision-replay-guard-event",
+                "mutation": {
+                    "type": "STATE_GATEWAY",
+                    "operation": "NOT_A_DECISION_RESPONSE",
+                    "controller_turn_id": "decision-replay-guard-turn",
+                },
+            }
+            replay_guard_metadata = trusted_metadata_for_request(  # noqa: F405
+                replay_guard_request
+            )
+            replay_guard = state.runtime._gateway_decision_response_replay_locked  # noqa: SLF001
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
+            replay_guard_request["mutation"]["operation"] = (
+                "RECORD_DECISION_RESPONSE"
+            )
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=None,
+                )
+            )
+            replay_guard_request["mutation"]["gateway_request"] = []
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
+            replay_guard_request["mutation"]["gateway_request"] = {}
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
+            replay_guard_request["mutation"]["gateway_request"] = {
+                "decision_id": 1,
+                "option_id": "accept",
+                "normalized_digest": digest("response"),  # noqa: F405
+                "summary": "summary",
+                "classification_reason": "reason",
+            }
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
+            replay_guard_request["mutation"]["gateway_request"][
+                "decision_id"
+            ] = "not-recorded"
+            self.assertIsNone(
+                replay_guard(
+                    state.state(),
+                    replay_guard_request,
+                    trusted_turn_metadata=replay_guard_metadata,
+                )
+            )
             before_register = state.state()
             options = [
                 {
