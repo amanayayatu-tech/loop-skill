@@ -316,6 +316,75 @@ class LoopctlCompilerAndCanaryTests(unittest.TestCase):
             with self.assertRaisesRegex(loopctl.LoopctlError, "CANARY_MCP_LIFECYCLE_FAILED"):
                 loopctl.verify_canary(manifest)
 
+    def test_canary_rejects_each_malformed_receipt_container(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = self._source(temporary)
+            base = loopctl.compile_manifest(source)
+            source["canary_receipt"] = {
+                "schema_version": loopctl.CANARY_RECEIPT_VERSION,
+                "root_disposition": "DISPOSABLE",
+                "manifest_digest": base["manifest_digest"],
+                "lanes": [
+                    {
+                        "stage": stage,
+                        "status": "PASS",
+                        "receipt_digest": "sha256:" + "a" * 64,
+                    }
+                    for stage in loopctl.CANARY_STAGES
+                ],
+                "negative_evidence": [],
+                "final_status": "FINALIZATION_ACKED",
+                "mcp_lifecycle": {
+                    name: {
+                        "status": "SUPPORTED",
+                        "active_call_count_before": 0,
+                        "active_call_count_after": 0,
+                        "before_identity": "before",
+                        "after_identity": "after",
+                        "receipt_digest": "sha256:" + "b" * 64,
+                    }
+                    for name in loopctl.MCP_LIFECYCLE_CAPABILITIES
+                },
+            }
+            valid = loopctl.compile_manifest(source)
+            cases = (
+                ("CANARY_MANIFEST_INVALID", lambda value: value.__setitem__("schema_version", "bad")),
+                (
+                    "CANARY_RECEIPT_INVALID",
+                    lambda value: value["canary_receipt"].__setitem__("schema_version", "bad"),
+                ),
+                (
+                    "CANARY_ROOT_NOT_DISPOSABLE",
+                    lambda value: value["canary_receipt"].__setitem__("root_disposition", "FORMAL"),
+                ),
+                (
+                    "CANARY_MANIFEST_DIGEST_MISMATCH",
+                    lambda value: value["canary_receipt"].__setitem__("manifest_digest", "wrong"),
+                ),
+                (
+                    "CANARY_LANES_INVALID",
+                    lambda value: value["canary_receipt"].__setitem__("lanes", {}),
+                ),
+                (
+                    "CANARY_FINALIZATION_REQUIRED",
+                    lambda value: value["canary_receipt"].__setitem__("final_status", "OPEN"),
+                ),
+                (
+                    "CANARY_MCP_LIFECYCLE_REQUIRED",
+                    lambda value: value["canary_receipt"].__setitem__("mcp_lifecycle", []),
+                ),
+                (
+                    "CANARY_NEGATIVE_EVIDENCE_REQUIRED",
+                    lambda value: value["canary_receipt"].__setitem__("negative_evidence", {}),
+                ),
+            )
+            for error_code, mutate in cases:
+                with self.subTest(error_code=error_code):
+                    candidate = copy.deepcopy(valid)
+                    mutate(candidate)
+                    with self.assertRaisesRegex(loopctl.LoopctlError, error_code):
+                        loopctl.verify_canary(candidate)
+
     def test_formal_compile_rejects_role_identity_mismatch_and_replay(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = self._source(temporary)
@@ -603,6 +672,39 @@ class LoopctlCliTests(unittest.TestCase):
             result = json.loads(stdout.getvalue())
             self.assertEqual("DOCTOR_FAILED", result["status"])
             self.assertFalse(result["formal_ready"])
+
+    def test_input_reader_rejects_missing_malformed_and_non_object_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(loopctl.LoopctlError, "INPUT_UNAVAILABLE"):
+                loopctl._read_document(root / "missing.json")
+            malformed = root / "malformed.json"
+            malformed.write_text("{", encoding="utf-8")
+            with self.assertRaisesRegex(loopctl.LoopctlError, "INPUT_DOCUMENT_INVALID"):
+                loopctl._read_document(malformed)
+            non_object = root / "non-object.json"
+            non_object.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(loopctl.LoopctlError, "INPUT_DOCUMENT_INVALID"):
+                loopctl._read_document(non_object)
+
+    def test_audit_reads_accepted_events_and_rejects_malformed_event_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            control = root / ".codex-loop"
+            control.mkdir()
+            events = control / "LOOP_EVENTS.jsonl"
+            first = {"event_id": "one", "occurred_at": "2026-07-20T00:00:00Z"}
+            second = {"event_id": "two", "timestamp": "2026-07-20T00:00:01Z"}
+            events.write_text(
+                "\n".join(json.dumps(value) for value in (first, second)) + "\n",
+                encoding="utf-8",
+            )
+            audit = loopctl.audit_root(root)
+            self.assertEqual(2, audit["accepted_count"])
+            self.assertEqual([first, second], [item["record"] for item in audit["timeline"]])
+            events.write_text("[]\n", encoding="utf-8")
+            with self.assertRaisesRegex(loopctl.LoopctlError, "AUDIT_EVENT_LOG_INVALID"):
+                loopctl.audit_root(root)
 
 
 if __name__ == "__main__":
