@@ -193,13 +193,16 @@ class RejectionJournalTests(unittest.TestCase):
             root = Path(temporary)
             runtime = AdaptiveStateRuntime(root)
             self.assertFalse(runtime.apply(self._invalid_request(1))["ok"])
+            self.assertFalse(runtime.apply(self._invalid_request(2))["ok"])
             path = root / ".codex-loop" / "LOOP_REJECTIONS.jsonl"
-            value = json.loads(path.read_text(encoding="utf-8"))
-            value["error_code"] = "TAMPERED"
-            path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+            lines = path.read_text(encoding="utf-8").splitlines()
+            value = json.loads(lines[0])
+            value["error_code"] = "TAMPERED_EARLY_ENTRY"
+            lines[0] = json.dumps(value, sort_keys=True)
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(loopctl.LoopctlError, "AUDIT_REJECTION_LOG_INVALID"):
                 loopctl.audit_root(root)
-            response = runtime.apply(self._invalid_request(2))
+            response = runtime.apply(self._invalid_request(3))
             self.assertEqual("WRITE_FAILED", response["rejection_journal"]["status"])
 
 
@@ -226,6 +229,34 @@ class LoopctlCompilerAndCanaryTests(unittest.TestCase):
             },
         }
 
+    @staticmethod
+    def _lane(stage: str, manifest_digest: str, index: int) -> dict[str, object]:
+        lane: dict[str, object] = {
+            "stage": stage,
+            "status": "PASS",
+            "manifest_digest": manifest_digest,
+            "evidence": {
+                "kind": "CANONICAL_EVENT",
+                "identity_digest": "sha256:" + f"{index:064x}",
+            },
+        }
+        lane["receipt_digest"] = loopctl._digest(lane)
+        return lane
+
+    @staticmethod
+    def _lifecycle_receipt(name: str, manifest_digest: str) -> dict[str, object]:
+        receipt: dict[str, object] = {
+            "status": "SUPPORTED",
+            "capability": name,
+            "manifest_digest": manifest_digest,
+            "active_call_count_before": 0,
+            "active_call_count_after": 0,
+            "before_identity": f"before-{name}",
+            "after_identity": f"after-{name}",
+        }
+        receipt["receipt_digest"] = loopctl._digest(receipt)
+        return receipt
+
     def test_compile_requires_full_role_registry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = self._source(temporary)
@@ -251,24 +282,13 @@ class LoopctlCompilerAndCanaryTests(unittest.TestCase):
                 "root_disposition": "DISPOSABLE",
                 "manifest_digest": manifest["manifest_digest"],
                 "lanes": [
-                    {
-                        "stage": stage,
-                        "status": "PASS",
-                        "receipt_digest": "sha256:" + f"{index:064x}",
-                    }
+                    self._lane(stage, manifest["manifest_digest"], index)
                     for index, stage in enumerate(loopctl.CANARY_STAGES, 1)
                 ],
                 "negative_evidence": [{"stage": "SEND", "status": "PRESERVED"}],
                 "final_status": "FINALIZATION_ACKED",
                 "mcp_lifecycle": {
-                    name: {
-                        "status": "SUPPORTED",
-                        "active_call_count_before": 0,
-                        "active_call_count_after": 0,
-                        "before_identity": f"before-{name}",
-                        "after_identity": f"after-{name}",
-                        "receipt_digest": "sha256:" + "b" * 64,
-                    }
+                    name: self._lifecycle_receipt(name, manifest["manifest_digest"])
                     for name in loopctl.MCP_LIFECYCLE_CAPABILITIES
                 },
             }
@@ -282,6 +302,10 @@ class LoopctlCompilerAndCanaryTests(unittest.TestCase):
             failed["canary_receipt"]["lanes"][3]["status"] = "FAIL"
             with self.assertRaisesRegex(loopctl.LoopctlError, "CANARY_LANE_FAILED"):
                 loopctl.verify_canary(failed)
+            forged = copy.deepcopy(compiled)
+            forged["canary_receipt"]["lanes"][3]["receipt_digest"] = "sha256:" + "0" * 64
+            with self.assertRaisesRegex(loopctl.LoopctlError, "CANARY_LANE_FAILED"):
+                loopctl.verify_canary(forged)
 
     def test_canary_rejects_lifecycle_refresh_with_active_calls(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -292,20 +316,13 @@ class LoopctlCompilerAndCanaryTests(unittest.TestCase):
                 "root_disposition": "DISPOSABLE",
                 "manifest_digest": base["manifest_digest"],
                 "lanes": [
-                    {"stage": stage, "status": "PASS", "receipt_digest": "sha256:" + "a" * 64}
-                    for stage in loopctl.CANARY_STAGES
+                    self._lane(stage, base["manifest_digest"], index)
+                    for index, stage in enumerate(loopctl.CANARY_STAGES, 1)
                 ],
                 "negative_evidence": [],
                 "final_status": "FINALIZATION_ACKED",
                 "mcp_lifecycle": {
-                    name: {
-                        "status": "SUPPORTED",
-                        "active_call_count_before": 0,
-                        "active_call_count_after": 0,
-                        "before_identity": "before",
-                        "after_identity": "after",
-                        "receipt_digest": "sha256:" + "b" * 64,
-                    }
+                    name: self._lifecycle_receipt(name, base["manifest_digest"])
                     for name in loopctl.MCP_LIFECYCLE_CAPABILITIES
                 },
             }
@@ -325,24 +342,13 @@ class LoopctlCompilerAndCanaryTests(unittest.TestCase):
                 "root_disposition": "DISPOSABLE",
                 "manifest_digest": base["manifest_digest"],
                 "lanes": [
-                    {
-                        "stage": stage,
-                        "status": "PASS",
-                        "receipt_digest": "sha256:" + "a" * 64,
-                    }
-                    for stage in loopctl.CANARY_STAGES
+                    self._lane(stage, base["manifest_digest"], index)
+                    for index, stage in enumerate(loopctl.CANARY_STAGES, 1)
                 ],
                 "negative_evidence": [],
                 "final_status": "FINALIZATION_ACKED",
                 "mcp_lifecycle": {
-                    name: {
-                        "status": "SUPPORTED",
-                        "active_call_count_before": 0,
-                        "active_call_count_after": 0,
-                        "before_identity": "before",
-                        "after_identity": "after",
-                        "receipt_digest": "sha256:" + "b" * 64,
-                    }
+                    name: self._lifecycle_receipt(name, base["manifest_digest"])
                     for name in loopctl.MCP_LIFECYCLE_CAPABILITIES
                 },
             }

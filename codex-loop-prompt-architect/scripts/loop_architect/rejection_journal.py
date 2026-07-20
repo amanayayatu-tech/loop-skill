@@ -81,45 +81,6 @@ def _read_entries(path: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def _read_tail(path: Path) -> dict[str, Any] | None:
-    """Read the last complete entry in bounded time before an append."""
-
-    if not path.exists() or path.stat().st_size == 0:
-        return None
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            end = handle.tell()
-            if end == 0:
-                return None
-            handle.seek(end - 1)
-            if handle.read(1) != b"\n":
-                raise RejectionJournalError("truncated rejection journal tail")
-            position = end - 2
-            while position >= 0:
-                handle.seek(position)
-                if handle.read(1) == b"\n":
-                    position += 1
-                    break
-                position -= 1
-            handle.seek(max(position, 0))
-            line = handle.read(end - max(position, 0)).decode("utf-8")
-        value = json.loads(line)
-        if not isinstance(value, dict):
-            raise RejectionJournalError("invalid rejection journal tail")
-        digest = value.pop("entry_digest", None)
-        if digest != _entry_digest(value):
-            raise RejectionJournalError("rejection journal tail digest mismatch")
-        value["entry_digest"] = digest
-        if not isinstance(value.get("sequence"), int) or value["sequence"] < 1:
-            raise RejectionJournalError("rejection journal tail sequence invalid")
-        return value
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        if isinstance(exc, RejectionJournalError):
-            raise
-        raise RejectionJournalError("rejection journal tail unreadable") from exc
-
-
 def append_rejection(
     path: Path,
     *,
@@ -137,7 +98,8 @@ def append_rejection(
 
     if path.parent.is_symlink() or path.is_symlink():
         raise RejectionJournalError("rejection journal symlink is forbidden")
-    previous_entry = _read_tail(path)
+    entries = _read_entries(path)
+    previous_entry = entries[-1] if entries else None
     actor = request.get("actor") if isinstance(request, dict) else None
     mutation = request.get("mutation") if isinstance(request, dict) else None
     operation = None

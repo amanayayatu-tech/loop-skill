@@ -543,6 +543,81 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             )
             self.assertNotIn("state-writer-1", current["thread_registry"])
 
+    def test_state_gateway_materializes_formal_startup_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pack_source = root / "CONTROLLER_PACK.md"
+            pack_content = "# Formal gateway initialization fixture\n"
+            pack_source.write_text(pack_content, encoding="utf-8")
+            startup_receipt = {
+                "schema_version": "formal-startup-receipt-v1",
+                "issuer": "CODEX_APP_HOST",
+                "evidence_model": "HOST_COOPERATIVE",
+                "compiled_manifest_digest": digest("compiled"),  # noqa: F405
+                "doctor_identity_digest": digest("doctor"),  # noqa: F405
+                "canary_receipt_digest": digest("canary"),  # noqa: F405
+                "canary_final_status": "FINALIZATION_ACKED",
+                "host_capability_receipt_digest": digest("host"),  # noqa: F405
+                "role_receipt_digests": [],
+                "heartbeat_receipt_digest": digest("heartbeat"),  # noqa: F405
+                "registry_complete": True,
+                "mcp_lifecycle_supported": True,
+                "model_identity_requirement": "NOT_REQUIRED",
+                "model_identity_status": "NOT_APPLICABLE",
+                "required_model": "UNSPECIFIED",
+                "required_reasoning": "UNSPECIFIED",
+            }
+            startup_receipt["receipt_digest"] = json_digest(startup_receipt)  # noqa: F405
+            startup_content = json.dumps(
+                startup_receipt, sort_keys=True, separators=(",", ":")
+            )
+            startup_source = root / "STARTUP_RECEIPT.json"
+            startup_source.write_text(startup_content, encoding="utf-8")
+            template = Harness(root / "template")  # noqa: F405
+            _, template_request = template.initialize(state_gateway=True)
+            initialize_mutation = copy.deepcopy(template_request["mutation"])
+            initialize_mutation.update(
+                {
+                    "controller_pack_digest": digest(pack_content),  # noqa: F405
+                    "initialization_class": "FORMAL",
+                    "startup_receipt_path": ".codex-loop/sources/STARTUP_RECEIPT.json",
+                    "startup_receipt_digest": digest(startup_content),  # noqa: F405
+                    "model_identity_requirement": "NOT_REQUIRED",
+                    "required_model": "UNSPECIFIED",
+                    "required_reasoning": "UNSPECIFIED",
+                }
+            )
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "init",
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18"},
+                }
+            )
+            initialized = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-formal-initialize",
+                    "operation": "INITIALIZE",
+                    "occurred_at": T1,  # noqa: F405
+                    "parameters": {
+                        "initialize_mutation": initialize_mutation,
+                        "controller_pack_source_path": str(pack_source),
+                        "startup_receipt_source_path": str(startup_source),
+                    },
+                },
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            current = AdaptiveStateRuntime(root).read_state()  # noqa: F405
+            self.assertEqual("FORMAL", current["initialization_class"])
+            self.assertEqual(
+                startup_receipt["canary_receipt_digest"],
+                current["startup_receipt"]["canary_receipt_digest"],
+            )
+
     def test_state_gateway_registers_bound_host_observations_and_one_heartbeat(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

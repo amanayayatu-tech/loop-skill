@@ -1215,7 +1215,15 @@ class AdaptiveStateMcpServer:
                         self._gateway_error("STATE_REQUEST_ID_CONFLICT", "/params/arguments/request/request_id")
                     if not bootstrap_replay:
                         self._gateway_error("STATE_GATEWAY_ROOT_NOT_EMPTY", "/params/arguments/root")
+                initialize_mutation = copy.deepcopy(payload.get("initialize_mutation"))
+                initialization_class = (
+                    initialize_mutation.get("initialization_class", "LEGACY_COMPATIBLE")
+                    if isinstance(initialize_mutation, dict)
+                    else None
+                )
                 required = {"initialize_mutation", "controller_pack_source_path"}
+                if initialization_class == "FORMAL":
+                    required.add("startup_receipt_source_path")
                 if set(payload) != required or not isinstance(payload["initialize_mutation"], dict):
                     self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
                 source = payload["controller_pack_source_path"]
@@ -1228,7 +1236,6 @@ class AdaptiveStateMcpServer:
                 except (OSError, UnicodeDecodeError, ValueError):
                     self._gateway_error("STATE_GATEWAY_PACK_SOURCE_INVALID", "/params/arguments/request/parameters/controller_pack_source_path")
                 digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
-                initialize_mutation = copy.deepcopy(payload["initialize_mutation"])
                 if initialize_mutation.get("controller_pack_digest") != digest:
                     self._gateway_error("STATE_GATEWAY_PACK_SOURCE_DIGEST_MISMATCH", "/params/arguments/request/parameters/initialize_mutation/controller_pack_digest")
                 artifacts = [{
@@ -1236,6 +1243,30 @@ class AdaptiveStateMcpServer:
                     "source_path": str(source_path), "digest": digest,
                     "media_type": "text/markdown",
                 }]
+                if initialization_class == "FORMAL":
+                    startup_source = payload["startup_receipt_source_path"]
+                    if not isinstance(startup_source, str) or not Path(startup_source).is_absolute():
+                        self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters/startup_receipt_source_path")
+                    startup_source_path = Path(startup_source).resolve(strict=False)
+                    try:
+                        startup_source_path.relative_to(Path(root).resolve(strict=False))
+                        startup_content = startup_source_path.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError, ValueError):
+                        self._gateway_error("STATE_GATEWAY_STARTUP_RECEIPT_SOURCE_INVALID", "/params/arguments/request/parameters/startup_receipt_source_path")
+                    startup_digest = "sha256:" + hashlib.sha256(startup_content.encode("utf-8")).hexdigest()
+                    if (
+                        initialize_mutation.get("startup_receipt_path")
+                        != ".codex-loop/sources/STARTUP_RECEIPT.json"
+                        or initialize_mutation.get("startup_receipt_digest")
+                        != startup_digest
+                    ):
+                        self._gateway_error("STATE_GATEWAY_STARTUP_RECEIPT_DIGEST_MISMATCH", "/params/arguments/request/parameters/initialize_mutation/startup_receipt_digest")
+                    artifacts.append({
+                        "path": ".codex-loop/sources/STARTUP_RECEIPT.json",
+                        "source_path": str(startup_source_path),
+                        "digest": startup_digest,
+                        "media_type": "application/json",
+                    })
                 mutation = {
                     "type": "STATE_GATEWAY",
                     "operation": operation,

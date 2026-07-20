@@ -71,17 +71,20 @@ module:
   Packs, with explicit-only v1/v2 migration;
 - durable outboxes, receipts, replay, and lost-output recovery;
 - a read-only first-invocation dependency/identity doctor, compiled startup
-  manifest, and disposable full-lifecycle canary before formal initialization;
+  manifest, manifest-bound lane/lifecycle receipts, and disposable
+  full-lifecycle canary before formal initialization; the MCP Gateway
+  materializes the formal startup receipt from a root-confined source;
 - a complete recovery registry and privacy-minimized, hash-chained append-only
   rejection journal; recoverable states may not expose `WAIT` as their only
   operation;
-- host-issued role/model/reasoning receipts and explicit MCP install, restart,
-  reconnect, schema-refresh, and App-refresh capability receipts;
+- host-bound task/thread receipts, opt-in host model/reasoning receipts when an
+  exact identity is required, and explicit MCP install, restart, reconnect,
+  schema-refresh, and App-refresh capability receipts;
 - read-only `host_lifecycle_readback` derivation of those identities and
   zero-active-call observations inside the host-attested serial dispatcher;
   callers cannot supply counts, process identities, App build, or schema digest;
-- reviewed-artifact Git closeout with locked base identity and idempotent
-  commit/push readback recovery;
+- reviewed-artifact Git closeout with locked base identity, a clean index and
+  worktree for `NO_COMMIT`, and idempotent commit/push readback recovery;
 - schema-driven policy migration with retained history, safe points, bounded
   values, approval, and rollback-or-stop semantics;
 - workflow state kept distinct from the achieved evidence completion class;

@@ -615,9 +615,30 @@ def verify_canary(manifest: dict[str, Any]) -> dict[str, Any]:
         for item in lanes
         if isinstance(item, dict) and isinstance(item.get("stage"), str)
     }
+    if len(lanes) != len(CANARY_STAGES) or set(by_stage) != set(CANARY_STAGES):
+        raise LoopctlError("CANARY_LANES_INVALID", "/canary_receipt/lanes")
     for stage in CANARY_STAGES:
         lane = by_stage.get(stage)
-        if lane is None or lane.get("status") != "PASS" or not lane.get("receipt_digest"):
+        if not isinstance(lane, dict) or lane.get("status") != "PASS":
+            raise LoopctlError("CANARY_LANE_FAILED", f"/canary_receipt/lanes/{stage}")
+        claimed = lane.get("receipt_digest")
+        lane_body = dict(lane)
+        lane_body.pop("receipt_digest", None)
+        evidence = lane.get("evidence")
+        if (
+            not isinstance(claimed, str)
+            or set(lane)
+            != {"stage", "status", "manifest_digest", "evidence", "receipt_digest"}
+            or not DIGEST_RE.fullmatch(claimed)
+            or claimed != _digest(lane_body)
+            or lane.get("manifest_digest") != manifest.get("manifest_digest")
+            or not isinstance(evidence, dict)
+            or set(evidence) != {"kind", "identity_digest"}
+            or not isinstance(evidence.get("kind"), str)
+            or not evidence["kind"]
+            or not isinstance(evidence.get("identity_digest"), str)
+            or not DIGEST_RE.fullmatch(evidence["identity_digest"])
+        ):
             raise LoopctlError("CANARY_LANE_FAILED", f"/canary_receipt/lanes/{stage}")
     if receipt.get("final_status") != "FINALIZATION_ACKED":
         raise LoopctlError("CANARY_FINALIZATION_REQUIRED", "/canary_receipt/final_status")
@@ -626,14 +647,33 @@ def verify_canary(manifest: dict[str, Any]) -> dict[str, Any]:
         raise LoopctlError("CANARY_MCP_LIFECYCLE_REQUIRED", "/canary_receipt/mcp_lifecycle")
     for capability in MCP_LIFECYCLE_CAPABILITIES:
         value = lifecycle.get(capability)
+        lifecycle_body = dict(value) if isinstance(value, dict) else {}
+        lifecycle_digest = lifecycle_body.pop("receipt_digest", None)
         if (
             not isinstance(value, dict)
+            or set(value)
+            != {
+                "status",
+                "capability",
+                "manifest_digest",
+                "active_call_count_before",
+                "active_call_count_after",
+                "before_identity",
+                "after_identity",
+                "receipt_digest",
+            }
+            or value.get("capability") != capability
+            or value.get("manifest_digest") != manifest.get("manifest_digest")
             or value.get("status") != "SUPPORTED"
             or value.get("active_call_count_before") != 0
             or value.get("active_call_count_after") != 0
             or not isinstance(value.get("before_identity"), str)
+            or not value["before_identity"]
             or not isinstance(value.get("after_identity"), str)
-            or not isinstance(value.get("receipt_digest"), str)
+            or not value["after_identity"]
+            or not isinstance(lifecycle_digest, str)
+            or not DIGEST_RE.fullmatch(lifecycle_digest)
+            or lifecycle_digest != _digest(lifecycle_body)
         ):
             raise LoopctlError(
                 "CANARY_MCP_LIFECYCLE_FAILED",

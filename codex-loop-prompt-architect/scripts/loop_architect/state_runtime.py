@@ -3945,7 +3945,13 @@ class AdaptiveStateRuntime:
                 or (
                     relative == ".codex-loop/sources/STARTUP_RECEIPT.json"
                     and mutation is not None
-                    and mutation.get("type") == "INITIALIZE"
+                    and (
+                        mutation.get("type") == "INITIALIZE"
+                        or (
+                            mutation.get("type") == "STATE_GATEWAY"
+                            and mutation.get("operation") == "INITIALIZE"
+                        )
+                    )
                 )
                 or versioned_pack
                 or (
@@ -4004,6 +4010,20 @@ class AdaptiveStateRuntime:
                     and not self._path_is_within(source, self.control_dir)
                     and source.is_file()
                 )
+                formal_startup_source = bool(
+                    relative == ".codex-loop/sources/STARTUP_RECEIPT.json"
+                    and mutation is not None
+                    and (
+                        mutation.get("type") == "INITIALIZE"
+                        or (
+                            mutation.get("type") == "STATE_GATEWAY"
+                            and mutation.get("operation") == "INITIALIZE"
+                        )
+                    )
+                    and artifact["media_type"] == "application/json"
+                    and not self._path_is_within(source, self.control_dir)
+                    and source.is_file()
+                )
                 staged_report_source = bool(
                     target.parent == self.reports_dir
                     and target.suffix == ".json"
@@ -4040,7 +4060,11 @@ class AdaptiveStateRuntime:
                     staged_report_payload = self._require_staged_report_file(
                         source, artifact["digest"], source_json_path
                     )
-                elif not (controller_pack_source or heartbeat_prompt_source):
+                elif not (
+                    controller_pack_source
+                    or heartbeat_prompt_source
+                    or formal_startup_source
+                ):
                     raise RuntimeRejection(
                         "ARTIFACT_SOURCE_PATH_NOT_ALLOWED",
                         source_json_path,
@@ -10943,7 +10967,14 @@ class AdaptiveStateRuntime:
         ):
             raise RuntimeRejection("GOAL_CLOSEOUT_GIT_RECEIPT_INVALID", "/git_receipt")
         if receipt["status"] == "NO_COMMIT":
-            if actual_head != record["base_head"] or receipt["parent"] is not None:
+            worktree_status = self._git_readback(
+                "status", "--porcelain=v1", "--untracked-files=all"
+            )
+            if (
+                actual_head != record["base_head"]
+                or receipt["parent"] is not None
+                or worktree_status
+            ):
                 raise RuntimeRejection("GOAL_CLOSEOUT_BASELINE_DRIFT", "/git_receipt")
         else:
             actual_parent = self._git_readback("rev-parse", f"{actual_head}^")

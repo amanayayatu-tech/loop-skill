@@ -24,6 +24,10 @@ All notable changes to this project are documented here. The project follows
   `APP_SIGNED` labels are rejected. A missing task receipt carrier is a host
   blocker only when a caller opts into an exact `required_model` or
   `required_reasoning`; default Loops record `UNSPECIFIED` / `NOT_APPLICABLE`.
+- Bound every disposable-canary lane and lifecycle receipt to its compiled
+  manifest and verified digest, added root-confined formal startup receipt
+  materialization to the MCP Gateway, required a clean worktree for
+  `NO_COMMIT`, and validate the full rejection hash chain before every append.
 - Added host-attested `host_lifecycle_readback` so install, server restart,
   client reconnect, schema refresh, App refresh, and zero-active-call evidence
   are derived by the serial MCP dispatcher instead of model-authored receipts.

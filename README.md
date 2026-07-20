@@ -72,13 +72,13 @@ scripts/loopctl canary --input compiled-manifest.json --json
 scripts/loopctl audit --root /absolute/loop/root --json
 ```
 
-`doctor` 检查实际 Python 解释器与依赖、Git/worktree、source/install manifest、MCP 配置和 schema，以及 App/宿主能力。receipt 以这些身份的 digest 缓存；任何一项变化都会失效。失败只返回明确错误和修复命令，不创建 canonical、角色或 heartbeat。`compile` 默认生成 disposable CP0；正式初始化还必须绑定完整 registry、宿主签发的角色/model receipt、heartbeat readback、五类 MCP lifecycle receipt，以及覆盖初始化至 `FINALIZATION_ACKED` 的真实 disposable canary。
+`doctor` 检查实际 Python 解释器与依赖、Git/worktree、source/install manifest、MCP 配置和 schema，以及 App/宿主能力。receipt 以这些身份的 digest 缓存；任何一项变化都会失效。失败只返回明确错误和修复命令，不创建 canonical、角色或 heartbeat。`compile` 默认生成 disposable CP0；正式初始化还必须绑定完整 registry、task/thread 与 heartbeat readback、五类 MCP lifecycle receipt，以及覆盖初始化至 `FINALIZATION_ACKED` 的真实 disposable canary。只有显式要求 `required_model` 或 `required_reasoning` 时才强制宿主 model receipt。canary 的每个 lane 和 lifecycle receipt 都必须绑定 manifest 并通过自身 digest 校验；formal startup receipt 由 MCP Gateway 从 root 内的 source path materialize，不能由调用参数内联伪造。
 
 App 重启后，只读 MCP `host_lifecycle_readback` 从已校验的安装 receipt、当前精确 server 注册、OpenAI 签名的 App 父进程及当前 server/client/schema 身份生成五类 lifecycle receipt。active-call 数由串行 stdio dispatcher 自己计数并排除当前 readback 调用；模型不能传入或自签 `0`。安装漂移、未观察到重启、并行调用或 App build 不可读都会 fail closed。
 
 运行时的可恢复错误全部由统一 recovery registry 映射到唯一 next operation，不能只返回 `WAIT`。拒绝操作另写入 hash-chain、append-only、fsync 的 `.codex-loop/LOOP_REJECTIONS.jsonl`；其中只保留请求 digest 和最小审计字段，不保留 prompt、聊天、凭据或完整请求。这里的“零副作用”指零 canonical、产品和外部副作用，审计 journal append 是显式允许的审计副作用。
 
-正式 Goal 可要求 Git closeout saga：`PREPARE_GOAL_CLOSEOUT` 锁定 reviewed artifact、HEAD、branch、路径和一次性 capability；commit/push 后由 Git readback 执行 `ACK_GOAL_CLOSEOUT`。崩溃恢复复用原 closeout 记录，HEAD 漂移、路径越界或 remote ref 不一致均拒绝。policy migration 使用通用 descriptor 和完整历史；旧 repair-budget effect 保持兼容。STATUS/dashboard 从 `status-v5` 起同时显示 workflow 状态与证据完成类别：`COMPLETE_ARTIFACT`、`COMPLETE_WITH_LIMITATION`、`EMPIRICAL_RESULT_OBSERVED`、`FORMAL_ACCEPTED` 或 `PUBLIC_RELEASED`。
+正式 Goal 可要求 Git closeout saga：`PREPARE_GOAL_CLOSEOUT` 锁定 reviewed artifact、HEAD、branch、路径和一次性 capability；commit/push 后由 Git readback 执行 `ACK_GOAL_CLOSEOUT`。`NO_COMMIT` 只在 HEAD 未漂移且 worktree/index 完全干净时合法。崩溃恢复复用原 closeout 记录，HEAD 漂移、路径越界或 remote ref 不一致均拒绝。policy migration 使用通用 descriptor 和完整历史；旧 repair-budget effect 保持兼容。STATUS/dashboard 从 `status-v5` 起同时显示 workflow 状态与证据完成类别：`COMPLETE_ARTIFACT`、`COMPLETE_WITH_LIMITATION`、`EMPIRICAL_RESULT_OBSERVED`、`FORMAL_ACCEPTED` 或 `PUBLIC_RELEASED`。
 
 ## 先质检，再 Loop 化
 

@@ -7785,6 +7785,36 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
     },
+    "STATE_GATEWAY_STARTUP_RECEIPT_DIGEST_MISMATCH": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "STATE_GATEWAY_STARTUP_RECEIPT_DIGEST_MISMATCH",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "STATE_GATEWAY_STARTUP_RECEIPT_SOURCE_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "STATE_GATEWAY_STARTUP_RECEIPT_SOURCE_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "STATE_GATEWAY_SUCCESSOR_EVIDENCE_INVALID": {
       "classification": "RECOVERABLE",
       "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",

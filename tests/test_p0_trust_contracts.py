@@ -407,6 +407,68 @@ class GitCloseoutSagaTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             self.assertEqual("GOAL_CLOSEOUT_ALREADY_ACKED", replay["code"])
             self.assertEqual(commit, state["goal_closeout_ledger"]["g1"]["git_receipt"]["commit"])
 
+    def test_no_commit_closeout_rejects_dirty_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            head, branch = self._git_root(root)
+            runtime = AdaptiveStateRuntime(root)
+            artifact_digest = digest("reviewed-artifact")
+            state = {
+                "loop_id": "loop-closeout",
+                "logical_time": T0,
+                "goal_definition_registry": {"g1": {"closeout_required": True}},
+                "goal_execution_ledger": {
+                    "g1": {
+                        "status": "CODE_REVIEW_PASS",
+                        "latest_worker": {
+                            "status": "PASS",
+                            "dispatch_id": "worker-1",
+                            "artifact_digest": artifact_digest,
+                            "review_handoff": {
+                                "artifact_identity": {
+                                    "current_branch": branch,
+                                    "head_sha": head,
+                                    "changed_files": [],
+                                }
+                            },
+                        },
+                    }
+                },
+                "goal_closeout_ledger": {},
+            }
+            runtime._gateway_prepare_goal_closeout(
+                state,
+                {
+                    "closeout_id": "closeout-no-commit",
+                    "goal_id": "g1",
+                    "artifact_digest": artifact_digest,
+                    "allowed_paths": ["product.txt"],
+                    "observed_at": T1,
+                },
+                2,
+            )
+            (root / "product.txt").write_text("dirty-after-prepare\n", encoding="utf-8")
+            receipt = {
+                "status": "NO_COMMIT",
+                "branch": branch,
+                "commit": head,
+                "tree": runtime._git_readback("rev-parse", "HEAD^{tree}"),
+                "parent": None,
+                "remote_ref": "refs/remotes/origin/main",
+                "remote_sha": None,
+            }
+            with self.assertRaisesRegex(RuntimeRejection, "GOAL_CLOSEOUT_BASELINE_DRIFT"):
+                runtime._gateway_ack_goal_closeout(
+                    state,
+                    {
+                        "closeout_id": "closeout-no-commit",
+                        "goal_id": "g1",
+                        "observed_at": T2,
+                        "git_receipt": receipt,
+                    },
+                    3,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
