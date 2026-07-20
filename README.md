@@ -28,7 +28,8 @@ Build Week 期间新增或强化了双语上手路径、可演进的项目规范
 ```bash
 git clone https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
-python3 -m pip install -r requirements-test.txt
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-test.txt
 ./scripts/install.sh
 ```
 
@@ -59,6 +60,25 @@ python3 -m pip install -r requirements-test.txt
 3. **你启动真实 Loop**：在 Codex App 中创建一个真实 Controller 任务，把 Pack 作为启动输入；只有这一步才开始实际编排。
 
 如果 Intake 返回 `DIRECT_TASK_RECOMMENDED`，直接让 Codex 完成任务通常更快。Loop 不是每件事都需要的仪式。
+
+## 正式长程 Loop 的启动闸
+
+每个新会话第一次进入 intake 或 generate 前，Skill 会先运行只读 doctor。也可直接检查：
+
+```bash
+scripts/loopctl doctor --check --json
+scripts/loopctl compile --input loop-source.json --check --json
+scripts/loopctl canary --input compiled-manifest.json --json
+scripts/loopctl audit --root /absolute/loop/root --json
+```
+
+`doctor` 检查实际 Python 解释器与依赖、Git/worktree、source/install manifest、MCP 配置和 schema，以及 App/宿主能力。receipt 以这些身份的 digest 缓存；任何一项变化都会失效。失败只返回明确错误和修复命令，不创建 canonical、角色或 heartbeat。`compile` 默认生成 disposable CP0；正式初始化还必须绑定完整 registry、宿主签发的角色/model receipt、heartbeat readback、五类 MCP lifecycle receipt，以及覆盖初始化至 `FINALIZATION_ACKED` 的真实 disposable canary。
+
+App 重启后，只读 MCP `host_lifecycle_readback` 从已校验的安装 receipt、当前精确 server 注册、OpenAI 签名的 App 父进程及当前 server/client/schema 身份生成五类 lifecycle receipt。active-call 数由串行 stdio dispatcher 自己计数并排除当前 readback 调用；模型不能传入或自签 `0`。安装漂移、未观察到重启、并行调用或 App build 不可读都会 fail closed。
+
+运行时的可恢复错误全部由统一 recovery registry 映射到唯一 next operation，不能只返回 `WAIT`。拒绝操作另写入 hash-chain、append-only、fsync 的 `.codex-loop/LOOP_REJECTIONS.jsonl`；其中只保留请求 digest 和最小审计字段，不保留 prompt、聊天、凭据或完整请求。这里的“零副作用”指零 canonical、产品和外部副作用，审计 journal append 是显式允许的审计副作用。
+
+正式 Goal 可要求 Git closeout saga：`PREPARE_GOAL_CLOSEOUT` 锁定 reviewed artifact、HEAD、branch、路径和一次性 capability；commit/push 后由 Git readback 执行 `ACK_GOAL_CLOSEOUT`。崩溃恢复复用原 closeout 记录，HEAD 漂移、路径越界或 remote ref 不一致均拒绝。policy migration 使用通用 descriptor 和完整历史；旧 repair-budget effect 保持兼容。STATUS/dashboard 从 `status-v5` 起同时显示 workflow 状态与证据完成类别：`COMPLETE_ARTIFACT`、`COMPLETE_WITH_LIMITATION`、`EMPIRICAL_RESULT_OBSERVED`、`FORMAL_ACCEPTED` 或 `PUBLIC_RELEASED`。
 
 ## 先质检，再 Loop 化
 
@@ -132,7 +152,7 @@ python3 -m pip install -r requirements-test.txt
 
 新生成的 Adaptive Pack 默认使用 schema v3。它不再创建会话式 State-Writer 任务；已安装的 MCP `state_gateway({root, request})` 是唯一 canonical writer。Controller 仍然只读，Worker 只做产品工作，Reviewer/Local Verifier 只提交证据，任何外层 Supervisor 都不属于产品角色。
 
-**当前平台边界：**schema v3 是 **host-cooperative evidence**，不是声称防御“恶意 Controller 可伪造全部 App 调用”的 Byzantine 系统。Gateway 将一次真实 App 的 task/thread、automation、send 返回 target 或 PAUSED readback，绑定到当前 host-attested turn、唯一 PREPARED outbox 和已登记 heartbeat；由 Gateway 自己取得 canonical payload digest，且 send observation 本身绝不产生 PASS。它防止崩溃、重复发送、陈旧/错配/重放报告、错误 artifact/dispatch 与误终态。未来若 App 提供 `x-codex-app-action-receipt-v1`，会作为可选 stronger attestation 严格校验；当前缺失不阻断正常运行、canary 或发布。
+**当前平台边界：**schema v3 是 **host-cooperative evidence**，不是声称防御“恶意 Controller 可伪造全部 App 调用”的 Byzantine 系统。Gateway 将一次真实 App 的 task/thread、automation、send 返回 target 或 PAUSED readback，绑定到当前 host-attested turn、唯一 PREPARED outbox 和已登记 heartbeat；由 Gateway 自己取得 canonical payload digest，且 send observation 本身绝不产生 PASS。它防止崩溃、重复发送、陈旧/错配/重放报告、错误 artifact/dispatch 与误终态。默认 Loop 不固定具体模型：`model_identity_requirement=NOT_REQUIRED`、`model_identity_status=NOT_APPLICABLE`，model/reasoning 只记录为 `UNSPECIFIED`，不会暗示已验证身份。只有 manifest 或 Goal 显式声明 `required_model` / `required_reasoning` 时，才启用严格身份闸；此时 App 必须在非参数 `_meta.x-codex-app-action-receipt-v1` 中注入 `THREAD_CREATE_OR_READ` 收据，宿主不支持则 `HOST_BLOCKED`。当前 v1 只接受准确标记为 `HOST_COOPERATIVE` 的宿主注入证据；普通 digest 不得冒充 `APP_SIGNED`。
 
 ```text
 Controller (read-only)
@@ -312,9 +332,9 @@ python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold
 快速本地回归：
 
 ```bash
-python3 -m pip install -r requirements-test.txt
-python3 -W error -m unittest discover -s tests -v
-python3 codex-loop-prompt-architect/scripts/validate_skill.py
+.venv/bin/python -m pip install -r requirements-test.txt
+.venv/bin/python -W error -m unittest discover -s tests -v
+.venv/bin/python codex-loop-prompt-architect/scripts/validate_skill.py
 bash -n scripts/install.sh
 ```
 

@@ -5,6 +5,44 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- Added `loopctl doctor`, `compile`, `canary`, and `audit`. New skill sessions
+  run the dependency and identity doctor before intake/generation; formal
+  initialization requires a complete compiled registry, host receipts, MCP
+  lifecycle capability, and a disposable canary ending at
+  `FINALIZATION_ACKED`.
+- Added a generated recovery registry covering every runtime rejection/status
+  code and a privacy-minimized, hash-chained, fsynced append-only rejection
+  journal. Rejections retain their compatibility fields and now include one
+  structured legal recovery operation and copyable parameter template.
+- Added host-bound role/model/reasoning receipts, a Git Goal closeout saga with
+  idempotent commit/push readback recovery, and schema-driven policy migration
+  with safe points, bounds, approval, history, and rollback-or-stop behavior.
+- Clarified that role receipts injected by the current v1 App metadata carrier
+  are `HOST_COOPERATIVE`, not cryptographically `APP_SIGNED`; unsigned
+  `APP_SIGNED` labels are rejected. A missing task receipt carrier is a host
+  blocker only when a caller opts into an exact `required_model` or
+  `required_reasoning`; default Loops record `UNSPECIFIED` / `NOT_APPLICABLE`.
+- Added host-attested `host_lifecycle_readback` so install, server restart,
+  client reconnect, schema refresh, App refresh, and zero-active-call evidence
+  are derived by the serial MCP dispatcher instead of model-authored receipts.
+- Added explicit evidence completion classes and `status-v5`, which renders
+  workflow state separately from artifact, limitation, empirical, formal, and
+  public completion evidence.
+
+### Changed
+
+- Kept v1/v2/v3 state and historical events readable without rewriting them.
+  Historical complete and limitation terminal states receive additive
+  completion projections on read and materialize them only on a later accepted
+  write. Existing repair-budget migration effects remain compatible and are
+  not reimplemented.
+- Defined zero-effect rejection as zero canonical, product, and external side
+  effects; the separate rejection-journal append is an allowed audit effect.
+- Compatibility CI now fails when any runtime code is absent from the recovery
+  registry or a recoverable code maps only to `WAIT`.
+
 ## [3.3.3] - 2026-07-19
 
 ### Fixed
