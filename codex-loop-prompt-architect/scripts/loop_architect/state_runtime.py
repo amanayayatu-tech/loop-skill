@@ -32,6 +32,8 @@ from .human_control import (
     render_decision_card,
     validate_review_surface,
 )
+from .recovery_registry import recovery_for
+from .rejection_journal import RejectionJournalError, append_rejection
 DEFAULT_HUMAN_CONTROL_POLICY = {
     "human_steering_enabled": True,
     "status_projection_enabled": True,
@@ -41,10 +43,19 @@ DEFAULT_HUMAN_CONTROL_POLICY = {
     "review_evidence_policy": "deterministic_first",
 }
 
-CURRENT_STATUS_RENDER_CONTRACT = "status-v4"
+CURRENT_STATUS_RENDER_CONTRACT = "status-v5"
+PRIOR_STATUS_RENDER_CONTRACT = "status-v4"
 HISTORICAL_STATUS_RENDER_CONTRACT = "status-v3"
 PREVIOUS_STATUS_RENDER_CONTRACT = "status-v2"
 LEGACY_STATUS_RENDER_CONTRACT = "status-v1"
+
+COMPLETION_CLASSES = {
+    "COMPLETE_ARTIFACT",
+    "COMPLETE_WITH_LIMITATION",
+    "EMPIRICAL_RESULT_OBSERVED",
+    "FORMAL_ACCEPTED",
+    "PUBLIC_RELEASED",
+}
 
 
 STATE_BEGIN = "STATE_JSON_BEGIN"
@@ -53,6 +64,10 @@ SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 GATEWAY_ROUTE_ID_MAX_LENGTH = 48
 DIGEST_RE = re.compile(r"sha256:[a-f0-9]{64}\Z")
 SHA256_HEX_RE = re.compile(r"[a-f0-9]{64}\Z")
+HEARTBEAT_RRULE_RE = re.compile(
+    r"(?:FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}|"
+    r"FREQ=HOURLY(?:;INTERVAL=[1-9][0-9]{0,3})?)\Z"
+)
 INTENDED_TRANSITION = "ROUTE_ONE_TRANSITION"
 TRUSTED_TURN_SOURCE = "CODEX_MCP_REQUEST_META"
 TRUSTED_HOST_BOUNDARY = "CODEX_SIGNED_APP_SERVER_PARENT"
@@ -374,6 +389,7 @@ DECISION_EFFECT_CAPABILITY = {
     "STOP_LOOP_CONFIRMED": "none",
     "INCREASE_REPAIR_BUDGET_TO_5": "none",
     "INCREASE_REPAIR_BUDGET": "none",
+    "APPLY_POLICY_MIGRATION": "none",
 }
 ROADMAP_OPERATION_TYPES = {
     "ADD_MILESTONE",
@@ -1859,6 +1875,7 @@ class AdaptiveStateRuntime:
         self.control_dir = self.root / ".codex-loop"
         self.state_path = self.control_dir / "LOOP_STATE.md"
         self.events_path = self.control_dir / "LOOP_EVENTS.jsonl"
+        self.rejections_path = self.control_dir / "LOOP_REJECTIONS.jsonl"
         self.goals_path = self.control_dir / "GOALS.md"
         self.dashboard_path = self.control_dir / "progress-dashboard.html"
         self.status_path = self.control_dir / "STATUS.md"
@@ -1898,15 +1915,19 @@ class AdaptiveStateRuntime:
                     {
                         "availability": "DEFERRED_UNAVAILABLE",
                         "side_effects": "NONE",
+                        "audit_side_effect": "REJECTION_JOURNAL_APPEND",
                     },
                 ),
                 state_version=0,
+                request=request,
             )
 
         try:
             mutation_validator, state_validator = self._load_validators()
         except RuntimeRejection as rejection:
-            return self._rejection_response(rejection, state_version=0)
+            return self._rejection_response(
+                rejection, state_version=0, request=request
+            )
 
         try:
             self._ensure_json_value(request, "/")
@@ -1914,14 +1935,18 @@ class AdaptiveStateRuntime:
             normalized = self._normalize_request(copy.deepcopy(request))
             request_digest = _digest(normalized)
         except RuntimeRejection as rejection:
-            return self._rejection_response(rejection, state_version=0)
+            return self._rejection_response(
+                rejection, state_version=0, request=request
+            )
         except (TypeError, ValueError) as exc:
             rejection = RuntimeRejection(
                 "REQUEST_JSON_INVALID",
                 "/",
                 {"error_type": type(exc).__name__},
             )
-            return self._rejection_response(rejection, state_version=0)
+            return self._rejection_response(
+                rejection, state_version=0, request=request
+            )
 
         state_version = 0
         journal_written = False
@@ -3917,6 +3942,11 @@ class AdaptiveStateRuntime:
             )
             allowed = (
                 relative == ".codex-loop/sources/CONTROLLER_PACK.md"
+                or (
+                    relative == ".codex-loop/sources/STARTUP_RECEIPT.json"
+                    and mutation is not None
+                    and mutation.get("type") == "INITIALIZE"
+                )
                 or versioned_pack
                 or (
                     versioned_heartbeat_prompt
@@ -4259,6 +4289,15 @@ class AdaptiveStateRuntime:
             else None
         )
         finalization_pending = self._gateway_finalization_pending(state)
+        completion_rows = "".join(
+            "<tr>"
+            f"<td>{html.escape(goal_id)}</td>"
+            f"<td>{html.escape(str(record.get('status')))}</td>"
+            f"<td>{html.escape(str(self._completion_projection(state, goal_id, record)[0]))}</td>"
+            f"<td>{html.escape(str(self._completion_projection(state, goal_id, record)[1] or 'NOT_YET_ACHIEVED'))}</td>"
+            "</tr>"
+            for goal_id, record in sorted(state["goal_execution_ledger"].items())
+        )
         rows = "".join(
             "<tr>"
             f"<td>{html.escape(item['milestone_id'])}</td>"
@@ -4311,8 +4350,13 @@ class AdaptiveStateRuntime:
 <p><strong>Terminal status:</strong> {html.escape(str(state['terminal_status']))}</p>
 <p><strong>Terminal heartbeat:</strong> {html.escape(str(terminal_heartbeat or 'NOT_TERMINAL'))}</p>
 <p><strong>Finalization phase:</strong> {"PREPARED_WAITING_FOR_PAUSED_RECEIPT" if finalization_pending else "NONE"}</p>
+<p><strong>Model identity requirement:</strong> {html.escape(str(state.get('model_identity_requirement', 'NOT_REQUIRED')))}</p>
+<p><strong>Model identity status:</strong> {html.escape(str(state.get('model_identity_status', 'NOT_APPLICABLE')))}</p>
+<p><strong>Required model/reasoning:</strong> {html.escape(str(state.get('required_model', 'UNSPECIFIED')))} / {html.escape(str(state.get('required_reasoning', 'UNSPECIFIED')))}</p>
 <p><strong>Blocked at Goal:</strong> {html.escape(str(blocked_goal_id or 'NONE'))}</p>
 <p><strong>Remaining Goals:</strong> {remaining_goal_count}</p>
+<h2>Workflow and evidence completion</h2>
+<table><thead><tr><th>Goal</th><th>Workflow status</th><th>Required evidence class</th><th>Achieved evidence class</th></tr></thead><tbody>{completion_rows}</tbody></table>
 <table><thead><tr><th>Milestone</th><th>Status</th><th>Outcome</th><th>Decisions</th><th>Blockers</th><th>Required evidence</th></tr></thead><tbody>{rows}</tbody></table>
 <h2>Goal queue</h2><pre><code>{html.escape(_canonical_json(state['goal_queue'], indent=2))}</code></pre>
 <h2>Estimate history</h2><pre><code>{html.escape(_canonical_json(state['estimate_history'], indent=2))}</code></pre>
@@ -4369,16 +4413,31 @@ class AdaptiveStateRuntime:
         if version == LEGACY_STATUS_RENDER_CONTRACT:
             return self._render_status_v1(state)
         if version == PREVIOUS_STATUS_RENDER_CONTRACT:
-            return self._render_status_v2(state, live_heartbeat_contract=False)
-        if version == HISTORICAL_STATUS_RENDER_CONTRACT:
-            return self._render_status_v2(state, live_heartbeat_contract=True)
+            return self._render_status_v2(
+                state,
+                live_heartbeat_contract=False,
+                include_completion=False,
+            )
+        if version in {
+            HISTORICAL_STATUS_RENDER_CONTRACT,
+            PRIOR_STATUS_RENDER_CONTRACT,
+        }:
+            return self._render_status_v2(
+                state,
+                live_heartbeat_contract=True,
+                include_completion=False,
+            )
         if version != CURRENT_STATUS_RENDER_CONTRACT:
             raise RuntimeRejection(
                 "STATUS_RENDER_CONTRACT_UNSUPPORTED",
                 "/status_projection_target/render_contract_version",
                 {"render_contract_version": version},
             )
-        return self._render_status_v2(state, live_heartbeat_contract=True)
+        return self._render_status_v2(
+            state,
+            live_heartbeat_contract=True,
+            include_completion=True,
+        )
 
     def _render_status_v1(self, state: dict[str, Any]) -> bytes:
         active_outboxes = [
@@ -4500,6 +4559,7 @@ class AdaptiveStateRuntime:
         state: dict[str, Any],
         *,
         live_heartbeat_contract: bool,
+        include_completion: bool = False,
     ) -> bytes:
         active_outbox_entries = [
             (kind, record)
@@ -4757,6 +4817,10 @@ class AdaptiveStateRuntime:
         progress_signal = (
             f"STATE_ADVANCED:{state.get('last_event_id') or 'INITIALIZED'}"
         )
+        completion_summary = ", ".join(
+            f"{goal_id}:{record.get('status')}:{self._completion_projection(state, goal_id, record)[0]}->{self._completion_projection(state, goal_id, record)[1] or 'NOT_YET_ACHIEVED'}"
+            for goal_id, record in sorted(state["goal_execution_ledger"].items())
+        ) or "NONE"
         lines = [
             "# Loop Status",
             "",
@@ -4780,7 +4844,15 @@ class AdaptiveStateRuntime:
             ),
             f"- Last meaningful progress: `{progress_signal}` at `{state['logical_time']}`",
             f"- Role status: `{', '.join(role_statuses) or 'NONE'}`",
+            f"- Model identity requirement: `{state.get('model_identity_requirement', 'NOT_REQUIRED')}`",
+            f"- Model identity status: `{state.get('model_identity_status', 'NOT_APPLICABLE')}`",
+            f"- Required model/reasoning: `{state.get('required_model', 'UNSPECIFIED')} / {state.get('required_reasoning', 'UNSPECIFIED')}`",
             f"- Validation gate: `{validation_gate_display}`",
+            *(
+                [f"- Workflow and evidence completion: `{completion_summary}`"]
+                if include_completion
+                else []
+            ),
             "",
             "## What's next",
             "",
@@ -5048,6 +5120,73 @@ class AdaptiveStateRuntime:
             )
         return state
 
+    @staticmethod
+    def _completion_projection(
+        state: dict[str, Any], goal_id: str, record: dict[str, Any]
+    ) -> tuple[str, str | None]:
+        """Project additive completion fields for historical canonical states.
+
+        This deliberately does not rewrite the state on read.  Historical v3
+        bytes and events remain immutable; the defaults become explicit only
+        in the next accepted state version.
+        """
+
+        definition = state.get("goal_definition_registry", {}).get(goal_id, {})
+        required = record.get("required_completion_class") or definition.get(
+            "required_completion_class", "COMPLETE_ARTIFACT"
+        )
+        achieved = record.get("achieved_completion_class")
+        if achieved is None and record.get("status") == "COMPLETE":
+            has_limitation = state.get("terminal_status") == "LOOP_COMPLETE_WITH_LIMITATION"
+            if not has_limitation:
+                has_limitation = any(
+                    review.get("goal_id") == goal_id
+                    and review.get("decision")
+                    in {
+                        "REVIEW_PASS_WITH_LIMITATION",
+                        "FINAL_REVIEW_PASS_WITH_LIMITATION",
+                    }
+                    for review in state.get("assurance_ledger", {}).values()
+                    if isinstance(review, dict)
+                )
+            achieved = (
+                "COMPLETE_WITH_LIMITATION"
+                if has_limitation
+                else "COMPLETE_ARTIFACT"
+            )
+        return required, achieved
+
+    def _apply_additive_compatibility_defaults(
+        self, state: dict[str, Any]
+    ) -> None:
+        """Materialize additive v3 defaults only on an accepted next write."""
+
+        state.setdefault("initialization_class", "LEGACY_COMPATIBLE")
+        state.setdefault("startup_receipt", None)
+        legacy_strict_identity = bool(
+            state.get("initialization_class") == "FORMAL"
+            and isinstance(state.get("startup_receipt"), dict)
+            and state["startup_receipt"].get("role_receipt_digests")
+        )
+        state.setdefault(
+            "model_identity_requirement",
+            "REQUIRED" if legacy_strict_identity else "NOT_REQUIRED",
+        )
+        state.setdefault(
+            "model_identity_status",
+            "VERIFIED" if legacy_strict_identity else "NOT_APPLICABLE",
+        )
+        state.setdefault("required_model", "UNSPECIFIED")
+        state.setdefault("required_reasoning", "UNSPECIFIED")
+        state.setdefault("goal_closeout_ledger", {})
+        state.setdefault("policy_migration_history", [])
+        for goal_id, record in state.get("goal_execution_ledger", {}).items():
+            required, achieved = self._completion_projection(state, goal_id, record)
+            record.setdefault("required_completion_class", required)
+            if record.get("achieved_completion_class") is None and achieved is not None:
+                record["achieved_completion_class"] = achieved
+            record.setdefault("completion_evidence", None)
+
     def _validate_canonical_state(self, state: Any, state_validator: Any) -> None:
         self._validate_schema(state_validator, state, "CANONICAL_STATE_SCHEMA_INVALID")
         if state["root"] != str(self.root):
@@ -5107,6 +5246,7 @@ class AdaptiveStateRuntime:
             LEGACY_STATUS_RENDER_CONTRACT,
             PREVIOUS_STATUS_RENDER_CONTRACT,
             HISTORICAL_STATUS_RENDER_CONTRACT,
+            PRIOR_STATUS_RENDER_CONTRACT,
             CURRENT_STATUS_RENDER_CONTRACT,
         }
         historical_projection_valid = False
@@ -7889,6 +8029,7 @@ class AdaptiveStateRuntime:
         state_version: int,
         request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        recovery = recovery_for(rejection.code)
         response: dict[str, Any] = {
             "ok": False,
             "status": rejection.code,
@@ -7901,10 +8042,60 @@ class AdaptiveStateRuntime:
             "evidence_paths": self._existing_evidence_paths(),
             "external_actions": [],
             "external_action_count": 0,
+            "recovery": recovery,
         }
         if request is not None:
-            response["state_request_id"] = request.get("state_request_id")
-            response["event_id"] = request.get("event_id")
+            response["state_request_id"] = (
+                request.get("state_request_id")
+                if isinstance(request, dict)
+                else None
+            )
+            response["event_id"] = (
+                request.get("event_id") if isinstance(request, dict) else None
+            )
+            try:
+                self._require_root()
+                with self._exclusive_lock():
+                    entry = append_rejection(
+                        self.rejections_path,
+                        state_version=state_version,
+                        request=request,
+                        error_code=rejection.code,
+                        error_path=rejection.path,
+                        recovery=recovery,
+                    )
+                response["rejection_journal"] = {
+                    "status": "APPENDED",
+                    "sequence": entry["sequence"],
+                    "entry_digest": entry["entry_digest"],
+                    "path": self._relative_control_path("LOOP_REJECTIONS.jsonl"),
+                }
+                response["evidence_paths"] = list(
+                    dict.fromkeys(
+                        [
+                            *response["evidence_paths"],
+                            self._relative_control_path("LOOP_REJECTIONS.jsonl"),
+                        ]
+                    )
+                )
+            except (OSError, RuntimeRejection, RejectionJournalError) as exc:
+                response["rejection_journal"] = {
+                    "status": "WRITE_FAILED",
+                    "error_type": type(exc).__name__,
+                }
+                response["recovery"] = {
+                    "classification": "NON_RETRYABLE",
+                    "operation": "STOP_AND_REPAIR_REJECTION_JOURNAL",
+                    "preconditions": "Restore append-only audit persistence.",
+                    "identity_reuse": "Preserve the original rejected request digest.",
+                    "side_effect_boundary": "No canonical, product, or external side effects.",
+                    "stop_condition": "Do not retry the rejected operation until audit persistence is restored.",
+                    "next_operation": {
+                        "operation": "STOP_AND_REPAIR_REJECTION_JOURNAL",
+                        "arguments": {"original_error_code": rejection.code},
+                    },
+                    "registered": True,
+                }
         return response
 
     @staticmethod
@@ -7929,6 +8120,8 @@ class AdaptiveStateRuntime:
             paths.append(self._relative_control_path("LOOP_STATE.md"))
         if self.events_path.exists():
             paths.append(self._relative_control_path("LOOP_EVENTS.jsonl"))
+        if self.rejections_path.exists():
+            paths.append(self._relative_control_path("LOOP_REJECTIONS.jsonl"))
         if self.goals_path.exists():
             paths.append(self._relative_control_path("GOALS.md"))
         if self.dashboard_path.exists():
@@ -8019,6 +8212,8 @@ class AdaptiveStateRuntime:
         if candidate.get("schema_version", 1) >= 2:
             candidate.setdefault("native_goal_policy", "required")
             candidate.setdefault("controller_goal_resume_receipt", None)
+        if candidate.get("schema_version") == 3:
+            self._apply_additive_compatibility_defaults(candidate)
         if mutation_type == "ACQUIRE_LEASE":
             result = self._acquire_lease(
                 candidate,
@@ -9237,7 +9432,7 @@ class AdaptiveStateRuntime:
         if operation == "PREPARE_ROUTE":
             return self._gateway_prepare_route(state, request, gateway_request, after_version)
         if operation == "REGISTER_TASK":
-            return self._gateway_register_task(state, gateway_request)
+            return self._gateway_register_task(state, request, gateway_request)
         if operation == "REGISTER_HEARTBEAT":
             return self._gateway_register_heartbeat(
                 state, request, gateway_request, after_version
@@ -9252,6 +9447,14 @@ class AdaptiveStateRuntime:
             return self._gateway_ack_route_result(
                 state, request, gateway_request, after_version,
                 recovery=operation == "REPORT_RECOVERY",
+            )
+        if operation == "PREPARE_GOAL_CLOSEOUT":
+            return self._gateway_prepare_goal_closeout(
+                state, gateway_request, after_version
+            )
+        if operation == "ACK_GOAL_CLOSEOUT":
+            return self._gateway_ack_goal_closeout(
+                state, gateway_request, after_version
             )
         if operation == "RECORD_TRANSPORT_OBSERVATION":
             return self._gateway_record_transport_observation(state, gateway_request)
@@ -9280,10 +9483,12 @@ class AdaptiveStateRuntime:
                 trusted_turn_metadata=trusted_turn_metadata,
             )
         if operation == "ADVANCE_ROADMAP":
-            return self._gateway_advance_roadmap(state, gateway_request, after_version)
+            return self._gateway_advance_roadmap(
+                state, request, gateway_request, after_version
+            )
         if operation == "PREPARE_FINALIZATION":
             return self._gateway_prepare_finalization(
-                state, gateway_request, after_version
+                state, request, gateway_request, after_version
             )
         if operation == "ACK_FINALIZATION":
             return self._gateway_ack_finalization(
@@ -9411,6 +9616,7 @@ class AdaptiveStateRuntime:
     def _gateway_register_task(
         self,
         state: dict[str, Any],
+        request: dict[str, Any],
         value: Any,
     ) -> dict[str, Any]:
         """Record one reconciled formal task without reviving a session writer.
@@ -9420,13 +9626,18 @@ class AdaptiveStateRuntime:
         registry directly.  Product work still needs PREPARE_ROUTE afterwards.
         """
 
+        base_keys = {
+            "thread_id", "role_kind", "bootstrap_role_kind",
+            "bootstrap_prompt_digest", "worktree_path",
+        }
+        receipt_keys = {"role_receipt_path", "role_receipt_digest"}
+        strict_model_identity = (
+            state.get("initialization_class") == "FORMAL"
+            and state.get("model_identity_requirement") == "REQUIRED"
+        )
+        expected_keys = base_keys | receipt_keys if strict_model_identity else base_keys
         item = self._gateway_exact_keys(
-            value,
-            {
-                "thread_id", "role_kind", "bootstrap_role_kind",
-                "bootstrap_prompt_digest", "worktree_path",
-            },
-            "/mutation/gateway_request",
+            value, expected_keys, "/mutation/gateway_request"
         )
         thread_id = self._gateway_safe_id(item["thread_id"], "/thread_id")
         role_kind = item["role_kind"]
@@ -9444,6 +9655,89 @@ class AdaptiveStateRuntime:
             or item["worktree_path"] != str(self.root)
         ):
             raise RuntimeRejection("STATE_GATEWAY_TASK_RECEIPT_INVALID", "/thread_id")
+        role_receipt = None
+        if strict_model_identity:
+            receipt_path = item["role_receipt_path"]
+            receipt_digest = self._gateway_digest(
+                item["role_receipt_digest"], "/role_receipt_digest"
+            )
+            artifact = next(
+                (
+                    candidate
+                    for candidate in request["artifacts"]
+                    if candidate["path"] == receipt_path
+                    and candidate["digest"] == receipt_digest
+                    and candidate["media_type"] == "application/json"
+                ),
+                None,
+            )
+            if artifact is None or receipt_path not in request["evidence_paths"]:
+                raise RuntimeRejection(
+                    "STATE_GATEWAY_TASK_RECEIPT_INVALID", "/role_receipt_path"
+                )
+            try:
+                receipt_value = _strict_json_loads(
+                    artifact["content"],
+                    code="STATE_GATEWAY_TASK_RECEIPT_INVALID",
+                    path="/role_receipt",
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeRejection(
+                    "STATE_GATEWAY_TASK_RECEIPT_INVALID", "/role_receipt"
+                ) from exc
+            fields = {
+                "schema_version", "issuer", "evidence_model", "task_id",
+                "thread_id", "role", "model", "reasoning", "app_build",
+                "receipt_digest",
+            }
+            if (
+                not isinstance(receipt_value, dict)
+                or set(receipt_value) != fields
+                or receipt_value.get("schema_version") != "host-role-model-receipt-v1"
+                or receipt_value.get("issuer") != "CODEX_APP_HOST"
+                or receipt_value.get("evidence_model") != "HOST_COOPERATIVE"
+                or receipt_value.get("thread_id") != thread_id
+                or receipt_value.get("role") != role_kind
+                or not all(
+                    isinstance(receipt_value.get(field), str)
+                    and receipt_value[field]
+                    for field in ("task_id", "model", "reasoning", "app_build")
+                )
+            ):
+                raise RuntimeRejection(
+                    "STATE_GATEWAY_TASK_RECEIPT_INVALID", "/role_receipt"
+                )
+            if (
+                state.get("required_model") != "UNSPECIFIED"
+                and receipt_value.get("model") != state.get("required_model")
+            ) or (
+                state.get("required_reasoning") != "UNSPECIFIED"
+                and receipt_value.get("reasoning") != state.get("required_reasoning")
+            ):
+                raise RuntimeRejection(
+                    "STATE_GATEWAY_TASK_RECEIPT_INVALID", "/role_receipt"
+                )
+            claimed = receipt_value["receipt_digest"]
+            body = dict(receipt_value)
+            body.pop("receipt_digest")
+            if (
+                claimed != _digest(body)
+                or claimed
+                not in state["startup_receipt"].get("role_receipt_digests", [])
+            ):
+                raise RuntimeRejection(
+                    "STATE_GATEWAY_TASK_RECEIPT_INVALID", "/role_receipt/receipt_digest"
+                )
+            role_receipt = {
+                "path": receipt_path,
+                "artifact_digest": receipt_digest,
+                "receipt_digest": claimed,
+                "task_id": receipt_value["task_id"],
+                "model": receipt_value["model"],
+                "reasoning": receipt_value["reasoning"],
+                "app_build": receipt_value["app_build"],
+                "evidence_model": receipt_value["evidence_model"],
+            }
         candidate = {
             "thread_id": thread_id,
             "project_id": self._project_id(state),
@@ -9453,6 +9747,10 @@ class AdaptiveStateRuntime:
             "bootstrap_prompt_digest": item["bootstrap_prompt_digest"],
             "status": "REGISTERED",
             "worktree_path": str(self.root),
+            "model": role_receipt["model"] if role_receipt else "UNSPECIFIED",
+            "reasoning": role_receipt["reasoning"] if role_receipt else "UNSPECIFIED",
+            "model_identity_status": "VERIFIED" if role_receipt else "NOT_APPLICABLE",
+            **({"role_model_receipt": role_receipt} if role_receipt is not None else {}),
         }
         existing = state["thread_registry"].get(thread_id)
         if existing is not None:
@@ -9522,7 +9820,7 @@ class AdaptiveStateRuntime:
             or identity["target_thread_id"] != request["thread_id"]
             or identity["prompt_normalization"] != "LF_NORMALIZED_NO_TRAILING_NEWLINE"
             or not isinstance(identity["rrule"], str)
-            or not identity["rrule"].startswith("FREQ=MINUTELY;INTERVAL=")
+            or HEARTBEAT_RRULE_RE.fullmatch(identity["rrule"]) is None
             or DIGEST_RE.fullmatch(identity["prompt_digest"]) is None
             or any(SAFE_ID_RE.fullmatch(identity[key]) is None for key in ("automation_id", "target_thread_id"))
             or not isinstance(identity["automation_name"], str)
@@ -9555,6 +9853,14 @@ class AdaptiveStateRuntime:
         observation, path, digest = self._gateway_heartbeat_observation(
             state, request, value, required_status="ACTIVE"
         )
+        if (
+            state.get("initialization_class") == "FORMAL"
+            and digest != state["startup_receipt"].get("heartbeat_receipt_digest")
+        ):
+            raise RuntimeRejection(
+                "HEARTBEAT_PROMPT_IDENTITY_INVALID",
+                "/automation_observation_digest",
+            )
         identity = self._gateway_heartbeat_identity(observation)
         outbox_id = f"gateway-heartbeat-{_digest(identity)[len('sha256:'):]}"
         claim, _ = self._gateway_virtual_lease(
@@ -10453,9 +10759,372 @@ class AdaptiveStateRuntime:
             },
         }
 
+    def _git_readback(self, *args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(self.root), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise RuntimeRejection(
+                "GOAL_CLOSEOUT_GIT_READBACK_FAILED",
+                "/git",
+                {"command": list(args), "returncode": result.returncode},
+            )
+        return result.stdout.strip()
+
+    @staticmethod
+    def _path_allowed(path: str, allowed_paths: list[str]) -> bool:
+        return any(
+            path == allowed.rstrip("/")
+            or path.startswith(allowed.rstrip("/") + "/")
+            for allowed in allowed_paths
+        )
+
+    def _gateway_prepare_goal_closeout(
+        self,
+        state: dict[str, Any],
+        value: Any,
+        after_version: int,
+    ) -> dict[str, Any]:
+        item = self._gateway_exact_keys(
+            value,
+            {"closeout_id", "goal_id", "artifact_digest", "allowed_paths", "observed_at"},
+            "/mutation/gateway_request",
+        )
+        closeout_id = self._gateway_safe_id(item["closeout_id"], "/closeout_id")
+        goal_id = self._gateway_safe_id(item["goal_id"], "/goal_id")
+        artifact_digest = self._gateway_digest(item["artifact_digest"], "/artifact_digest")
+        self._observe_time(state, item["observed_at"], "/observed_at")
+        definition = state["goal_definition_registry"].get(goal_id)
+        ledger = state["goal_execution_ledger"].get(goal_id)
+        if (
+            not isinstance(definition, dict)
+            or not isinstance(ledger, dict)
+            or ledger.get("status")
+            not in {"CODE_REVIEW_PASS", "LOCAL_VERIFICATION_PASS", "FINAL_AUDIT_PASS"}
+        ):
+            raise RuntimeRejection("GOAL_CLOSEOUT_REVIEW_REQUIRED", "/goal_id")
+        worker = self._gateway_latest_worker_for_route(state, goal_id)
+        identity = worker["review_handoff"]["artifact_identity"]
+        if worker["artifact_digest"] != artifact_digest:
+            raise RuntimeRejection(
+                "GOAL_CLOSEOUT_ARTIFACT_MISMATCH", "/artifact_digest"
+            )
+        allowed_paths = item["allowed_paths"]
+        if (
+            not isinstance(allowed_paths, list)
+            or not allowed_paths
+            or any(
+                not isinstance(path, str)
+                or not path
+                or Path(path).is_absolute()
+                or ".." in PurePosixPath(path).parts
+                or path.startswith(".codex-loop/")
+                for path in allowed_paths
+            )
+            or any(
+                not self._path_allowed(path, allowed_paths)
+                for path in identity["changed_files"]
+            )
+        ):
+            raise RuntimeRejection("GOAL_CLOSEOUT_PATHS_INVALID", "/allowed_paths")
+        capability_identity = {
+            "loop_id": state["loop_id"],
+            "closeout_id": closeout_id,
+            "goal_id": goal_id,
+            "artifact_digest": artifact_digest,
+            "allowed_paths": allowed_paths,
+        }
+        existing = state.get("goal_closeout_ledger", {}).get(goal_id)
+        if existing is not None:
+            comparable = {
+                key: existing.get(key) for key in capability_identity
+            }
+            if comparable != capability_identity:
+                raise RuntimeRejection("GOAL_CLOSEOUT_IDENTITY_CONFLICT", "/closeout_id")
+            return {
+                "code": "GOAL_CLOSEOUT_ALREADY_PREPARED",
+                "next_action_code": (
+                    "ACK_GOAL_CLOSEOUT_FROM_GIT_READBACK"
+                    if existing.get("status") == "PREPARED"
+                    else "ADVANCE_ROADMAP"
+                ),
+                "result": copy.deepcopy(existing),
+            }
+        branch = self._git_readback("branch", "--show-current")
+        base_head = self._git_readback("rev-parse", "HEAD")
+        base_tree = self._git_readback("rev-parse", "HEAD^{tree}")
+        if (
+            not branch
+            or identity.get("current_branch") != branch
+            or identity.get("head_sha") != base_head
+        ):
+            raise RuntimeRejection("GOAL_CLOSEOUT_BASELINE_DRIFT", "/git")
+        remote_ref = f"refs/remotes/origin/{branch}"
+        remote_probe = subprocess.run(
+            ["git", "-C", str(self.root), "rev-parse", "--verify", remote_ref],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        remote_sha = remote_probe.stdout.strip() if remote_probe.returncode == 0 else None
+        capability_identity = {
+            **capability_identity,
+            "base_head": base_head,
+            "branch": branch,
+        }
+        capability_body = {
+            **capability_identity,
+            "prepared_state_version": after_version,
+        }
+        record = {
+            **capability_body,
+            "status": "PREPARED",
+            "base_tree": base_tree,
+            "remote_ref": remote_ref,
+            "remote_sha_before": remote_sha,
+            "one_use_capability": _digest(capability_body),
+            "git_receipt": None,
+            "ack_state_version": None,
+        }
+        state.setdefault("goal_closeout_ledger", {})[goal_id] = record
+        return {
+            "code": "GOAL_CLOSEOUT_PREPARED",
+            "next_action_code": "COMMIT_OR_PUSH_ONCE_THEN_ACK_FROM_GIT_READBACK",
+            "result": copy.deepcopy(record),
+        }
+
+    def _gateway_ack_goal_closeout(
+        self,
+        state: dict[str, Any],
+        value: Any,
+        after_version: int,
+    ) -> dict[str, Any]:
+        item = self._gateway_exact_keys(
+            value,
+            {"closeout_id", "goal_id", "observed_at", "git_receipt"},
+            "/mutation/gateway_request",
+        )
+        goal_id = self._gateway_safe_id(item["goal_id"], "/goal_id")
+        closeout_id = self._gateway_safe_id(item["closeout_id"], "/closeout_id")
+        self._observe_time(state, item["observed_at"], "/observed_at")
+        record = state.get("goal_closeout_ledger", {}).get(goal_id)
+        if not isinstance(record, dict) or record.get("closeout_id") != closeout_id:
+            raise RuntimeRejection("GOAL_CLOSEOUT_NOT_PREPARED", "/closeout_id")
+        receipt = item["git_receipt"]
+        required = {
+            "status", "branch", "commit", "tree", "parent", "remote_ref", "remote_sha"
+        }
+        if not isinstance(receipt, dict) or set(receipt) != required:
+            raise RuntimeRejection("GOAL_CLOSEOUT_GIT_RECEIPT_INVALID", "/git_receipt")
+        receipt_digest = _digest(receipt)
+        if record.get("status") == "ACKED":
+            if record.get("git_receipt_digest") != receipt_digest:
+                raise RuntimeRejection("GOAL_CLOSEOUT_ACK_CONFLICT", "/git_receipt")
+            return {
+                "code": "GOAL_CLOSEOUT_ALREADY_ACKED",
+                "next_action_code": "ADVANCE_ROADMAP",
+                "result": copy.deepcopy(record),
+            }
+        actual_branch = self._git_readback("branch", "--show-current")
+        actual_head = self._git_readback("rev-parse", "HEAD")
+        actual_tree = self._git_readback("rev-parse", "HEAD^{tree}")
+        if (
+            receipt["branch"] != record["branch"]
+            or actual_branch != record["branch"]
+            or receipt["commit"] != actual_head
+            or receipt["tree"] != actual_tree
+            or receipt["remote_ref"] != record["remote_ref"]
+            or receipt["status"] not in {"NO_COMMIT", "COMMITTED", "PUSHED"}
+        ):
+            raise RuntimeRejection("GOAL_CLOSEOUT_GIT_RECEIPT_INVALID", "/git_receipt")
+        if receipt["status"] == "NO_COMMIT":
+            if actual_head != record["base_head"] or receipt["parent"] is not None:
+                raise RuntimeRejection("GOAL_CLOSEOUT_BASELINE_DRIFT", "/git_receipt")
+        else:
+            actual_parent = self._git_readback("rev-parse", f"{actual_head}^")
+            if receipt["parent"] != actual_parent or actual_parent != record["base_head"]:
+                raise RuntimeRejection("GOAL_CLOSEOUT_BASELINE_DRIFT", "/git_receipt")
+            changed = self._git_readback(
+                "diff", "--name-only", record["base_head"], actual_head
+            ).splitlines()
+            if any(not self._path_allowed(path, record["allowed_paths"]) for path in changed):
+                raise RuntimeRejection("GOAL_CLOSEOUT_PATHS_INVALID", "/git_receipt")
+        remote_result = subprocess.run(
+            ["git", "-C", str(self.root), "rev-parse", "--verify", record["remote_ref"]],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        actual_remote = remote_result.stdout.strip() if remote_result.returncode == 0 else None
+        if receipt["remote_sha"] != actual_remote:
+            raise RuntimeRejection("GOAL_CLOSEOUT_REMOTE_REF_MISMATCH", "/git_receipt")
+        if receipt["status"] == "PUSHED" and actual_remote != actual_head:
+            raise RuntimeRejection("GOAL_CLOSEOUT_REMOTE_REF_MISMATCH", "/git_receipt")
+        record.update(
+            {
+                "status": "ACKED",
+                "git_receipt": copy.deepcopy(receipt),
+                "git_receipt_digest": receipt_digest,
+                "ack_state_version": after_version,
+            }
+        )
+        return {
+            "code": "GOAL_CLOSEOUT_ACKED",
+            "next_action_code": "ADVANCE_ROADMAP",
+            "result": copy.deepcopy(record),
+        }
+
+    def _gateway_completion_request(
+        self, value: Any, required: set[str]
+    ) -> dict[str, Any]:
+        optional = {
+            "achieved_completion_class",
+            "completion_evidence_path",
+            "completion_evidence_digest",
+        }
+        if not isinstance(value, dict) or frozenset(value) not in {
+            frozenset(required),
+            frozenset(required | optional),
+        }:
+            raise RuntimeRejection(
+                "STATE_GATEWAY_REQUEST_INVALID", "/mutation/gateway_request"
+            )
+        return copy.deepcopy(value)
+
+    def _gateway_completion_class(
+        self,
+        state: dict[str, Any],
+        request: dict[str, Any],
+        goal_id: str,
+        worker: dict[str, Any],
+        value: dict[str, Any],
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Resolve an evidence category without treating categories as levels."""
+
+        has_limitation = any(
+            review.get("goal_id") == goal_id
+            and review.get("worker_dispatch_id") == worker["dispatch_id"]
+            and review.get("artifact_digest") == worker["artifact_digest"]
+            and review.get("decision")
+            in {"REVIEW_PASS_WITH_LIMITATION", "FINAL_REVIEW_PASS_WITH_LIMITATION"}
+            for review in state["assurance_ledger"].values()
+        )
+        natural_class = (
+            "COMPLETE_WITH_LIMITATION" if has_limitation else "COMPLETE_ARTIFACT"
+        )
+        achieved = value.get("achieved_completion_class", natural_class)
+        if achieved not in COMPLETION_CLASSES:
+            raise RuntimeRejection(
+                "COMPLETION_CLASS_INVALID", "/achieved_completion_class"
+            )
+        evidence: dict[str, Any] | None = None
+        has_receipt_fields = "completion_evidence_path" in value
+        if achieved in {"COMPLETE_ARTIFACT", "COMPLETE_WITH_LIMITATION"}:
+            if has_receipt_fields or achieved != natural_class:
+                raise RuntimeRejection(
+                    "COMPLETION_CLASS_EVIDENCE_MISMATCH",
+                    "/achieved_completion_class",
+                )
+        else:
+            if not has_receipt_fields:
+                raise RuntimeRejection(
+                    "COMPLETION_CLASS_RECEIPT_REQUIRED",
+                    "/completion_evidence_path",
+                )
+            evidence_path = value["completion_evidence_path"]
+            evidence_digest = self._gateway_digest(
+                value["completion_evidence_digest"],
+                "/completion_evidence_digest",
+            )
+            if not isinstance(evidence_path, str) or evidence_path not in request["evidence_paths"]:
+                raise RuntimeRejection(
+                    "COMPLETION_CLASS_RECEIPT_UNBOUND", "/completion_evidence_path"
+                )
+            artifact = next(
+                (
+                    candidate
+                    for candidate in request["artifacts"]
+                    if candidate["path"] == evidence_path
+                    and candidate["digest"] == evidence_digest
+                    and candidate["media_type"] == "application/json"
+                ),
+                None,
+            )
+            if artifact is None:
+                raise RuntimeRejection(
+                    "COMPLETION_CLASS_RECEIPT_UNBOUND", "/completion_evidence_path"
+                )
+            try:
+                receipt = _strict_json_loads(
+                    artifact["content"],
+                    code="COMPLETION_CLASS_RECEIPT_INVALID",
+                    path="/completion_evidence",
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeRejection(
+                    "COMPLETION_CLASS_RECEIPT_INVALID", "/completion_evidence"
+                ) from exc
+            expected_issuer = {
+                "EMPIRICAL_RESULT_OBSERVED": "MEASUREMENT_SYSTEM",
+                "FORMAL_ACCEPTED": "FORMAL_AUTHORITY",
+                "PUBLIC_RELEASED": "PUBLIC_REGISTRY",
+            }[achieved]
+            if (
+                not isinstance(receipt, dict)
+                or set(receipt)
+                != {
+                    "schema_version",
+                    "completion_class",
+                    "goal_id",
+                    "artifact_digest",
+                    "issuer_kind",
+                    "observed_at",
+                    "receipt_digest",
+                }
+                or receipt.get("schema_version") != "completion-evidence-v1"
+                or receipt.get("completion_class") != achieved
+                or receipt.get("goal_id") != goal_id
+                or receipt.get("artifact_digest") != worker["artifact_digest"]
+                or receipt.get("issuer_kind") != expected_issuer
+                or not isinstance(receipt.get("observed_at"), str)
+            ):
+                raise RuntimeRejection(
+                    "COMPLETION_CLASS_RECEIPT_INVALID", "/completion_evidence"
+                )
+            claimed = receipt["receipt_digest"]
+            body = dict(receipt)
+            body.pop("receipt_digest")
+            if claimed != _digest(body):
+                raise RuntimeRejection(
+                    "COMPLETION_CLASS_RECEIPT_INVALID",
+                    "/completion_evidence/receipt_digest",
+                )
+            evidence = {
+                "path": evidence_path,
+                "digest": evidence_digest,
+                "issuer_kind": expected_issuer,
+                "receipt_digest": claimed,
+            }
+        definition = state["goal_definition_registry"][goal_id]
+        required_class = definition.get("required_completion_class")
+        if required_class is not None and required_class != achieved:
+            raise RuntimeRejection(
+                "REQUIRED_COMPLETION_CLASS_NOT_ACHIEVED",
+                "/achieved_completion_class",
+                {"required": required_class, "achieved": achieved},
+            )
+        return achieved, evidence
+
     def _gateway_advance_roadmap(
         self,
         state: dict[str, Any],
+        request: dict[str, Any],
         value: Any,
         after_version: int,
     ) -> dict[str, Any]:
@@ -10466,10 +11135,8 @@ class AdaptiveStateRuntime:
         validation matrix or invent a future queue while acknowledging a review.
         """
 
-        item = self._gateway_exact_keys(
-            value,
-            {"goal_id", "roadmap_audit_id", "observed_at"},
-            "/mutation/gateway_request",
+        item = self._gateway_completion_request(
+            value, {"goal_id", "roadmap_audit_id", "observed_at"}
         )
         goal_id = self._gateway_safe_id(item["goal_id"], "/goal_id")
         audit_id = self._gateway_safe_id(item["roadmap_audit_id"], "/roadmap_audit_id")
@@ -10502,10 +11169,23 @@ class AdaptiveStateRuntime:
             for record in state[field].values()
         ):
             raise RuntimeRejection("STATE_GATEWAY_ACTIVE_OUTBOX", "/gateway_route_ledger")
+        if definition.get("closeout_required") is True:
+            closeout = state.get("goal_closeout_ledger", {}).get(goal_id)
+            if (
+                not isinstance(closeout, dict)
+                or closeout.get("status") != "ACKED"
+                or closeout.get("artifact_digest") != worker["artifact_digest"]
+            ):
+                raise RuntimeRejection("GOAL_CLOSEOUT_ACK_REQUIRED", "/goal_id")
         old_queue = copy.deepcopy(state["goal_queue"])
         old_version = state["roadmap_version"]
+        achieved_class, completion_evidence = self._gateway_completion_class(
+            state, request, goal_id, worker, item
+        )
         ledger["status"] = "COMPLETE"
         ledger["completed_roadmap_version"] = old_version + 1
+        ledger["achieved_completion_class"] = achieved_class
+        ledger["completion_evidence"] = completion_evidence
         state["goal_queue"] = [
             candidate for candidate in state["goal_queue"] if candidate["goal_id"] != goal_id
         ]
@@ -10600,13 +11280,13 @@ class AdaptiveStateRuntime:
     def _gateway_prepare_finalization(
         self,
         state: dict[str, Any],
+        request: dict[str, Any],
         value: Any,
         after_version: int,
     ) -> dict[str, Any]:
-        item = self._gateway_exact_keys(
+        item = self._gateway_completion_request(
             value,
             {"finalization_id", "goal_id", "final_audit_id", "observed_at"},
-            "/mutation/gateway_request",
         )
         finalization_id = self._gateway_safe_id(item["finalization_id"], "/finalization_id")
         goal_id = self._gateway_safe_id(item["goal_id"], "/goal_id")
@@ -10638,6 +11318,14 @@ class AdaptiveStateRuntime:
             state, goal_id, worker["dispatch_id"], worker["artifact_digest"]
         ):
             raise RuntimeRejection("LOCAL_VERIFICATION_REQUIRED", "/goal_id")
+        if definition.get("closeout_required") is True:
+            closeout = state.get("goal_closeout_ledger", {}).get(goal_id)
+            if (
+                not isinstance(closeout, dict)
+                or closeout.get("status") != "ACKED"
+                or closeout.get("artifact_digest") != worker["artifact_digest"]
+            ):
+                raise RuntimeRejection("GOAL_CLOSEOUT_ACK_REQUIRED", "/goal_id")
         unresolved = [
             candidate_goal_id
             for candidate_goal_id, record in state["goal_execution_ledger"].items()
@@ -10662,6 +11350,9 @@ class AdaptiveStateRuntime:
         terminal_status = (
             "LOOP_COMPLETE_WITH_LIMITATION" if current_chain_has_limitation else "LOOP_COMPLETE"
         )
+        achieved_class, completion_evidence = self._gateway_completion_class(
+            state, request, goal_id, worker, item
+        )
         controller_goal_id = self._gateway_no_native_goal_id()
         closeout_capability = _closeout_capability(
             loop_id=state["loop_id"],
@@ -10675,6 +11366,8 @@ class AdaptiveStateRuntime:
         )
         ledger["status"] = "COMPLETE"
         ledger["completed_roadmap_version"] = state["roadmap_version"] + 1
+        ledger["achieved_completion_class"] = achieved_class
+        ledger["completion_evidence"] = completion_evidence
         for milestone in state["milestones"]:
             if milestone["milestone_id"] == state["active_milestone_id"]:
                 milestone["status"] = "COMPLETE"
@@ -10725,6 +11418,7 @@ class AdaptiveStateRuntime:
                 "finalization_id": finalization_id,
                 "automation_id": automation_id,
                 "completion_terminal_status": terminal_status,
+                "achieved_completion_class": achieved_class,
                 "closeout_capability": closeout_capability,
             },
         }
@@ -11405,6 +12099,24 @@ class AdaptiveStateRuntime:
 
         legacy_effect = "INCREASE_REPAIR_BUDGET_TO_5"
         generic_effect = "INCREASE_REPAIR_BUDGET"
+        descriptor_effect = "APPLY_POLICY_MIGRATION"
+        descriptor_options = [
+            option
+            for option in mutation["options"]
+            if option["option_effect"] == descriptor_effect
+        ]
+        if descriptor_options or "policy_descriptor" in mutation["scope"]:
+            if (
+                len(descriptor_options) != 1
+                or set(mutation["scope"]) != {"policy_descriptor"}
+            ):
+                raise RuntimeRejection(
+                    "POLICY_MIGRATION_DESCRIPTOR_INVALID", "/mutation/scope"
+                )
+            AdaptiveStateRuntime._validate_policy_descriptor(
+                state, mutation["scope"]["policy_descriptor"]
+            )
+            return
         changing = [
             option
             for option in mutation["options"]
@@ -11449,6 +12161,152 @@ class AdaptiveStateRuntime:
                     "current": current,
                 },
             )
+
+    @staticmethod
+    def _policy_slot(
+        state: dict[str, Any], policy_path: str
+    ) -> tuple[dict[str, Any], str, Any, str]:
+        allowlist = {
+            "/authorization_envelope/repair_policy/max_repair_attempts_per_goal": (
+                state["authorization_envelope"]["repair_policy"],
+                "max_repair_attempts_per_goal",
+                int,
+                "none",
+            ),
+            "/failure_policy/same_strategy_failure_threshold": (
+                state["failure_policy"],
+                "same_strategy_failure_threshold",
+                int,
+                "none",
+            ),
+            "/human_control_policy/status_projection_enabled": (
+                state["human_control_policy"],
+                "status_projection_enabled",
+                bool,
+                "none",
+            ),
+        }
+        if policy_path not in allowlist:
+            raise RuntimeRejection(
+                "POLICY_MIGRATION_PATH_NOT_ALLOWED", "/mutation/scope/policy_descriptor/policy_path"
+            )
+        return allowlist[policy_path]
+
+    @staticmethod
+    def _validate_policy_descriptor(
+        state: dict[str, Any], descriptor: Any
+    ) -> None:
+        fields = {
+            "migration_id", "policy_path", "value_type", "source_value",
+            "target_value", "bounds", "monotonic", "reversible",
+            "required_capability", "approval", "safe_point", "action",
+            "rollback_or_stop",
+        }
+        if not isinstance(descriptor, dict) or set(descriptor) != fields:
+            raise RuntimeRejection(
+                "POLICY_MIGRATION_DESCRIPTOR_INVALID", "/mutation/scope/policy_descriptor"
+            )
+        container, key, expected_type, capability = AdaptiveStateRuntime._policy_slot(
+            state, descriptor["policy_path"]
+        )
+        value_type = "boolean" if expected_type is bool else "integer"
+        source = descriptor["source_value"]
+        target = descriptor["target_value"]
+        bounds = descriptor["bounds"]
+        if (
+            not isinstance(descriptor["migration_id"], str)
+            or SAFE_ID_RE.fullmatch(descriptor["migration_id"]) is None
+            or descriptor["value_type"] != value_type
+            or type(source) is not expected_type
+            or type(target) is not expected_type
+            or container[key] != source
+            or descriptor["required_capability"] != capability
+            or descriptor["approval"] != "DECISION_CARD"
+            or descriptor["safe_point"] != "NO_ACTIVE_OUTBOX"
+            or descriptor["action"] not in {"APPLY", "ROLLBACK"}
+            or descriptor["rollback_or_stop"] not in {"ROLLBACK", "STOP"}
+            or type(descriptor["reversible"]) is not bool
+            or not isinstance(bounds, dict)
+            or set(bounds) != {"minimum", "maximum"}
+        ):
+            raise RuntimeRejection(
+                "POLICY_MIGRATION_DESCRIPTOR_INVALID", "/mutation/scope/policy_descriptor"
+            )
+        if expected_type is int and not (
+            type(bounds["minimum"]) is int
+            and type(bounds["maximum"]) is int
+            and bounds["minimum"] <= source <= bounds["maximum"]
+            and bounds["minimum"] <= target <= bounds["maximum"]
+        ):
+            raise RuntimeRejection(
+                "POLICY_MIGRATION_BOUNDS_INVALID", "/mutation/scope/policy_descriptor/bounds"
+            )
+        monotonic = descriptor["monotonic"]
+        if monotonic not in {"INCREASE_ONLY", "DECREASE_ONLY", "NONE"}:
+            raise RuntimeRejection(
+                "POLICY_MIGRATION_MONOTONICITY_INVALID", "/mutation/scope/policy_descriptor/monotonic"
+            )
+        if (
+            (monotonic == "INCREASE_ONLY" and not source < target)
+            or (monotonic == "DECREASE_ONLY" and not source > target)
+            or source == target
+        ):
+            raise RuntimeRejection(
+                "POLICY_MIGRATION_MONOTONICITY_INVALID", "/mutation/scope/policy_descriptor"
+            )
+        if any(
+            record.get("status") in {"PREPARED", "SENT"}
+            for field in OUTBOX_FIELDS.values()
+            for record in state[field].values()
+        ):
+            raise RuntimeRejection(
+                "POLICY_MIGRATION_SAFE_POINT_REQUIRED", "/mutation/scope/policy_descriptor/safe_point"
+            )
+        history = state.get("policy_migration_history", [])
+        matching = [
+            record for record in history
+            if record.get("migration_id") == descriptor["migration_id"]
+            and record.get("action") == "APPLY"
+        ]
+        if descriptor["action"] == "ROLLBACK":
+            if (
+                len(matching) != 1
+                or matching[0].get("reversible") is not True
+                or source != matching[0].get("target_value")
+                or target != matching[0].get("source_value")
+            ):
+                raise RuntimeRejection(
+                    "POLICY_MIGRATION_ROLLBACK_INVALID", "/mutation/scope/policy_descriptor"
+                )
+        elif any(
+            record.get("migration_id") == descriptor["migration_id"]
+            for record in history
+        ):
+            raise RuntimeRejection(
+                "POLICY_MIGRATION_ID_CONFLICT", "/mutation/scope/policy_descriptor/migration_id"
+            )
+
+    @staticmethod
+    def _apply_policy_descriptor(
+        state: dict[str, Any],
+        descriptor: Mapping[str, Any],
+        *,
+        decision_id: str,
+        after_version: int,
+    ) -> None:
+        AdaptiveStateRuntime._validate_policy_descriptor(state, descriptor)
+        container, key, _, _ = AdaptiveStateRuntime._policy_slot(
+            state, descriptor["policy_path"]
+        )
+        container[key] = descriptor["target_value"]
+        state.setdefault("policy_migration_history", []).append(
+            {
+                **copy.deepcopy(dict(descriptor)),
+                "decision_id": decision_id,
+                "applied_state_version": after_version,
+                "status": "ROLLED_BACK" if descriptor["action"] == "ROLLBACK" else "APPLIED",
+            }
+        )
 
     @staticmethod
     def _equivalent_local_preview_url(
@@ -11503,6 +12361,7 @@ class AdaptiveStateRuntime:
                 and selected.get("option_effect") in {
                     "INCREASE_REPAIR_BUDGET_TO_5",
                     "INCREASE_REPAIR_BUDGET",
+                    "APPLY_POLICY_MIGRATION",
                 }
             ):
                 # The applied effect intentionally changes the authorization
@@ -11681,13 +12540,54 @@ class AdaptiveStateRuntime:
             raise RuntimeRejection("DECISION_OPTION_INVALID", "/mutation/option_id")
         self._validate_repair_policy_decision(state, decision)
         if option["option_effect"] == "INCREASE_REPAIR_BUDGET_TO_5":
+            source_value = state["authorization_envelope"]["repair_policy"][
+                "max_repair_attempts_per_goal"
+            ]
             state["authorization_envelope"]["repair_policy"][
                 "max_repair_attempts_per_goal"
             ] = 5
+            state.setdefault("policy_migration_history", []).append(
+                {
+                    "migration_id": mutation["decision_id"],
+                    "policy_path": "/authorization_envelope/repair_policy/max_repair_attempts_per_goal",
+                    "source_value": source_value,
+                    "target_value": 5,
+                    "action": "APPLY",
+                    "reversible": False,
+                    "status": "APPLIED",
+                    "compatibility_effect": "INCREASE_REPAIR_BUDGET_TO_5",
+                    "decision_id": mutation["decision_id"],
+                    "applied_state_version": after_version,
+                }
+            )
         elif option["option_effect"] == "INCREASE_REPAIR_BUDGET":
+            source_value = state["authorization_envelope"]["repair_policy"][
+                "max_repair_attempts_per_goal"
+            ]
             state["authorization_envelope"]["repair_policy"][
                 "max_repair_attempts_per_goal"
             ] = decision["scope"]["repair_policy_max_attempts_to"]
+            state.setdefault("policy_migration_history", []).append(
+                {
+                    "migration_id": mutation["decision_id"],
+                    "policy_path": "/authorization_envelope/repair_policy/max_repair_attempts_per_goal",
+                    "source_value": source_value,
+                    "target_value": decision["scope"]["repair_policy_max_attempts_to"],
+                    "action": "APPLY",
+                    "reversible": False,
+                    "status": "APPLIED",
+                    "compatibility_effect": "INCREASE_REPAIR_BUDGET",
+                    "decision_id": mutation["decision_id"],
+                    "applied_state_version": after_version,
+                }
+            )
+        elif option["option_effect"] == "APPLY_POLICY_MIGRATION":
+            self._apply_policy_descriptor(
+                state,
+                decision["scope"]["policy_descriptor"],
+                decision_id=mutation["decision_id"],
+                after_version=after_version,
+            )
         decision["status"] = "APPLIED"
         decision["selected_option_id"] = option["option_id"]
         decision["applied_state_version"] = after_version
@@ -12067,7 +12967,21 @@ class AdaptiveStateRuntime:
             for artifact in request["artifacts"]
             if artifact["path"] == ".codex-loop/sources/CONTROLLER_PACK.md"
         ]
-        if len(pack_artifacts) != 1 or len(request["artifacts"]) != 1:
+        initialization_class = mutation.get(
+            "initialization_class", "LEGACY_COMPATIBLE"
+        )
+        startup_artifacts = [
+            artifact
+            for artifact in request["artifacts"]
+            if artifact["path"] == ".codex-loop/sources/STARTUP_RECEIPT.json"
+        ]
+        expected_artifact_count = 2 if initialization_class == "FORMAL" else 1
+        if (
+            len(pack_artifacts) != 1
+            or len(request["artifacts"]) != expected_artifact_count
+            or (initialization_class == "FORMAL" and len(startup_artifacts) != 1)
+            or (initialization_class != "FORMAL" and startup_artifacts)
+        ):
             raise RuntimeRejection(
                 "CONTROLLER_PACK_ARTIFACT_REQUIRED",
                 "/artifacts",
@@ -12089,6 +13003,152 @@ class AdaptiveStateRuntime:
                 "CONTROLLER_PACK_IDENTITY_MISMATCH",
                 "/artifacts/0/media_type",
             )
+        startup_receipt = None
+        model_identity_requirement = mutation.get(
+            "model_identity_requirement", "NOT_REQUIRED"
+        )
+        identity_policy_explicit = any(
+            key in mutation
+            for key in (
+                "model_identity_requirement", "required_model", "required_reasoning"
+            )
+        )
+        required_model = mutation.get("required_model", "UNSPECIFIED")
+        required_reasoning = mutation.get("required_reasoning", "UNSPECIFIED")
+        if (
+            model_identity_requirement not in {"NOT_REQUIRED", "REQUIRED"}
+            or not isinstance(required_model, str)
+            or not required_model
+            or not isinstance(required_reasoning, str)
+            or not required_reasoning
+            or (
+                model_identity_requirement == "NOT_REQUIRED"
+                and (required_model != "UNSPECIFIED" or required_reasoning != "UNSPECIFIED")
+            )
+            or (
+                model_identity_requirement == "REQUIRED"
+                and required_model == "UNSPECIFIED"
+                and required_reasoning == "UNSPECIFIED"
+            )
+        ):
+            raise RuntimeRejection(
+                "FORMAL_STARTUP_RECEIPT_INVALID", "/mutation/model_identity_requirement"
+            )
+        if initialization_class == "FORMAL":
+            startup_artifact = startup_artifacts[0]
+            if (
+                mutation.get("startup_receipt_path") != startup_artifact["path"]
+                or mutation.get("startup_receipt_digest") != startup_artifact["digest"]
+                or startup_artifact["media_type"] != "application/json"
+            ):
+                raise RuntimeRejection(
+                    "FORMAL_STARTUP_RECEIPT_INVALID", "/mutation/startup_receipt_digest"
+                )
+            try:
+                value = _strict_json_loads(
+                    startup_artifact["content"],
+                    code="FORMAL_STARTUP_RECEIPT_INVALID",
+                    path="/startup_receipt",
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeRejection(
+                    "FORMAL_STARTUP_RECEIPT_INVALID", "/startup_receipt"
+                ) from exc
+            legacy_fields = {
+                "schema_version", "issuer", "evidence_model",
+                "compiled_manifest_digest", "doctor_identity_digest",
+                "canary_receipt_digest", "canary_final_status",
+                "host_capability_receipt_digest", "role_receipt_digests",
+                "heartbeat_receipt_digest", "registry_complete",
+                "mcp_lifecycle_supported", "receipt_digest",
+            }
+            policy_fields = {
+                "model_identity_requirement", "model_identity_status",
+                "required_model", "required_reasoning",
+            }
+            fields = legacy_fields | policy_fields
+            legacy_identity_contract = isinstance(value, dict) and set(value) == legacy_fields
+            if legacy_identity_contract:
+                receipt_requirement = "REQUIRED"
+                receipt_status = "VERIFIED"
+                receipt_required_model = "UNSPECIFIED"
+                receipt_required_reasoning = "UNSPECIFIED"
+                if not identity_policy_explicit:
+                    model_identity_requirement = "REQUIRED"
+            else:
+                receipt_requirement = value.get("model_identity_requirement") if isinstance(value, dict) else None
+                receipt_status = value.get("model_identity_status") if isinstance(value, dict) else None
+                receipt_required_model = value.get("required_model") if isinstance(value, dict) else None
+                receipt_required_reasoning = value.get("required_reasoning") if isinstance(value, dict) else None
+            receipt_role_digests = value.get("role_receipt_digests") if isinstance(value, dict) else None
+            receipt_policy_ok = (
+                receipt_requirement == model_identity_requirement
+                and receipt_required_model == required_model
+                and receipt_required_reasoning == required_reasoning
+                and (
+                    (
+                        receipt_requirement == "NOT_REQUIRED"
+                        and receipt_status == "NOT_APPLICABLE"
+                        and receipt_role_digests == []
+                    )
+                    or (
+                        receipt_requirement == "REQUIRED"
+                        and receipt_status == "VERIFIED"
+                        and isinstance(receipt_role_digests, list)
+                        and len(receipt_role_digests) >= 3
+                    )
+                )
+            )
+            if (
+                not isinstance(value, dict)
+                or frozenset(value) not in {frozenset(legacy_fields), frozenset(fields)}
+                or value.get("schema_version") != "formal-startup-receipt-v1"
+                or value.get("issuer") != "CODEX_APP_HOST"
+                or value.get("evidence_model") != "HOST_COOPERATIVE"
+                or value.get("canary_final_status") != "FINALIZATION_ACKED"
+                or value.get("registry_complete") is not True
+                or value.get("mcp_lifecycle_supported") is not True
+                or not receipt_policy_ok
+                or any(
+                    not isinstance(digest, str) or DIGEST_RE.fullmatch(digest) is None
+                    for digest in [
+                        value.get("compiled_manifest_digest"),
+                        value.get("doctor_identity_digest"),
+                        value.get("canary_receipt_digest"),
+                        value.get("host_capability_receipt_digest"),
+                        value.get("heartbeat_receipt_digest"),
+                        *value["role_receipt_digests"],
+                    ]
+                )
+            ):
+                raise RuntimeRejection(
+                    "FORMAL_STARTUP_RECEIPT_INVALID", "/startup_receipt"
+                )
+            claimed = value["receipt_digest"]
+            body = dict(value)
+            body.pop("receipt_digest")
+            if claimed != _digest(body):
+                raise RuntimeRejection(
+                    "FORMAL_STARTUP_RECEIPT_INVALID",
+                    "/startup_receipt/receipt_digest",
+                )
+            startup_receipt = {
+                "path": startup_artifact["path"],
+                "artifact_digest": startup_artifact["digest"],
+                "receipt_digest": claimed,
+                "compiled_manifest_digest": value["compiled_manifest_digest"],
+                "doctor_identity_digest": value["doctor_identity_digest"],
+                "canary_receipt_digest": value["canary_receipt_digest"],
+                "host_capability_receipt_digest": value[
+                    "host_capability_receipt_digest"
+                ],
+                "role_receipt_digests": list(value["role_receipt_digests"]),
+                "heartbeat_receipt_digest": value["heartbeat_receipt_digest"],
+                "model_identity_requirement": model_identity_requirement,
+                "model_identity_status": receipt_status,
+                "required_model": required_model,
+                "required_reasoning": required_reasoning,
+            }
         roadmap_version = 1
         definitions = copy.deepcopy(mutation["goal_definition_registry"])
         validation_requirements = {
@@ -12127,6 +13187,11 @@ class AdaptiveStateRuntime:
                 "attempts": [],
                 "latest_worker": None,
                 "completed_roadmap_version": None,
+                "required_completion_class": definition.get(
+                    "required_completion_class", "COMPLETE_ARTIFACT"
+                ),
+                "achieved_completion_class": None,
+                "completion_evidence": None,
             }
         authorization = copy.deepcopy(mutation["authorization_envelope"])
         active = [
@@ -12188,6 +13253,16 @@ class AdaptiveStateRuntime:
             }
         return {
             "schema_version": 3 if gateway_mode else 2,
+            "initialization_class": initialization_class,
+            "startup_receipt": startup_receipt,
+            "model_identity_requirement": model_identity_requirement,
+            "model_identity_status": (
+                "VERIFIED"
+                if model_identity_requirement == "REQUIRED"
+                else "NOT_APPLICABLE"
+            ),
+            "required_model": required_model,
+            "required_reasoning": required_reasoning,
             "review_contract_version": 2,
             "worker_validation_projection_contract_version": 1,
             "controller_pack_migration_contract_version": 2,
@@ -12237,6 +13312,8 @@ class AdaptiveStateRuntime:
             "goal_queue": queue,
             "goal_definition_registry": definitions,
             "goal_execution_ledger": goal_ledger,
+            "goal_closeout_ledger": {},
+            "policy_migration_history": [],
             "local_verification_required_goal_ids": sorted(
                 mutation.get("local_verification_required_goal_ids", [])
             ),
@@ -14734,7 +15811,7 @@ class AdaptiveStateRuntime:
                 or not isinstance(identity["automation_name"], str)
                 or not identity["automation_name"]
                 or not isinstance(identity["rrule"], str)
-                or not identity["rrule"].startswith("FREQ=MINUTELY;INTERVAL=")
+                or HEARTBEAT_RRULE_RE.fullmatch(identity["rrule"]) is None
             ):
                 raise RuntimeRejection("AUTOMATION_IDENTITY_INVALID", "/mutation/identity")
             if any(

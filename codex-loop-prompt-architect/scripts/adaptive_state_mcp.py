@@ -14,14 +14,18 @@ import ctypes
 import hashlib
 import json
 import os
+import plistlib
 import re
 import select
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO
+
+import tomllib
 
 from adaptive_state_runtime import execute_runtime_codec
 
@@ -35,6 +39,8 @@ from loop_architect.state_runtime import (
     TrustedHostAttestation,
     TrustedTurnMetadata,
 )
+from loop_architect.recovery_registry import recovery_for
+from verify_installation import validate_manifest
 
 
 MCP_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2024-11-05")
@@ -43,6 +49,7 @@ MCP_SERVER_VERSION = "1.4.0"
 MCP_TOOL_NAME = "route_state_mutation"
 MCP_RUNTIME_CODEC_TOOL_NAME = "runtime_codec"
 MCP_STATE_GATEWAY_TOOL_NAME = "state_gateway"
+MCP_HOST_LIFECYCLE_TOOL_NAME = "host_lifecycle_readback"
 MCP_TURN_META_KEY = "x-codex-turn-metadata"
 MCP_THREAD_META_KEY = "threadId"
 # This reserved top-level metadata field is intentionally not an MCP tool
@@ -99,6 +106,7 @@ def _runtime_error(
         "evidence_paths": [],
         "external_actions": [],
         "external_action_count": 0,
+        "recovery": recovery_for(code),
     }
 
 
@@ -476,6 +484,7 @@ class AdaptiveStateMcpServer:
     host_attestation: TrustedHostAttestation | None
     host_error: McpBridgeError | None = None
     initialized: bool = False
+    active_tool_calls: int = 0
 
     @classmethod
     def from_current_process(cls) -> "AdaptiveStateMcpServer":
@@ -501,6 +510,197 @@ class AdaptiveStateMcpServer:
             "structuredContent": response,
             "isError": not response.get("ok", False),
         }
+
+    @staticmethod
+    def _receipt_digest(value: dict[str, Any]) -> str:
+        content = json.dumps(
+            value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return "sha256:" + hashlib.sha256(content).hexdigest()
+
+    @staticmethod
+    def _process_started_at(pid: int) -> datetime:
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        try:
+            local = datetime.strptime(result.stdout.strip(), "%a %b %d %H:%M:%S %Y")
+        except ValueError as exc:
+            raise McpBridgeError("HOST_LIFECYCLE_PROCESS_START_UNAVAILABLE") from exc
+        local_zone = datetime.now().astimezone().tzinfo
+        if result.returncode != 0 or local_zone is None:
+            raise McpBridgeError("HOST_LIFECYCLE_PROCESS_START_UNAVAILABLE")
+        return local.replace(tzinfo=local_zone).astimezone(timezone.utc)
+
+    @staticmethod
+    def _app_build(executable: Path) -> str:
+        app_bundle = next(
+            (parent for parent in (executable, *executable.parents) if parent.suffix == ".app"),
+            None,
+        )
+        if app_bundle is None:
+            raise McpBridgeError("HOST_LIFECYCLE_APP_BUILD_UNAVAILABLE")
+        with (app_bundle / "Contents" / "Info.plist").open("rb") as handle:
+            app_info = plistlib.load(handle)
+        app_build = str(
+            app_info.get("CFBundleVersion")
+            or app_info.get("CFBundleShortVersionString")
+            or ""
+        )
+        if not app_build:
+            raise McpBridgeError("HOST_LIFECYCLE_APP_BUILD_UNAVAILABLE")
+        return app_build
+
+    def _call_host_lifecycle_readback(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Return host-derived post-restart lifecycle evidence.
+
+        The stdio MCP server dispatches one frame at a time.  The counter is
+        maintained by ``handle`` and excludes this readback call, so both
+        quiescence values are observed rather than supplied by the model.
+        """
+
+        if self.host_attestation is None:
+            error = self.host_error or McpBridgeError("BLOCKED_BY_APP_ATTESTATION")
+            return self._tool_result(_runtime_error(error.code, error.path, error.details))
+        arguments = params.get("arguments")
+        if arguments != {}:
+            return self._tool_result(
+                _runtime_error("HOST_LIFECYCLE_REQUEST_INVALID", "/params/arguments")
+            )
+        try:
+            metadata = _extract_turn_metadata(params, self.host_attestation)
+            other_active_calls = self.active_tool_calls - 1
+            if other_active_calls != 0:
+                raise McpBridgeError(
+                    "HOST_LIFECYCLE_ACTIVE_CALLS_PRESENT",
+                    "/active_tool_calls",
+                    {"active_call_count": other_active_calls},
+                )
+            codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+            receipt_dir = codex_home / "install-receipts" / "codex-loop-prompt-architect"
+            receipt_paths = sorted(receipt_dir.glob("*.json"))
+            if not receipt_paths:
+                raise McpBridgeError("HOST_LIFECYCLE_INSTALL_RECEIPT_UNAVAILABLE")
+            receipt_path = receipt_paths[-1]
+            schema_path = Path(__file__).resolve().parents[1] / "references" / "install-manifest.schema.json"
+            install = validate_manifest(receipt_path, schema_path)
+            registration = install.get("mcp_registration")
+            if not isinstance(registration, dict):
+                raise McpBridgeError("HOST_LIFECYCLE_INSTALL_RECEIPT_INVALID")
+            script_path = Path(__file__).resolve()
+            script_sha = hashlib.sha256(script_path.read_bytes()).hexdigest()
+            if (
+                Path(registration.get("installed_script_path", "")).resolve(strict=False)
+                != script_path
+                or registration.get("installed_script_sha256") != script_sha
+                or install.get("source_install_drift") != []
+            ):
+                raise McpBridgeError("HOST_LIFECYCLE_INSTALL_IDENTITY_MISMATCH")
+            config_path = Path(registration.get("config_path", "")).resolve(strict=False)
+            config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+            current_registration = config.get("mcp_servers", {}).get(MCP_SERVER_NAME)
+            expected_registration = {
+                "command": registration.get("command"),
+                "args": registration.get("args"),
+            }
+            if current_registration != expected_registration:
+                raise McpBridgeError("HOST_LIFECYCLE_REGISTRATION_DRIFT")
+
+            created_at = datetime.fromisoformat(
+                str(install["created_at"]).replace("Z", "+00:00")
+            ).astimezone(timezone.utc)
+            app_started_at = self._process_started_at(self.host_attestation.parent_pid)
+            server_started_at = self._process_started_at(os.getpid())
+            if app_started_at <= created_at or server_started_at <= created_at:
+                raise McpBridgeError("HOST_LIFECYCLE_RESTART_NOT_OBSERVED")
+
+            executable = Path(self.host_attestation.parent_executable).resolve(strict=False)
+            app_build = self._app_build(executable)
+
+            tool_listing = self.handle(
+                {"jsonrpc": "2.0", "id": "lifecycle-schema", "method": "tools/list", "params": {}}
+            )
+            if not isinstance(tool_listing, dict) or "result" not in tool_listing:
+                raise McpBridgeError("HOST_LIFECYCLE_SCHEMA_READBACK_UNAVAILABLE")
+            schema_digest = self._receipt_digest(tool_listing["result"])
+            install_identity = "sha256:" + str(install["manifest_digest"])
+            source_identity = "sha256:" + str(install["source_manifest_digest"])
+            installed_identity = "sha256:" + str(install["installed_manifest_digest"])
+            registration_identity = self._receipt_digest(expected_registration)
+            app_identity = self._receipt_digest(
+                {
+                    "build": app_build,
+                    "parent_cdhash": self.host_attestation.parent_cdhash,
+                    "started_at": app_started_at.isoformat(),
+                }
+            )
+            server_identity = self._receipt_digest(
+                {
+                    "script_sha256": script_sha,
+                    "server_version": MCP_SERVER_VERSION,
+                    "started_at": server_started_at.isoformat(),
+                    "app_identity": app_identity,
+                }
+            )
+            client_identity = self._receipt_digest(
+                {
+                    "session_digest": hashlib.sha256(metadata.session_id.encode()).hexdigest(),
+                    "thread_digest": hashlib.sha256(metadata.thread_id.encode()).hexdigest(),
+                    "turn_digest": hashlib.sha256(metadata.turn_id.encode()).hexdigest(),
+                }
+            )
+            observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+            def lane(before_identity: str, after_identity: str) -> dict[str, Any]:
+                value: dict[str, Any] = {
+                    "status": "SUPPORTED",
+                    "active_call_count_before": other_active_calls,
+                    "active_call_count_after": other_active_calls,
+                    "before_identity": before_identity,
+                    "after_identity": after_identity,
+                    "observed_at": observed_at,
+                    "quiescence_model": "SERIAL_STDIO_EXCLUDING_READBACK_CALL",
+                }
+                value["receipt_digest"] = self._receipt_digest(value)
+                return value
+
+            lifecycle = {
+                "install": lane(source_identity, installed_identity),
+                "server_restart": lane(install_identity, server_identity),
+                "client_reconnect": lane(registration_identity, client_identity),
+                "schema_refresh": lane("sha256:" + script_sha, schema_digest),
+                "app_refresh": lane(install_identity, app_identity),
+            }
+            response: dict[str, Any] = {
+                "ok": True,
+                "status": "HOST_LIFECYCLE_READBACK_COMPLETE",
+                "schema_version": "host-lifecycle-readback-v1",
+                "evidence_model": "HOST_COOPERATIVE",
+                "app_build": app_build,
+                "app_readback": True,
+                "server_identity": server_identity,
+                "client_identity": client_identity,
+                "schema_digest": schema_digest,
+                "install_receipt_digest": install_identity,
+                "mcp_lifecycle": lifecycle,
+                "observed_at": observed_at,
+            }
+            response["receipt_digest"] = self._receipt_digest(response)
+            return self._tool_result(response)
+        except McpBridgeError as exc:
+            return self._tool_result(_runtime_error(exc.code, exc.path, exc.details))
+        except (OSError, ValueError, KeyError) as exc:
+            return self._tool_result(
+                _runtime_error(
+                    "HOST_LIFECYCLE_READBACK_FAILED",
+                    "/host_lifecycle",
+                    {"error_type": type(exc).__name__},
+                )
+            )
 
     @staticmethod
     def _transport_recovery_fail_safe(
@@ -1089,10 +1289,19 @@ class AdaptiveStateMcpServer:
                     gateway_payload = copy.deepcopy(payload)
                     artifacts = []
                 elif operation == "REGISTER_TASK":
-                    result_fields = {
+                    base_result_fields = {
                         "thread_id", "role_kind", "bootstrap_role_kind",
                         "bootstrap_prompt_digest", "worktree_path",
                     }
+                    strict_model_identity = (
+                        state.get("initialization_class") == "FORMAL"
+                        and state.get("model_identity_requirement") == "REQUIRED"
+                    )
+                    result_fields = base_result_fields | (
+                        {"task_id", "model", "reasoning", "app_build", "evidence_model"}
+                        if strict_model_identity
+                        else set()
+                    )
                     attested = _optional_app_action_result(
                         params,
                         metadata,
@@ -1102,12 +1311,70 @@ class AdaptiveStateMcpServer:
                     if attested is not None:
                         if payload:
                             self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
-                        gateway_payload = attested
+                        gateway_payload = {
+                            key: copy.deepcopy(attested[key])
+                            for key in base_result_fields
+                        }
+                        if strict_model_identity:
+                            receipt = {
+                                "schema_version": "host-role-model-receipt-v1",
+                                "issuer": "CODEX_APP_HOST",
+                                "evidence_model": attested["evidence_model"],
+                                "task_id": attested["task_id"],
+                                "thread_id": attested["thread_id"],
+                                "role": attested["role_kind"],
+                                "model": attested["model"],
+                                "reasoning": attested["reasoning"],
+                                "app_build": attested["app_build"],
+                            }
+                            receipt["receipt_digest"] = "sha256:" + hashlib.sha256(
+                                json.dumps(
+                                    receipt,
+                                    sort_keys=True,
+                                    ensure_ascii=True,
+                                    separators=(",", ":"),
+                                ).encode("utf-8")
+                            ).hexdigest()
+                            content = json.dumps(
+                                receipt,
+                                sort_keys=True,
+                                ensure_ascii=True,
+                                separators=(",", ":"),
+                            )
+                            artifact_digest = "sha256:" + hashlib.sha256(
+                                content.encode("utf-8")
+                            ).hexdigest()
+                            artifact_path = (
+                                ".codex-loop/reports/host-role-"
+                                + receipt["receipt_digest"].removeprefix("sha256:")
+                                + ".json"
+                            )
+                            gateway_payload.update(
+                                {
+                                    "role_receipt_path": artifact_path,
+                                    "role_receipt_digest": artifact_digest,
+                                }
+                            )
+                            artifacts = [
+                                {
+                                    "path": artifact_path,
+                                    "content": content,
+                                    "digest": artifact_digest,
+                                    "media_type": "application/json",
+                                }
+                            ]
+                        else:
+                            artifacts = []
                     else:
+                        if strict_model_identity:
+                            self._gateway_error(
+                                "BLOCKED_BY_APP_ATTESTATION",
+                                "/params/_meta",
+                            )
                         if set(payload) != result_fields:
                             self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
                         gateway_payload = copy.deepcopy(payload)
-                    artifacts = []
+                        artifacts = []
                 elif operation in {"REGISTER_HEARTBEAT", "RECORD_HEARTBEAT_OBSERVATION"}:
                     required_observation = {
                         "automation_id", "status", "automation_name", "kind",
@@ -1556,6 +1823,27 @@ class AdaptiveStateMcpServer:
                         + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
                     )
                     artifacts = []
+                elif operation == "PREPARE_GOAL_CLOSEOUT":
+                    required = {
+                        "closeout_id", "goal_id", "artifact_digest",
+                        "allowed_paths", "observed_at",
+                    }
+                    if set(payload) != required:
+                        self._gateway_error(
+                            "STATE_GATEWAY_REQUEST_INVALID",
+                            "/params/arguments/request/parameters",
+                        )
+                    gateway_payload = copy.deepcopy(payload)
+                    artifacts = []
+                elif operation == "ACK_GOAL_CLOSEOUT":
+                    required = {"closeout_id", "goal_id", "observed_at", "git_receipt"}
+                    if set(payload) != required:
+                        self._gateway_error(
+                            "STATE_GATEWAY_REQUEST_INVALID",
+                            "/params/arguments/request/parameters",
+                        )
+                    gateway_payload = copy.deepcopy(payload)
+                    artifacts = []
                 elif operation == "ADVANCE_ROADMAP":
                     if set(payload) != {"goal_id", "roadmap_audit_id", "observed_at"}:
                         self._gateway_error("STATE_GATEWAY_REQUEST_INVALID", "/params/arguments/request/parameters")
@@ -1890,7 +2178,8 @@ class AdaptiveStateMcpServer:
                                                     "INITIALIZE", "MIGRATE_V2_TO_V3", "PREPARE_ROUTE",
                                                     "REGISTER_TASK", "REGISTER_HEARTBEAT",
                                                     "RECORD_HEARTBEAT_OBSERVATION", "RECORD_ROUTE_SENT",
-                                                    "ACK_ROUTE_RESULT", "REPORT_RECOVERY", "ADVANCE_ROADMAP",
+                                                    "ACK_ROUTE_RESULT", "REPORT_RECOVERY",
+                                                    "PREPARE_GOAL_CLOSEOUT", "ACK_GOAL_CLOSEOUT", "ADVANCE_ROADMAP",
                                                     "PREPARE_FINALIZATION", "ACK_FINALIZATION",
                                                     "INITIALIZE_SUCCESSOR", "RECORD_TRANSPORT_OBSERVATION",
                                                     "ACK_TRANSPORT_PAUSE", "ACK_TRANSPORT_RECOVERY",
@@ -1909,7 +2198,27 @@ class AdaptiveStateMcpServer:
                                 "idempotentHint": True,
                                 "openWorldHint": False,
                             },
-                        }
+                        },
+                        {
+                            "name": MCP_HOST_LIFECYCLE_TOOL_NAME,
+                            "description": (
+                                "Read host-derived install, server restart, client "
+                                "reconnect, schema refresh, App refresh, and serial "
+                                "stdio quiescence receipts. The model supplies no "
+                                "identity or active-call counts."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {},
+                            },
+                            "annotations": {
+                                "readOnlyHint": True,
+                                "destructiveHint": False,
+                                "idempotentHint": True,
+                                "openWorldHint": False,
+                            },
+                        },
                     ]
                 },
             }
@@ -1919,19 +2228,23 @@ class AdaptiveStateMcpServer:
                 MCP_TOOL_NAME,
                 MCP_RUNTIME_CODEC_TOOL_NAME,
                 MCP_STATE_GATEWAY_TOOL_NAME,
+                MCP_HOST_LIFECYCLE_TOOL_NAME,
             }:
                 return self._jsonrpc_error(request_id, -32602, "Unknown tool")
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": (
+            self.active_tool_calls += 1
+            try:
+                result = (
                     self._call_route_tool(params)
                     if tool_name == MCP_TOOL_NAME
                     else self._call_runtime_codec(params)
                     if tool_name == MCP_RUNTIME_CODEC_TOOL_NAME
                     else self._call_state_gateway(params)
-                ),
-            }
+                    if tool_name == MCP_STATE_GATEWAY_TOOL_NAME
+                    else self._call_host_lifecycle_readback(params)
+                )
+            finally:
+                self.active_tool_calls -= 1
+            return {"jsonrpc": "2.0", "id": request_id, "result": result}
         return self._jsonrpc_error(request_id, -32601, "Method not found")
 
     @staticmethod

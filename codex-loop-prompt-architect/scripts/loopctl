@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHON_BIN=${PYTHON:-}
+
+# The installer records the exact dependency-complete MCP interpreter.  Reuse
+# that host-verified absolute path for loopctl instead of accidentally falling
+# back to a different system Python on the first Skill invocation.  The
+# bootstrap Python only reads JSON with the standard library; it never runs the
+# control plane.
+if [ -z "$PYTHON_BIN" ]; then
+  RECEIPT_DIR=${CODEX_HOME:-"$HOME/.codex"}/install-receipts/codex-loop-prompt-architect
+  BOOTSTRAP_PYTHON=$(command -v python3 || true)
+  if [ -n "$BOOTSTRAP_PYTHON" ]; then
+    PYTHON_BIN=$(
+      "$BOOTSTRAP_PYTHON" -c '
+import json
+import os
+import pathlib
+import sys
+
+receipts = sorted(pathlib.Path(sys.argv[1]).glob("*.json"))
+if receipts:
+    command = json.loads(receipts[-1].read_text(encoding="utf-8"))["mcp_registration"]["command"]
+    if isinstance(command, str) and os.path.isabs(command) and os.access(command, os.X_OK):
+        print(command)
+' "$RECEIPT_DIR" 2>/dev/null || true
+    )
+  fi
+fi
+
+exec "${PYTHON_BIN:-python3}" "$SCRIPT_DIR/loopctl.py" "$@"

@@ -107,7 +107,7 @@
       "properties": {
         "path": {
           "type": "string",
-          "pattern": "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/(CONTROLLER_PACK(?:\\.[a-f0-9]{64})?\\.md|HEARTBEAT_PROMPT\\.[a-f0-9]{64}\\.txt))$"
+          "pattern": "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/(CONTROLLER_PACK(?:\\.[a-f0-9]{64})?\\.md|STARTUP_RECEIPT\\.json|HEARTBEAT_PROMPT\\.[a-f0-9]{64}\\.txt))$"
         },
         "content": {"type": "string", "maxLength": 4000000},
         "source_path": {
@@ -257,6 +257,10 @@
         "depends_on": {"$ref": "#/$defs/safeIdArray"},
         "dispatch_when": {"type": "string", "minLength": 1},
         "payload_template_digest": {"$ref": "#/$defs/digest"},
+        "closeout_required": {"type": "boolean"},
+        "required_completion_class": {
+          "enum": ["COMPLETE_ARTIFACT", "COMPLETE_WITH_LIMITATION", "EMPIRICAL_RESULT_OBSERVED", "FORMAL_ACCEPTED", "PUBLIC_RELEASED"]
+        },
         "validation_matrix": {"$ref": "#/$defs/validationDimensionMap"},
         "review_surface": {"$ref": "#/$defs/reviewSurface"}
       }
@@ -482,8 +486,8 @@
       "required": ["command_digest", "exit_code", "normalized_lines_digest", "failing_test_ids", "adapter", "error_class", "error_location", "changed_files", "diff_digest", "strategy_id", "hypothesis_digest", "raw_log_digest", "previously_passing_tests_regressed"],
       "properties": {"command_digest": {"$ref": "#/$defs/digest"}, "exit_code": {"type": "integer"}, "normalized_lines_digest": {"$ref": "#/$defs/digest"}, "failing_test_ids": {"$ref": "#/$defs/stringArray"}, "adapter": {"const": "generic-v1"}, "error_class": {"const": "UNKNOWN"}, "error_location": {"const": "UNKNOWN"}, "changed_files": {"$ref": "#/$defs/stringArray"}, "diff_digest": {"$ref": "#/$defs/digest"}, "strategy_id": {"$ref": "#/$defs/safeId"}, "hypothesis_digest": {"$ref": "#/$defs/digest"}, "raw_log_digest": {"$ref": "#/$defs/digest"}, "previously_passing_tests_regressed": {"$ref": "#/$defs/stringArray"}}
     },
-    "decisionOption": {"type": "object", "additionalProperties": false, "required": ["option_id", "option_effect", "preauthorized_capability"], "properties": {"option_id": {"$ref": "#/$defs/safeId"}, "option_effect": {"enum": ["CREATE_DRAFT_PR", "WAIT", "RETURN_FOR_REPAIR", "CONTINUE", "APPLY_ROADMAP_REVISION", "REVIEW_SURFACE_ACCEPTED", "STOP_LOOP_CONFIRMED", "INCREASE_REPAIR_BUDGET_TO_5", "INCREASE_REPAIR_BUDGET"]}, "preauthorized_capability": {"enum": ["none", "pr_create", "thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"]}}},
-    "decisionScope": {"type": "object", "additionalProperties": false, "properties": {"goal_id": {"$ref": "#/$defs/safeId"}, "dispatch_id": {"$ref": "#/$defs/safeId"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "artifact_path": {"type": "string", "minLength": 1}, "preview_url": {"type": "string", "pattern": "^https?://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^?]*)?$"}, "repository": {"type": "string", "minLength": 1}, "branch": {"type": "string", "minLength": 1}, "worktree_path": {"type": "string", "minLength": 1}, "review_surface_type": {"type": "string", "minLength": 1}, "repair_policy_max_attempts_from": {"type": "integer", "minimum": 0, "maximum": 19}, "repair_policy_max_attempts_to": {"type": "integer", "minimum": 1, "maximum": 20}}},
+    "decisionOption": {"type": "object", "additionalProperties": false, "required": ["option_id", "option_effect", "preauthorized_capability"], "properties": {"option_id": {"$ref": "#/$defs/safeId"}, "option_effect": {"enum": ["CREATE_DRAFT_PR", "WAIT", "RETURN_FOR_REPAIR", "CONTINUE", "APPLY_ROADMAP_REVISION", "REVIEW_SURFACE_ACCEPTED", "STOP_LOOP_CONFIRMED", "INCREASE_REPAIR_BUDGET_TO_5", "INCREASE_REPAIR_BUDGET", "APPLY_POLICY_MIGRATION"]}, "preauthorized_capability": {"enum": ["none", "pr_create", "thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"]}}},
+    "decisionScope": {"type": "object", "additionalProperties": false, "properties": {"goal_id": {"$ref": "#/$defs/safeId"}, "dispatch_id": {"$ref": "#/$defs/safeId"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "artifact_path": {"type": "string", "minLength": 1}, "preview_url": {"type": "string", "pattern": "^https?://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^?]*)?$"}, "repository": {"type": "string", "minLength": 1}, "branch": {"type": "string", "minLength": 1}, "worktree_path": {"type": "string", "minLength": 1}, "review_surface_type": {"type": "string", "minLength": 1}, "repair_policy_max_attempts_from": {"type": "integer", "minimum": 0, "maximum": 19}, "repair_policy_max_attempts_to": {"type": "integer", "minimum": 1, "maximum": 20}, "policy_descriptor": {"$ref": "#/$defs/jsonObject"}}},
     "estimateRevision": {
       "type": "object", "additionalProperties": false,
       "required": ["min_minutes", "typical_minutes", "max_minutes", "confidence", "assumptions", "excludes"],
@@ -499,7 +503,7 @@
     "humanControlPolicy": {"type": "object", "additionalProperties": false, "required": ["human_steering_enabled", "status_projection_enabled", "decision_cards_enabled", "failure_fingerprint_enabled", "context_freshness_required", "review_evidence_policy"], "properties": {"human_steering_enabled": {"type": "boolean"}, "status_projection_enabled": {"type": "boolean"}, "decision_cards_enabled": {"type": "boolean"}, "failure_fingerprint_enabled": {"const": true}, "context_freshness_required": {"const": true}, "review_evidence_policy": {"const": "deterministic_first"}}},
     "migrateV1ToV2": {"type": "object", "additionalProperties": false, "required": ["type", "source_state_digest"], "properties": {"type": {"const": "MIGRATE_V1_TO_V2"}, "source_state_digest": {"$ref": "#/$defs/digest"}}},
     "migrateV2ToV3": {"type": "object", "additionalProperties": false, "required": ["type", "source_state_digest"], "properties": {"type": {"const": "MIGRATE_V2_TO_V3"}, "source_state_digest": {"$ref": "#/$defs/digest"}}},
-    "stateGateway": {"type": "object", "additionalProperties": false, "required": ["type", "operation", "gateway_request"], "properties": {"type": {"const": "STATE_GATEWAY"}, "operation": {"enum": ["INITIALIZE", "PREPARE_ROUTE", "REGISTER_TASK", "REGISTER_HEARTBEAT", "RECORD_HEARTBEAT_OBSERVATION", "RECORD_ROUTE_SENT", "ACK_ROUTE_RESULT", "REPORT_RECOVERY", "ADVANCE_ROADMAP", "PREPARE_FINALIZATION", "ACK_FINALIZATION", "INITIALIZE_SUCCESSOR", "RECORD_TRANSPORT_OBSERVATION", "ACK_TRANSPORT_PAUSE", "ACK_TRANSPORT_RECOVERY", "REGISTER_DECISION", "RECORD_DECISION_RESPONSE"]}, "gateway_request": {"$ref": "#/$defs/jsonObject"}}},
+    "stateGateway": {"type": "object", "additionalProperties": false, "required": ["type", "operation", "gateway_request"], "properties": {"type": {"const": "STATE_GATEWAY"}, "operation": {"enum": ["INITIALIZE", "PREPARE_ROUTE", "REGISTER_TASK", "REGISTER_HEARTBEAT", "RECORD_HEARTBEAT_OBSERVATION", "RECORD_ROUTE_SENT", "ACK_ROUTE_RESULT", "REPORT_RECOVERY", "PREPARE_GOAL_CLOSEOUT", "ACK_GOAL_CLOSEOUT", "ADVANCE_ROADMAP", "PREPARE_FINALIZATION", "ACK_FINALIZATION", "INITIALIZE_SUCCESSOR", "RECORD_TRANSPORT_OBSERVATION", "ACK_TRANSPORT_PAUSE", "ACK_TRANSPORT_RECOVERY", "REGISTER_DECISION", "RECORD_DECISION_RESPONSE"]}, "gateway_request": {"$ref": "#/$defs/jsonObject"}}},
     "heartbeatObservation": {
       "type": "object",
       "additionalProperties": false,
@@ -510,7 +514,7 @@
         "automation_name": {"$ref": "#/$defs/boundedText"},
         "kind": {"const": "HEARTBEAT"},
         "target_thread_id": {"$ref": "#/$defs/safeId"},
-        "rrule": {"type": "string", "pattern": "^FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}$"},
+        "rrule": {"type": "string", "pattern": "^(?:FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}|FREQ=HOURLY(?:;INTERVAL=[1-9][0-9]{0,3})?)$"},
         "prompt_digest": {"$ref": "#/$defs/digest"},
         "prompt_normalization": {"const": "LF_NORMALIZED_NO_TRAILING_NEWLINE"},
         "observed_at": {"$ref": "#/$defs/timestamp"}
@@ -831,6 +835,12 @@
         "state_writer_thread_id": {"$ref": "#/$defs/safeId"},
         "state_writer_bootstrap_prompt_digest": {"$ref": "#/$defs/digest"},
         "state_gateway_mode": {"const": "MCP_CANONICAL_WRITER"},
+        "initialization_class": {"enum": ["DISPOSABLE", "FORMAL"]},
+        "model_identity_requirement": {"enum": ["NOT_REQUIRED", "REQUIRED"]},
+        "required_model": {"type": "string", "minLength": 1, "maxLength": 256},
+        "required_reasoning": {"type": "string", "minLength": 1, "maxLength": 256},
+        "startup_receipt_path": {"const": ".codex-loop/sources/STARTUP_RECEIPT.json"},
+        "startup_receipt_digest": {"$ref": "#/$defs/digest"},
         "bootstrap_threads": {"type": "array", "maxItems": 3, "items": {"$ref": "#/$defs/jsonObject"}},
         "dashboard_required": {"type": "boolean"},
         "native_goal_policy": {"enum": ["disabled", "advisory", "required"]},
@@ -854,6 +864,12 @@
       "oneOf": [
         {"required": ["state_writer_thread_id", "state_writer_bootstrap_prompt_digest"], "not": {"required": ["state_gateway_mode"]}},
         {"required": ["state_gateway_mode"], "not": {"anyOf": [{"required": ["state_writer_thread_id"]}, {"required": ["state_writer_bootstrap_prompt_digest"]}]}}
+      ],
+      "allOf": [
+        {
+          "if": {"properties": {"initialization_class": {"const": "FORMAL"}}, "required": ["initialization_class"]},
+          "then": {"required": ["startup_receipt_path", "startup_receipt_digest"]}
+        }
       ]
     },
     "acquireLease": {
