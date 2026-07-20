@@ -614,7 +614,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             request["mutation"]["controller_pack_digest"] = request["artifacts"][0]["digest"]
             rejected = AdaptiveStateRuntime(root).apply(request)
             self.assertEqual(rejected["status"], "PATH_SCOPE_ESCAPE")
-            self.assertFalse((root / ".codex-loop").exists())
+            self.assertEqual(rejection_audit_files(root), ["LOOP_REJECTIONS.jsonl"])
 
     def test_runtime_stages_identity_bound_formal_report_source_for_ack(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

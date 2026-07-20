@@ -262,7 +262,7 @@ class PublicDraft202012SchemaTests(unittest.TestCase):
             state["$defs"]["statusProjectionTarget"]["properties"][
                 "render_contract_version"
             ]["enum"],
-            ["status-v1", "status-v2", "status-v3", "status-v4"],
+            ["status-v1", "status-v2", "status-v3", "status-v4", "status-v5"],
         )
 
     def test_empty_permissions_object_matches_runtime_when_workers_are_explicit(self) -> None:

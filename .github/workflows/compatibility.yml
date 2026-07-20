@@ -131,6 +131,10 @@ jobs:
         run: python -W error -m compileall -q codex-loop-prompt-architect/scripts scripts tests .github/ci
       - name: Validate skill package
         run: python codex-loop-prompt-architect/scripts/validate_skill.py
+      - name: Require complete runtime recovery coverage
+        run: >-
+          python codex-loop-prompt-architect/scripts/build_recovery_registry.py
+          --check --json
       - name: Check installer syntax
         run: bash -n scripts/install.sh
       - name: Run required quick semantic tests

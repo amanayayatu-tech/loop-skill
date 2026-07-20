@@ -335,6 +335,130 @@ class AdaptiveStateMcpTests(unittest.TestCase):
         request_id_schema = gateway["inputSchema"]["properties"]["request"]["properties"]["request_id"]
         self.assertEqual(request_id_schema["maxLength"], 128)
         self.assertEqual(request_id_schema["pattern"], "^[A-Za-z0-9][A-Za-z0-9._-]*$")
+        lifecycle = listed["result"]["tools"][3]
+        self.assertEqual(lifecycle["name"], mcp.MCP_HOST_LIFECYCLE_TOOL_NAME)
+        self.assertTrue(lifecycle["annotations"]["readOnlyHint"])
+        self.assertEqual(lifecycle["inputSchema"]["properties"], {})
+
+    def test_host_lifecycle_readback_derives_zero_counts_and_host_identities(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            codex_home = Path(temporary)
+            receipt_dir = (
+                codex_home
+                / "install-receipts"
+                / "codex-loop-prompt-architect"
+            )
+            receipt_dir.mkdir(parents=True)
+            receipt_path = receipt_dir / "receipt.json"
+            receipt_path.write_text("{}\n", encoding="utf-8")
+            config_path = codex_home / "config.toml"
+            script_path = Path(mcp.__file__).resolve()
+            script_sha = hashlib.sha256(script_path.read_bytes()).hexdigest()
+            registration = {
+                "command": "/absolute/python",
+                "args": [str(script_path)],
+                "config_path": str(config_path),
+                "config_readback": True,
+                "installed_script_path": str(script_path),
+                "installed_script_sha256": script_sha,
+            }
+            config_path.write_text(
+                "[mcp_servers.codex-loop-state]\n"
+                'command = "/absolute/python"\n'
+                f'args = ["{script_path}"]\n',
+                encoding="utf-8",
+            )
+            install = {
+                "created_at": "2026-01-01T00:00:00Z",
+                "manifest_digest": "1" * 64,
+                "source_manifest_digest": "2" * 64,
+                "installed_manifest_digest": "3" * 64,
+                "source_install_drift": [],
+                "mcp_registration": registration,
+            }
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "init",
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18"},
+                }
+            )
+            started = mcp.datetime(2026, 1, 1, 0, 1, tzinfo=mcp.timezone.utc)
+            with (
+                mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}),
+                mock.patch.object(mcp, "validate_manifest", return_value=install),
+                mock.patch.object(server, "_process_started_at", return_value=started),
+                mock.patch.object(server, "_app_build", return_value="test-build"),
+            ):
+                response = server.handle(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "lifecycle",
+                        "method": "tools/call",
+                        "params": {
+                            "name": mcp.MCP_HOST_LIFECYCLE_TOOL_NAME,
+                            "arguments": {},
+                            "_meta": McpHarness.metadata(),
+                        },
+                    }
+                )
+            result = response["result"]["structuredContent"]
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status"], "HOST_LIFECYCLE_READBACK_COMPLETE")
+            self.assertEqual(server.active_tool_calls, 0)
+            self.assertEqual(set(result["mcp_lifecycle"]), {
+                "install", "server_restart", "client_reconnect",
+                "schema_refresh", "app_refresh",
+            })
+            for lane in result["mcp_lifecycle"].values():
+                self.assertEqual(lane["active_call_count_before"], 0)
+                self.assertEqual(lane["active_call_count_after"], 0)
+                self.assertEqual(
+                    lane["quiescence_model"],
+                    "SERIAL_STDIO_EXCLUDING_READBACK_CALL",
+                )
+                self.assertTrue(lane["receipt_digest"].startswith("sha256:"))
+
+    def test_host_lifecycle_readback_rejects_parallel_or_model_counts(self) -> None:
+        server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+        server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "init",
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            }
+        )
+        forged = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "forged",
+                "method": "tools/call",
+                "params": {
+                    "name": mcp.MCP_HOST_LIFECYCLE_TOOL_NAME,
+                    "arguments": {"active_call_count_before": 0},
+                    "_meta": McpHarness.metadata(),
+                },
+            }
+        )["result"]["structuredContent"]
+        self.assertEqual(forged["status"], "HOST_LIFECYCLE_REQUEST_INVALID")
+        server.active_tool_calls = 1
+        busy = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "busy",
+                "method": "tools/call",
+                "params": {
+                    "name": mcp.MCP_HOST_LIFECYCLE_TOOL_NAME,
+                    "arguments": {},
+                    "_meta": McpHarness.metadata(),
+                },
+            }
+        )["result"]["structuredContent"]
+        self.assertEqual(busy["status"], "HOST_LIFECYCLE_ACTIVE_CALLS_PRESENT")
+        self.assertEqual(server.active_tool_calls, 1)
 
     def test_state_gateway_requires_host_turn_metadata_before_state_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -690,7 +814,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "automation_name": "attested heartbeat",
                 "kind": "HEARTBEAT",
                 "target_thread_id": "controller-1",
-                "rrule": "FREQ=MINUTELY;INTERVAL=10",
+                "rrule": "FREQ=HOURLY",
                 "prompt_digest": digest("heartbeat-prompt"),  # noqa: F405
                 "prompt_normalization": "LF_NORMALIZED_NO_TRAILING_NEWLINE",
                 "observed_at": T2,  # noqa: F405
@@ -4724,7 +4848,7 @@ class McpBridgeBoundaryTests(unittest.TestCase):
             self.assertEqual(
                 result["error"]["code"], "STATE_GATEWAY_PREDECESSOR_NOT_FINALIZED"
             )
-            self.assertFalse((root / ".codex-loop").exists())
+            self.assertEqual(rejection_audit_files(root), ["LOOP_REJECTIONS.jsonl"])
 
     def test_successor_bootstrap_replay_reaches_runtime_before_root_guard(self) -> None:
         """A registered successor bootstrap replay is not rejected as nonempty."""

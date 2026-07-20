@@ -2939,7 +2939,7 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
 
             response = AdaptiveStateRuntime(root, jsonschema_loader=missing).apply({})
             self.assertEqual(response["status"], "DEPENDENCY_MISSING")
-            self.assertFalse((root / ".codex-loop").exists())
+            self.assertEqual(rejection_audit_files(root), ["LOOP_REJECTIONS.jsonl"])
 
             harness = Harness(root)
             pack = controller_pack_artifact()
@@ -2969,4 +2969,4 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
             )
             response = harness.runtime.apply(request)
             self.assertEqual(response["status"], "PATH_SCOPE_ESCAPE")
-            self.assertFalse((root / ".codex-loop").exists())
+            self.assertEqual(rejection_audit_files(root), ["LOOP_REJECTIONS.jsonl"])

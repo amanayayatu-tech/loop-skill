@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "expected_total_tests": 634,
+  "expected_total_tests": 666,
   "expected_shard_counts": {
-    "1": 180,
+    "1": 199,
     "2": 168,
-    "3": 144,
-    "4": 142
+    "3": 146,
+    "4": 153
   },
   "shards": {
     "1": [
@@ -17,7 +17,8 @@
       "tests.test_whitespace_range",
       "tests.test_mcp_registration",
       "tests.test_app_canary_receipt",
-      "tests.test_install_manifest"
+      "tests.test_install_manifest",
+      "tests.test_loopctl_p0"
     ],
     "2": [
       "tests.test_state_runtime_finalization",
@@ -45,7 +46,8 @@
       "tests.test_release_contract",
       "tests.test_native_goal_recovery_unavailable",
       "tests.test_public_schema",
-      "tests.test_spec_governance"
+      "tests.test_spec_governance",
+      "tests.test_p0_trust_contracts"
     ]
   },
   "dedicated_only": {
