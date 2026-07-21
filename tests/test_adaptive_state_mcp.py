@@ -617,6 +617,24 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 startup_receipt["canary_receipt_digest"],
                 current["startup_receipt"]["canary_receipt_digest"],
             )
+            registered = call_state_gateway(
+                server,
+                root,
+                {
+                    "request_id": "gateway-formal-register-worker",
+                    "operation": "REGISTER_TASK",
+                    "occurred_at": T2,  # noqa: F405
+                    "parameters": {
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    },
+                },
+            )
+            self.assertTrue(registered["ok"], registered)
+            self.assertEqual(registered["operation_status"], "GATEWAY_TASK_REGISTERED")
 
     def test_state_gateway_registers_bound_host_observations_and_one_heartbeat(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -3944,9 +3944,13 @@ class AdaptiveStateRuntime:
                 relative == ".codex-loop/sources/CONTROLLER_PACK.md"
                 or (
                     relative == ".codex-loop/sources/STARTUP_RECEIPT.json"
-                    and mutation is not None
                     and (
-                        mutation.get("type") == "INITIALIZE"
+                        # Historical transaction journals are revalidated
+                        # without their original mutation object.  The path
+                        # remains immutable and control-dir confined there,
+                        # so permit the already archived startup receipt.
+                        mutation is None
+                        or mutation.get("type") == "INITIALIZE"
                         or (
                             mutation.get("type") == "STATE_GATEWAY"
                             and mutation.get("operation") == "INITIALIZE"
