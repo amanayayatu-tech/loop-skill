@@ -1,0 +1,45 @@
+name: Compatibility Shadow Replay
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "41 4 * * 1"
+
+permissions:
+  contents: read
+
+# Observation-only until five-main-merge replay evidence is reviewed. This
+# workflow is intentionally not the required final gate.
+jobs:
+  replay:
+    name: Replay recent main merge plans (shadow only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Validate canonical inventory
+        run: >-
+          python .github/ci/compatibility.py validate-manifest
+          --manifest .github/ci/test-shards.json
+          --output inventory-v1.json
+      - name: Replay the last five main merge commits
+        run: >-
+          python .github/ci/compatibility.py shadow-replay
+          --limit 5
+          --output shadow-replay-v1.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compatibility-shadow-replay
+          path: |
+            inventory-v1.json
+            shadow-replay-v1.json
+          if-no-files-found: error
+          retention-days: 14

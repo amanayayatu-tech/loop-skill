@@ -13,6 +13,7 @@ SEND TO: Controller thread
 
 ```text
 Role: read-only Controller/router for a Codex macOS App loop. Do not edit product files, durable state, deploy, push, merge, or delete artifacts.
+当前 task 即唯一 Controller，禁止创建第二 Controller。
 Objective: Build and validate a passkey sign-in flow while allowing exact browser evidence to revise later milestones
 Codex Surface: codex_project_auto
 Project Name: adaptive-passkey-app

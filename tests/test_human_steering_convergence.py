@@ -590,11 +590,13 @@ class HumanControlRuntimeTests(unittest.TestCase):
             "render_contract_version": "status-v1",
         }
         runtime.state_path.write_bytes(runtime._render_state(state))
+        runtime.status_path.chmod(0o600)
         runtime.status_path.write_bytes(legacy_payload)
         journal_path = (
             runtime.projection_transactions_dir
             / f"status-v{state['state_version']}.json"
         )
+        journal_path.chmod(0o600)
         journal_path.write_text(
             json.dumps(
                 {
@@ -650,11 +652,13 @@ class HumanControlRuntimeTests(unittest.TestCase):
             "render_contract_version": "status-v2",
         }
         runtime.state_path.write_bytes(runtime._render_state(state))
+        runtime.status_path.chmod(0o600)
         runtime.status_path.write_bytes(previous_payload)
         journal_path = (
             runtime.projection_transactions_dir
             / f"status-v{state['state_version']}.json"
         )
+        journal_path.chmod(0o600)
         journal_path.write_text(
             json.dumps(
                 {
@@ -706,11 +710,13 @@ class HumanControlRuntimeTests(unittest.TestCase):
             "render_contract_version": "status-v3",
         }
         runtime.state_path.write_bytes(runtime._render_state(state))
+        runtime.status_path.chmod(0o600)
         runtime.status_path.write_bytes(historical_payload)
         journal_path = (
             runtime.projection_transactions_dir
             / f"status-v{state['state_version']}.json"
         )
+        journal_path.chmod(0o600)
         journal_path.write_text(
             json.dumps(
                 {

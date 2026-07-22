@@ -74,6 +74,7 @@ class ClassificationTests(unittest.TestCase):
         plan = compatibility.classify_entries([entry("tests/test_state_runtime_io.py")])
         self.assertTrue(plan["run_state_fuzz"])
         self.assertFalse(plan["run_generator_fuzz"])
+        self.assertEqual(plan["path_classes"]["state"], ["tests/test_state_runtime_io.py"])
 
     def test_generator_risk(self) -> None:
         plan = compatibility.classify_entries([entry("tests/test_loop_prompt_scaffold.py")])
@@ -260,6 +261,34 @@ class ManifestAndArtifactTests(unittest.TestCase):
             inventory_path.write_text(json.dumps(malformed), encoding="utf-8")
             with self.assertRaises(compatibility.CompatibilityError):
                 compatibility._inventory_total(inventory_path)
+
+    def test_shadow_replay_is_bounded_and_never_claims_required_gate(self) -> None:
+        replay = compatibility.replay_recent_main_plans(REPO, 5)
+        self.assertTrue(replay["shadow_only"])
+        self.assertLessEqual(replay["merge_count"], 5)
+        for item in replay["replays"]:
+            self.assertEqual(set(item["path_classes"]), {
+                "ci_release", "docs", "generator", "state", "standard", "unknown",
+            })
+        with self.assertRaises(compatibility.CompatibilityError):
+            compatibility.replay_recent_main_plans(REPO, 0)
+
+    def test_shadow_replay_uses_remote_main_without_a_local_branch(self) -> None:
+        original_run = compatibility.subprocess.run
+        observed: list[list[str]] = []
+
+        def run(argv, *args, **kwargs):
+            observed.append(list(argv))
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return original_run(argv, *args, **kwargs)
+            return original_run(argv, *args, **kwargs)
+
+        with mock.patch.object(compatibility.subprocess, "run", side_effect=run):
+            compatibility.replay_recent_main_plans(REPO, 1)
+        self.assertIn(
+            ["git", "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"],
+            observed,
+        )
 
     def test_artifact_verifier_accepts_exact_unique_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

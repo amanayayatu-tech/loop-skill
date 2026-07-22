@@ -7,6 +7,18 @@ All notable changes to this project are documented here. The project follows
 
 ### Added
 
+- Added P2 content-addressed storage for new projections, reports, and report
+  staging while retaining readable legacy facades; added derived audit index,
+  per-Goal summaries, a business timeline, and dashboard business/control-plane
+  separation.
+- Added `archive-manifest-v2` emission plus both legacy readers, active-policy
+  prompt isolation, a scoped privacy-safe risky-artifact scanner, and copyable
+  recovery-derived next-operation templates across runtime, MCP, and `loopctl`.
+- Added consistent `loopctl` check/emit/JSON envelopes, machine-checkable
+  singleton Controller bootstrap text, structured CI path classes and shard
+  P50/P95/slowest telemetry, and a non-required shadow replay over the latest
+  five main merge commits.
+
 - Added the opt-in P1 canonical governance runtime: Goal-bound defect-family
   routes, mandatory Reviewer sibling/unchecked-surface disclosure, automatic
   third-return escalation, heartbeat drift detection, recoverable route

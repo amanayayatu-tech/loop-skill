@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "expected_total_tests": 754,
+  "expected_total_tests": 765,
   "expected_shard_counts": {
     "1": 206,
-    "2": 168,
+    "2": 169,
     "3": 148,
-    "4": 232
+    "4": 242
   },
   "shards": {
     "1": [
@@ -49,7 +49,8 @@
       "tests.test_spec_governance",
       "tests.test_p0_trust_contracts",
       "tests.test_p1_modules",
-      "tests.test_p1_runtime"
+      "tests.test_p1_runtime",
+      "tests.test_p2_operability"
     ]
   },
   "dedicated_only": {

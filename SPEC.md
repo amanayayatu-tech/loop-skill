@@ -99,6 +99,17 @@ module:
   prompt, chat, task/thread ID, path, PII, secret, or raw-log export;
 - complete AST-derived recovery coverage across runtime, MCP, CLI, and codec
   error boundaries; recoverable entries have one non-`WAIT` operation;
+- SHA-256 content-addressed writes for new projections, reports, and staging,
+  with readable legacy facades and no historical deletion;
+- derived audit index, per-Goal summaries, and business timeline that never
+  become a second canonical source, plus explicit dashboard separation of
+  business progress from control-plane activity;
+- recovery-derived copyable next-operation templates and consistent CLI
+  check/emit/JSON modes with stable exit envelopes;
+- privacy-safe risky-artifact classification, active-policy-only prompt
+  generation, and unified `archive-manifest-v2` with two legacy readers;
+- observation-only CI shadow replay, path classification, and structured
+  shard P50/P95/slowest telemetry without replacing the required final gate;
 - current-artifact, current-dispatch, PASS-report evidence binding;
 - bounded transport degradation and immutable successor handoff;
 - fenced leases and identity-preserving Pack migration;
@@ -119,6 +130,33 @@ bound authority receipt.
 
 The index gives the exact normative statements and source mappings. It is an
 index, not a second state schema.
+
+## P2 operability contract
+
+Content addressing applies only to derived projection, report, and report
+staging writes. Canonical state, accepted events, rejection history, and
+transaction authority remain independently persisted. A facade points to an
+object whose SHA-256, size, owner, regular-file type, and permission class are
+verified; corruption or a symlink fails closed. A legacy ordinary file remains
+readable and is converted only when a later accepted write replaces it.
+
+`audit-index.json`, `goal-summaries.json`, and `business-timeline.json` are
+reproducible projections of canonical state. Their business route counts are
+reported separately from canonical mutation counts. They cannot authorize a
+route, repair, closeout, or finalization.
+
+An active Controller prompt is generated from active policy only. Historical
+model and heartbeat policy text remains retained audit evidence but is removed
+before rendering, so stale prose cannot regain authority. The generated
+Controller bootstrap contains the machine-checkable singleton statement
+`当前 task 即唯一 Controller，禁止创建第二 Controller。`.
+
+Every new archive manifest has schema identity `archive-manifest-v2`, a
+self-excluding manifest digest, explicit privacy class, and inventories for
+Git, state, events, outboxes, roles, heartbeat, and files. Legacy flat and
+context-wrapped archives are read-only compatibility inputs. No archive or
+privacy-safe export makes raw prompts, chat, credentials, or private payload
+bytes public.
 
 ## Safe evolution
 

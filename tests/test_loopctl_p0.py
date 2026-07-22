@@ -169,7 +169,7 @@ class RejectionJournalTests(unittest.TestCase):
     def test_concurrent_rejections_are_hash_chained_and_privacy_minimized(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            secret = "sk-live-must-never-appear"
+            secret = "FIXTURE sk-" + "live-must-never-appear"
 
             def reject(index: int) -> dict[str, object]:
                 return AdaptiveStateRuntime(root).apply(
