@@ -131,7 +131,7 @@ class ContentAddressedStore:
         if path.is_symlink():
             raise ContentAddressingError("CONTENT_OBJECT_SYMLINK")
         try:
-            metadata = path.stat(follow_symlinks=False)
+            metadata = os.stat(path, follow_symlinks=False)
             payload = path.read_bytes()
         except OSError as exc:
             raise ContentAddressingError("CONTENT_OBJECT_UNAVAILABLE") from exc
