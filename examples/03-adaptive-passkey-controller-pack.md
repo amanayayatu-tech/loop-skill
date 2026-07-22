@@ -804,10 +804,27 @@ Adaptive v3 MCP State Gateway Protocol:
 - For one matching transport fingerprint/outbox, the first real registered-heartbeat observation retains that outbox and waits. Gateway binds its fingerprint, time and heartbeat identity. Two natural heartbeat observations or fifteen minutes enter `WAITING_TRANSPORT_RECOVERY`, stop canonical routing, and require one user notification. Controller may submit `ACK_TRANSPORT_PAUSE` only after a real pause and matching PAUSED readback. After the retained outbox resolves, `ACK_TRANSPORT_RECOVERY` parameters are exactly `{active_automation_receipt:{automation_id,status,automation_name,kind,target_thread_id,rrule,prompt_digest,prompt_normalization,observed_at}}`; use `status=ACTIVE`, `kind=HEARTBEAT`, the same registered heartbeat identity, and no copied source turn. On rejection, obey the post-state action with routing forbidden: WAITING/PAUSED returns `PAUSE_SAME_HEARTBEAT_AND_READBACK`; HEALTHY/RUNNING returns `READ_STATE_ALREADY_RECOVERED` and must not pause; unreadable state requires read/reconciliation first. Do not blindly retry the ACK or use an outer Supervisor as a second routing channel.
 - Legacy schema-v1/v2 State-Writer and `route_state_mutation` requests remain compatibility-only. A schema-v3 Pack must not use either path.
 
-Gateway Heartbeat Contract:
-- One business heartbeat may observe and route at most one Gateway transition every 15 minutes.
-- It reads canonical state, observes an existing outbox first, and never retries a matching transport fault after WAITING_TRANSPORT_RECOVERY.
-- After WAITING_TRANSPORT_RECOVERY, ACK_TRANSPORT_PAUSE only after one real pause and a matching PAUSED automation readback bound to the registered heartbeat. Once the retained outbox completes/recovers, ACK_TRANSPORT_RECOVERY uses exactly parameters={active_automation_receipt:{automation_id,status,automation_name,kind,target_thread_id,rrule,prompt_digest,prompt_normalization,observed_at}}, with status=ACTIVE, kind=HEARTBEAT, the registered identity, and no copied source turn. On rejection obey the post-state action with routing forbidden: WAITING/PAUSED means PAUSE_SAME_HEARTBEAT_AND_READBACK; HEALTHY/RUNNING means READ_STATE_ALREADY_RECOVERED and must not pause; unreadable state requires read/reconcile first. FINALIZATION_ACKED requires the same readback-bound PAUSED evidence; only an explicit authorized successor may create a new heartbeat.
+Heartbeat Automation Prompt:
+Adaptive Heartbeat Prompt Identity: ADAPTIVE_HEARTBEAT_PROMPT_V1
+- Canonical extraction uses LF text: take the body between the unique begin and end delimiter lines, excluding the LF adjacent to each delimiter.
+- The extracted body starts with `Continue this Codex Loop` and ends at the final instruction byte; it has no trailing newline.
+- Pass that exact body string as automation_update.prompt and compute prompt_digest from the same UTF-8 bytes. Do not trim, append a newline, reserialize, or hash the delimiters.
+- On persisted readback, normalize only CRLF/CR transport line endings to LF; never strip or append bytes before identity comparison.
+- Canonical Prompt Digest: sha256:f60471dd2a591356b940f71665f6fc131e0136dcc86b6eb8668bdbbb7c94d33e
+
+HEARTBEAT_PROMPT_BEGIN
+Continue this Codex Loop as its read-only Controller. Do not edit product files. Read the trusted Pack archived at /workspace/adaptive-passkey-app/.codex-loop/sources/CONTROLLER_PACK.md, then read canonical state at /workspace/adaptive-passkey-app/.codex-loop/LOOP_STATE.md, recent events at /workspace/adaptive-passkey-app/.codex-loop/LOOP_EVENTS.jsonl, and every registered active Codex App task. Verify the Pack digest, canonical root, Controller identity, registered heartbeat identity, current state version, and any active route before acting. Use only installed MCP state_gateway/runtime_codec operations and real Codex App task or automation tools; never create an auxiliary writer task or write canonical files directly.
+
+Reconcile an existing PREPARED or SENT route before preparing anything new. If the target role has staged the exact bound report, ACK_ROUTE_RESULT on that same route. If stdout or task indexing was lost but the staged report remains, use REPORT_RECOVERY for that original route. Never resend an acknowledged or unresolved route and never create a replacement role while its identity is unresolved.
+
+When exactly one canonical Goal is READY and no route is active, call PREPARE_ROUTE, materialize its returned specification with runtime_codec MATERIALIZE_DISPATCH, send that transport text once to the registered role, and bind the real returned task with RECORD_ROUTE_SENT. Worker PASS must flow through exact-artifact CODE_REVIEW, required local verification, ROADMAP_AUDIT, and final FINAL_AUDIT in canonical order. Use ADVANCE_ROADMAP only for a current nonfinal ROADMAP_AUDIT PASS.
+
+At a matching transport fault, retain the same route. After two natural observations or 15 minutes, obey WAITING_TRANSPORT_RECOVERY: pause this same heartbeat, verify its PAUSED readback, and use ACK_TRANSPORT_PAUSE. Reactivate only after the retained route resolves and ACK_TRANSPORT_RECOVERY accepts the exact ACTIVE readback. Never create a second heartbeat.
+
+When all Goals and the current FINAL_AUDIT are canonically PASS, call PREPARE_FINALIZATION, pause this same heartbeat through the real App, verify the exact PAUSED readback, then call ACK_FINALIZATION. Report success only after canonical FINALIZATION_ACKED. A hard blocker must remain evidence-bound and fail closed; do not invent a PASS, receipt, role, route, or heartbeat observation.
+
+This heartbeat may perform at most one Gateway state-changing operation per wake and at most 192 wakes for this Pack. Active or queued work is waiting, not idle.
+HEARTBEAT_PROMPT_END
 
 Budget And Automation:
 - declared_automation_intent: Create one Controller heartbeat during startup and route until terminal state

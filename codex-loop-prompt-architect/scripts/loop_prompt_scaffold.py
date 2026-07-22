@@ -39,6 +39,14 @@ from loop_architect.human_control import (  # noqa: E402
     derive_validation_matrix,
     validate_review_surface,
 )
+from loop_architect.heartbeat_contract import (  # noqa: E402
+    HEARTBEAT_PROMPT_BEGIN,
+    HEARTBEAT_PROMPT_END,
+    extract_heartbeat_prompt_body,
+    heartbeat_prompt_digest,
+    normalize_heartbeat_prompt_readback,
+    validate_gateway_heartbeat_pack,
+)
 from loop_architect.schema import (  # noqa: E402
     ADAPTIVE_HEARTBEAT_PROMPT_MARKER,
     ADAPTIVE_REVIEW_ENVELOPE,
@@ -178,10 +186,6 @@ CLI_INTEGER_FIELDS = {
     "token_cap",
 }
 
-HEARTBEAT_PROMPT_BEGIN = "HEARTBEAT_PROMPT_BEGIN"
-HEARTBEAT_PROMPT_END = "HEARTBEAT_PROMPT_END"
-
-
 def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -195,31 +199,36 @@ def strict_json_loads(text: str) -> Any:
     return json.loads(text, object_pairs_hook=unique_json_object)
 
 
-def normalize_heartbeat_prompt_readback(text: str) -> str:
-    """Normalize transport line endings without trimming identity bytes."""
+def heartbeat_prompt_identity_block(body: str) -> str:
+    """Render one canonical, byte-addressed Adaptive heartbeat prompt."""
 
-    if not isinstance(text, str):
-        raise TypeError("heartbeat prompt must be a string")
-    return text.replace("\r\n", "\n").replace("\r", "\n")
-
-
-def extract_heartbeat_prompt_body(text: str) -> str:
-    """Extract the canonical body while excluding delimiter-adjacent newlines."""
-
-    normalized = normalize_heartbeat_prompt_readback(text)
-    begin = f"{HEARTBEAT_PROMPT_BEGIN}\n"
-    end = f"\n{HEARTBEAT_PROMPT_END}"
-    if normalized.count(begin) != 1 or normalized.count(end) != 1:
-        raise ValueError("heartbeat prompt delimiters must appear exactly once")
-    body = normalized.split(begin, 1)[1].split(end, 1)[0]
-    if not body or body.endswith("\n"):
+    normalized = normalize_heartbeat_prompt_readback(body)
+    if not normalized or normalized.endswith("\n"):
         raise ValueError("heartbeat prompt body must be nonempty and have no trailing newline")
-    return body
+    digest = heartbeat_prompt_digest(normalized)
+    return (
+        "Heartbeat Automation Prompt:\n"
+        f"Adaptive Heartbeat Prompt Identity: {ADAPTIVE_HEARTBEAT_PROMPT_MARKER}\n"
+        "- Canonical extraction uses LF text: take the body between the unique begin and end "
+        "delimiter lines, excluding the LF adjacent to each delimiter.\n"
+        "- The extracted body starts with `Continue this Codex Loop` and ends at the final "
+        "instruction byte; it has no trailing newline.\n"
+        "- Pass that exact body string as automation_update.prompt and compute prompt_digest "
+        "from the same UTF-8 bytes. Do not trim, append a newline, reserialize, or hash the "
+        "delimiters.\n"
+        "- On persisted readback, normalize only CRLF/CR transport line endings to LF; never "
+        "strip or append bytes before identity comparison.\n"
+        f"- Canonical Prompt Digest: {digest}\n\n"
+        f"{HEARTBEAT_PROMPT_BEGIN}\n{normalized}\n{HEARTBEAT_PROMPT_END}"
+    )
 
 
-def heartbeat_prompt_digest(prompt: str) -> str:
-    normalized = normalize_heartbeat_prompt_readback(prompt)
-    return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+def validate_rendered_heartbeat_contract(data: dict[str, Any], pack: str) -> list[str]:
+    """Fail closed when a schema-v3 Pack lacks an executable heartbeat body."""
+
+    if not uses_state_gateway(data):
+        return []
+    return validate_gateway_heartbeat_pack(pack)
 
 
 def is_placeholder_value(value: Any) -> bool:
@@ -2590,6 +2599,49 @@ HEARTBEAT_PROMPT_END"""
     )
 
 
+def gateway_heartbeat_prompt_block(
+    audit_paths: dict[str, str],
+    heartbeat_interval_minutes: int,
+    max_wakeups: int,
+) -> str:
+    """Render the executable schema-v3 Gateway heartbeat prompt."""
+
+    body = (
+        "Continue this Codex Loop as its read-only Controller. Do not edit product files. "
+        f"Read the trusted Pack archived at {audit_paths['sources']}CONTROLLER_PACK.md, "
+        f"then read canonical state at {audit_paths['state']}, recent events at "
+        f"{audit_paths['events']}, and every registered active Codex App task. Verify the "
+        "Pack digest, canonical root, Controller identity, registered heartbeat identity, "
+        "current state version, and any active route before acting. Use only installed MCP "
+        "state_gateway/runtime_codec operations and real Codex App task or automation tools; "
+        "never create an auxiliary writer task or write canonical files directly.\n\n"
+        "Reconcile an existing PREPARED or SENT route before preparing anything new. If the "
+        "target role has staged the exact bound report, ACK_ROUTE_RESULT on that same route. "
+        "If stdout or task indexing was lost but the staged report remains, use REPORT_RECOVERY "
+        "for that original route. Never resend an acknowledged or unresolved route and never "
+        "create a replacement role while its identity is unresolved.\n\n"
+        "When exactly one canonical Goal is READY and no route is active, call PREPARE_ROUTE, "
+        "materialize its returned specification with runtime_codec MATERIALIZE_DISPATCH, send "
+        "that transport text once to the registered role, and bind the real returned task with "
+        "RECORD_ROUTE_SENT. Worker PASS must flow through exact-artifact CODE_REVIEW, required "
+        "local verification, ROADMAP_AUDIT, and final FINAL_AUDIT in canonical order. Use "
+        "ADVANCE_ROADMAP only for a current nonfinal ROADMAP_AUDIT PASS.\n\n"
+        "At a matching transport fault, retain the same route. After two natural observations "
+        f"or {heartbeat_interval_minutes} minutes, obey WAITING_TRANSPORT_RECOVERY: pause this "
+        "same heartbeat, verify its PAUSED readback, and use ACK_TRANSPORT_PAUSE. Reactivate "
+        "only after the retained route resolves and ACK_TRANSPORT_RECOVERY accepts the exact "
+        "ACTIVE readback. Never create a second heartbeat.\n\n"
+        "When all Goals and the current FINAL_AUDIT are canonically PASS, call "
+        "PREPARE_FINALIZATION, pause this same heartbeat through the real App, verify the exact "
+        "PAUSED readback, then call ACK_FINALIZATION. Report success only after canonical "
+        "FINALIZATION_ACKED. A hard blocker must remain evidence-bound and fail closed; do not "
+        "invent a PASS, receipt, role, route, or heartbeat observation.\n\n"
+        f"This heartbeat may perform at most one Gateway state-changing operation per wake and "
+        f"at most {max_wakeups} wakes for this Pack. Active or queued work is waiting, not idle."
+    )
+    return heartbeat_prompt_identity_block(body)
+
+
 def adaptive_transition_table_block(
     state_writer_role: str,
     runtime_retry_attempts: int,
@@ -3904,11 +3956,10 @@ Required Report Fields:
             f"{audit_paths['root']}progress-dashboard.html",
             dashboard_required(data, len(normalize_milestones(data.get("milestones")))),
         )
-        heartbeat_prompt = (
-            "Gateway Heartbeat Contract:\n"
-            f"- One business heartbeat may observe and route at most one Gateway transition every {heartbeat_interval} minutes.\n"
-            "- It reads canonical state, observes an existing outbox first, and never retries a matching transport fault after WAITING_TRANSPORT_RECOVERY.\n"
-            "- After WAITING_TRANSPORT_RECOVERY, ACK_TRANSPORT_PAUSE only after one real pause and a matching PAUSED automation readback bound to the registered heartbeat. Once the retained outbox completes/recovers, ACK_TRANSPORT_RECOVERY uses exactly parameters={active_automation_receipt:{automation_id,status,automation_name,kind,target_thread_id,rrule,prompt_digest,prompt_normalization,observed_at}}, with status=ACTIVE, kind=HEARTBEAT, the registered identity, and no copied source turn. On rejection obey the post-state action with routing forbidden: WAITING/PAUSED means PAUSE_SAME_HEARTBEAT_AND_READBACK; HEALTHY/RUNNING means READ_STATE_ALREADY_RECOVERED and must not pause; unreadable state requires read/reconcile first. FINALIZATION_ACKED requires the same readback-bound PAUSED evidence; only an explicit authorized successor may create a new heartbeat."
+        heartbeat_prompt = gateway_heartbeat_prompt_block(
+            audit_paths,
+            heartbeat_interval,
+            max_wakeups,
         )
         transition_table = (
             "Gateway Transition Contract:\n"
@@ -4295,6 +4346,9 @@ SEND VIA: Controller to real Worker thread for {first_goal['worker_role']}
 
 def render_controller_pack(data: dict[str, Any], mode: str) -> str:
     pack = _render_controller_pack_base(data, mode)
+    heartbeat_errors = validate_rendered_heartbeat_contract(data, pack)
+    if heartbeat_errors:
+        raise ValueError("; ".join(heartbeat_errors))
     if data.get("coordination_mode") == "adaptive":
         errors = validate_adaptive_pack_transport_contract(pack)
         if errors:
@@ -4372,7 +4426,13 @@ def main() -> int:
             for error in errors:
                 print(f"- {error}")
             return 1
+        try:
+            render_controller_pack(data, args.mode)
+        except (TypeError, ValueError) as exc:
+            print(f"Rendered Pack validation error: {exc}")
+            return 1
         print("All required fields and semantic invariants are valid.")
+        print("rendered-Pack invariants are valid.")
         return 0
 
     if errors and not args.allow_draft:

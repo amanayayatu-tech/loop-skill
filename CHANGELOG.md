@@ -5,6 +5,17 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.8] - 2026-07-23
+
+### Fixed
+
+- Adaptive `MCP_CANONICAL_WRITER` Controller Packs now embed one concrete,
+  byte-addressed Gateway heartbeat body between the canonical delimiters instead
+  of emitting only a descriptive contract.
+- Controller Pack generation, `--check-only`, and `validate_skill.py` now share
+  rendered-Pack heartbeat invariants and reject missing, empty, ambiguous, or
+  digest-mismatched Gateway heartbeat bodies before initialization.
+
 ## [3.3.7] - 2026-07-22
 
 v3.3.7 consolidates the previously unreleased P0-P2 work completed after
@@ -536,7 +547,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.7...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.8...HEAD
+[3.3.8]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8
 [3.3.7]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.7
 [3.3.3]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.3
 [3.3.2]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.2

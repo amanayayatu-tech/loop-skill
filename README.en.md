@@ -214,9 +214,11 @@ Do not use it when:
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
 
-## Adaptive v3.3.7: who writes state and who advances a route
+## Adaptive v3.3.8: who writes state and who advances a route
 
 New Adaptive Packs default to schema v3. They do not create a session State-Writer task. The installed MCP `state_gateway({root, request})` is the sole canonical writer. The Controller remains read-only, Workers perform product work, Reviewer/Local Verifier tasks submit evidence, and an outer Supervisor is not a product role.
+
+Starting with v3.3.8, a Gateway Pack carries one extractable, digest-addressed heartbeat body. Generation, `--check-only`, and release validation share the same invariant and reject a missing or digest-mismatched body instead of leaving runtime automation prompt bytes to inference.
 
 **Current platform boundary:** schema v3 uses **host-cooperative evidence**. It does not claim Byzantine resistance to a malicious Controller that can forge every App call. The Gateway binds one real App task/thread, automation, send-return target, or PAUSED readback to the current host-attested turn, one PREPARED outbox, and the registered heartbeat; it derives the canonical payload digest itself, and a send observation never produces PASS. This protects against crashes, duplicate sends, stale/mismatched/replayed reports, wrong artifact/dispatch, and premature terminal projection. A normal Loop does not pin a model: it records `model_identity_requirement=NOT_REQUIRED`, `model_identity_status=NOT_APPLICABLE`, and `UNSPECIFIED` model/reasoning values without implying verification. The strict identity gate is enabled only when a manifest or Goal declares `required_model` or `required_reasoning`. In that mode the App must inject a `THREAD_CREATE_OR_READ` receipt through the non-argument `_meta.x-codex-app-action-receipt-v1` carrier; an unsupported host yields `HOST_BLOCKED`. The v1 contract accepts accurately labelled `HOST_COOPERATIVE` injected evidence only; an ordinary digest must never claim `APP_SIGNED`.
 

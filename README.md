@@ -211,9 +211,11 @@ P1 canonical runtime 会把 defect family、同轮 sibling/unchecked-surface 披
 
 输出详细度 `compact` / `full` / `minimal_patch` 与协作模式 `standard` / `adaptive` 是两条独立轴，不要混为一谈。
 
-## Adaptive v3.3.7：谁写状态、谁推进路线
+## Adaptive v3.3.8：谁写状态、谁推进路线
 
 新生成的 Adaptive Pack 默认使用 schema v3。它不再创建会话式 State-Writer 任务；已安装的 MCP `state_gateway({root, request})` 是唯一 canonical writer。Controller 仍然只读，Worker 只做产品工作，Reviewer/Local Verifier 只提交证据，任何外层 Supervisor 都不属于产品角色。
+
+v3.3.8 起，Gateway Pack 会携带唯一、可提取且可重算摘要的 heartbeat 正文；生成、`--check-only` 和发布校验共同拒绝缺失或摘要不匹配的正文，避免运行时自行猜测 automation prompt 字节。
 
 **当前平台边界：**schema v3 是 **host-cooperative evidence**，不是声称防御“恶意 Controller 可伪造全部 App 调用”的 Byzantine 系统。Gateway 将一次真实 App 的 task/thread、automation、send 返回 target 或 PAUSED readback，绑定到当前 host-attested turn、唯一 PREPARED outbox 和已登记 heartbeat；由 Gateway 自己取得 canonical payload digest，且 send observation 本身绝不产生 PASS。它防止崩溃、重复发送、陈旧/错配/重放报告、错误 artifact/dispatch 与误终态。默认 Loop 不固定具体模型：`model_identity_requirement=NOT_REQUIRED`、`model_identity_status=NOT_APPLICABLE`，model/reasoning 只记录为 `UNSPECIFIED`，不会暗示已验证身份。只有 manifest 或 Goal 显式声明 `required_model` / `required_reasoning` 时，才启用严格身份闸；此时 App 必须在非参数 `_meta.x-codex-app-action-receipt-v1` 中注入 `THREAD_CREATE_OR_READ` 收据，宿主不支持则 `HOST_BLOCKED`。当前 v1 只接受准确标记为 `HOST_COOPERATIVE` 的宿主注入证据；普通 digest 不得冒充 `APP_SIGNED`。
 

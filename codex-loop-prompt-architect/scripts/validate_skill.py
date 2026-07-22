@@ -10,6 +10,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from loop_architect.heartbeat_contract import validate_gateway_heartbeat_pack  # noqa: E402
+
 
 def parse_frontmatter(skill_file: Path) -> dict[str, str]:
     lines = skill_file.read_text(encoding="utf-8").splitlines()
@@ -53,6 +59,7 @@ def validate(skill_dir: Path) -> list[str]:
         skill_dir / "scripts" / "loop_architect" / "schema.py",
         skill_dir / "scripts" / "loop_architect" / "validation.py",
         skill_dir / "scripts" / "loop_architect" / "forecast.py",
+        skill_dir / "scripts" / "loop_architect" / "heartbeat_contract.py",
         skill_dir / "scripts" / "loop_architect" / "protocol_model.py",
         skill_dir / "scripts" / "loop_architect" / "state_runtime.py",
         skill_dir / "scripts" / "loop_architect" / "standard_renderer.py",
@@ -358,6 +365,9 @@ def validate(skill_dir: Path) -> list[str]:
         )
         if adaptive_payload.get("state_gateway_mode", "MCP_CANONICAL_WRITER") == "MCP_CANONICAL_WRITER":
             adaptive_markers = (
+                "HEARTBEAT_PROMPT_BEGIN",
+                "HEARTBEAT_PROMPT_END",
+                "Canonical Prompt Digest: sha256:",
                 "Adaptive v3 Controller Routing Protocol",
                 "Adaptive v3 MCP State Gateway Protocol",
                 "state_gateway({root, request})",
@@ -390,6 +400,8 @@ def validate(skill_dir: Path) -> list[str]:
             )
         if adaptive_result.returncode or any(marker not in adaptive_result.stdout for marker in adaptive_markers):
             errors.append("scaffold Adaptive Mode smoke did not produce all required protocol markers")
+        if adaptive_payload.get("state_gateway_mode", "MCP_CANONICAL_WRITER") == "MCP_CANONICAL_WRITER":
+            errors.extend(validate_gateway_heartbeat_pack(adaptive_result.stdout))
         try:
             from loop_architect.protocol_model import (
                 forbidden_rendered_tokens,

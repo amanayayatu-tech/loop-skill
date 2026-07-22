@@ -131,11 +131,149 @@ class AdaptiveValidationTests(unittest.TestCase):
         self.assertIn("ADVANCE_ROADMAP", pack)
         self.assertIn("PREPARE_FINALIZATION", pack)
         self.assertIn("Native Goal adapters are disabled", pack)
+        body = scaffold.extract_heartbeat_prompt_body(pack)
+        self.assertTrue(body.startswith("Continue this Codex Loop"))
+        self.assertIn("PREPARE_ROUTE", body)
+        self.assertIn("ACK_FINALIZATION", body)
+        self.assertNotIn("ACQUIRE_LEASE", body)
+        self.assertNotIn("PREPARE_OUTBOX", body)
+        self.assertEqual(pack.count("HEARTBEAT_PROMPT_BEGIN"), 1)
+        self.assertEqual(pack.count("HEARTBEAT_PROMPT_END"), 1)
+        self.assertIn(
+            f"Canonical Prompt Digest: {scaffold.heartbeat_prompt_digest(body)}",
+            pack,
+        )
         self.assertNotIn("### Worker Prompt - state-writer", pack)
         self.assertNotIn("Create a State-Writer task", pack)
         self.assertNotIn("immediately before PREPARE_OUTBOX", pack)
         self.assertNotIn("strict JSON ACK_OUTBOX result.status", pack)
         self.assertNotIn("only reviewed evidence plus ROADMAP_REVISION may change future Goals", pack)
+
+    def test_gateway_heartbeat_prompt_is_stable_across_modes_and_automation_input(self) -> None:
+        for mode in ("compact", "full"):
+            for explicit_automation in (False, True):
+                with self.subTest(mode=mode, explicit_automation=explicit_automation):
+                    payload = adaptive_payload()
+                    payload["state_gateway_mode"] = "MCP_CANONICAL_WRITER"
+                    if explicit_automation:
+                        payload["automation"] = "Create one bounded Gateway heartbeat"
+                    payload["_provided_keys"] = sorted(
+                        key for key in payload if not key.startswith("_")
+                    )
+                    pack = scaffold.render_controller_pack(payload, mode)
+                    body = scaffold.extract_heartbeat_prompt_body(pack)
+                    self.assertFalse(body.endswith(("\n", "\r")))
+                    self.assertEqual(
+                        scaffold.validate_rendered_heartbeat_contract(payload, pack),
+                        [],
+                    )
+                    self.assertNotIn("State-Writer", body)
+                    self.assertNotIn("FINALIZE_LOOP", body)
+
+    def test_gateway_heartbeat_missing_body_is_rejected(self) -> None:
+        payload = adaptive_payload()
+        payload["state_gateway_mode"] = "MCP_CANONICAL_WRITER"
+        payload["_provided_keys"] = sorted(
+            key for key in payload if not key.startswith("_")
+        )
+        pack = scaffold.render_controller_pack(payload, "compact")
+        broken = pack.replace("HEARTBEAT_PROMPT_BEGIN\n", "HEARTBEAT_PROMPT_MISSING\n", 1)
+        errors = scaffold.validate_rendered_heartbeat_contract(payload, broken)
+        self.assertTrue(errors)
+        self.assertIn("gateway_heartbeat_prompt_invalid", errors[0])
+
+    def test_gateway_heartbeat_rejects_malformed_identity_and_legacy_semantics(self) -> None:
+        payload = adaptive_payload()
+        payload["state_gateway_mode"] = "MCP_CANONICAL_WRITER"
+        payload["_provided_keys"] = sorted(
+            key for key in payload if not key.startswith("_")
+        )
+        pack = scaffold.render_controller_pack(payload, "compact")
+        body = scaffold.extract_heartbeat_prompt_body(pack)
+        begin = "HEARTBEAT_PROMPT_BEGIN\n"
+        end = "\nHEARTBEAT_PROMPT_END"
+        malformed = {
+            "duplicate_begin": pack.replace(begin, begin + begin, 1),
+            "duplicate_end": pack.replace(end, end + end, 1),
+            "empty_body": pack.replace(f"{begin}{body}{end}", f"{begin}{end}", 1),
+            "trailing_lf": pack.replace(end, "\n\nHEARTBEAT_PROMPT_END", 1),
+            "digest_mismatch": pack.replace(
+                scaffold.heartbeat_prompt_digest(body),
+                "sha256:" + "0" * 64,
+                1,
+            ),
+        }
+        for name, candidate in malformed.items():
+            with self.subTest(name=name):
+                self.assertTrue(scaffold.validate_gateway_heartbeat_pack(candidate))
+
+        for line_endings in ("\r\n", "\r"):
+            with self.subTest(line_endings=repr(line_endings)):
+                transported = pack.replace("\n", line_endings)
+                self.assertEqual(scaffold.validate_gateway_heartbeat_pack(transported), [])
+
+        forbidden_semantics = (
+            "State-Writer",
+            "state-writer",
+            "ACQUIRE_LEASE",
+            "RENEW_LEASE",
+            "TAKEOVER_LEASE",
+            "RELEASE_LEASE",
+            "PREPARE_OUTBOX",
+            "CANCEL_OUTBOX",
+            "MARK_OUTBOX_SENT",
+            "ACK_OUTBOX",
+            "FINALIZE_LOOP",
+            "guessed state",
+            "guess the state",
+            "infer state from",
+        )
+        for token in forbidden_semantics:
+            with self.subTest(forbidden_semantic=token):
+                injected = scaffold.heartbeat_prompt_identity_block(
+                    body + f"\nForbidden instruction: {token}."
+                )
+                self.assertIn(
+                    f"gateway_heartbeat_prompt_legacy_token:{token}",
+                    scaffold.validate_gateway_heartbeat_pack(injected),
+                )
+
+    def test_legacy_state_writer_pack_bytes_remain_v337_identical(self) -> None:
+        expected = {
+            "compact": "6be95365f8cb56c59beded14589b8cb5d5ab23c57d6f216416a6fde48aa741f1",
+            "full": "f07f2ba4779967a2de5741911bcb1d23ad4ed332adc2b18e3e624fcb0fdd7a46",
+        }
+        for mode, expected_digest in expected.items():
+            with self.subTest(mode=mode):
+                pack = scaffold.render_controller_pack(adaptive_payload(), mode)
+                self.assertEqual(
+                    hashlib.sha256(pack.encode("utf-8")).hexdigest(),
+                    expected_digest,
+                )
+
+    def test_gateway_check_only_validates_rendered_pack(self) -> None:
+        payload = adaptive_payload()
+        payload["state_gateway_mode"] = "MCP_CANONICAL_WRITER"
+        payload = {
+            key: value for key, value in payload.items() if not key.startswith("_")
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            input_path = Path(temporary) / "gateway-input.json"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py"),
+                    "--input",
+                    str(input_path),
+                    "--check-only",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("rendered-Pack invariants are valid", completed.stdout)
 
     def test_native_goal_policy_defaults_required_and_rejects_unknown(self) -> None:
         payload = adaptive_payload()
