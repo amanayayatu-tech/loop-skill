@@ -24,15 +24,19 @@ import hashlib
 import io
 import json
 import os
+import runpy
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "codex-loop-prompt-architect" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+
+import recovery_coverage_check  # noqa: E402
 
 from loop_architect import (  # noqa: E402
     capability_envelope,
@@ -1086,3 +1090,110 @@ class GoalRegistryRulesTests(unittest.TestCase):
                     },
                 ]
             )
+
+
+class RecoveryCoverageCheckTests(unittest.TestCase):
+    @staticmethod
+    def _descriptor(operation: str = "REPORT_RECOVERY") -> dict:
+        return {
+            "classification": "RECOVERABLE",
+            "operation": operation,
+            "next_operation": {"operation": operation},
+        }
+
+    def _check(self, document: object, expected: set[str]) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "registry.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with mock.patch.object(
+                recovery_coverage_check.build_recovery_registry,
+                "extract_codes",
+                return_value=expected,
+            ):
+                return recovery_coverage_check.check(path)
+
+    def test_complete_registry(self) -> None:
+        result = self._check({"entries": {"A": self._descriptor()}}, {"A"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "RECOVERY_COVERAGE_COMPLETE")
+
+    def test_missing_stale_and_non_object_descriptors(self) -> None:
+        result = self._check(
+            {
+                "entries": {
+                    "B": "not-an-object",
+                    "STALE": self._descriptor(),
+                }
+            },
+            {"A", "B"},
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("missing:A", result["failures"])
+        self.assertIn("stale:STALE", result["failures"])
+        self.assertIn("B:descriptor-not-object", result["failures"])
+
+    def test_invalid_and_wait_only_recoveries(self) -> None:
+        invalid = (
+            {**self._descriptor(), "classification": "UNKNOWN"},
+            self._descriptor("WAIT"),
+            {**self._descriptor(), "next_operation": []},
+            {**self._descriptor(), "next_operation": {"operation": "OTHER"}},
+            {**self._descriptor(), "operation": ""},
+        )
+        for descriptor in invalid:
+            with self.subTest(descriptor=descriptor):
+                result = self._check({"entries": {"A": descriptor}}, {"A"})
+                self.assertEqual(
+                    result["failures"], ["A:invalid-or-wait-only-recovery"]
+                )
+
+    def test_missing_bad_json_and_bad_entries_are_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "registry.json"
+            with mock.patch.object(
+                recovery_coverage_check.build_recovery_registry,
+                "extract_codes",
+                return_value=set(),
+            ):
+                missing = recovery_coverage_check.check(path)
+                path.write_text("{bad json", encoding="utf-8")
+                malformed = recovery_coverage_check.check(path)
+        self.assertEqual(missing["status"], "RECOVERY_COVERAGE_REGISTRY_INVALID")
+        self.assertEqual(malformed["status"], "RECOVERY_COVERAGE_REGISTRY_INVALID")
+        for document in ([], {"entries": []}):
+            with self.subTest(document=document):
+                result = self._check(document, set())
+                self.assertFalse(result["ok"])
+
+    def test_main_emits_json_and_text_with_exit_status(self) -> None:
+        complete = {"ok": True, "status": "RECOVERY_COVERAGE_COMPLETE"}
+        incomplete = {"ok": False, "status": "RECOVERY_COVERAGE_INCOMPLETE"}
+        with mock.patch.object(
+            recovery_coverage_check, "check", return_value=complete
+        ), mock.patch.object(
+            sys, "argv", ["recovery_coverage_check.py", "--json"]
+        ), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as output:
+            self.assertEqual(recovery_coverage_check.main(), 0)
+            self.assertTrue(json.loads(output.getvalue())["ok"])
+        with mock.patch.object(
+            recovery_coverage_check, "check", return_value=incomplete
+        ), mock.patch.object(
+            sys, "argv", ["recovery_coverage_check.py", "--check"]
+        ), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as output:
+            self.assertEqual(recovery_coverage_check.main(), 1)
+            self.assertEqual(output.getvalue().strip(), "RECOVERY_COVERAGE_INCOMPLETE")
+        with mock.patch.object(
+            sys, "argv", ["recovery_coverage_check.py", "--check"]
+        ), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as output:
+            with self.assertRaises(SystemExit) as exit_context:
+                runpy.run_path(
+                    str(SCRIPTS / "recovery_coverage_check.py"), run_name="__main__"
+                )
+            self.assertEqual(exit_context.exception.code, 0)
+            self.assertEqual(output.getvalue().strip(), "RECOVERY_COVERAGE_COMPLETE")
