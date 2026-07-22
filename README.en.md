@@ -15,6 +15,48 @@ Chats end. Windows refresh. The work rarely ends at the same moment. The hardest
 
 It **designs the Loop and generates the Pack**. It does not implement the target project for you, and one invocation does not silently launch an unattended run.
 
+## Loop, state-machine, and graph semantics
+
+LoopSkill is a **governed, evidence-bound execution and completion control plane**. Consecutive Controller turns drive the outer loop; persistent canonical state, typed operations, guards, ledgers, leases, outboxes, evidence binding, and deterministic recovery constrain the work inside it. It therefore has explicit state-machine and graph semantics, but deliberately does not offer arbitrary DAG orchestration and is not a general-purpose graph workflow runtime.
+
+There is no standalone node/edge DSL or unified Graph definition file. The legal nodes, transitions, and recovery edges are jointly defined by schemas, runtime validators, Goal dependencies, and the recovery registry:
+
+| LoopSkill entity | State-machine / graph meaning | What it does today |
+| --- | --- | --- |
+| Goal registry / Goal queue | Node set and dependencies | Defines the allowed business Goals, dependencies, and order |
+| canonical state version | Graph state and version | Uses CAS/freshness to prevent stale results from advancing current state |
+| typed runtime operation | Typed edge / transition | Restricts the Controller to operations accepted by the runtime |
+| guard / validation / evidence freshness | Edge guard | Rejects a transition when evidence, authority, version, or identity is insufficient |
+| Controller lease / routing turn | One scheduling right | Prevents duplicate routing in one Controller turn |
+| outbox | Durable intent for a pending edge | Supports send-crash, lost-output, and idempotent recovery |
+| Worker / Reviewer report | Node output and verification result | Binds the current dispatch, artifact, diff, and evidence |
+| recovery registry | Failure edge and legal recovery edge | Maps each recoverable code to one legal next operation |
+| finalization | Explicit terminal transition | Closes the loop only at canonical `FINALIZATION_ACKED` |
+| heartbeat / human decision | Timed wake-up and human interrupt | Supports observation, pause, resume, and human gates |
+
+The diagram below describes the current **Adaptive schema-v3** execution path:
+
+```mermaid
+flowchart TD
+    C[Controller request / one routing turn] --> O[Typed operation + guard]
+    W[Worker / Reviewer<br/>bound report + evidence] --> O
+    O --> G[MCP State Gateway<br/>sole canonical writer]
+    G --> S[LOOP_STATE.md<br/>canonical JSON envelope]
+    G --> E[LOOP_EVENTS.jsonl<br/>accepted mutations]
+    G --> R[LOOP_REJECTIONS.jsonl<br/>rejected operations]
+    S --> P[Derived STATUS / GOALS / dashboard<br/>metrics / audit index / business timeline]
+    S --> F[Explicit finalization<br/>FINALIZATION_ACKED]
+    P -. observation only; cannot authorize routes .-> C
+```
+
+Despite its Markdown extension, `.codex-loop/LOOP_STATE.md` contains a strict JSON envelope, not free-form natural-language notes. It is the sole canonical state. Adaptive schema v3 permits only the MCP State Gateway to write it; Standard and legacy Adaptive Packs retain their constrained single-State-Writer path, and the two writer types never share canonical authority. The Controller, Worker, and Reviewer must not edit canonical state directly in either path. `.codex-loop/LOOP_EVENTS.jsonl` appends accepted canonical mutations. The separate, hash-chained `.codex-loop/LOOP_REJECTIONS.jsonl` appends rejected operations while excluding raw prompts, chat, credentials, and complete requests.
+
+`STATUS.md`, `GOALS.md`, the dashboard, metrics, `audit-index.json`, per-Goal summaries, and `business-timeline.json` are deterministic projections of canonical state. They support human reading, Git diffs, observation, and recovery, but cannot authorize a route in reverse or become a second canonical source. If they disagree, canonical state and the transaction journal prevail. New projection, report, and staging writes use SHA-256 content addressing and deduplication while legacy facades remain readable. This does not treat Markdown as an unconstrained concurrent database: concurrency correctness comes from one canonical writer, state versions, CAS, leases, outboxes, PREPARED/APPLIED journals, digests, and schema validators. The Markdown envelope remains useful because it is readable, reviewable, Git-diffable, archivable, and recoverable after a chat, task, or App restart.
+
+**Standard and Adaptive.** A Standard Loop uses a fixed, dependency-ordered Goal Queue, with a topology closer to a predefined linear or finitely branching state machine; it fits stable Goals and ordering. An Adaptive Loop keeps one Active milestone and permits audited roadmap revision as new evidence arrives. The model cannot arbitrarily rewrite the objective: the Goal registry, repair budget, capabilities, and completion criteria remain canonical constraints. Both modes retain one canonical writer, one formal route per Controller turn, bounded repair, explicit review/audit/finalization, lost-output recovery, and invalidation of old reviews when evidence identity changes.
+
+**Boundaries.** LoopSkill does not currently promise arbitrary dynamic DAG authoring, unlimited parallel fan-out/fan-in, concurrent writes by multiple Workers to one canonical state, per-node time travel or independent checkpoint replay, a general deterministic merge engine for branches, or cross-machine distributed scheduling. It does not replace LangGraph, Temporal, Airflow, or CI systems. This is a reliability tradeoff: LoopSkill prioritizes scope drift, duplicate dispatch, stale evidence, repair loops, crash recovery, human pauses, and false completion claims in long-running Codex work.
+
 ## OpenAI Build Week 2026
 
 LoopSkill had a foundation before the event and was meaningfully extended with **Codex and GPT-5.6** from July 13–17, 2026. Codex was the primary engineering environment for this work, with GPT-5.6 used across implementation, incident analysis, test design, documentation, review, and release hardening.
@@ -172,7 +214,7 @@ Do not use it when:
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
 
-## Adaptive v3.3.3: who writes state and who advances a route
+## Adaptive v3.3.7: who writes state and who advances a route
 
 New Adaptive Packs default to schema v3. They do not create a session State-Writer task. The installed MCP `state_gateway({root, request})` is the sole canonical writer. The Controller remains read-only, Workers perform product work, Reviewer/Local Verifier tasks submit evidence, and an outer Supervisor is not a product role.
 

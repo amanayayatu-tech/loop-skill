@@ -15,6 +15,48 @@
 
 它负责**设计 Loop 和生成 Pack**，不会替你直接实现目标项目，也不会仅凭一句调用就自动启动无人值守任务。
 
+## Loop、状态机与 Graph：LoopSkill 到底是什么
+
+LoopSkill 是一个**受治理、证据绑定的执行与完成控制面**：外层由连续的 Controller turn 驱动，内部用持久化 canonical state、受类型约束的操作、guard、ledger、lease、outbox、证据绑定和确定性恢复来约束长程工作。它因此具有明确的状态机与 Graph 语义，但刻意不提供任意 DAG 编排能力，也不是通用 Graph workflow runtime。
+
+当前没有一份独立的 node/edge DSL 或统一 Graph definition 文件。允许的节点、转移和失败恢复边，由 schema、runtime validators、Goal dependency 与 recovery registry 共同定义：
+
+| LoopSkill 实体 | 状态机 / Graph 语义 | 当前真实作用 |
+| --- | --- | --- |
+| Goal registry / Goal queue | 节点集合与依赖关系 | 定义允许执行的业务目标、依赖和顺序 |
+| canonical state version | 图状态与版本 | 通过 CAS/freshness 防止陈旧结果推进当前状态 |
+| typed runtime operation | 有类型的边 / 转移 | Controller 只能请求 runtime 允许的操作 |
+| guard / validation / evidence freshness | 边的 guard | 证据、权限、版本或身份不满足时拒绝转移 |
+| Controller lease / routing turn | 单次调度权 | 防止同一 Controller turn 重复路由 |
+| outbox | 待执行边的持久化意图 | 支持发送崩溃、丢失输出和幂等恢复 |
+| Worker / Reviewer report | 节点产物与验证结果 | 绑定当前 dispatch、artifact、diff 和证据 |
+| recovery registry | 失败边与合法恢复边 | 每个 recoverable code 映射一个合法 next operation |
+| finalization | 显式终态转移 | 只有 canonical `FINALIZATION_ACKED` 才闭环 |
+| heartbeat / human decision | 定时唤醒与人工 interrupt | 支持观察、暂停、恢复和人工闸门 |
+
+下面的图描述当前 **Adaptive schema v3** 执行路径：
+
+```mermaid
+flowchart TD
+    C[Controller request / one routing turn] --> O[Typed operation + guard]
+    W[Worker / Reviewer<br/>bound report + evidence] --> O
+    O --> G[MCP State Gateway<br/>唯一 canonical writer]
+    G --> S[LOOP_STATE.md<br/>canonical JSON envelope]
+    G --> E[LOOP_EVENTS.jsonl<br/>accepted mutations]
+    G --> R[LOOP_REJECTIONS.jsonl<br/>rejected operations]
+    S --> P[Derived STATUS / GOALS / dashboard<br/>metrics / audit index / business timeline]
+    S --> F[Explicit finalization<br/>FINALIZATION_ACKED]
+    P -. observation only; cannot authorize routes .-> C
+```
+
+`.codex-loop/LOOP_STATE.md` 虽然使用 Markdown 文件扩展名，但内容是严格 JSON envelope，而不是任意自然语言笔记；它是唯一 canonical state。Adaptive schema v3 只能由 MCP State Gateway 写入；Standard 与 legacy Adaptive Pack 仍使用其受约束的单 State-Writer 路径，两类 writer 不会同时成为 canonical authority。Controller、Worker 和 Reviewer 在任一路径中都不得直接编辑 canonical。`.codex-loop/LOOP_EVENTS.jsonl` 追加 accepted canonical mutation；独立且 hash-chained 的 `.codex-loop/LOOP_REJECTIONS.jsonl` 追加 rejected operation，并排除 raw prompt、聊天、凭据和完整请求。
+
+`STATUS.md`、`GOALS.md`、dashboard、metrics、`audit-index.json`、按 Goal 汇总和 `business-timeline.json` 都是 canonical state 的确定性派生投影。它们适合人类阅读、Git diff、观察和恢复辅助，但不能反向授权路由或成为第二 canonical；发生冲突时，以 canonical state 与 transaction journal 为准。新 projection、report 和 staging 写入使用 SHA-256 内容寻址与去重，同时保留历史 facade 的读取兼容。这不是把 Markdown 当成无约束并发数据库：并发正确性来自单 canonical writer、state version、CAS、lease、outbox、PREPARED/APPLIED journal、digest 和 schema validator。Markdown envelope 的价值是可读、可审查、易于 Git diff 和归档，也便于在聊天、任务或 App 重启后恢复上下文。
+
+**Standard 与 Adaptive。**Standard Loop 使用依赖有序的固定 Goal Queue，拓扑接近预定义的线性或有限分支状态机，适合目标与顺序稳定的任务。Adaptive Loop 保持一个 Active milestone，允许后续路线依据新证据进行受审计的 roadmap revision；模型不能任意改写目标，Goal registry、repair budget、capability 与完成标准仍受 canonical 约束。两者都坚持单 canonical writer、一次 Controller turn 一条正式 route、有界 repair、显式 review/audit/finalization、lost-output recovery，以及证据身份变化后旧 review 不得复用。
+
+**边界。**LoopSkill 当前不把任意动态 DAG authoring、无限制并行 fan-out/fan-in、多 Worker 并发写同一 canonical state、任意节点独立 checkpoint/时间旅行、多分支通用确定性 merge、跨机器分布式调度作为一等产品承诺，也不取代 LangGraph、Temporal、Airflow 或 CI 系统。这是可靠性取舍：它优先解决 Codex 长程任务中的 scope drift、重复派发、证据陈旧、修复循环、崩溃恢复、人工暂停和错误宣布完成。
+
 ## OpenAI Build Week 2026
 
 LoopSkill 在活动开始前已有基础版本，并在 2026 年 7 月 13–17 日使用 **Codex 和 GPT-5.6** 完成了实质性扩展。Codex 是这轮工作的主要工程环境，GPT-5.6 用于实现、事故分析、测试设计、文档、审查与发布加固。
@@ -169,7 +211,7 @@ P1 canonical runtime 会把 defect family、同轮 sibling/unchecked-surface 披
 
 输出详细度 `compact` / `full` / `minimal_patch` 与协作模式 `standard` / `adaptive` 是两条独立轴，不要混为一谈。
 
-## Adaptive v3.3.3：谁写状态、谁推进路线
+## Adaptive v3.3.7：谁写状态、谁推进路线
 
 新生成的 Adaptive Pack 默认使用 schema v3。它不再创建会话式 State-Writer 任务；已安装的 MCP `state_gateway({root, request})` 是唯一 canonical writer。Controller 仍然只读，Worker 只做产品工作，Reviewer/Local Verifier 只提交证据，任何外层 Supervisor 都不属于产品角色。
 
