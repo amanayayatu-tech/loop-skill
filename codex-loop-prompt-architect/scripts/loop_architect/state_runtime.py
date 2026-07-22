@@ -34,6 +34,17 @@ from .human_control import (
 )
 from .recovery_registry import recovery_for
 from .rejection_journal import RejectionJournalError, append_rejection
+from .p1_runtime import (
+    P1RuntimeError,
+    ensure_compatible as ensure_p1_compatible,
+    initial_state as initial_p1_state,
+    record_heartbeat as p1_record_heartbeat,
+    record_review_disclosure as p1_record_review_disclosure,
+    record_route_acked as p1_record_route_acked,
+    record_route_prepared as p1_record_route_prepared,
+    record_route_sent as p1_record_route_sent,
+    repair_context as p1_repair_context,
+)
 DEFAULT_HUMAN_CONTROL_POLICY = {
     "human_steering_enabled": True,
     "status_projection_enabled": True,
@@ -5206,6 +5217,7 @@ class AdaptiveStateRuntime:
         )
         state.setdefault("required_model", "UNSPECIFIED")
         state.setdefault("required_reasoning", "UNSPECIFIED")
+        ensure_p1_compatible(state)
         state.setdefault("goal_closeout_ledger", {})
         state.setdefault("policy_migration_history", [])
         for goal_id, record in state.get("goal_execution_ledger", {}).items():
@@ -13298,6 +13310,15 @@ class AdaptiveStateRuntime:
             ),
             "required_model": required_model,
             "required_reasoning": required_reasoning,
+            "p1_runtime": initial_p1_state(
+                enabled=mutation.get("p1_runtime_enabled", False),
+                initialization_class=initialization_class,
+                goal_definitions=mutation["goal_definition_registry"],
+                supervisor_capabilities=mutation.get("supervisor_capability_envelope"),
+                model_canaries=mutation.get("model_canaries"),
+                runtime_digest=mutation.get("runtime_digest", "UNMETERED"),
+                config_digest=mutation.get("config_digest", "UNMETERED"),
+            ),
             "review_contract_version": 2,
             "worker_validation_projection_contract_version": 1,
             "controller_pack_migration_contract_version": 2,

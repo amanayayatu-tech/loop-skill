@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://loop-skill/references/defect-family-catalog.schema.json",
+  "title": "Defect family catalog",
+  "description": "Catalog of runtime defect families used by P1-1 / P1-2 / P1-3 to detect same-family returns and trigger structural escalation.",
+  "type": "object",
+  "required": ["schema_version", "families"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "defect-family-catalog-v1"
+    },
+    "families": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "family_id",
+          "searched_files",
+          "searched_patterns",
+          "entrypoints",
+          "type_matrix",
+          "siblings",
+          "closure_status",
+          "discoverer"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "family_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._-]{0,95}$"
+          },
+          "searched_files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "searched_patterns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "entrypoints": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "type_matrix": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                }
+              ]
+            }
+          },
+          "siblings": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._/:@<>-]{1,256}$"
+            }
+          },
+          "closure_status": {
+            "enum": ["OPEN", "CONTAINED", "CLOSED", "ESCALATED"]
+          },
+          "discoverer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "remediation_note": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        }
+      }
+    }
+  }
+}
