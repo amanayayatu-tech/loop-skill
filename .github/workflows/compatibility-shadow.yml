@@ -25,6 +25,9 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
       - name: Validate canonical inventory
         run: >-
           python .github/ci/compatibility.py validate-manifest
