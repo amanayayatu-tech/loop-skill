@@ -143,27 +143,52 @@ class DefectFamily:
         """Hydrate a ``DefectFamily`` from a JSON-stable dict."""
         if not isinstance(payload, Mapping):
             raise DefectFamilyError("family payload must be a mapping")
-        try:
-            type_matrix = tuple(
-                (name, tuple(values))
-                for name, values in payload["type_matrix"]
-            )
-        except (KeyError, TypeError) as exc:
-            raise DefectFamilyError(
-                f"type_matrix missing or malformed: {exc}"
-            ) from exc
+        required = {
+            "family_id", "searched_files", "searched_patterns", "entrypoints",
+            "type_matrix", "siblings", "closure_status", "discoverer",
+        }
+        if frozenset(payload) not in {
+            frozenset(required),
+            frozenset(required | {"remediation_note"}),
+        }:
+            raise DefectFamilyError("family payload has missing or unexpected fields")
+
+        def strings(field_name: str) -> tuple[str, ...]:
+            value = payload[field_name]
+            if not isinstance(value, list) or any(type(item) is not str for item in value):
+                raise DefectFamilyError(f"{field_name} must be an array of strings")
+            return tuple(value)
+
+        raw_matrix = payload["type_matrix"]
+        if not isinstance(raw_matrix, list):
+            raise DefectFamilyError("type_matrix must be an array")
+        type_matrix_items: list[tuple[str, tuple[str, ...]]] = []
+        for entry in raw_matrix:
+            if (
+                not isinstance(entry, list)
+                or len(entry) != 2
+                or type(entry[0]) is not str
+                or not isinstance(entry[1], list)
+                or any(type(item) is not str for item in entry[1])
+            ):
+                raise DefectFamilyError("type_matrix entries must be [string, string[]]")
+            type_matrix_items.append((entry[0], tuple(entry[1])))
+        for field_name in ("family_id", "closure_status", "discoverer"):
+            if type(payload[field_name]) is not str:
+                raise DefectFamilyError(f"{field_name} must be a string")
+        remediation_note = payload.get("remediation_note", "")
+        if type(remediation_note) is not str:
+            raise DefectFamilyError("remediation_note must be a string")
         return cls(
-            family_id=str(payload["family_id"]),
-            searched_files=tuple(str(value) for value in payload.get("searched_files", ())),
-            searched_patterns=tuple(
-                str(value) for value in payload.get("searched_patterns", ())
-            ),
-            entrypoints=tuple(str(value) for value in payload.get("entrypoints", ())),
-            type_matrix=type_matrix,
-            siblings=tuple(str(value) for value in payload.get("siblings", ())),
-            closure_status=str(payload.get("closure_status", "OPEN")),
-            discoverer=str(payload.get("discoverer", "unspecified")),
-            remediation_note=str(payload.get("remediation_note", "")),
+            family_id=payload["family_id"],
+            searched_files=strings("searched_files"),
+            searched_patterns=strings("searched_patterns"),
+            entrypoints=strings("entrypoints"),
+            type_matrix=tuple(type_matrix_items),
+            siblings=strings("siblings"),
+            closure_status=payload["closure_status"],
+            discoverer=payload["discoverer"],
+            remediation_note=remediation_note,
         )
 
     def digest(self) -> str:

@@ -169,6 +169,24 @@ def build_envelope(
     any future field additions stay in lock-step with
     :func:`validate_envelope`.
     """
+    sequence_values = {
+        "searched_files": searched_files,
+        "searched_patterns": searched_patterns,
+        "unchecked_surfaces": unchecked_surfaces,
+        "siblings": siblings,
+        "evidence_paths": evidence_paths,
+    }
+    if any(
+        isinstance(value, (str, bytes))
+        or not isinstance(value, Sequence)
+        or any(type(item) is not str for item in value)
+        for value in sequence_values.values()
+    ):
+        raise ReviewerEnvelopeError("disclosure arrays must contain only strings")
+    if any(type(value) is not str for value in (verdict, defect_family_id, defect_family_digest, remediation)):
+        raise ReviewerEnvelopeError("reviewer envelope scalar fields must be strings")
+    if type(return_number) is not int:
+        raise ReviewerEnvelopeError("return_number must be an integer")
     envelope = ReviewerEnvelope(
         verdict=verdict,
         defect_family_id=defect_family_id,
@@ -200,26 +218,31 @@ def envelope_from_mapping(
     """
     if not isinstance(payload, Mapping):
         raise ReviewerEnvelopeError("envelope payload must be a mapping")
-    family_id = str(payload.get("defect_family_id", ""))
+    required = {
+        "verdict", "defect_family_id", "defect_family_digest", "searched_files",
+        "searched_patterns", "unchecked_surfaces", "siblings",
+    }
+    optional = {"return_number", "remediation", "evidence_paths"}
+    if not required.issubset(payload) or set(payload) - required - optional:
+        raise ReviewerEnvelopeError("envelope payload has missing or unexpected fields")
+    family_id = payload["defect_family_id"]
+    if type(family_id) is not str:
+        raise ReviewerEnvelopeError("defect_family_id must be a string")
     if return_counter is not None and family_id:
         return_number = return_counter.observe(family_id)
     else:
-        return_number = int(payload.get("return_number", 0))
+        return_number = payload.get("return_number", 0)
     return build_envelope(
-        verdict=str(payload.get("verdict", "")),
+        verdict=payload["verdict"],
         defect_family_id=family_id,
-        defect_family_digest=str(payload.get("defect_family_digest", "")),
-        searched_files=tuple(str(value) for value in payload.get("searched_files", ())),
-        searched_patterns=tuple(
-            str(value) for value in payload.get("searched_patterns", ())
-        ),
-        unchecked_surfaces=tuple(
-            str(value) for value in payload.get("unchecked_surfaces", ())
-        ),
-        siblings=tuple(str(value) for value in payload.get("siblings", ())),
+        defect_family_digest=payload["defect_family_digest"],
+        searched_files=payload["searched_files"],
+        searched_patterns=payload["searched_patterns"],
+        unchecked_surfaces=payload["unchecked_surfaces"],
+        siblings=payload["siblings"],
         return_number=return_number,
-        remediation=str(payload.get("remediation", "")),
-        evidence_paths=tuple(str(value) for value in payload.get("evidence_paths", ())),
+        remediation=payload.get("remediation", ""),
+        evidence_paths=payload.get("evidence_paths", []),
     )
 
 

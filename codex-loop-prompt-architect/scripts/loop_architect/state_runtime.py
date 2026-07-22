@@ -36,6 +36,7 @@ from .recovery_registry import recovery_for
 from .rejection_journal import RejectionJournalError, append_rejection
 from .p1_runtime import (
     P1RuntimeError,
+    authorize_supervisor as p1_authorize_supervisor,
     ensure_compatible as ensure_p1_compatible,
     initial_state as initial_p1_state,
     record_heartbeat as p1_record_heartbeat,
@@ -129,6 +130,7 @@ DISPATCH_PAYLOAD_KEYS = {
         "validation_matrix",
         "review_surface",
         "context_freshness_snapshot",
+        "defect_family",
         "worker_permission",
         "worker_role",
         "worker_role_kind",
@@ -152,6 +154,7 @@ DISPATCH_PAYLOAD_KEYS = {
         "source_worker_dispatch_id",
         "source_worker_report_digest",
         "target_thread_id",
+        "reviewer_disclosure_contract",
     },
     "LOCAL_VERIFY_DISPATCH": {
         "artifact_identity",
@@ -910,7 +913,9 @@ def _validate_dispatch_payload_shape(envelope_type: str, payload: Mapping[str, A
             "validation_matrix",
             "review_surface",
             "context_freshness_snapshot",
+            "defect_family",
         },
+        "REVIEW_DISPATCH": {"reviewer_disclosure_contract"},
         "LOCAL_VERIFY_DISPATCH": {"external_call_authorization"},
     }.get(envelope_type, set())
     minimum = required - compatibility_optional
@@ -1078,6 +1083,11 @@ def _validate_dispatch_payload_shape(envelope_type: str, payload: Mapping[str, A
                 "DISPATCH_FRESHNESS_SNAPSHOT_INVALID",
                 "context_freshness_snapshot",
             )
+        defect_family = payload.get("defect_family")
+        if defect_family is not None and not isinstance(defect_family, dict):
+            _dispatch_payload_rejection(
+                "P1_DEFECT_FAMILY_INVALID", "defect_family"
+            )
         permissions = payload["phase_permissions"]
         if (
             not isinstance(permissions, dict)
@@ -1120,6 +1130,33 @@ def _validate_dispatch_payload_shape(envelope_type: str, payload: Mapping[str, A
         _require_safe_dispatch_id(payload, "roadmap_audit_id", nullable=True)
         if payload["review_kind"] not in REVIEW_DECISIONS:
             _dispatch_payload_rejection("DISPATCH_PAYLOAD_FIELD_INVALID", "review_kind")
+        disclosure_contract = payload.get("reviewer_disclosure_contract")
+        if disclosure_contract is not None and (
+            not isinstance(disclosure_contract, dict)
+            or set(disclosure_contract)
+            != {
+                "required",
+                "required_fields",
+                "third_return_actions",
+            }
+            or disclosure_contract.get("required") is not True
+            or disclosure_contract.get("required_fields")
+            != [
+                "defect_family",
+                "searched_files",
+                "searched_patterns",
+                "unchecked_surfaces",
+                "siblings",
+                "remediation",
+                "verdict",
+            ]
+            or disclosure_contract.get("third_return_actions")
+            != sorted({"REFACTOR", "GOAL_SPLIT", "CLAIM_NARROWING", "LIMITATION"})
+        ):
+            _dispatch_payload_rejection(
+                "P1_REVIEWER_DISCLOSURE_CONTRACT_INVALID",
+                "reviewer_disclosure_contract",
+            )
         if (
             payload["review_kind"] == "CODE_REVIEW"
             and (
@@ -4373,6 +4410,21 @@ class AdaptiveStateRuntime:
             f"<li><code>{html.escape(event_id)}</code></li>"
             for event_id, _ in ordered_events[-12:]
         )
+        p1_runtime = state.get("p1_runtime", {})
+        p1_families = (
+            p1_runtime.get("defect_families", {})
+            if isinstance(p1_runtime, dict) and p1_runtime.get("enabled") is True
+            else {}
+        )
+        p1_family_rows = "".join(
+            "<tr>"
+            f"<td>{html.escape(family_id)}</td>"
+            f"<td>{html.escape(str(record.get('return_number')))}</td>"
+            f"<td>{html.escape(str(record.get('closure_status')))}</td>"
+            f"<td>{html.escape(str(record.get('reviewer_envelope', {}).get('verdict')))}</td>"
+            "</tr>"
+            for family_id, record in sorted(p1_families.items())
+        ) or '<tr><td colspan="4">None</td></tr>'
         payload = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -4401,6 +4453,9 @@ class AdaptiveStateRuntime:
 <h2>Estimate history</h2><pre><code>{html.escape(_canonical_json(state['estimate_history'], indent=2))}</code></pre>
 <h2>Evidence</h2><ul>{evidence_items}</ul>
 <h2>Required user decisions</h2><ul>{required_decision_items}</ul>
+<h2>P1 defect-family governance</h2>
+<p><strong>Enabled:</strong> {html.escape(str(bool(p1_runtime.get('enabled'))))}</p>
+<table><thead><tr><th>Family</th><th>Return</th><th>Closure</th><th>Resolution</th></tr></thead><tbody>{p1_family_rows}</tbody></table>
 <h2>Recent events</h2><ul>{event_items}</ul>
 <p>Generated from canonical state at {html.escape(state['logical_time'])}. This file is read-only.</p>
 </body>
@@ -4860,6 +4915,13 @@ class AdaptiveStateRuntime:
             f"{goal_id}:{record.get('status')}:{self._completion_projection(state, goal_id, record)[0]}->{self._completion_projection(state, goal_id, record)[1] or 'NOT_YET_ACHIEVED'}"
             for goal_id, record in sorted(state["goal_execution_ledger"].items())
         ) or "NONE"
+        p1_runtime = state.get("p1_runtime", {})
+        p1_enabled = isinstance(p1_runtime, dict) and p1_runtime.get("enabled") is True
+        p1_families = p1_runtime.get("defect_families", {}) if p1_enabled else {}
+        p1_family_summary = ", ".join(
+            f"{family_id}:return-{record.get('return_number')}:{record.get('closure_status')}"
+            for family_id, record in sorted(p1_families.items())
+        ) or "NONE"
         lines = [
             "# Loop Status",
             "",
@@ -4887,6 +4949,8 @@ class AdaptiveStateRuntime:
             f"- Model identity status: `{state.get('model_identity_status', 'NOT_APPLICABLE')}`",
             f"- Required model/reasoning: `{state.get('required_model', 'UNSPECIFIED')} / {state.get('required_reasoning', 'UNSPECIFIED')}`",
             f"- Validation gate: `{validation_gate_display}`",
+            f"- P1 governance: `{'ENABLED' if p1_enabled else 'DISABLED'}`",
+            f"- Defect families: `{p1_family_summary}`",
             *(
                 [f"- Workflow and evidence completion: `{completion_summary}`"]
                 if include_completion
@@ -8672,6 +8736,15 @@ class AdaptiveStateRuntime:
         )
         parent = state["goal_execution_ledger"].get(goal_id, {}).get("latest_worker")
         parent_dispatch_id = parent.get("dispatch_id") if isinstance(parent, dict) else None
+        if parent_dispatch_id is not None:
+            try:
+                p1_authorize_supervisor(
+                    state,
+                    operation="loop.repair",
+                    scope_prefix=f"goal:{goal_id}",
+                )
+            except P1RuntimeError as exc:
+                raise RuntimeRejection(exc.code, exc.path) from exc
         repository = subprocess.run(
             ["git", "-C", str(self.root), "rev-parse", "--is-inside-work-tree"],
             capture_output=True, text=True, check=False, timeout=15,
@@ -8734,6 +8807,8 @@ class AdaptiveStateRuntime:
             "worker_role": definition["worker_role"],
             "worker_role_kind": role_kind,
         }
+        if state.get("p1_runtime", {}).get("enabled") is True:
+            payload["defect_family"] = p1_repair_context(state, goal_id)
         materialized = materialize_dispatch_payload(
             {"envelope_type": "WORKER_DISPATCH", "payload": payload}
         )
@@ -8917,6 +8992,22 @@ class AdaptiveStateRuntime:
             "source_worker_report_digest": worker["report_digest"],
             "target_thread_id": target_thread_id,
         }
+        if state.get("p1_runtime", {}).get("enabled") is True:
+            payload["reviewer_disclosure_contract"] = {
+                "required": True,
+                "required_fields": [
+                    "defect_family",
+                    "searched_files",
+                    "searched_patterns",
+                    "unchecked_surfaces",
+                    "siblings",
+                    "remediation",
+                    "verdict",
+                ],
+                "third_return_actions": sorted(
+                    {"REFACTOR", "GOAL_SPLIT", "CLAIM_NARROWING", "LIMITATION"}
+                ),
+            }
         materialized = materialize_dispatch_payload(
             {"envelope_type": "REVIEW_DISPATCH", "payload": payload}
         )
@@ -9932,6 +10023,10 @@ class AdaptiveStateRuntime:
         }
         state["heartbeat_prompt_identity"] = copy.deepcopy(identity)
         self._project_heartbeat_observation(state, observation, path, digest, after_version)
+        try:
+            p1_record_heartbeat(state, observation)
+        except P1RuntimeError as exc:
+            raise RuntimeRejection(exc.code, exc.path) from exc
         state["heartbeat_routing_gate_enforced"] = True
         return {
             "code": "GATEWAY_HEARTBEAT_REGISTERED",
@@ -9955,6 +10050,10 @@ class AdaptiveStateRuntime:
         record = self._registered_heartbeat_record(state)
         record["result"] = {**record["result"], "status": observation["status"]}
         self._project_heartbeat_observation(state, observation, path, digest, after_version)
+        try:
+            p1_record_heartbeat(state, observation)
+        except P1RuntimeError as exc:
+            raise RuntimeRejection(exc.code, exc.path) from exc
         return {
             "code": "GATEWAY_HEARTBEAT_OBSERVATION_RECORDED",
             "next_action_code": "READ_STATE",
@@ -10085,6 +10184,15 @@ class AdaptiveStateRuntime:
             "report_digest": None,
             "report_attestation": None,
         }
+        try:
+            p1_record_route_prepared(
+                state,
+                route_id=route_id,
+                route_kind="WORKER",
+                observed_at=item["observed_at"],
+            )
+        except P1RuntimeError as exc:
+            raise RuntimeRejection(exc.code, exc.path) from exc
         return {
             "code": "GATEWAY_ROUTE_PREPARED",
             "next_action_code": "MATERIALIZE_AND_SEND_ONCE",
@@ -10185,6 +10293,15 @@ class AdaptiveStateRuntime:
             "report_digest": None,
             "report_attestation": None,
         }
+        try:
+            p1_record_route_prepared(
+                state,
+                route_id=route_id,
+                route_kind=route_kind,
+                observed_at=observed_at,
+            )
+        except P1RuntimeError as exc:
+            raise RuntimeRejection(exc.code, exc.path) from exc
         return {
             "code": "GATEWAY_ROUTE_PREPARED",
             "next_action_code": "MATERIALIZE_AND_SEND_ONCE",
@@ -10285,6 +10402,15 @@ class AdaptiveStateRuntime:
         route["sent_at"] = observation["observed_at"]
         record["status"] = "SENT"
         record["sent_evidence_paths"] = [evidence_path]
+        try:
+            p1_record_route_sent(
+                state,
+                route_id=route_id,
+                observed_at=observation["observed_at"],
+                receipt_digest=observation["evidence_digest"],
+            )
+        except P1RuntimeError as exc:
+            raise RuntimeRejection(exc.code, exc.path) from exc
         return {
             "code": "GATEWAY_ROUTE_SENT",
             "next_action_code": "WAIT_FOR_STAGED_REPORT",
@@ -10412,6 +10538,17 @@ class AdaptiveStateRuntime:
             report,
             pending_artifacts=pending_artifacts,
         )
+        if record["outbox_kind"] == "ASSURANCE":
+            try:
+                p1_record_review_disclosure(
+                    state,
+                    goal_id=record["identity"]["goal_id"],
+                    review_status=result["status"],
+                    result={"reviewer_disclosure": report.get("reviewer_disclosure")},
+                    evidence_paths=[expected_path, *sorted(pending_artifacts)],
+                )
+            except P1RuntimeError as exc:
+                raise RuntimeRejection(exc.code, exc.path) from exc
         self._observe_time(state, request["occurred_at"], "/occurred_at")
         record["ack_evidence_paths"] = [expected_path]
         record["result"] = copy.deepcopy(result)
@@ -10511,6 +10648,16 @@ class AdaptiveStateRuntime:
         route["report_attestation"] = copy.deepcopy(attestation)
         if outbox_kind == "DISPATCH":
             route["worker_dispatch_id"] = outbox_id
+        try:
+            p1_record_route_acked(
+                state,
+                route_id=outbox_id,
+                observed_at=request["occurred_at"],
+                accepted=True,
+                recovery=recovery,
+            )
+        except P1RuntimeError as exc:
+            raise RuntimeRejection(exc.code, exc.path) from exc
         code = "GATEWAY_REPORT_RECOVERY_ACKED" if recovery else "GATEWAY_ROUTE_ACKED"
         return {
             "code": code,
@@ -13298,6 +13445,18 @@ class AdaptiveStateRuntime:
                 "roadmap_version": roadmap_version,
                 "projection_digest": mutation["projection_digest"],
             }
+        try:
+            p1_runtime_state = initial_p1_state(
+                enabled=mutation.get("p1_runtime_enabled", False),
+                initialization_class=initialization_class,
+                goal_definitions=mutation["goal_definition_registry"],
+                supervisor_capabilities=mutation.get("supervisor_capability_envelope"),
+                model_canaries=mutation.get("model_canaries"),
+                runtime_digest=mutation.get("runtime_digest", "UNMETERED"),
+                config_digest=mutation.get("config_digest", "UNMETERED"),
+            )
+        except P1RuntimeError as exc:
+            raise RuntimeRejection(exc.code, exc.path) from exc
         return {
             "schema_version": 3 if gateway_mode else 2,
             "initialization_class": initialization_class,
@@ -13310,15 +13469,7 @@ class AdaptiveStateRuntime:
             ),
             "required_model": required_model,
             "required_reasoning": required_reasoning,
-            "p1_runtime": initial_p1_state(
-                enabled=mutation.get("p1_runtime_enabled", False),
-                initialization_class=initialization_class,
-                goal_definitions=mutation["goal_definition_registry"],
-                supervisor_capabilities=mutation.get("supervisor_capability_envelope"),
-                model_canaries=mutation.get("model_canaries"),
-                runtime_digest=mutation.get("runtime_digest", "UNMETERED"),
-                config_digest=mutation.get("config_digest", "UNMETERED"),
-            ),
+            "p1_runtime": p1_runtime_state,
             "review_contract_version": 2,
             "worker_validation_projection_contract_version": 1,
             "controller_pack_migration_contract_version": 2,
@@ -17908,6 +18059,18 @@ class AdaptiveStateRuntime:
                 "ROADMAP_PROPOSAL_UNEXPECTED",
                 "/artifacts/report/roadmap_proposal",
             )
+        if kind == "ASSURANCE" and state.get("p1_runtime", {}).get("enabled") is True:
+            try:
+                validation_state = copy.deepcopy(state)
+                p1_record_review_disclosure(
+                    validation_state,
+                    goal_id=goal_id,
+                    review_status=result["status"],
+                    result={"reviewer_disclosure": report.get("reviewer_disclosure")},
+                    evidence_paths=sorted((pending_artifacts or {}).keys()),
+                )
+            except P1RuntimeError as exc:
+                raise RuntimeRejection(exc.code, exc.path) from exc
         return review_handoff
 
     def _validate_worker_review_handoff(

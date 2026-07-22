@@ -169,22 +169,32 @@ class CapabilityEnvelope:
     def from_dict(cls, payload: Mapping[str, Any]) -> "CapabilityEnvelope":
         if not isinstance(payload, Mapping):
             raise CapabilityEnvelopeError("envelope payload must be a mapping")
-        capabilities = tuple(
-            Capability(
-                name=str(entry["name"]),
-                scope=str(entry["scope"]),
-                action=str(entry["action"]),
-                constraint=str(entry["constraint"]),
-            )
-            for entry in payload.get("capabilities", ())
-        )
+        required = {"owner", "role", "capabilities", "denials", "issued_at", "note"}
+        if set(payload) != required:
+            raise CapabilityEnvelopeError("envelope has missing or unexpected fields")
+        if any(type(payload[field]) is not str for field in ("owner", "role", "issued_at", "note")):
+            raise CapabilityEnvelopeError("envelope scalar fields must be strings")
+        if not isinstance(payload["capabilities"], list):
+            raise CapabilityEnvelopeError("capabilities must be an array")
+        capabilities_list: list[Capability] = []
+        for entry in payload["capabilities"]:
+            if (
+                not isinstance(entry, dict)
+                or set(entry) != {"name", "scope", "action", "constraint"}
+                or any(type(entry[field]) is not str for field in entry)
+            ):
+                raise CapabilityEnvelopeError("capability entry has invalid shape")
+            capabilities_list.append(Capability(**entry))
+        denials = payload["denials"]
+        if not isinstance(denials, list) or any(type(value) is not str for value in denials):
+            raise CapabilityEnvelopeError("denials must be an array of strings")
         return cls(
-            owner=str(payload.get("owner", "")),
-            role=str(payload.get("role", "")),
-            capabilities=capabilities,
-            denials=tuple(str(value) for value in payload.get("denials", ())),
-            issued_at=str(payload.get("issued_at", "")),
-            note=str(payload.get("note", "")),
+            owner=payload["owner"],
+            role=payload["role"],
+            capabilities=tuple(capabilities_list),
+            denials=tuple(denials),
+            issued_at=payload["issued_at"],
+            note=payload["note"],
         )
 
 

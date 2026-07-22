@@ -5,10 +5,9 @@ The orchestrator collapses a Controller's three-step route hand-off
 ``ACK_ROUTE_RESULT`` -> next-route hand-off into a single deterministic
 turn. External calls remain individual receipts; only the *sequencing*
 is collapsed. The orchestrator never invents a network-level atomic
-transaction; it just guarantees that a Controller turn that begins
-orchestration either finishes all internal steps or none of them, with
-one merged receipt and the same atomicity guarantees the existing
-rejection journal already provides for one-step routes.
+transaction. A Controller turn can resume after its last acknowledged
+step with one merged receipt; every external action retains its own
+identity and a replay resumes from, rather than repeats, that boundary.
 
 The module is intentionally minimal: it accepts a sequence of
 ``OrchestrationStep`` objects and a write callback, runs them in
@@ -60,14 +59,16 @@ class OrchestrationStep:
     operation: str
     payload: Mapping[str, Any]
     requires_external_call: bool = False
+    external_receipt_digest: str = ""
 
-    def canonical(self) -> str:
+    def canonical(self) -> bytes:
         """Return the canonical byte form used for receipt digests."""
         return json.dumps(
             {
                 "operation": self.operation,
                 "payload": dict(self.payload),
                 "requires_external_call": self.requires_external_call,
+                "external_receipt_digest": self.external_receipt_digest,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -121,6 +122,7 @@ def orchestrate(
     write: WriteCallback,
     *,
     clock: Callable[[], float] = time.monotonic,
+    completed_step_receipts: Sequence[Mapping[str, Any]] = (),
 ) -> OrchestrationReceipt:
     """Run ``steps`` under one merged receipt.
 
@@ -146,9 +148,11 @@ def orchestrate(
         raise RouteOrchestrationError("orchestration requires at least one step")
     if not turn_id:
         raise RouteOrchestrationError("turn_id is required")
+    if len(completed_step_receipts) > len(steps):
+        raise RouteOrchestrationError("completed receipts exceed step count")
     started = clock()
-    receipts: list[Mapping[str, Any]] = []
-    for step in steps:
+    receipts: list[Mapping[str, Any]] = [dict(item) for item in completed_step_receipts]
+    for step in steps[len(receipts):]:
         receipt = write(step)
         if receipt is None:
             completed = clock()
@@ -203,6 +207,12 @@ def _make_receipt(
             "step_digests": [
                 hashlib.sha256(step.canonical()).hexdigest() for step in steps
             ],
+            "step_receipt_digests": [
+                hashlib.sha256(
+                    json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                for receipt in receipts
+            ],
             "status": status,
             "started_at": started_at,
             "completed_at": completed_at,
@@ -235,6 +245,9 @@ def fold_legacy_three_step(
     orchestration sequence. Provided as a convenience so callers do
     not duplicate the step ordering.
     """
+    send_receipt_digest = hashlib.sha256(
+        json.dumps(send_receipt, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     return (
         OrchestrationStep(
             operation="PREPARE_ROUTE",
@@ -244,6 +257,7 @@ def fold_legacy_three_step(
             operation="RECORD_ROUTE_SENT",
             payload=record_payload,
             requires_external_call=True,
+            external_receipt_digest=send_receipt_digest,
         ),
     )
 
