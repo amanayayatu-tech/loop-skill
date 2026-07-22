@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import stat
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -101,27 +103,51 @@ def read_manifest(path: Path) -> dict[str, Any]:
 
 
 def write_manifest(path: Path, value: dict[str, Any]) -> None:
-    validate_manifest(value)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.parent / f".{path.name}.tmp"
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
     try:
+        validate_manifest(value)
+        path.parent.mkdir(parents=True, exist_ok=True)
         payload = canonical_bytes(value) + b"\n"
-        if os.write(descriptor, payload) != len(payload):
-            raise OSError("short archive manifest write")
+        legacy_temporary = path.parent / f".{path.name}.tmp"
+        if os.path.lexists(legacy_temporary):
+            metadata = os.lstat(legacy_temporary)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+                raise ArchiveManifestError("ARCHIVE_TEMP_INVALID")
+            if legacy_temporary.read_bytes() == payload:
+                os.replace(legacy_temporary, path)
+                _fsync_directory(path.parent)
+                return
+            legacy_temporary.unlink()
+        temporary = path.parent / (
+            f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+        )
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            try:
+                if os.write(descriptor, payload) != len(payload):
+                    raise OSError("short archive manifest write")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, path)
+            _fsync_directory(path.parent)
+        finally:
+            temporary.unlink(missing_ok=True)
+    except ArchiveManifestError:
+        raise
+    except OSError as exc:
+        raise ArchiveManifestError("ARCHIVE_MANIFEST_WRITE_FAILED") from exc
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-    os.replace(temporary, path)
-    directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
 
 
 __all__ = [

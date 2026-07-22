@@ -24,7 +24,11 @@ from loop_architect.capability_envelope import (
     CapabilityEnvelopeError,
 )
 from loop_architect.p1_runtime import privacy_safe_export
-from loop_architect.archive_manifest_v2 import build_manifest, write_manifest
+from loop_architect.archive_manifest_v2 import (
+    ArchiveManifestError,
+    build_manifest,
+    write_manifest,
+)
 from loop_architect.risky_artifact_scanner import scan, unallowed_credentials
 
 
@@ -886,13 +890,15 @@ def archive_root(root: Path, reason: str) -> dict[str, Any]:
         )
         for outbox_id, record in state.get(field, {}).items()
     ]
+    remote = _git(resolved, "remote", "get-url", "origin")
     manifest = build_manifest(
         reason=reason,
         root=str(resolved),
         git={
             "branch": _git(resolved, "branch", "--show-current"),
             "head": _git(resolved, "rev-parse", "HEAD"),
-            "remote": _git(resolved, "remote", "get-url", "origin"),
+            "remote_configured": remote is not None,
+            "remote_digest": _digest(remote.encode("utf-8")) if remote else None,
         },
         state={
             "schema_version": state.get("schema_version"),
@@ -928,7 +934,10 @@ def archive_root(root: Path, reason: str) -> dict[str, Any]:
 
 
 def risk_scan_root(root: Path) -> dict[str, Any]:
-    findings = scan(root.expanduser().resolve(strict=False))
+    candidate = root.expanduser()
+    if candidate.is_symlink() or not candidate.exists() or not candidate.is_dir():
+        raise LoopctlError("RISK_SCAN_ROOT_INVALID", "/root")
+    findings = scan(candidate.resolve(strict=True))
     unsafe = unallowed_credentials(findings)
     if unsafe:
         raise LoopctlError(
@@ -1033,7 +1042,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "archive":
             result = archive_root(args.root, args.reason)
             if args.emit and not args.check:
-                write_manifest(args.emit, result["manifest"])
+                try:
+                    write_manifest(args.emit, result["manifest"])
+                except ArchiveManifestError as exc:
+                    raise LoopctlError(
+                        "ARCHIVE_MANIFEST_WRITE_FAILED",
+                        "/emit",
+                        {"error_type": type(exc).__name__},
+                    ) from exc
         else:
             result = risk_scan_root(args.root)
     except LoopctlError as exc:

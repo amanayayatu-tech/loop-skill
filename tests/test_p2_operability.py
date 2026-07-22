@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -149,6 +150,10 @@ class AuditAndPolicyTests(unittest.TestCase):
             split["historical_evidence"]["historical_model_policy"],
             "old-model-prompt",
         )
+        self.assertEqual(
+            split["historical_evidence"]["nested"]["heartbeat_policy_history"],
+            ["old-heartbeat-prompt"],
+        )
 
 
 class ArchiveAndScannerTests(unittest.TestCase):
@@ -177,6 +182,75 @@ class ArchiveAndScannerTests(unittest.TestCase):
                 )
             self.assertEqual(0, emitted)
             self.assertEqual(read_manifest(output)["schema_version"], "archive-manifest-v2")
+
+    def test_archive_redacts_remote_credentials_and_recovers_owned_stale_temp(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "root"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            remote = "https://user:" + "secret-token@example.com/repo.git"
+            subprocess.run(
+                ["git", "-C", str(root), "remote", "add", "origin", remote],
+                check=True,
+            )
+            harness = Harness(root)
+            self.assertTrue(harness.initialize(state_gateway=True)[0]["ok"])
+            result = loopctl.archive_root(root, "test")
+            encoded = json.dumps(result, sort_keys=True)
+            self.assertNotIn(remote, encoded)
+            self.assertTrue(result["manifest"]["git"]["remote_configured"])
+            self.assertRegex(
+                result["manifest"]["git"]["remote_digest"],
+                r"^sha256:[a-f0-9]{64}$",
+            )
+            output = Path(temporary) / "archive.json"
+            payload = (
+                json.dumps(
+                    result["manifest"],
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                + b"\n"
+            )
+            output.with_name(f".{output.name}.tmp").write_bytes(payload)
+            write_manifest(output, result["manifest"])
+            self.assertEqual(read_manifest(output), result["manifest"])
+
+    def test_archive_temp_error_and_invalid_scan_root_use_cli_envelopes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "root"
+            root.mkdir()
+            harness = Harness(root)
+            self.assertTrue(harness.initialize(state_gateway=True)[0]["ok"])
+            output = Path(temporary) / "archive.json"
+            target = Path(temporary) / "target"
+            target.write_text("unsafe", encoding="utf-8")
+            output.with_name(f".{output.name}.tmp").symlink_to(target)
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                exit_code = loopctl.main(
+                    [
+                        "archive", "--root", str(root), "--reason", "test",
+                        "--emit", str(output), "--json",
+                    ]
+                )
+            self.assertEqual(1, exit_code)
+            self.assertEqual(
+                json.loads(stdout.getvalue())["status"],
+                "ARCHIVE_MANIFEST_WRITE_FAILED",
+            )
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                exit_code = loopctl.main(
+                    ["risk-scan", "--root", str(root / "missing"), "--check", "--json"]
+                )
+            self.assertEqual(1, exit_code)
+            self.assertEqual(
+                json.loads(stdout.getvalue())["status"],
+                "RISK_SCAN_ROOT_INVALID",
+            )
 
     def test_archive_v2_roundtrip_digest_and_two_legacy_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -232,6 +306,12 @@ class ArchiveAndScannerTests(unittest.TestCase):
                         kind="SHA256",
                         reason="test digest",
                     ),
+                    AllowRule(
+                        rule_id="CREDENTIAL_FIXTURE",
+                        path_glob="fixture.txt",
+                        kind="FIXTURE",
+                        reason="synthetic credential fixture",
+                    ),
                 ),
             )
             kinds = {finding["kind"] for finding in findings}
@@ -239,6 +319,13 @@ class ArchiveAndScannerTests(unittest.TestCase):
             unsafe = unallowed_credentials(findings)
             self.assertEqual(["secret.txt"], [finding["path"] for finding in unsafe])
             self.assertNotIn("z" * 24, json.dumps(findings))
+
+            (root / "example.txt").write_text(
+                "example production key: sk-" + "q" * 24,
+                encoding="utf-8",
+            )
+            unsafe = unallowed_credentials(scan(root))
+            self.assertIn("example.txt", [finding["path"] for finding in unsafe])
 
 
 if __name__ == "__main__":

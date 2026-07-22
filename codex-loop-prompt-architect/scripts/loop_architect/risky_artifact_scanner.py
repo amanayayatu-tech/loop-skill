@@ -58,13 +58,23 @@ def scan(root: Path, allowlist: tuple[AllowRule, ...] = ()) -> list[dict[str, ob
             for kind, pattern in PATTERNS.items():
                 for match in pattern.finditer(line):
                     classified = "FIXTURE" if placeholder_line and kind in CREDENTIAL_KINDS else kind
-                    findings.append(_finding(relative, line_number, classified, match.group(0), allowlist))
+                    findings.append(
+                        _finding(
+                            relative,
+                            line_number,
+                            classified,
+                            match.group(0),
+                            allowlist,
+                            credential_candidate=kind in CREDENTIAL_KINDS,
+                        )
+                    )
     return findings
 
 
 def _finding(
     path: str, line: int, kind: str, value: str,
     allowlist: tuple[AllowRule, ...],
+    *, credential_candidate: bool = False,
 ) -> dict[str, object]:
     matched = next(
         (rule for rule in allowlist if rule.kind == kind and fnmatch.fnmatchcase(path, rule.path_glob)),
@@ -76,7 +86,7 @@ def _finding(
         "kind": kind,
         "line": line,
         "path": path,
-        "risky": kind in CREDENTIAL_KINDS and matched is None,
+        "risky": (kind in CREDENTIAL_KINDS or credential_candidate) and matched is None,
         "value_digest": "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest(),
     }
 
