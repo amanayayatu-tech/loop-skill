@@ -80,6 +80,17 @@ class CompiledManifest:
             self.to_dict(), sort_keys=True, separators=(",", ":")
         ).encode()
 
+    def to_digest_bytes(self) -> bytes:
+        """Return the canonical content-address payload.
+
+        The advertised digest field is excluded so verification is finite and
+        reproducible: consumers hash this payload and compare it with
+        ``digest``.
+        """
+        payload = self.to_dict()
+        payload.pop("digest")
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
 
 def compile_manifest(source: Mapping[str, Any]) -> CompiledManifest:
     """Compile ``source`` into a :class:`CompiledManifest`.
@@ -121,7 +132,7 @@ def compile_manifest(source: Mapping[str, Any]) -> CompiledManifest:
         policy=policy,
         source_digest=source_digest,
     )
-    manifest.digest = hashlib.sha256(manifest.to_canonical_bytes()).hexdigest()
+    manifest.digest = hashlib.sha256(manifest.to_digest_bytes()).hexdigest()
     return manifest
 
 

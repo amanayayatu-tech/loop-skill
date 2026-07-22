@@ -269,6 +269,11 @@ class DefectFamilyTests(unittest.TestCase):
             siblings = ledger.find_siblings("json.boundary")
             ids = sorted(family.family_id for family in siblings)
             self.assertEqual(ids, ["json.other"])
+            reopened = defect_family.DefectFamilyLedger.open(path)
+            reopened_ids = sorted(reopened.families)
+            self.assertEqual(
+                reopened_ids, ["json.boundary", "json.other", "yaml.parse"]
+            )
 
     def test_ledger_same_family_returns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -752,6 +757,25 @@ class CapabilityEnvelopeTests(unittest.TestCase):
         )
         self.assertFalse(envelope.authorize("loop.push"))
 
+    def test_scope_matching_is_delimiter_aware_and_grant_directed(self) -> None:
+        envelope = capability_envelope.CapabilityEnvelope(
+            owner="supervisor",
+            role="SUPERVISOR",
+            capabilities=(
+                capability_envelope.Capability(
+                    name="loop.repair",
+                    scope="goal:g1",
+                    action="loop.repair",
+                    constraint="bounded",
+                ),
+            ),
+        )
+        self.assertTrue(envelope.authorize("loop.repair", scope_prefix="goal:g1"))
+        self.assertTrue(
+            envelope.authorize("loop.repair", scope_prefix="goal:g1:repair")
+        )
+        self.assertFalse(envelope.authorize("loop.repair", scope_prefix="goal:g10"))
+
     def test_digest_is_stable(self) -> None:
         a = capability_envelope.required_host_envelope()
         b = capability_envelope.required_host_envelope()
@@ -816,6 +840,10 @@ class ManifestCompilerTests(unittest.TestCase):
     def test_compile_succeeds(self) -> None:
         manifest = manifest_compiler.compile_manifest(self._source())
         self.assertEqual(len(manifest.digest), 64)
+        self.assertEqual(
+            manifest.digest,
+            hashlib.sha256(manifest.to_digest_bytes()).hexdigest(),
+        )
         self.assertEqual(len(manifest.roles), 1)
         self.assertEqual(len(manifest.goals), 1)
 

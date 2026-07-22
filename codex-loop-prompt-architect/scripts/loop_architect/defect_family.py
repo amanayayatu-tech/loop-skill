@@ -280,8 +280,10 @@ class DefectFamilyLedger:
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        existing_bytes = self.path.read_bytes() if self.path.exists() else b""
+        with tmp.open("wb") as handle:
+            handle.write(existing_bytes)
+            handle.write((json.dumps(entry, sort_keys=True) + "\n").encode("utf-8"))
             handle.flush()
             import os as _os
             _os.fsync(handle.fileno())

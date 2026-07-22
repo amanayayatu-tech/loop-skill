@@ -59,6 +59,17 @@ class CapabilityEnvelopeError(ValueError):
     """Raised on invalid envelopes, scope mismatches, or denials."""
 
 
+def _scope_grants(granted_scope: str, requested_scope: str) -> bool:
+    """Return whether ``granted_scope`` contains ``requested_scope``.
+
+    Scope segments are colon-delimited.  A grant for ``goal:g1`` may cover
+    ``goal:g1:repair`` but must never cover the sibling ``goal:g10``.
+    """
+    return requested_scope == granted_scope or requested_scope.startswith(
+        granted_scope + ":"
+    )
+
+
 @dataclass(frozen=True)
 class Capability:
     name: str
@@ -148,7 +159,7 @@ class CapabilityEnvelope:
         for capability in self.capabilities:
             if capability.name != capability_name:
                 continue
-            if scope_prefix and not capability.scope.startswith(scope_prefix):
+            if scope_prefix and not _scope_grants(capability.scope, scope_prefix):
                 continue
             return True
         return False
@@ -160,7 +171,7 @@ class CapabilityEnvelope:
         for capability in self.capabilities:
             if capability.action != operation:
                 continue
-            if scope_prefix and not capability.scope.startswith(scope_prefix):
+            if scope_prefix and not _scope_grants(capability.scope, scope_prefix):
                 continue
             return True
         return False
