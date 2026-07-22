@@ -82,6 +82,45 @@ class DefectFamilyTests(unittest.TestCase):
                 closure_status="OPEN",
                 discoverer="x",
             )
+
+    def test_external_json_exact_type_matrix_rejected(self) -> None:
+        valid = {
+            "family_id": "json.boundary",
+            "searched_files": ["a.py"],
+            "searched_patterns": ["loads()"],
+            "entrypoints": ["main"],
+            "type_matrix": [["scalar", ["string"]]],
+            "siblings": ["a.py:1"],
+            "closure_status": "OPEN",
+            "discoverer": "reviewer",
+        }
+        mutations = []
+        for field, wrong in (
+            ("family_id", 1),
+            ("searched_files", "a.py"),
+            ("searched_patterns", {"loads()": True}),
+            ("entrypoints", [1]),
+            ("type_matrix", {"scalar": ["string"]}),
+            ("siblings", [False]),
+            ("closure_status", ["OPEN"]),
+            ("discoverer", None),
+        ):
+            candidate = dict(valid)
+            candidate[field] = wrong
+            mutations.append(candidate)
+        mutations.extend(
+            [
+                {**valid, "unexpected": True},
+                {key: value for key, value in valid.items() if key != "siblings"},
+                {**valid, "type_matrix": [["scalar"]]},
+                {**valid, "type_matrix": [["scalar", "string"]]},
+            ]
+        )
+        for candidate in mutations:
+            with self.subTest(candidate=candidate):
+                with self.assertRaises(defect_family.DefectFamilyError):
+                    defect_family.DefectFamily.from_dict(candidate)
+
     def test_ledger_appends_and_rejects_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ledger.jsonl"
@@ -273,6 +312,32 @@ class ReviewerEnvelopeTests(unittest.TestCase):
                 return_number=3,
             )
 
+    def test_external_json_scalar_and_container_coercion_rejected(self) -> None:
+        valid = {
+            "verdict": "POINT_REPAIR",
+            "defect_family_id": "json.boundary",
+            "defect_family_digest": "sha256:" + "1" * 64,
+            "searched_files": ["a.py"],
+            "searched_patterns": ["loads()"],
+            "unchecked_surfaces": [],
+            "siblings": [],
+            "return_number": 1,
+        }
+        for field, wrong in (
+            ("verdict", 1),
+            ("defect_family_id", False),
+            ("searched_files", "a.py"),
+            ("searched_patterns", [1]),
+            ("unchecked_surfaces", {}),
+            ("siblings", [None]),
+            ("return_number", "1"),
+        ):
+            candidate = dict(valid)
+            candidate[field] = wrong
+            with self.subTest(field=field):
+                with self.assertRaises(reviewer_envelope.ReviewerEnvelopeError):
+                    reviewer_envelope.envelope_from_mapping(candidate)
+
     def test_escalation_verdict_accepted(self) -> None:
         env = reviewer_envelope.build_envelope(
             verdict="REFACTOR",
@@ -343,6 +408,33 @@ class RouteOrchestratorTests(unittest.TestCase):
                 steps=(),
                 write=lambda step: {},
             )
+
+    def test_resume_skips_already_acknowledged_external_step(self) -> None:
+        steps = route_orchestrator.fold_legacy_three_step(
+            prepare_payload={"route_id": "r1"},
+            send_receipt={"message_id": "m1"},
+            record_payload={"route_id": "r1"},
+        )
+        called: list[str] = []
+        receipt = route_orchestrator.orchestrate(
+            turn_id="turn-resume",
+            steps=steps,
+            completed_step_receipts=({"status": "PREPARED"},),
+            write=lambda step: called.append(step.operation) or {"status": "SENT"},
+        )
+        self.assertEqual(called, ["RECORD_ROUTE_SENT"])
+        self.assertEqual(receipt.status, route_orchestrator.STATUS_COMPLETED)
+        self.assertEqual(len(receipt.step_receipts), 2)
+        self.assertTrue(steps[1].external_receipt_digest)
+
+    def test_step_identity_binds_external_receipt(self) -> None:
+        first = route_orchestrator.fold_legacy_three_step(
+            prepare_payload={}, send_receipt={"id": "one"}, record_payload={}
+        )
+        second = route_orchestrator.fold_legacy_three_step(
+            prepare_payload={}, send_receipt={"id": "two"}, record_payload={}
+        )
+        self.assertNotEqual(first[1].canonical(), second[1].canonical())
 
 
 # ---------------------------------------------------------------------------

@@ -1094,6 +1094,7 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             self.assertFalse(missing_payload["ok"], missing_payload)
             self.assertEqual(missing_payload["status"], "STATE_GATEWAY_REQUEST_INVALID")
             self.assertEqual(state.state(), before_operation_evidence)
+
             malformed_operation_evidence = server.handle(
                 {
                     "jsonrpc": "2.0",
@@ -1385,6 +1386,86 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                 "ACKED",
             )
             self.assertNotIn("g1", completed["validation_results"])
+
+    def test_p1_gateway_prepare_projects_orchestration_and_repair_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = Harness(root)  # noqa: F405
+            initialized, _ = state.initialize(
+                state_gateway=True,
+                p1_runtime_enabled=True,
+                supervisor_capability_envelope={
+                    "owner": "supervisor-1",
+                    "role": "SUPERVISOR",
+                    "capabilities": [
+                        {
+                            "name": "loop.repair",
+                            "scope": "goal:g1",
+                            "action": "loop.repair",
+                            "constraint": "bounded",
+                        }
+                    ],
+                    "denials": [],
+                    "issued_at": T1,  # noqa: F405
+                    "note": "test envelope",
+                },
+                bootstrap_threads=[
+                    {
+                        "thread_id": "worker-1",
+                        "role_kind": "WORKER",
+                        "bootstrap_role_kind": "implementation",
+                        "bootstrap_prompt_digest": digest("worker-bootstrap"),  # noqa: F405
+                        "worktree_path": str(root.resolve()),
+                    }
+                ],
+            )
+            self.assertTrue(initialized["ok"], initialized)
+            server = mcp.AdaptiveStateMcpServer(synthetic_host_attestation())
+            server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "init",
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18"},
+                }
+            )
+            response = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "p1-gateway-prepare",
+                    "method": "tools/call",
+                    "params": {
+                        "name": mcp.MCP_STATE_GATEWAY_TOOL_NAME,
+                        "_meta": McpHarness.metadata(),
+                        "arguments": {
+                            "root": str(root),
+                            "request": {
+                                "request_id": "p1-gateway-prepare",
+                                "operation": "PREPARE_ROUTE",
+                                "occurred_at": T1,  # noqa: F405
+                                "parameters": {
+                                    "route_id": "p1-worker-1",
+                                    "goal_id": "g1",
+                                    "route_kind": "WORKER",
+                                    "target_thread_id": "worker-1",
+                                    "observed_at": T1,  # noqa: F405
+                                },
+                            },
+                        },
+                    },
+                }
+            )
+            payload = response["result"]["structuredContent"]
+            self.assertTrue(payload["ok"], payload)
+            specification = payload["result"]["payload_specification"]["payload"]
+            self.assertIn("defect_family", specification)
+            self.assertIsNone(specification["defect_family"])
+            runtime = state.state()["p1_runtime"]
+            self.assertTrue(runtime["enabled"])
+            self.assertEqual(
+                runtime["route_orchestrations"]["p1-worker-1"]["status"],
+                "PREPARED",
+            )
 
     def test_cross_process_worker_evidence_is_archived_with_original_outbox(self) -> None:
         """A target stages real validation bytes; the Controller only ACKs its handle."""

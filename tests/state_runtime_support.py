@@ -531,6 +531,9 @@ class Harness:
         native_goal_policy: str = "required",
         state_gateway: bool = False,
         bootstrap_threads: list[dict[str, Any]] | None = None,
+        p1_runtime_enabled: bool = False,
+        supervisor_capability_envelope: dict[str, Any] | None = None,
+        model_canaries: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         definitions = definitions or {"g1": goal("g1", "m1")}
         milestones = milestones or [milestone("m1", "ACTIVE")]
@@ -565,6 +568,21 @@ class Harness:
                 "authorization_envelope": self.authorization,
                 "local_verification_required_goal_ids": list(
                     local_required_goal_ids or []
+                ),
+                **({"p1_runtime_enabled": True} if p1_runtime_enabled else {}),
+                **(
+                    {
+                        "supervisor_capability_envelope": copy.deepcopy(
+                            supervisor_capability_envelope
+                        )
+                    }
+                    if supervisor_capability_envelope is not None
+                    else {}
+                ),
+                **(
+                    {"model_canaries": copy.deepcopy(model_canaries)}
+                    if model_canaries is not None
+                    else {}
                 ),
                 **(
                     {"bootstrap_threads": copy.deepcopy(bootstrap_threads)}
