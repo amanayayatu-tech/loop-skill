@@ -774,6 +774,13 @@ class ParsingTests(unittest.TestCase):
 
 
 class GeneratedPackTests(unittest.TestCase):
+    def test_controller_bootstrap_declares_the_current_task_as_singleton(self) -> None:
+        pack = scaffold.render_controller_pack(base_payload(), "compact")
+        self.assertIn(
+            "当前 task 即唯一 Controller，禁止创建第二 Controller。",
+            pack,
+        )
+
     def test_first_goal_has_identity_and_review_fields(self) -> None:
         pack = scaffold.render_controller_pack(base_payload(), "compact")
         first_goal = pack.split("## First Goal", 1)[1]
