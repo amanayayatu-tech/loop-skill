@@ -1,5 +1,35 @@
 {
   "entries": {
+    "--crash-at": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "--crash-at",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "--root": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "--root",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "ACTIVE_GOAL_NOT_READY": {
       "classification": "RECOVERABLE",
       "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
@@ -495,6 +525,36 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
     },
+    "AUDIT_EVENT_LOG_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "AUDIT_EVENT_LOG_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "AUDIT_REJECTION_LOG_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "AUDIT_REJECTION_LOG_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "AUTHORIZATION_BOUNDARY_VIOLATION": {
       "classification": "HUMAN_GATED",
       "identity_reuse": "Reuse the rejected intent; never self-attest role or model identity.",
@@ -585,6 +645,171 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
     },
+    "CANARY_FINALIZATION_REQUIRED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_FINALIZATION_REQUIRED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_LANES_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_LANES_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_LANE_FAILED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_LANE_FAILED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_MANIFEST_DIGEST_MISMATCH": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_MANIFEST_DIGEST_MISMATCH",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_MANIFEST_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_MANIFEST_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_MCP_LIFECYCLE_FAILED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_MCP_LIFECYCLE_FAILED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_MCP_LIFECYCLE_REQUIRED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_MCP_LIFECYCLE_REQUIRED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_NEGATIVE_EVIDENCE_REQUIRED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_NEGATIVE_EVIDENCE_REQUIRED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_RECEIPT_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_RECEIPT_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_RECEIPT_REQUIRED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_RECEIPT_REQUIRED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CANARY_ROOT_NOT_DISPOSABLE": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CANARY_ROOT_NOT_DISPOSABLE",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "CANONICAL_ROOT_MISMATCH": {
       "classification": "RECOVERABLE",
       "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
@@ -621,6 +846,21 @@
       "next_operation": {
         "arguments": {
           "error_code": "CANONICAL_STATE_SCHEMA_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CAPTURE_COMPLETE_DIFF_ARGUMENTS_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CAPTURE_COMPLETE_DIFF_ARGUMENTS_INVALID",
           "use_original_evidence": true
         },
         "operation": "RESUBMIT_CORRECTED_REQUEST"
@@ -786,6 +1026,186 @@
       "next_operation": {
         "arguments": {
           "error_code": "CODEC_REPORT_TARGET_ATTESTATION_MISMATCH",
+          "use_original_evidence": true
+        },
+        "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT"
+      },
+      "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT",
+      "preconditions": "Obtain a fresh receipt from the authoritative host or human gate.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop when the required authority or observation is unavailable."
+    },
+    "COMPILE_CP0_REGISTRY_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_CP0_REGISTRY_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_GOAL_REGISTRY_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_GOAL_REGISTRY_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_HEARTBEAT_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_HEARTBEAT_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_INPUT_INCOMPLETE": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_INPUT_INCOMPLETE",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_MODEL_CANARY_FAILED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_MODEL_CANARY_FAILED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_MODEL_CANARY_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_MODEL_CANARY_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_MODE_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_MODE_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_P1_CONFIG_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_P1_CONFIG_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_REGISTRY_EMPTY": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_REGISTRY_EMPTY",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_ROLE_REGISTRY_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_ROLE_REGISTRY_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_ROOT_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_ROOT_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "COMPILE_SUPERVISOR_CAPABILITY_INVALID": {
+      "classification": "HUMAN_GATED",
+      "identity_reuse": "Reuse the rejected intent; never self-attest role or model identity.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "COMPILE_SUPERVISOR_CAPABILITY_INVALID",
           "use_original_evidence": true
         },
         "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT"
@@ -2700,6 +3120,21 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
     },
+    "DUPLICATE_JSON_KEY": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "DUPLICATE_JSON_KEY",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "EMULATED_GOAL_EVIDENCE_UNBOUND": {
       "classification": "RECOVERABLE",
       "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
@@ -4575,6 +5010,36 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
     },
+    "HOST_RECEIPT_DIGEST_MISMATCH": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "HOST_RECEIPT_DIGEST_MISMATCH",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "HOST_RECEIPT_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "HOST_RECEIPT_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "HUMAN_STEERING_DISABLED": {
       "classification": "HUMAN_GATED",
       "identity_reuse": "Reuse the rejected intent; never self-attest role or model identity.",
@@ -4611,6 +5076,111 @@
       "next_operation": {
         "arguments": {
           "error_code": "INFLIGHT_STEERING_MUST_DEFER",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "INPUT_DOCUMENT_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "INPUT_DOCUMENT_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "INPUT_FORMAT_UNSUPPORTED": {
+      "classification": "NON_RETRYABLE",
+      "identity_reuse": "Use a new request identity; retain the rejected digest as history.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "INPUT_FORMAT_UNSUPPORTED",
+          "use_original_evidence": true
+        },
+        "operation": "SUBMIT_NEW_CORRECTED_INTENT"
+      },
+      "operation": "SUBMIT_NEW_CORRECTED_INTENT",
+      "preconditions": "Correct the unsupported or unsafe input before a new request.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction would expand authority or weaken an invariant."
+    },
+    "INPUT_TRANSPORT_EOF_BEFORE_FRAME": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "INPUT_TRANSPORT_EOF_BEFORE_FRAME",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "INPUT_TRANSPORT_TIMEOUT": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "INPUT_TRANSPORT_TIMEOUT",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "INPUT_TRANSPORT_TOO_LARGE": {
+      "classification": "NON_RETRYABLE",
+      "identity_reuse": "Use a new request identity; retain the rejected digest as history.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "INPUT_TRANSPORT_TOO_LARGE",
+          "use_original_evidence": true
+        },
+        "operation": "SUBMIT_NEW_CORRECTED_INTENT"
+      },
+      "operation": "SUBMIT_NEW_CORRECTED_INTENT",
+      "preconditions": "Correct the unsupported or unsafe input before a new request.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction would expand authority or weaken an invariant."
+    },
+    "INPUT_TRANSPORT_UTF8_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "INPUT_TRANSPORT_UTF8_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "INPUT_UNAVAILABLE": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "INPUT_UNAVAILABLE",
           "use_original_evidence": true
         },
         "operation": "RESUBMIT_CORRECTED_REQUEST"
@@ -5100,6 +5670,21 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
     },
+    "MATERIALIZE_DISPATCH_ARGUMENTS_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "MATERIALIZE_DISPATCH_ARGUMENTS_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "MCP_ARGUMENTS_INVALID": {
       "classification": "RECOVERABLE",
       "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
@@ -5205,6 +5790,21 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
     },
+    "METRICS_STATE_NOT_INITIALIZED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "METRICS_STATE_NOT_INITIALIZED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "MIGRATION_SOURCE_DIGEST_MISMATCH": {
       "classification": "RECOVERABLE",
       "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
@@ -5241,6 +5841,36 @@
       "next_operation": {
         "arguments": {
           "error_code": "MILESTONE_ID_CONFLICT",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "MODEL_IDENTITY_POLICY_CONFLICT": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "MODEL_IDENTITY_POLICY_CONFLICT",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "MODEL_IDENTITY_POLICY_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "MODEL_IDENTITY_POLICY_INVALID",
           "use_original_evidence": true
         },
         "operation": "RESUBMIT_CORRECTED_REQUEST"
@@ -5451,6 +6081,21 @@
       "next_operation": {
         "arguments": {
           "error_code": "NEXT_GOAL_NOT_READY",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "NORMALIZE_FINGERPRINT_ARGUMENTS_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "NORMALIZE_FINGERPRINT_ARGUMENTS_INVALID",
           "use_original_evidence": true
         },
         "operation": "RESUBMIT_CORRECTED_REQUEST"
@@ -5774,6 +6419,306 @@
       "preconditions": "Read the error path and canonical state before correction.",
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_DEFECT_FAMILY_CLOSURE_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_DEFECT_FAMILY_CLOSURE_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_DEFECT_FAMILY_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_DEFECT_FAMILY_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_DIGEST_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_DIGEST_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_EXACT_OBJECT_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_EXACT_OBJECT_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_EXACT_TYPE_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_EXACT_TYPE_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_GOAL_REGISTRY_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_GOAL_REGISTRY_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_HEARTBEAT_REGISTRY_DRIFT": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_HEARTBEAT_REGISTRY_DRIFT",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_INITIALIZATION_CLASS_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_INITIALIZATION_CLASS_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_MODEL_CANARY_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_MODEL_CANARY_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_MODEL_CANARY_REQUIRED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_MODEL_CANARY_REQUIRED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_REVIEWER_DISCLOSURE_DECISION_MISMATCH": {
+      "classification": "HUMAN_GATED",
+      "identity_reuse": "Reuse the rejected intent; never self-attest role or model identity.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_REVIEWER_DISCLOSURE_DECISION_MISMATCH",
+          "use_original_evidence": true
+        },
+        "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT"
+      },
+      "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT",
+      "preconditions": "Obtain a fresh receipt from the authoritative host or human gate.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop when the required authority or observation is unavailable."
+    },
+    "P1_REVIEWER_DISCLOSURE_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_REVIEWER_DISCLOSURE_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_REVIEWER_DISCLOSURE_REQUIRED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_REVIEWER_DISCLOSURE_REQUIRED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_ROUTE_ORCHESTRATION_CONFLICT": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_ROUTE_ORCHESTRATION_CONFLICT",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_ROUTE_ORCHESTRATION_NOT_PREPARED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_ROUTE_ORCHESTRATION_NOT_PREPARED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_ROUTE_ORCHESTRATION_NOT_SENT": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_ROUTE_ORCHESTRATION_NOT_SENT",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_RUNTIME_STATE_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_RUNTIME_STATE_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "P1_SUPERVISOR_CAPABILITY_DENIED": {
+      "classification": "HUMAN_GATED",
+      "identity_reuse": "Reuse the rejected intent; never self-attest role or model identity.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_SUPERVISOR_CAPABILITY_DENIED",
+          "use_original_evidence": true
+        },
+        "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT"
+      },
+      "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT",
+      "preconditions": "Obtain a fresh receipt from the authoritative host or human gate.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop when the required authority or observation is unavailable."
+    },
+    "P1_SUPERVISOR_CAPABILITY_INVALID": {
+      "classification": "HUMAN_GATED",
+      "identity_reuse": "Reuse the rejected intent; never self-attest role or model identity.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_SUPERVISOR_CAPABILITY_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT"
+      },
+      "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT",
+      "preconditions": "Obtain a fresh receipt from the authoritative host or human gate.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop when the required authority or observation is unavailable."
+    },
+    "P1_SUPERVISOR_CAPABILITY_REQUIRED": {
+      "classification": "HUMAN_GATED",
+      "identity_reuse": "Reuse the rejected intent; never self-attest role or model identity.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "P1_SUPERVISOR_CAPABILITY_REQUIRED",
+          "use_original_evidence": true
+        },
+        "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT"
+      },
+      "operation": "PROVIDE_HOST_OR_HUMAN_RECEIPT",
+      "preconditions": "Obtain a fresh receipt from the authoritative host or human gate.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop when the required authority or observation is unavailable."
     },
     "PACK_MIGRATION_ACTIVE_LEASE": {
       "classification": "RECOVERABLE",
@@ -6780,6 +7725,51 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if the refreshed state makes the intent stale or unauthorized."
     },
+    "ROLE_RECEIPT_IDENTITY_MISMATCH": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "ROLE_RECEIPT_IDENTITY_MISMATCH",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "ROLE_RECEIPT_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "ROLE_RECEIPT_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "ROLE_RECEIPT_REPLAY": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "ROLE_RECEIPT_REPLAY",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "ROOT_NOT_DIRECTORY": {
       "classification": "NON_RETRYABLE",
       "identity_reuse": "Use a new request identity; retain the rejected digest as history.",
@@ -6876,6 +7866,21 @@
       "next_operation": {
         "arguments": {
           "error_code": "RUNTIME_CODEC_ARGUMENTS_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "RUNTIME_CODEC_OPERATION_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "RUNTIME_CODEC_OPERATION_INVALID",
           "use_original_evidence": true
         },
         "operation": "RESUBMIT_CORRECTED_REQUEST"
@@ -7026,6 +8031,36 @@
       "next_operation": {
         "arguments": {
           "error_code": "STAGED_REPORT_FILE_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "STAGE_EXTERNAL_RECEIPT_ARGUMENTS_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "STAGE_EXTERNAL_RECEIPT_ARGUMENTS_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "STAGE_REPORT_ARGUMENTS_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "STAGE_REPORT_ARGUMENTS_INVALID",
           "use_original_evidence": true
         },
         "operation": "RESUBMIT_CORRECTED_REQUEST"
@@ -8850,6 +9885,21 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
     },
+    "VERIFY_DISPATCH_ARGUMENTS_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "VERIFY_DISPATCH_ARGUMENTS_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "WAITING_TRANSPORT_RECOVERY": {
       "classification": "RECOVERABLE",
       "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
@@ -9366,6 +10416,66 @@
       "next_operation": {
         "arguments": {
           "error_code": "WORKER_ZERO_EXECUTION_BLOCKER_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "object required": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "object required",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "unexpected staged evidence name": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "unexpected staged evidence name",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "unexpected staged report name": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "unexpected staged report name",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "unsupported digest comparison provenance": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "unsupported digest comparison provenance",
           "use_original_evidence": true
         },
         "operation": "RESUBMIT_CORRECTED_REQUEST"

@@ -7,6 +7,17 @@ All notable changes to this project are documented here. The project follows
 
 ### Added
 
+- Added the opt-in P1 canonical governance runtime: Goal-bound defect-family
+  routes, mandatory Reviewer sibling/unchecked-surface disclosure, automatic
+  third-return escalation, heartbeat drift detection, recoverable route
+  orchestration, model canaries, and structured Supervisor repair capability.
+- Added privacy-safe `loopctl metrics-export`, explicit `UNMETERED` metrics,
+  route/heartbeat/recovery latency, and runtime/config/model digests without
+  prompts, chat, identifiers, paths, PII, secrets, or raw logs.
+- Expanded machine-generated recovery coverage across runtime, MCP, CLI, P1,
+  and codec boundaries. The CI checker compares the exact AST inventory with
+  the registry and rejects missing, stale, malformed, or `WAIT`-only entries.
+
 - Added `loopctl doctor`, `compile`, `canary`, and `audit`. New skill sessions
   run the dependency and identity doctor before intake/generation; formal
   initialization requires a complete compiled registry, host receipts, MCP

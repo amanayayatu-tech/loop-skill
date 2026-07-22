@@ -74,6 +74,7 @@ scripts/loopctl doctor --check --json
 scripts/loopctl compile --input loop-source.json --check --json
 scripts/loopctl canary --input compiled-manifest.json --json
 scripts/loopctl audit --root /absolute/loop/root --json
+scripts/loopctl metrics-export --root /absolute/loop/root --json
 ```
 
 `doctor` verifies the actual Python interpreter and dependencies, Git/worktree identity, source/install manifests, MCP configuration and schemas, and observable App/host capabilities. Its receipt cache is content-addressed by those identities and invalidates on any drift. Failure returns an exact error and remediation without creating canonical state, roles, or a heartbeat. `compile` defaults CP0 to disposable. Formal initialization additionally requires a complete registry, task/thread and heartbeat readback, five MCP lifecycle receipts, and a real disposable canary covering initialization through `FINALIZATION_ACKED`. A host model receipt is mandatory only when `required_model` or `required_reasoning` is explicit. Every canary lane and lifecycle receipt is manifest-bound and self-digest-checked; the MCP Gateway materializes the formal startup receipt from a root-confined source path instead of trusting inline request bytes.
@@ -83,6 +84,16 @@ After an App restart, the read-only MCP `host_lifecycle_readback` derives all fi
 Every recoverable runtime code is mapped by one recovery registry entry to one legal next operation; `WAIT` alone is never recovery. Rejected requests are separately appended to the hash-chained, fsynced `.codex-loop/LOOP_REJECTIONS.jsonl`. It stores a request digest and minimum audit fields, never prompts, chat, credentials, or the full request. “Zero side effects” means zero canonical, product, and external effects; the declared rejection-journal append is an allowed audit effect.
 
 A formal Goal can require a Git closeout saga. `PREPARE_GOAL_CLOSEOUT` locks the reviewed artifact, HEAD, branch, paths, and a one-use capability; `ACK_GOAL_CLOSEOUT` relies on Git readback after commit/push. `NO_COMMIT` is legal only when HEAD is unchanged and the index/worktree is completely clean. Crash recovery reuses the original closeout record, while HEAD drift, out-of-scope paths, or a remote-ref mismatch fail closed. Policy migrations use a generic descriptor and retained history while legacy repair-budget effects remain readable. Starting with `status-v5`, STATUS and the dashboard show workflow state separately from evidence completion: `COMPLETE_ARTIFACT`, `COMPLETE_WITH_LIMITATION`, `EMPIRICAL_RESULT_OBSERVED`, `FORMAL_ACCEPTED`, or `PUBLIC_RELEASED`.
+
+## P1 efficiency and governance runtime
+
+New Loops may explicitly enable `p1.enabled=true` in compiler input. An enabled disposable registry may contain only `D0-control-plane-self-test`; a formal manifest declares the complete Goal registry at initialization and supplies representative model-canary receipts for Controller, Worker, and Reviewer. Concrete model identity remains unspecified by default. Host identity receipts are required only by strict `required_model` / `required_reasoning` configurations.
+
+The P1 canonical subdocument records defect families, same-round sibling and unchecked-surface disclosure, heartbeat identity, route orchestration, latency, and intervention counts. A third Reviewer return for the same family can no longer request another point repair; it must select `REFACTOR`, `GOAL_SPLIT`, `CLAIM_NARROWING`, or `LIMITATION`. Repair routes must also satisfy the structured Supervisor capability envelope; prose cannot widen authority.
+
+The `PREPARE → send → RECORD` orchestration merges deterministic sequencing, not network atomicity. Every external send retains its own receipt, and crash replay resumes after the last acknowledged step without repeating the external action. The heartbeat registry is the sole source for automation ID, target, RRULE, prompt digest, and status; readback drift fails closed.
+
+`metrics-export` emits only aggregate counts, latency, `UNMETERED` values, and runtime/config/model digests. It excludes prompts, chat, task/thread IDs, paths, PII, secrets, and raw logs. CI recovery coverage uses AST enumeration across runtime, MCP, CLI, and codec boundaries; every reachable code must have exactly one non-`WAIT` next operation.
 
 ## Intake before Loop generation
 

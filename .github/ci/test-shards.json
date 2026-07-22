@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "expected_total_tests": 671,
+  "expected_total_tests": 754,
   "expected_shard_counts": {
-    "1": 202,
+    "1": 206,
     "2": 168,
-    "3": 147,
-    "4": 154
+    "3": 148,
+    "4": 232
   },
   "shards": {
     "1": [
@@ -47,7 +47,9 @@
       "tests.test_native_goal_recovery_unavailable",
       "tests.test_public_schema",
       "tests.test_spec_governance",
-      "tests.test_p0_trust_contracts"
+      "tests.test_p0_trust_contracts",
+      "tests.test_p1_modules",
+      "tests.test_p1_runtime"
     ]
   },
   "dedicated_only": {

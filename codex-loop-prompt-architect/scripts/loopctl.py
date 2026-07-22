@@ -19,6 +19,11 @@ from typing import Any, Sequence
 
 from loop_architect.recovery_registry import registry_document
 from loop_architect.rejection_journal import read_rejections
+from loop_architect.capability_envelope import (
+    CapabilityEnvelope,
+    CapabilityEnvelopeError,
+)
+from loop_architect.p1_runtime import privacy_safe_export
 
 
 SKILL_NAME = "codex-loop-prompt-architect"
@@ -526,13 +531,69 @@ def compile_manifest(source: dict[str, Any]) -> dict[str, Any]:
     ):
         raise LoopctlError("COMPILE_HEARTBEAT_INVALID", "/heartbeat")
     compiled_goals = copy.deepcopy(goals)
+    goal_ids: list[str] = []
     for goal in compiled_goals:
         if not isinstance(goal, dict) or not isinstance(goal.get("goal_id"), str):
             raise LoopctlError("COMPILE_GOAL_REGISTRY_INVALID", "/goals")
+        goal_ids.append(goal["goal_id"])
         goal.setdefault("required_completion_class", "COMPLETE_ARTIFACT")
         goal.setdefault(
             "closeout_required", source.get("mode", "DISPOSABLE") == "FORMAL"
         )
+    if len(goal_ids) != len(set(goal_ids)):
+        raise LoopctlError("COMPILE_GOAL_REGISTRY_INVALID", "/goals")
+    p1_source = source.get("p1", {"enabled": False})
+    if not isinstance(p1_source, dict) or type(p1_source.get("enabled")) is not bool:
+        raise LoopctlError("COMPILE_P1_CONFIG_INVALID", "/p1")
+    p1_enabled = p1_source["enabled"]
+    expected_p1_keys = (
+        {"enabled", "supervisor_capability_envelope", "model_canaries"}
+        if p1_enabled
+        else {"enabled"}
+    )
+    if set(p1_source) != expected_p1_keys:
+        raise LoopctlError("COMPILE_P1_CONFIG_INVALID", "/p1")
+    supervisor_envelope = None
+    model_canaries: dict[str, Any] = {}
+    if p1_enabled:
+        try:
+            supervisor_envelope = CapabilityEnvelope.from_dict(
+                p1_source["supervisor_capability_envelope"]
+            ).to_dict()
+        except (CapabilityEnvelopeError, KeyError, TypeError) as exc:
+            raise LoopctlError(
+                "COMPILE_SUPERVISOR_CAPABILITY_INVALID",
+                "/p1/supervisor_capability_envelope",
+            ) from exc
+        raw_canaries = p1_source["model_canaries"]
+        if not isinstance(raw_canaries, dict) or set(raw_canaries) != {
+            "CONTROLLER", "WORKER", "REVIEWER"
+        }:
+            raise LoopctlError("COMPILE_MODEL_CANARY_INVALID", "/p1/model_canaries")
+        for role, record in raw_canaries.items():
+            if (
+                not isinstance(record, dict)
+                or set(record) != {"status", "task_digest", "result_digest"}
+                or record.get("status") not in {"PASS", "FAIL", "UNMETERED"}
+                or any(
+                    value != "UNMETERED"
+                    and (not isinstance(value, str) or DIGEST_RE.fullmatch(value) is None)
+                    for value in (record.get("task_digest"), record.get("result_digest"))
+                )
+            ):
+                raise LoopctlError(
+                    "COMPILE_MODEL_CANARY_INVALID", f"/p1/model_canaries/{role}"
+                )
+            model_canaries[role] = copy.deepcopy(record)
+        if source.get("mode", "DISPOSABLE") == "FORMAL" and any(
+            record["status"] != "PASS" for record in model_canaries.values()
+        ):
+            raise LoopctlError("COMPILE_MODEL_CANARY_FAILED", "/p1/model_canaries")
+        if source.get("mode", "DISPOSABLE") == "DISPOSABLE":
+            if goal_ids != ["D0-control-plane-self-test"]:
+                raise LoopctlError("COMPILE_CP0_REGISTRY_INVALID", "/goals")
+        elif "D0-control-plane-self-test" in goal_ids:
+            raise LoopctlError("COMPILE_GOAL_REGISTRY_INVALID", "/goals")
     compiled_roles = copy.deepcopy(roles)
     if identity_policy["model_identity_requirement"] == "NOT_REQUIRED":
         for role in compiled_roles:
@@ -573,6 +634,16 @@ def compile_manifest(source: dict[str, Any]) -> dict[str, Any]:
         "model_identity_policy": {
             **identity_policy,
             "model_identity_status": identity_status,
+        },
+        "p1_runtime": {
+            "enabled": p1_enabled,
+            "supervisor_capability_envelope": supervisor_envelope,
+            "model_canaries": model_canaries,
+            "goal_registry": {
+                "mode": source.get("mode", "DISPOSABLE"),
+                "goal_ids": goal_ids,
+                "migration_status": "LOCKED_UNTIL_SAFE_POINT",
+            },
         },
         "formal_ready": identity_status != "HOST_BLOCKED",
         "canary_receipt": source.get("canary_receipt"),
@@ -746,6 +817,38 @@ def audit_root(root: Path) -> dict[str, Any]:
     }
 
 
+def export_metrics(root: Path) -> dict[str, Any]:
+    """Return only the canonical aggregate measurement allowlist."""
+
+    from loop_architect.state_runtime import AdaptiveStateRuntime
+
+    state = AdaptiveStateRuntime(root.expanduser().resolve(strict=False)).read_state()
+    if state is None:
+        raise LoopctlError("METRICS_STATE_NOT_INITIALIZED", "/root")
+    result = privacy_safe_export(state)
+    audit = audit_root(root)
+    mutation_types = [
+        str(item.get("record", {}).get("mutation_type", ""))
+        for item in audit["timeline"]
+        if item.get("kind") == "ACCEPTED"
+    ]
+    result.update(
+        accepted_count=audit["accepted_count"],
+        rejected_count=audit["rejected_count"],
+        human_intervention_count=sum(
+            "DECISION" in mutation or "HUMAN" in mutation
+            for mutation in mutation_types
+        ),
+        supervisor_intervention_count=sum(
+            "SUPERVISOR" in mutation for mutation in mutation_types
+        ),
+    )
+    digest_body = dict(result)
+    digest_body.pop("export_digest", None)
+    result["export_digest"] = _digest(digest_body)
+    return {"ok": True, "status": "PRIVACY_SAFE_METRICS_EXPORTED", **result}
+
+
 def _error(exc: LoopctlError) -> dict[str, Any]:
     return {
         "ok": False,
@@ -780,6 +883,9 @@ def _parser() -> argparse.ArgumentParser:
     audit = subparsers.add_parser("audit")
     audit.add_argument("--root", required=True, type=Path)
     audit.add_argument("--json", action="store_true")
+    metrics = subparsers.add_parser("metrics-export")
+    metrics.add_argument("--root", required=True, type=Path)
+    metrics.add_argument("--json", action="store_true")
     return parser
 
 
@@ -801,8 +907,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = {"ok": True, "status": "COMPILE_PASS", "compiled_manifest": result}
         elif args.command == "canary":
             result = verify_canary(_read_document(args.input))
-        else:
+        elif args.command == "audit":
             result = audit_root(args.root)
+        else:
+            result = export_metrics(args.root)
     except LoopctlError as exc:
         result = _error(exc)
     print(json.dumps(result, sort_keys=True) if getattr(args, "json", False) else result["status"])

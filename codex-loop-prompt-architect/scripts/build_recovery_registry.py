@@ -13,8 +13,10 @@ from typing import Any
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 SOURCES = (
     PROJECT_DIR / "scripts" / "loop_architect" / "state_runtime.py",
+    PROJECT_DIR / "scripts" / "loop_architect" / "p1_runtime.py",
     PROJECT_DIR / "scripts" / "adaptive_state_mcp.py",
     PROJECT_DIR / "scripts" / "adaptive_state_runtime.py",
+    PROJECT_DIR / "scripts" / "loopctl.py",
 )
 OUTPUT = PROJECT_DIR / "references" / "recovery-registry-v1.json"
 CALLS = {
@@ -25,6 +27,13 @@ CALLS = {
     # this helper.  Omitting it made literal bridge codes invisible to the
     # coverage gate even though they were reachable in the real App path.
     "_gateway_error",
+    # Runtime-adjacent public boundaries use typed errors (and the standalone
+    # codec historically used ValueError) before converting them to the common
+    # JSON error envelope.  They are part of the same recovery contract.
+    "P1RuntimeError",
+    "InputTransportError",
+    "LoopctlError",
+    "ValueError",
 }
 EXTRA_DYNAMIC_CODES = {
     "INTERNAL_ERROR",

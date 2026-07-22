@@ -103,6 +103,27 @@ class RecoveryRegistryTests(unittest.TestCase):
         codes = build_recovery_registry.extract_codes()
         self.assertIn("STATE_GATEWAY_HEARTBEAT_UNREGISTERED", codes)
         self.assertIn("STATE_GATEWAY_REQUEST_INVALID", codes)
+        self.assertIn("P1_REVIEWER_DISCLOSURE_REQUIRED", codes)
+        self.assertIn("RUNTIME_CODEC_OPERATION_INVALID", codes)
+        self.assertIn("COMPILE_P1_CONFIG_INVALID", codes)
+
+    def test_recovery_coverage_checker_reports_exact_registry(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "recovery_coverage_check.py"),
+                "--check",
+                "--json",
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["code_count"], payload["registry_entry_count"])
+        self.assertGreaterEqual(payload["code_count"], 690)
 
     def test_generator_entrypoint_emits_checks_and_detects_stale_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -228,6 +249,63 @@ class LoopctlCompilerAndCanaryTests(unittest.TestCase):
                 "status": "ACTIVE",
             },
         }
+
+    @staticmethod
+    def _p1_config() -> dict[str, object]:
+        canary = {
+            "status": "UNMETERED",
+            "task_digest": "UNMETERED",
+            "result_digest": "UNMETERED",
+        }
+        return {
+            "enabled": True,
+            "supervisor_capability_envelope": {
+                "owner": "supervisor-1",
+                "role": "SUPERVISOR",
+                "capabilities": [],
+                "denials": [],
+                "issued_at": "2026-01-01T00:00:00Z",
+                "note": "deny by default",
+            },
+            "model_canaries": {
+                role: dict(canary) for role in ("CONTROLLER", "WORKER", "REVIEWER")
+            },
+        }
+
+    def test_compile_p1_disposable_requires_cp0_and_emits_governance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = self._source(temporary)
+            source["goals"] = [
+                {
+                    "goal_id": "D0-control-plane-self-test",
+                    "required_completion_class": "COMPLETE_ARTIFACT",
+                }
+            ]
+            source["p1"] = self._p1_config()
+            compiled = loopctl.compile_manifest(source)
+            self.assertTrue(compiled["p1_runtime"]["enabled"])
+            self.assertEqual(
+                compiled["p1_runtime"]["goal_registry"]["goal_ids"],
+                ["D0-control-plane-self-test"],
+            )
+
+    def test_compile_p1_rejects_non_cp0_disposable_and_malformed_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = self._source(temporary)
+            source["p1"] = self._p1_config()
+            with self.assertRaisesRegex(loopctl.LoopctlError, "COMPILE_CP0_REGISTRY_INVALID"):
+                loopctl.compile_manifest(source)
+            source["goals"] = [
+                {
+                    "goal_id": "D0-control-plane-self-test",
+                    "required_completion_class": "COMPLETE_ARTIFACT",
+                }
+            ]
+            source["p1"]["supervisor_capability_envelope"]["capabilities"] = "allow all"
+            with self.assertRaisesRegex(
+                loopctl.LoopctlError, "COMPILE_SUPERVISOR_CAPABILITY_INVALID"
+            ):
+                loopctl.compile_manifest(source)
 
     @staticmethod
     def _lane(stage: str, manifest_digest: str, index: int) -> dict[str, object]:
@@ -602,6 +680,45 @@ class LoopctlDoctorTests(unittest.TestCase):
 
 
 class LoopctlCliTests(unittest.TestCase):
+    def test_metrics_export_is_aggregate_only(self) -> None:
+        state = {
+            "p1_runtime": {
+                "metrics": {
+                    "accepted_count": 1,
+                    "rejected_count": 1,
+                    "human_intervention_count": 0,
+                    "supervisor_intervention_count": 0,
+                    "route_latency_ms": [10],
+                    "heartbeat_latency_ms": ["UNMETERED"],
+                    "recovery_latency_ms": [],
+                    "token_estimate": "UNMETERED",
+                    "cost_estimate_usd": "UNMETERED",
+                    "runtime_digest": "UNMETERED",
+                    "config_digest": "UNMETERED",
+                    "model_digest": "UNMETERED",
+                }
+            }
+        }
+        with (
+            mock.patch.object(state_runtime_module, "AdaptiveStateRuntime") as runtime,
+            mock.patch.object(
+                loopctl,
+                "audit_root",
+                return_value={
+                    "accepted_count": 3,
+                    "rejected_count": 2,
+                    "timeline": [],
+                },
+            ),
+        ):
+            runtime.return_value.read_state.return_value = state
+            payload = loopctl.export_metrics(Path("/private/user/root"))
+        serialized = json.dumps(payload, sort_keys=True).lower()
+        self.assertEqual(payload["accepted_count"], 3)
+        self.assertEqual(payload["rejected_count"], 2)
+        for forbidden in ("/private/user/root", "prompt", "thread_id", "task_id"):
+            self.assertNotIn(forbidden, serialized)
+
     def test_compile_audit_and_error_envelopes_use_stable_exit_codes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
