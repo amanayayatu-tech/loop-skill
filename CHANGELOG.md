@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.7] - 2026-07-22
+
+v3.3.7 consolidates the previously unreleased P0-P2 work completed after
+v3.3.3. No v3.3.4, v3.3.5, or v3.3.6 tag or GitHub Release was published.
+
 ### Added
 
 - Added P2 content-addressed storage for new projections, reports, and report
@@ -18,6 +23,9 @@ All notable changes to this project are documented here. The project follows
   singleton Controller bootstrap text, structured CI path classes and shard
   P50/P95/slowest telemetry, and a non-required shadow replay over the latest
   five main merge commits.
+- Added equivalent Chinese and English documentation that positions LoopSkill
+  as an evidence-bound reliability control plane with explicit state-machine
+  and graph semantics, not a general-purpose Graph runtime.
 
 - Added the opt-in P1 canonical governance runtime: Goal-bound defect-family
   routes, mandatory Reviewer sibling/unchecked-surface disclosure, automatic
@@ -69,6 +77,19 @@ All notable changes to this project are documented here. The project follows
   effects; the separate rejection-journal append is an allowed audit effect.
 - Compatibility CI now fails when any runtime code is absent from the recovery
   registry or a recoverable code maps only to `WAIT`.
+
+### Evidence boundary
+
+- P0 includes a real disposable Codex App canary that reached canonical
+  `FINALIZATION_ACKED`. P1 and P2 are supported by their repository tests,
+  isolated installation evidence, and GitHub Compatibility CI; these layers
+  are not presented as one combined App canary.
+- Exact model/reasoning identity remains opt-in. Default Loops record it as
+  `UNSPECIFIED` / `NOT_APPLICABLE`, and a strict requested identity fails
+  closed when the host cannot provide the required carrier.
+- This release adds no new App restart requirement and does not claim
+  arbitrary DAG authoring, distributed scheduling, or general Graph-runtime
+  capability.
 
 ## [3.3.3] - 2026-07-19
 
@@ -515,7 +536,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.3...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.7...HEAD
+[3.3.7]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.7
 [3.3.3]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.3
 [3.3.2]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.2
 [3.3.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.1
