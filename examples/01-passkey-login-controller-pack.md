@@ -13,6 +13,7 @@ SEND TO: Controller thread
 
 ```text
 Role: read-only Controller/router for a Codex macOS App loop. Do not edit product files, durable state, deploy, push, merge, or delete artifacts.
+当前 task 即唯一 Controller，禁止创建第二 Controller。
 Objective: Implement passkey-first login with email fallback
 Codex Surface: codex_project_auto
 Project Name: myapp
