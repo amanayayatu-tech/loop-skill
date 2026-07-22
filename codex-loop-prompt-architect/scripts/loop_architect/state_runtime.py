@@ -7296,7 +7296,6 @@ class AdaptiveStateRuntime:
                     payload,
                     category=stage_prefix,
                     transaction_id=transaction_id,
-                    final_mode=final_mode,
                     inject=self._inject,
                 )
             except (ContentAddressingError, OSError) as exc:

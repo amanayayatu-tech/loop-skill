@@ -71,7 +71,6 @@ class ContentAddressedStore:
         *,
         category: str,
         transaction_id: str,
-        final_mode: int = 0o600,
         inject: Callable[[str], None] | None = None,
     ) -> ContentReference:
         """Atomically replace ``facade`` with a link to immutable bytes."""
@@ -86,23 +85,19 @@ class ContentAddressedStore:
         except ValueError as exc:
             raise ContentAddressingError("CONTENT_FACADE_OUTSIDE_CONTROL_DIR") from exc
         digest = self.digest_bytes(payload)
-        mode_dir = self.objects / f"{final_mode:04o}"
-        if mode_dir.is_symlink():
-            raise ContentAddressingError("CONTENT_STORE_SYMLINK")
-        mode_dir.mkdir(mode=0o700, exist_ok=True)
-        object_path = mode_dir / digest
+        object_path = self.objects / digest
         if object_path.exists():
             self._verify_object(object_path, digest, len(payload))
         else:
-            temp = mode_dir / f".{digest}.{transaction_id}.tmp"
-            self._write_new(temp, payload, final_mode)
+            temp = self.objects / f".{digest}.{transaction_id}.tmp"
+            self._write_new(temp, payload, 0o444)
             try:
                 os.link(temp, object_path, follow_symlinks=False)
             except FileExistsError:
                 self._verify_object(object_path, digest, len(payload))
             finally:
                 temp.unlink(missing_ok=True)
-            self._fsync_dir(mode_dir)
+            self._fsync_dir(self.objects)
         facade.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temp_facade = facade.parent / f".{facade.name}.{transaction_id}.{category}.link"
         temp_facade.unlink(missing_ok=True)
@@ -143,6 +138,7 @@ class ContentAddressedStore:
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o222
             or metadata.st_size != size
             or self.digest_bytes(payload) != digest
         ):

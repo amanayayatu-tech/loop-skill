@@ -442,6 +442,7 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
                 expected_status = "ARTIFACT_DIGEST_MISMATCH"
                 state = harness.state()
                 if case == "file_tamper":
+                    report_path.chmod(0o600)
                     report_path.write_text(report_content + " ", encoding="utf-8")
                 elif case == "missing_ledger":
                     state["artifact_ledger"].pop(report_path_value)
@@ -456,6 +457,7 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
                         separators=(",", ":"),
                     )
                     report_digest = digest(tampered_content)
+                    report_path.chmod(0o600)
                     report_path.write_text(tampered_content, encoding="utf-8")
                     state["artifact_ledger"][report_path_value][
                         "digest"

@@ -68,6 +68,7 @@ class ContentAddressingTests(unittest.TestCase):
                 category="ARTIFACT",
                 transaction_id="one",
             )
+            (control / reference.object_path).chmod(0o600)
             (control / reference.object_path).write_bytes(b"tamper")
             with self.assertRaises(ContentAddressingError):
                 store.read(reference)
