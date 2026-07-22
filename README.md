@@ -71,6 +71,8 @@ scripts/loopctl compile --input loop-source.json --check --json
 scripts/loopctl canary --input compiled-manifest.json --json
 scripts/loopctl audit --root /absolute/loop/root --json
 scripts/loopctl metrics-export --root /absolute/loop/root --json
+scripts/loopctl archive --root /absolute/loop/root --reason "closeout" --check --json
+scripts/loopctl risk-scan --root /absolute/project/root --check --json
 ```
 
 `doctor` 检查实际 Python 解释器与依赖、Git/worktree、source/install manifest、MCP 配置和 schema，以及 App/宿主能力。receipt 以这些身份的 digest 缓存；任何一项变化都会失效。失败只返回明确错误和修复命令，不创建 canonical、角色或 heartbeat。`compile` 默认生成 disposable CP0；正式初始化还必须绑定完整 registry、task/thread 与 heartbeat readback、五类 MCP lifecycle receipt，以及覆盖初始化至 `FINALIZATION_ACKED` 的真实 disposable canary。只有显式要求 `required_model` 或 `required_reasoning` 时才强制宿主 model receipt。canary 的每个 lane 和 lifecycle receipt 都必须绑定 manifest 并通过自身 digest 校验；formal startup receipt 由 MCP Gateway 从 root 内的 source path materialize，不能由调用参数内联伪造。
@@ -90,6 +92,14 @@ P1 canonical runtime 会把 defect family、同轮 sibling/unchecked-surface 披
 `PREPARE → send → RECORD` 的 orchestration 只合并确定性编排，不伪装成网络原子事务。每次外部 send 保留独立 receipt；崩溃重放从最后一个已确认步骤恢复，不能重复外部动作。heartbeat registry 是 automation ID、target、RRULE、prompt digest 与 status 的唯一事实源，readback 漂移会 fail closed。
 
 `metrics-export` 只输出计数、latency、`UNMETERED` 值及 runtime/config/model digest。它不会输出 prompt、聊天、task/thread ID、路径、PII、秘密或 raw log。CI 的 recovery coverage 以 AST 枚举 runtime、MCP、CLI 与 codec 边界；当前每个可达 code 都必须有唯一、非 `WAIT` 的 next operation。
+
+## P2 可运维性与历史治理
+
+新写入的 projection、report 和 report staging 现在以 SHA-256 内容寻址；原有路径仍作为兼容 facade 可读，相同权限类别的重复字节只保留一个对象。旧布局不会被批量改写或删除。运行时同时生成轻量 `audit-index.json`、按 Goal 汇总和业务时间线，dashboard 把业务 route/Goal 与控制面 mutation 分开显示。
+
+所有 runtime、MCP 和 `loopctl` 错误 envelope 都从 recovery registry 给出可复制的 `next_operation_template`。`loopctl` 子命令统一接受 `--check`、`--emit`、`--json` 和稳定退出码；旧 `compile --emit PATH` 保留一个兼容周期。`risk-scan` 区分 SHA-256、placeholder、fixture 和真实 credential，allowlist 必须绑定规则 ID、文件范围、类别和原因，输出只保留命中值 digest。
+
+新归档使用 `archive-manifest-v2`，记录原因、root、Git、state、events、outboxes、roles、heartbeat、文件 digest 与隐私分类；两种旧 manifest 继续只读兼容。active prompt 只读取 active policy，历史 model/heartbeat 文字保留为 evidence 但不能重新进入 prompt。CI 保留现有 required final gate，并增加结构化 path class、四分片 P50/P95/最慢测试、分层 fuzz profile，以及最近五个 main merge 的 observation-only shadow replay。
 
 ## 先质检，再 Loop 化
 

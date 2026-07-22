@@ -75,6 +75,8 @@ scripts/loopctl compile --input loop-source.json --check --json
 scripts/loopctl canary --input compiled-manifest.json --json
 scripts/loopctl audit --root /absolute/loop/root --json
 scripts/loopctl metrics-export --root /absolute/loop/root --json
+scripts/loopctl archive --root /absolute/loop/root --reason "closeout" --check --json
+scripts/loopctl risk-scan --root /absolute/project/root --check --json
 ```
 
 `doctor` verifies the actual Python interpreter and dependencies, Git/worktree identity, source/install manifests, MCP configuration and schemas, and observable App/host capabilities. Its receipt cache is content-addressed by those identities and invalidates on any drift. Failure returns an exact error and remediation without creating canonical state, roles, or a heartbeat. `compile` defaults CP0 to disposable. Formal initialization additionally requires a complete registry, task/thread and heartbeat readback, five MCP lifecycle receipts, and a real disposable canary covering initialization through `FINALIZATION_ACKED`. A host model receipt is mandatory only when `required_model` or `required_reasoning` is explicit. Every canary lane and lifecycle receipt is manifest-bound and self-digest-checked; the MCP Gateway materializes the formal startup receipt from a root-confined source path instead of trusting inline request bytes.
@@ -94,6 +96,14 @@ The P1 canonical subdocument records defect families, same-round sibling and unc
 The `PREPARE → send → RECORD` orchestration merges deterministic sequencing, not network atomicity. Every external send retains its own receipt, and crash replay resumes after the last acknowledged step without repeating the external action. The heartbeat registry is the sole source for automation ID, target, RRULE, prompt digest, and status; readback drift fails closed.
 
 `metrics-export` emits only aggregate counts, latency, `UNMETERED` values, and runtime/config/model digests. It excludes prompts, chat, task/thread IDs, paths, PII, secrets, and raw logs. CI recovery coverage uses AST enumeration across runtime, MCP, CLI, and codec boundaries; every reachable code must have exactly one non-`WAIT` next operation.
+
+## P2 operability and historical governance
+
+New projections, reports, and report-staging files are SHA-256 content addressed. Historical facade paths remain readable, identical bytes within the same permission class share one object, and legacy layouts are never bulk-rewritten or deleted. The runtime also emits a lightweight audit index, per-Goal summaries, and a business timeline. The dashboard presents business routes/Goals separately from control-plane mutations.
+
+Runtime, MCP, and `loopctl` error envelopes derive a copyable `next_operation_template` from the recovery registry. `loopctl` commands consistently accept `--check`, `--emit`, and `--json` with stable exit codes; legacy `compile --emit PATH` remains for one compatibility cycle. `risk-scan` distinguishes SHA-256 identifiers, placeholders, fixtures, and credentials. Each allow rule binds a rule ID, file scope, kind, and reason, while output retains only a digest of the matched value.
+
+New archives use `archive-manifest-v2` and record reason, root, Git, state, events, outboxes, roles, heartbeat, file digests, and privacy classification; both older manifest shapes remain read-only compatible. Active prompts consume only active policy, while historical model/heartbeat prose remains evidence and cannot re-enter an active prompt. CI retains the existing required final gate and adds structured path classes, four-shard P50/P95/slowest telemetry, tiered fuzz profiles, and an observation-only replay over the latest five main merge commits.
 
 ## Intake before Loop generation
 
