@@ -1902,19 +1902,41 @@ def controller_goal_resume_request(
 
 
 def persisted_snapshot(root: Path) -> dict[str, bytes]:
+    """Snapshot canonical/product control files, excluding allowed audit append.
+
+    Rejected operations now append ``LOOP_REJECTIONS.jsonl`` while preserving
+    the historical zero-canonical/product/external-side-effect invariant.
+    Tests that exercise the audit chain inspect that file explicitly.
+    """
+
     control = root / ".codex-loop"
     if not control.exists():
         return {}
     snapshot: dict[str, bytes] = {}
     for path in sorted(control.rglob("*")):
+        if path == control / "LOOP_REJECTIONS.jsonl":
+            continue
         relative = str(path.relative_to(root))
         if path.is_symlink():
             snapshot[relative] = b"<SYMLINK>" + os.readlink(path).encode("utf-8")
         elif path.is_dir():
-            snapshot[relative + "/"] = b"<DIR>"
+            continue
         elif path.is_file():
             snapshot[relative] = path.read_bytes()
     return snapshot
+
+
+def rejection_audit_files(root: Path) -> list[str]:
+    """Return persisted control files after a virgin rejected operation."""
+
+    control = root / ".codex-loop"
+    if not control.exists():
+        return []
+    return sorted(
+        path.relative_to(control).as_posix()
+        for path in control.rglob("*")
+        if path.is_file()
+    )
 
 
 def runtime_surface_fingerprint(root: Path) -> dict[str, Any]:

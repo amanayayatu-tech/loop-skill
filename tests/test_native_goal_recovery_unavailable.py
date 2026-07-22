@@ -15,6 +15,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from loop_architect.state_runtime import AdaptiveStateRuntime, process_request  # noqa: E402
+from loop_architect.rejection_journal import read_rejections  # noqa: E402
 
 
 class NativeGoalRecoveryUnavailableTests(unittest.TestCase):
@@ -169,7 +170,10 @@ class NativeGoalRecoveryUnavailableTests(unittest.TestCase):
                         response["error"]["details"]["side_effects"],
                         "NONE",
                     )
-                    self.assertFalse((root / ".codex-loop").exists())
+                    journal = root / ".codex-loop" / "LOOP_REJECTIONS.jsonl"
+                    self.assertTrue(journal.is_file())
+                    self.assertGreaterEqual(len(read_rejections(journal)), 1)
+                    self.assertFalse((root / ".codex-loop" / "LOOP_STATE.md").exists())
 
 
 if __name__ == "__main__":

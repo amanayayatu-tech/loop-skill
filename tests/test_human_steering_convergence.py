@@ -528,7 +528,7 @@ class HumanControlRuntimeTests(unittest.TestCase):
         self.assertEqual(state["schema_version"], 2)
         self.assertEqual(
             state["status_projection_target"]["render_contract_version"],
-            "status-v4",
+            "status-v5",
         )
         status = (Path(self.temp.name) / ".codex-loop" / "STATUS.md").read_text()
         self.assertIn("## What's done", status)
@@ -629,7 +629,7 @@ class HumanControlRuntimeTests(unittest.TestCase):
         current = runtime.read_state()
         self.assertEqual(
             current["status_projection_target"]["render_contract_version"],
-            "status-v4",
+            "status-v5",
         )
         self.assertIn("Control phase", runtime.status_path.read_text())
 
@@ -689,7 +689,7 @@ class HumanControlRuntimeTests(unittest.TestCase):
             runtime.read_state()["status_projection_target"][
                 "render_contract_version"
             ],
-            "status-v4",
+            "status-v5",
         )
 
     def test_historical_status_v3_recover_preserves_bytes_then_mutation_upgrades(self) -> None:
@@ -759,7 +759,7 @@ class HumanControlRuntimeTests(unittest.TestCase):
         current = runtime.read_state()
         self.assertEqual(
             current["status_projection_target"]["render_contract_version"],
-            "status-v4",
+            "status-v5",
         )
         self.assertNotEqual(runtime.status_path.read_bytes(), historical_payload)
 

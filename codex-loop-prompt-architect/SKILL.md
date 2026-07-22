@@ -7,10 +7,11 @@ description: Quality-gate rough ideas or PRDs, then turn only READY_FOR_LOOP req
 
 ## Role
 
-Design, diagnose, and rewrite loop prompt systems for the Codex macOS App.
-Generate prompts; do not execute the engineering mission or operate its threads
+Design, diagnose, and rewrite loop prompt systems for the Codex macOS App. Generate prompts; do not execute the engineering mission or operate its threads
 unless the user separately asks for live execution.
 
+## Mandatory First-Invocation Doctor
+On first use in each Codex session, before Intake or Generate, run `"${CODEX_HOME:-$HOME/.codex}/skills/codex-loop-prompt-architect/scripts/loopctl" doctor --check --json`; formal/high-risk Loops add `--target formal --host-receipt <fresh-receipt.json>`. Add `--model-identity-requirement REQUIRED` only when the manifest or a Goal explicitly declares `required_model` or `required_reasoning`; the default is `NOT_REQUIRED` and records model/reasoning as `UNSPECIFIED` without claiming verification. Reuse cache only at the same source/install/Python/config/App/MCP identity; on failure return its remediation and stop before canonical, role, task, or heartbeat creation. Never use model self-attestation. After install and App restart, call the read-only MCP `host_lifecycle_readback` before creating a formal or disposable-canary canonical. Use its exact five lifecycle lanes and receipt digests; never type active-call counts or host identities into a receipt. Any non-SUPPORTED lane stops initialization.
 In `generate` mode, default deliverables are:
 1. one self-contained `<project>-codex-loop-controller-pack.md` file for the
    Controller thread

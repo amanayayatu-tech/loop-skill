@@ -228,10 +228,19 @@ class ManifestAndArtifactTests(unittest.TestCase):
         ).stdout.strip()
 
     def test_canonical_inventory(self) -> None:
-        self.assertEqual(self.inventory["expected_total_tests"], 634)
+        self.assertEqual(
+            self.inventory["expected_total_tests"],
+            sum(
+                shard["test_count"]
+                for shard in self.inventory["shards"].values()
+            ),
+        )
+        expected_shards = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))[
+            "expected_shard_counts"
+        ]
         self.assertEqual(
             {key: value["test_count"] for key, value in self.inventory["shards"].items()},
-            {"1": 180, "2": 168, "3": 144, "4": 142},
+            expected_shards,
         )
         self.assertEqual(set(self.inventory["dedicated_only"]), {
             "tests.test_adaptive_state_runtime",
@@ -240,8 +249,14 @@ class ManifestAndArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             inventory_path = Path(temporary) / "inventory.json"
             inventory_path.write_text(json.dumps(self.inventory), encoding="utf-8")
-            self.assertEqual(compatibility._inventory_total(inventory_path), 634)
-            malformed = {**self.inventory, "expected_total_tests": 635}
+            self.assertEqual(
+                compatibility._inventory_total(inventory_path),
+                self.inventory["expected_total_tests"],
+            )
+            malformed = {
+                **self.inventory,
+                "expected_total_tests": self.inventory["expected_total_tests"] + 1,
+            }
             inventory_path.write_text(json.dumps(malformed), encoding="utf-8")
             with self.assertRaises(compatibility.CompatibilityError):
                 compatibility._inventory_total(inventory_path)
@@ -264,7 +279,7 @@ class ManifestAndArtifactTests(unittest.TestCase):
                 (artifact_dir / f".ci-shard-{shard}.json").write_text(json.dumps(payload), encoding="utf-8")
                 (artifact_dir / f".coverage.shard-{shard}.host.1").touch()
             summary = compatibility.verify_shard_artifacts(REPO, MANIFEST_PATH, artifact_dir, self.sha)
-        self.assertEqual(summary["total_tests"], 634)
+        self.assertEqual(summary["total_tests"], self.inventory["expected_total_tests"])
 
     def test_artifact_verifier_rejects_wrong_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

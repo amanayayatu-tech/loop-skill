@@ -17,6 +17,8 @@ STATE_SCHEMA="$SOURCE_DIR/references/adaptive-state.schema.json"
 MUTATION_SCHEMA="$SOURCE_DIR/references/adaptive-mutation.schema.json"
 INSTALL_SCHEMA="$SOURCE_DIR/references/install-manifest.schema.json"
 APP_CANARY_SCHEMA="$SOURCE_DIR/references/app-canary-receipt.schema.json"
+LOOPCTL="$SOURCE_DIR/scripts/loopctl"
+RECOVERY_REGISTRY="$SOURCE_DIR/references/recovery-registry-v1.json"
 BACKUP_ROOT="$CODEX_HOME_DIR/skill-backups/codex-loop-prompt-architect"
 STAGING_ROOT="$CODEX_HOME_DIR/install-staging"
 STAMP="$(date +%Y%m%d%H%M%S)-$$"
@@ -61,7 +63,7 @@ if [[ ! -f "$SOURCE_DIR/SKILL.md" ]]; then
   exit 1
 fi
 
-for required_file in "$STATE_RUNTIME" "$STATE_MCP" "$MCP_CONFIG_HELPER" "$INSTALL_VERIFY" "$APP_CANARY_VERIFY" "$STATE_SCHEMA" "$MUTATION_SCHEMA" "$INSTALL_SCHEMA" "$APP_CANARY_SCHEMA"; do
+for required_file in "$STATE_RUNTIME" "$STATE_MCP" "$MCP_CONFIG_HELPER" "$INSTALL_VERIFY" "$APP_CANARY_VERIFY" "$LOOPCTL" "$STATE_SCHEMA" "$MUTATION_SCHEMA" "$INSTALL_SCHEMA" "$APP_CANARY_SCHEMA" "$RECOVERY_REGISTRY"; do
   if [[ ! -f "$required_file" ]]; then
     echo "Missing Adaptive state runtime artifact: $required_file" >&2
     exit 1
@@ -118,6 +120,8 @@ chmod +x "$STAGING_DIR/scripts/adaptive_state_mcp.py"
 chmod +x "$STAGING_DIR/scripts/configure_mcp.py"
 chmod +x "$STAGING_DIR/scripts/verify_installation.py"
 chmod +x "$STAGING_DIR/scripts/validate_app_canary_receipt.py"
+chmod +x "$STAGING_DIR/scripts/loopctl" "$STAGING_DIR/scripts/loopctl.py"
+chmod +x "$STAGING_DIR/scripts/build_recovery_registry.py"
 mkdir -p "$RUNTIME_SMOKE_ROOT"
 "$PYTHON_BIN" "$STAGING_DIR/scripts/adaptive_state_runtime.py" \
   --root "$RUNTIME_SMOKE_ROOT" --recover </dev/null >/dev/null

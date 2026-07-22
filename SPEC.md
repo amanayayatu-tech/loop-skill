@@ -70,13 +70,41 @@ module:
 - schema-v3 MCP State Gateway as the sole canonical writer for new Adaptive
   Packs, with explicit-only v1/v2 migration;
 - durable outboxes, receipts, replay, and lost-output recovery;
+- a read-only first-invocation dependency/identity doctor, compiled startup
+  manifest, manifest-bound lane/lifecycle receipts, and disposable
+  full-lifecycle canary before formal initialization; the MCP Gateway
+  materializes the formal startup receipt from a root-confined source;
+- a complete recovery registry and privacy-minimized, hash-chained append-only
+  rejection journal; recoverable states may not expose `WAIT` as their only
+  operation;
+- host-bound task/thread receipts, opt-in host model/reasoning receipts when an
+  exact identity is required, and explicit MCP install, restart, reconnect,
+  schema-refresh, and App-refresh capability receipts;
+- read-only `host_lifecycle_readback` derivation of those identities and
+  zero-active-call observations inside the host-attested serial dispatcher;
+  callers cannot supply counts, process identities, App build, or schema digest;
+- reviewed-artifact Git closeout with locked base identity, a clean index and
+  worktree for `NO_COMMIT`, and idempotent commit/push readback recovery;
+- schema-driven policy migration with retained history, safe points, bounded
+  values, approval, and rollback-or-stop semantics;
+- workflow state kept distinct from the achieved evidence completion class;
 - current-artifact, current-dispatch, PASS-report evidence binding;
 - bounded transport degradation and immutable successor handoff;
 - fenced leases and identity-preserving Pack migration;
-- bounded repair and fail-closed rejection with zero side effects;
+- bounded repair and fail-closed rejection with zero canonical, product, and
+  external side effects; the rejection-journal append is a declared audit
+  effect;
 - evidence claims bound to the exact artifact and environment;
 - real-Loop isolation;
 - completion only at canonical `FINALIZATION_ACKED`.
+
+Schema-v3 additions are additive. v1/v2/v3 state remains readable and accepted
+historical events are never rewritten. A historical completed Goal without an
+evidence class projects as `COMPLETE_ARTIFACT`; an existing limitation terminal
+projects as `COMPLETE_WITH_LIMITATION`. The projection becomes explicit only
+on a later accepted state version. Evidence classes are categories, not an
+ordinal ladder: empirical, formal, and public claims each require their own
+bound authority receipt.
 
 The index gives the exact normative statements and source mappings. It is an
 index, not a second state schema.
@@ -155,8 +183,21 @@ PREPARED finalization outbox; only the pause/readback-bound ACK creates the
 terminal projection. Schema v3 is host-cooperative rather than Byzantine: it
 binds real App return values and readback to the current host-attested
 Controller turn, but does not claim a provider-signed subtool result which the
-App does not expose. A future `x-codex-app-action-receipt-v1` carrier is an
-optional stronger attestation; its absence is not a normal-path blocker.
+App does not expose. Model identity is an opt-in guarantee. When neither the
+manifest nor a Goal declares `required_model` or `required_reasoning`,
+registration records `model_identity_requirement=NOT_REQUIRED`,
+`model_identity_status=NOT_APPLICABLE`, and `UNSPECIFIED` model/reasoning
+values. It does not request or imply a model receipt, and this capability does
+not participate in readiness. When either constraint is explicit, registration
+uses `model_identity_requirement=REQUIRED`; missing host support is
+`model_identity_status=HOST_BLOCKED` and fails closed. Strict registration requires a non-argument
+`_meta.x-codex-app-action-receipt-v1` carrier with schema version 1, action
+`THREAD_CREATE_OR_READ`, the current source thread and turn, and an exact result
+binding task/thread, role/bootstrap role, bootstrap prompt digest, worktree,
+model, reasoning, App build, and evidence model. Missing, extra, cross-turn, or
+cross-task values fail before canonical mutation. This v1 contract is
+`HOST_COOPERATIVE`, not a cryptographic signature; `APP_SIGNED` remains reserved
+for a future signed envelope with independent signature verification.
 For `RECORD_ROUTE_SENT`, the Controller submits only the returned target thread
 id and observation time from one real send. Gateway compares that target to the
 single PREPARED outbox and supplies the canonical exact materialized

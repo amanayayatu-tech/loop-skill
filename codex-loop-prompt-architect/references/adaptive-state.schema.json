@@ -116,6 +116,12 @@
   ],
   "properties": {
     "schema_version": {"enum": [1, 2, 3]},
+    "initialization_class": {"enum": ["LEGACY_COMPATIBLE", "DISPOSABLE", "FORMAL"]},
+    "startup_receipt": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/jsonObject"}]},
+    "model_identity_requirement": {"enum": ["NOT_REQUIRED", "REQUIRED"]},
+    "model_identity_status": {"enum": ["NOT_APPLICABLE", "UNVERIFIED", "VERIFIED", "HOST_BLOCKED"]},
+    "required_model": {"type": "string", "minLength": 1, "maxLength": 256},
+    "required_reasoning": {"type": "string", "minLength": 1, "maxLength": 256},
     "state_gateway_contract_version": {"const": 3},
     "state_gateway_mode": {"const": "MCP_CANONICAL_WRITER"},
     "gateway_route_ledger": {"$ref": "#/$defs/gatewayRouteMap"},
@@ -180,6 +186,8 @@
     },
     "goal_definition_registry": {"$ref": "#/$defs/goalDefinitionMap"},
     "goal_execution_ledger": {"$ref": "#/$defs/goalExecutionMap"},
+    "goal_closeout_ledger": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/jsonObject"}}, "additionalProperties": false},
+    "policy_migration_history": {"type": "array", "items": {"$ref": "#/$defs/jsonObject"}},
     "local_verification_required_goal_ids": {"$ref": "#/$defs/safeIdArray"},
     "authorization_envelope": {"$ref": "#/$defs/authorizationEnvelope"},
     "thread_registry": {"$ref": "#/$defs/threadRegistry"},
@@ -409,6 +417,10 @@
         "depends_on": {"$ref": "#/$defs/safeIdArray"},
         "dispatch_when": {"type": "string", "minLength": 1},
         "payload_template_digest": {"$ref": "#/$defs/digest"},
+        "closeout_required": {"type": "boolean"},
+        "required_completion_class": {
+          "enum": ["COMPLETE_ARTIFACT", "COMPLETE_WITH_LIMITATION", "EMPIRICAL_RESULT_OBSERVED", "FORMAL_ACCEPTED", "PUBLIC_RELEASED"]
+        },
         "validation_matrix": {"$ref": "#/$defs/validationMatrix"},
         "review_surface": {"$ref": "#/$defs/reviewSurface"}
       }
@@ -587,6 +599,18 @@
         },
         "completed_roadmap_version": {
           "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]
+        },
+        "required_completion_class": {
+          "enum": ["COMPLETE_ARTIFACT", "COMPLETE_WITH_LIMITATION", "EMPIRICAL_RESULT_OBSERVED", "FORMAL_ACCEPTED", "PUBLIC_RELEASED"]
+        },
+        "achieved_completion_class": {
+          "oneOf": [
+            {"type": "null"},
+            {"enum": ["COMPLETE_ARTIFACT", "COMPLETE_WITH_LIMITATION", "EMPIRICAL_RESULT_OBSERVED", "FORMAL_ACCEPTED", "PUBLIC_RELEASED"]}
+          ]
+        },
+        "completion_evidence": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/jsonObject"}]
         }
       }
     },
@@ -1027,7 +1051,11 @@
         },
         "bootstrap_prompt_digest": {"$ref": "#/$defs/digest"},
         "status": {"enum": ["REGISTERED", "ARCHIVED"]},
-        "worktree_path": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]}
+        "worktree_path": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
+        "model": {"type": "string", "minLength": 1, "maxLength": 256},
+        "reasoning": {"type": "string", "minLength": 1, "maxLength": 256},
+        "model_identity_status": {"enum": ["NOT_APPLICABLE", "UNVERIFIED", "VERIFIED", "HOST_BLOCKED"]},
+        "role_model_receipt": {"$ref": "#/$defs/jsonObject"}
       }
     },
     "threadRegistry": {
@@ -1087,7 +1115,7 @@
         "automation_name": {"type": "string", "minLength": 1, "maxLength": 1024},
         "kind": {"const": "HEARTBEAT"},
         "target_thread_id": {"$ref": "#/$defs/safeId"},
-        "rrule": {"type": "string", "pattern": "^FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}$"},
+        "rrule": {"type": "string", "pattern": "^(?:FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}|FREQ=HOURLY(?:;INTERVAL=[1-9][0-9]{0,3})?)$"},
         "prompt_digest": {"$ref": "#/$defs/digest"},
         "prompt_normalization": {"const": "LF_NORMALIZED_NO_TRAILING_NEWLINE"}
       }
@@ -1116,7 +1144,7 @@
         "automation_name": {"type": "string", "minLength": 1, "maxLength": 1024},
         "kind": {"const": "HEARTBEAT"},
         "target_thread_id": {"$ref": "#/$defs/safeId"},
-        "rrule": {"type": "string", "pattern": "^FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}$"},
+        "rrule": {"type": "string", "pattern": "^(?:FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}|FREQ=HOURLY(?:;INTERVAL=[1-9][0-9]{0,3})?)$"},
         "prompt_digest": {"$ref": "#/$defs/digest"},
         "prompt_normalization": {"const": "LF_NORMALIZED_NO_TRAILING_NEWLINE"},
         "observed_at": {"$ref": "#/$defs/timestamp"},
@@ -1311,7 +1339,7 @@
     "artifactRecordMap": {
       "type": "object",
       "patternProperties": {
-        "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/(CONTROLLER_PACK(?:\\.[a-f0-9]{64})?\\.md|HEARTBEAT_PROMPT\\.[a-f0-9]{64}\\.txt))$": {"$ref": "#/$defs/artifactRecord"}
+        "^\\.codex-loop/(reports/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(md|json|txt)|sources/(CONTROLLER_PACK(?:\\.[a-f0-9]{64})?\\.md|STARTUP_RECEIPT\\.json|HEARTBEAT_PROMPT\\.[a-f0-9]{64}\\.txt))$": {"$ref": "#/$defs/artifactRecord"}
       },
       "additionalProperties": false
     },
@@ -2032,9 +2060,9 @@
     "decisionOption": {
       "type": "object", "additionalProperties": false,
       "required": ["option_id", "option_effect", "preauthorized_capability"],
-      "properties": {"option_id": {"$ref": "#/$defs/safeId"}, "option_effect": {"enum": ["CREATE_DRAFT_PR", "WAIT", "RETURN_FOR_REPAIR", "CONTINUE", "APPLY_ROADMAP_REVISION", "REVIEW_SURFACE_ACCEPTED", "STOP_LOOP_CONFIRMED", "INCREASE_REPAIR_BUDGET_TO_5", "INCREASE_REPAIR_BUDGET"]}, "preauthorized_capability": {"enum": ["none", "pr_create", "thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"]}}
+      "properties": {"option_id": {"$ref": "#/$defs/safeId"}, "option_effect": {"enum": ["CREATE_DRAFT_PR", "WAIT", "RETURN_FOR_REPAIR", "CONTINUE", "APPLY_ROADMAP_REVISION", "REVIEW_SURFACE_ACCEPTED", "STOP_LOOP_CONFIRMED", "INCREASE_REPAIR_BUDGET_TO_5", "INCREASE_REPAIR_BUDGET", "APPLY_POLICY_MIGRATION"]}, "preauthorized_capability": {"enum": ["none", "pr_create", "thread_create", "automation_manage", "goal_manage", "message_send", "local_verifier"]}}
     },
-    "decisionScope": {"type": "object", "additionalProperties": false, "properties": {"goal_id": {"$ref": "#/$defs/safeId"}, "dispatch_id": {"$ref": "#/$defs/safeId"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "artifact_path": {"type": "string", "minLength": 1}, "preview_url": {"type": "string", "pattern": "^https?://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^?]*)?$"}, "repository": {"type": "string", "minLength": 1}, "branch": {"type": "string", "minLength": 1}, "worktree_path": {"type": "string", "minLength": 1}, "review_surface_type": {"type": "string", "minLength": 1}, "repair_policy_max_attempts_from": {"type": "integer", "minimum": 0, "maximum": 19}, "repair_policy_max_attempts_to": {"type": "integer", "minimum": 1, "maximum": 20}}},
+    "decisionScope": {"type": "object", "additionalProperties": false, "properties": {"goal_id": {"$ref": "#/$defs/safeId"}, "dispatch_id": {"$ref": "#/$defs/safeId"}, "artifact_digest": {"$ref": "#/$defs/digest"}, "artifact_path": {"type": "string", "minLength": 1}, "preview_url": {"type": "string", "pattern": "^https?://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^?]*)?$"}, "repository": {"type": "string", "minLength": 1}, "branch": {"type": "string", "minLength": 1}, "worktree_path": {"type": "string", "minLength": 1}, "review_surface_type": {"type": "string", "minLength": 1}, "repair_policy_max_attempts_from": {"type": "integer", "minimum": 0, "maximum": 19}, "repair_policy_max_attempts_to": {"type": "integer", "minimum": 1, "maximum": 20}, "policy_descriptor": {"$ref": "#/$defs/jsonObject"}}},
     "decisionRecord": {
       "type": "object", "additionalProperties": false,
       "required": ["decision_id", "decision_context_digest", "source_state_version", "valid_through_state_version", "options", "scope", "exclusions", "status", "selected_option_id"],
@@ -2106,7 +2134,7 @@
     "validationEvidence": {"type": "object", "additionalProperties": false, "required": ["evidence_path", "evidence_digest", "artifact_digest", "checked_at"], "properties": {"evidence_path": {"type": "string", "minLength": 1}, "evidence_digest": {"$ref": "#/$defs/digest"}, "evidence_media_type": {"type": "string", "minLength": 1}, "artifact_digest": {"$ref": "#/$defs/digest"}, "worker_dispatch_id": {"$ref": "#/$defs/safeId"}, "checked_at": {"$ref": "#/$defs/timestamp"}}},
     "validationEvidenceDimensions": {"type": "object", "propertyNames": {"enum": ["functional", "regression", "static_quality", "compatibility", "security", "performance", "user_experience", "change_impact"]}, "additionalProperties": {"$ref": "#/$defs/validationEvidence"}},
     "validationEvidenceMap": {"type": "object", "patternProperties": {"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": {"$ref": "#/$defs/validationEvidenceDimensions"}}, "additionalProperties": false},
-    "statusProjectionTarget": {"type": "object", "additionalProperties": false, "required": ["path", "target_state_version", "target_digest", "render_contract_version"], "properties": {"path": {"const": ".codex-loop/STATUS.md"}, "target_state_version": {"type": "integer", "minimum": 1}, "target_digest": {"$ref": "#/$defs/digest"}, "render_contract_version": {"enum": ["status-v1", "status-v2", "status-v3", "status-v4"]}}},
+    "statusProjectionTarget": {"type": "object", "additionalProperties": false, "required": ["path", "target_state_version", "target_digest", "render_contract_version"], "properties": {"path": {"const": ".codex-loop/STATUS.md"}, "target_state_version": {"type": "integer", "minimum": 1}, "target_digest": {"$ref": "#/$defs/digest"}, "render_contract_version": {"enum": ["status-v1", "status-v2", "status-v3", "status-v4", "status-v5"]}}},
     "humanControlPolicy": {"type": "object", "additionalProperties": false, "required": ["human_steering_enabled", "status_projection_enabled", "decision_cards_enabled", "failure_fingerprint_enabled", "context_freshness_required", "review_evidence_policy"], "properties": {"human_steering_enabled": {"type": "boolean"}, "status_projection_enabled": {"type": "boolean"}, "decision_cards_enabled": {"type": "boolean"}, "failure_fingerprint_enabled": {"const": true}, "context_freshness_required": {"const": true}, "review_evidence_policy": {"const": "deterministic_first"}}},
     "jsonValue": {
       "oneOf": [
@@ -2118,6 +2146,7 @@
         {"type": "object", "additionalProperties": {"$ref": "#/$defs/jsonValue"}}
       ]
     },
+    "jsonObject": {"type": "object", "additionalProperties": {"$ref": "#/$defs/jsonValue"}},
     "gatewayRoute": {
       "type": "object",
       "additionalProperties": false,

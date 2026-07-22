@@ -28,7 +28,8 @@ Requirements: macOS, Codex App, Git, and Python 3.9+.
 ```bash
 git clone https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
-python3 -m pip install -r requirements-test.txt
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-test.txt
 ./scripts/install.sh
 ```
 
@@ -63,6 +64,25 @@ Starting the work is an explicit three-step handoff:
 3. **You start the real Loop**: create a real Controller task in Codex App and use the Pack as its launch input. Actual orchestration begins only here.
 
 If Intake returns `DIRECT_TASK_RECOMMENDED`, asking Codex to do the task directly is usually faster. A Loop is not a ceremony every task must endure.
+
+## Startup gate for a formal long-running Loop
+
+On the first intake or generate invocation in each new session, the skill runs a read-only doctor. The same checks are available directly:
+
+```bash
+scripts/loopctl doctor --check --json
+scripts/loopctl compile --input loop-source.json --check --json
+scripts/loopctl canary --input compiled-manifest.json --json
+scripts/loopctl audit --root /absolute/loop/root --json
+```
+
+`doctor` verifies the actual Python interpreter and dependencies, Git/worktree identity, source/install manifests, MCP configuration and schemas, and observable App/host capabilities. Its receipt cache is content-addressed by those identities and invalidates on any drift. Failure returns an exact error and remediation without creating canonical state, roles, or a heartbeat. `compile` defaults CP0 to disposable. Formal initialization additionally requires a complete registry, task/thread and heartbeat readback, five MCP lifecycle receipts, and a real disposable canary covering initialization through `FINALIZATION_ACKED`. A host model receipt is mandatory only when `required_model` or `required_reasoning` is explicit. Every canary lane and lifecycle receipt is manifest-bound and self-digest-checked; the MCP Gateway materializes the formal startup receipt from a root-confined source path instead of trusting inline request bytes.
+
+After an App restart, the read-only MCP `host_lifecycle_readback` derives all five lifecycle receipts from the validated install receipt, exact current server registration, OpenAI-signed App parent, and current server/client/schema identities. Active-call counts come from the serial stdio dispatcher itself and exclude the readback call; the model cannot submit or self-attest zero. Install drift, an unobserved restart, concurrent calls, or an unavailable App build fails closed.
+
+Every recoverable runtime code is mapped by one recovery registry entry to one legal next operation; `WAIT` alone is never recovery. Rejected requests are separately appended to the hash-chained, fsynced `.codex-loop/LOOP_REJECTIONS.jsonl`. It stores a request digest and minimum audit fields, never prompts, chat, credentials, or the full request. “Zero side effects” means zero canonical, product, and external effects; the declared rejection-journal append is an allowed audit effect.
+
+A formal Goal can require a Git closeout saga. `PREPARE_GOAL_CLOSEOUT` locks the reviewed artifact, HEAD, branch, paths, and a one-use capability; `ACK_GOAL_CLOSEOUT` relies on Git readback after commit/push. `NO_COMMIT` is legal only when HEAD is unchanged and the index/worktree is completely clean. Crash recovery reuses the original closeout record, while HEAD drift, out-of-scope paths, or a remote-ref mismatch fail closed. Policy migrations use a generic descriptor and retained history while legacy repair-budget effects remain readable. Starting with `status-v5`, STATUS and the dashboard show workflow state separately from evidence completion: `COMPLETE_ARTIFACT`, `COMPLETE_WITH_LIMITATION`, `EMPIRICAL_RESULT_OBSERVED`, `FORMAL_ACCEPTED`, or `PUBLIC_RELEASED`.
 
 ## Intake before Loop generation
 
@@ -135,7 +155,7 @@ Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—
 
 New Adaptive Packs default to schema v3. They do not create a session State-Writer task. The installed MCP `state_gateway({root, request})` is the sole canonical writer. The Controller remains read-only, Workers perform product work, Reviewer/Local Verifier tasks submit evidence, and an outer Supervisor is not a product role.
 
-**Current platform boundary:** schema v3 uses **host-cooperative evidence**. It does not claim Byzantine resistance to a malicious Controller that can forge every App call. The Gateway binds one real App task/thread, automation, send-return target, or PAUSED readback to the current host-attested turn, one PREPARED outbox, and the registered heartbeat; it derives the canonical payload digest itself, and a send observation never produces PASS. This protects against crashes, duplicate sends, stale/mismatched/replayed reports, wrong artifact/dispatch, and premature terminal projection. If a future App exposes `x-codex-app-action-receipt-v1`, it is strictly checked as optional stronger attestation; its current absence does not block normal operation, a canary, or release.
+**Current platform boundary:** schema v3 uses **host-cooperative evidence**. It does not claim Byzantine resistance to a malicious Controller that can forge every App call. The Gateway binds one real App task/thread, automation, send-return target, or PAUSED readback to the current host-attested turn, one PREPARED outbox, and the registered heartbeat; it derives the canonical payload digest itself, and a send observation never produces PASS. This protects against crashes, duplicate sends, stale/mismatched/replayed reports, wrong artifact/dispatch, and premature terminal projection. A normal Loop does not pin a model: it records `model_identity_requirement=NOT_REQUIRED`, `model_identity_status=NOT_APPLICABLE`, and `UNSPECIFIED` model/reasoning values without implying verification. The strict identity gate is enabled only when a manifest or Goal declares `required_model` or `required_reasoning`. In that mode the App must inject a `THREAD_CREATE_OR_READ` receipt through the non-argument `_meta.x-codex-app-action-receipt-v1` carrier; an unsupported host yields `HOST_BLOCKED`. The v1 contract accepts accurately labelled `HOST_COOPERATIVE` injected evidence only; an ordinary digest must never claim `APP_SIGNED`.
 
 ```text
 Controller (read-only)
@@ -322,9 +342,9 @@ Repository modes:
 Fast local regression:
 
 ```bash
-python3 -m pip install -r requirements-test.txt
-python3 -W error -m unittest discover -s tests -v
-python3 codex-loop-prompt-architect/scripts/validate_skill.py
+.venv/bin/python -m pip install -r requirements-test.txt
+.venv/bin/python -W error -m unittest discover -s tests -v
+.venv/bin/python codex-loop-prompt-architect/scripts/validate_skill.py
 bash -n scripts/install.sh
 ```
 

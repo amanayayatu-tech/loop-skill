@@ -418,7 +418,7 @@ automation_update(
   kind="heartbeat",
   destination="thread",
   status="ACTIVE",
-  rrule="FREQ=MINUTELY;INTERVAL=<minutes>",
+  rrule="FREQ=MINUTELY;INTERVAL=<minutes>" or `FREQ=HOURLY[;INTERVAL=<hours>]`,
   name=HEARTBEAT_AUTOMATION_NAME,
   prompt=HEARTBEAT_PROMPT
 )
