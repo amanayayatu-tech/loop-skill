@@ -290,6 +290,14 @@ class ManifestAndArtifactTests(unittest.TestCase):
             observed,
         )
 
+    def test_shadow_workflow_installs_inventory_dependencies_first(self) -> None:
+        workflow = (REPO / ".github/workflows/compatibility-shadow.yml").read_text(
+            encoding="utf-8"
+        )
+        install = workflow.index("python -m pip install")
+        inventory = workflow.index("Validate canonical inventory")
+        self.assertLess(install, inventory)
+
     def test_artifact_verifier_accepts_exact_unique_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             artifact_dir = Path(temporary)
