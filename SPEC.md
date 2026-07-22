@@ -88,6 +88,17 @@ module:
 - schema-driven policy migration with retained history, safe points, bounded
   values, approval, and rollback-or-stop semantics;
 - workflow state kept distinct from the achieved evidence completion class;
+- opt-in P1 canonical governance: Goal-bound defect families, mandatory
+  same-round Reviewer sibling and unchecked-surface disclosure, and
+  escalation-only handling from the third same-family return;
+- recoverable route sequencing that binds each external receipt and resumes
+  after the last acknowledged step without claiming network atomicity;
+- one canonical heartbeat identity registry and structured Supervisor repair
+  capabilities; identity drift or unauthorized repair fails closed;
+- privacy-safe aggregate measurement with explicit `UNMETERED` values and no
+  prompt, chat, task/thread ID, path, PII, secret, or raw-log export;
+- complete AST-derived recovery coverage across runtime, MCP, CLI, and codec
+  error boundaries; recoverable entries have one non-`WAIT` operation;
 - current-artifact, current-dispatch, PASS-report evidence binding;
 - bounded transport degradation and immutable successor handoff;
 - fenced leases and identity-preserving Pack migration;
