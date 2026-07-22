@@ -226,6 +226,21 @@ def _plan(
     run_quick: bool = True,
     main_proof: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    path_classes = {"ci_release": [], "docs": [], "generator": [], "state": [], "standard": [], "unknown": []}
+    for entry in entries:
+        for path in entry.get("paths", []):
+            if _is_release_path(str(path)):
+                path_classes["ci_release"].append(path)
+            elif _is_light_path(str(path)):
+                path_classes["docs"].append(path)
+            elif _is_state_path(str(path)):
+                path_classes["state"].append(path)
+            elif _is_generator_path(str(path)):
+                path_classes["generator"].append(path)
+            elif _is_known_standard_path(str(path)):
+                path_classes["standard"].append(path)
+            else:
+                path_classes["unknown"].append(path)
     return {
         "schema_version": SCHEMA_VERSION,
         "tier": tier,
@@ -235,6 +250,7 @@ def _plan(
         "head_sha": head_sha,
         "merge_sha": merge_sha,
         "changed_entries": [dict(entry) for entry in entries],
+        "path_classes": {key: sorted(set(value)) for key, value in path_classes.items()},
         "run_quick": run_quick,
         "run_full": run_full,
         "run_state_fuzz": run_state_fuzz,
@@ -673,7 +689,39 @@ def run_shard(
                 "expected_tests": len(test_ids),
             }
         )
-        result = unittest.TextTestRunner(verbosity=2, failfast=False, durations=20).run(suite)
+        class TimingResult(unittest.TextTestResult):
+            def startTest(self, test: unittest.case.TestCase) -> None:  # noqa: N802
+                self._test_started = time.perf_counter()
+                super().startTest(test)
+
+            def stopTest(self, test: unittest.case.TestCase) -> None:  # noqa: N802
+                duration = max(0.0, time.perf_counter() - self._test_started)
+                self.test_timings.append(
+                    {"duration_seconds": round(duration, 6), "test_id": test.id()}
+                )
+                super().stopTest(test)
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self.test_timings: list[dict[str, Any]] = []
+
+        result = unittest.TextTestRunner(
+            verbosity=2,
+            failfast=False,
+            durations=20,
+            resultclass=TimingResult,
+        ).run(suite)
+        ordered = sorted(
+            result.test_timings,
+            key=lambda item: (item["duration_seconds"], item["test_id"]),
+        )
+
+        def percentile(fraction: float) -> float:
+            if not ordered:
+                return 0.0
+            index = max(0, min(len(ordered) - 1, int(fraction * len(ordered) + 0.999999) - 1))
+            return float(ordered[index]["duration_seconds"])
+
         execution.update(
             {
                 "successful": result.wasSuccessful(),
@@ -682,6 +730,11 @@ def run_shard(
                 "errors": len(result.errors),
                 "skipped": len(result.skipped),
                 "unexpected_successes": len(result.unexpectedSuccesses),
+                "timing": {
+                    "p50_seconds": percentile(0.50),
+                    "p95_seconds": percentile(0.95),
+                    "slowest": list(reversed(ordered[-20:])),
+                },
             }
         )
         returncode = 0 if result.wasSuccessful() and result.testsRun == len(test_ids) else 1
@@ -732,6 +785,7 @@ def verify_shard_artifacts(
             "test_count": expected["test_count"],
             "duration_seconds": execution.get("duration_seconds"),
             "coverage_files": coverage_files,
+            "timing": execution.get("timing", {}),
         }
     if len(observed_ids) != inventory["expected_total_tests"]:
         raise CompatibilityError("combined shard test ids do not equal the canonical inventory")
@@ -740,6 +794,60 @@ def verify_shard_artifacts(
         "tested_sha": expected_sha,
         "total_tests": len(observed_ids),
         "shards": shard_summaries,
+        "timing": {
+            "p50_seconds": max(
+                (summary.get("timing", {}).get("p50_seconds", 0.0) for summary in shard_summaries.values()),
+                default=0.0,
+            ),
+            "p95_seconds": max(
+                (summary.get("timing", {}).get("p95_seconds", 0.0) for summary in shard_summaries.values()),
+                default=0.0,
+            ),
+            "slowest": sorted(
+                [
+                    item
+                    for summary in shard_summaries.values()
+                    for item in summary.get("timing", {}).get("slowest", [])
+                ],
+                key=lambda item: (-item.get("duration_seconds", 0.0), item.get("test_id", "")),
+            )[:20],
+        },
+    }
+
+
+def replay_recent_main_plans(repo: Path, limit: int = 5) -> dict[str, Any]:
+    """Replay the path classifier over recent main merge commits for shadow cutover."""
+
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 20:
+        raise CompatibilityError("shadow replay limit must be between 1 and 20")
+    result = _run_git(repo, ["rev-list", "--merges", f"--max-count={limit}", "main"])
+    merges = [value for value in result.stdout.splitlines() if value]
+    replays: list[dict[str, Any]] = []
+    for merge in merges:
+        parents = _run_git(repo, ["rev-list", "--parents", "-n", "1", merge]).stdout.split()
+        if len(parents) < 3:
+            raise CompatibilityError(f"shadow replay commit is not a merge: {merge}")
+        entries = _changed_entries(repo, parents[1], merge)
+        plan = classify_entries(
+            entries,
+            event_name="shadow_replay",
+            base_sha=parents[1],
+            head_sha=merge,
+            merge_sha=merge,
+        )
+        replays.append(
+            {
+                "merge_sha": merge,
+                "path_classes": plan["path_classes"],
+                "reasons": plan["reasons"],
+                "tier": plan["tier"],
+            }
+        )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "merge_count": len(replays),
+        "replays": replays,
+        "shadow_only": True,
     }
 
 
@@ -1272,6 +1380,13 @@ def _cmd_verify_gate(args: argparse.Namespace) -> int:
     return 1 if errors else 0
 
 
+def _cmd_shadow_replay(args: argparse.Namespace) -> int:
+    result = replay_recent_main_plans(Path(args.repo).resolve(), args.limit)
+    _write_json(Path(args.output), result)
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1346,6 +1461,11 @@ def _parser() -> argparse.ArgumentParser:
     gate.add_argument("--needs-json", required=True)
     gate.add_argument("--summary", default=os.environ.get("GITHUB_STEP_SUMMARY", ""))
     gate.set_defaults(func=_cmd_verify_gate)
+    shadow = subparsers.add_parser("shadow-replay")
+    shadow.add_argument("--repo", default=".")
+    shadow.add_argument("--limit", type=int, default=5)
+    shadow.add_argument("--output", default="shadow-replay-v1.json")
+    shadow.set_defaults(func=_cmd_shadow_replay)
     return parser
 
 

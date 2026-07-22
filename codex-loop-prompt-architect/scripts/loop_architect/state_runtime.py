@@ -34,6 +34,8 @@ from .human_control import (
 )
 from .recovery_registry import recovery_for
 from .rejection_journal import RejectionJournalError, append_rejection
+from .audit_views import build_audit_views
+from .content_addressing import ContentAddressedStore, ContentAddressingError
 from .p1_runtime import (
     P1RuntimeError,
     authorize_supervisor as p1_authorize_supervisor,
@@ -1928,6 +1930,9 @@ class AdaptiveStateRuntime:
         self.dashboard_path = self.control_dir / "progress-dashboard.html"
         self.status_path = self.control_dir / "STATUS.md"
         self.metrics_path = self.control_dir / "LOOP_METRICS.json"
+        self.audit_index_path = self.control_dir / "audit-index.json"
+        self.goal_summaries_path = self.control_dir / "goal-summaries.json"
+        self.business_timeline_path = self.control_dir / "business-timeline.json"
         self.projection_transactions_dir = self.control_dir / "projection-transactions"
         self.transactions_dir = self.control_dir / "transactions"
         self.reports_dir = self.control_dir / "reports"
@@ -1935,6 +1940,7 @@ class AdaptiveStateRuntime:
         self.report_staging_dir = self.control_dir / "report-staging"
         self.report_attestations_dir = self.control_dir / "report-attestations"
         self.external_receipts_dir = self.control_dir / "external-receipts"
+        self.content_store = ContentAddressedStore(self.control_dir)
         # Lock the stable project-root inode. A lock file that is deleted during
         # virgin-layout cleanup can split writers across old and new inodes.
         self.lock_path = self.root
@@ -2192,6 +2198,7 @@ class AdaptiveStateRuntime:
                 self._write_goals_locked(next_state, normalized["state_request_id"])
                 self._write_dashboard_locked(next_state, normalized["state_request_id"])
                 self._write_loop_metrics_locked(next_state, normalized["state_request_id"])
+                self._write_audit_views_locked(next_state, normalized["state_request_id"])
                 self._append_event_locked(event)
                 journal["status"] = "APPLIED"
                 journal["applied_state_digest"] = journal["after_state_digest"]
@@ -3744,6 +3751,10 @@ class AdaptiveStateRuntime:
         self.sources_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
         self.external_receipts_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
         self.projection_transactions_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
+        try:
+            self.content_store.ensure_layout()
+        except ContentAddressingError as exc:
+            raise RuntimeRejection("CONTENT_STORE_INVALID", "/content-addressed") from exc
 
     def _cleanup_virgin_layout(self) -> None:
         try:
@@ -3765,6 +3776,7 @@ class AdaptiveStateRuntime:
                     self.sources_dir,
                     self.external_receipts_dir,
                     self.projection_transactions_dir,
+                    self.content_store.objects,
                 ):
                     if directory.exists() and any(directory.iterdir()):
                         return
@@ -3774,9 +3786,14 @@ class AdaptiveStateRuntime:
                     self.sources_dir,
                     self.external_receipts_dir,
                     self.projection_transactions_dir,
+                    self.content_store.objects,
                 ):
                     if directory.exists():
                         directory.rmdir()
+                if self.content_store.index.exists():
+                    self.content_store.index.unlink()
+                if self.content_store.root.exists():
+                    self.content_store.root.rmdir()
                 self.control_dir.rmdir()
                 self._fsync_dir(self.root)
         except (OSError, RuntimeRejection):
@@ -4438,6 +4455,12 @@ class AdaptiveStateRuntime:
 <body>
 <h1>Adaptive Loop Progress</h1>
 <div class="status"><p><strong>State version</strong><br>{state['state_version']}</p><p><strong>Roadmap version</strong><br>{state['roadmap_version']}</p><p><strong>Active milestone</strong><br>{html.escape(str(state['active_milestone_id']))}</p></div>
+<h2>Business progress</h2>
+<p><strong>Business routes:</strong> {len([route for route in state.get('gateway_route_ledger', {}).values() if route.get('route_kind') in {'WORKER', 'CODE_REVIEW', 'ROADMAP_AUDIT', 'FINAL_AUDIT', 'LOCAL_VERIFICATION'}])}</p>
+<p><strong>Goals represented:</strong> {len(state.get('goal_execution_ledger', {}))}</p>
+<h2>Control-plane activity</h2>
+<p><strong>Canonical events:</strong> {len(state.get('event_ledger', {}))}</p>
+<p>Control-plane mutations are operational evidence, not business成果.</p>
 <p><strong>Terminal status:</strong> {html.escape(str(state['terminal_status']))}</p>
 <p><strong>Terminal heartbeat:</strong> {html.escape(str(terminal_heartbeat or 'NOT_TERMINAL'))}</p>
 <p><strong>Finalization phase:</strong> {"PREPARED_WAITING_FOR_PAUSED_RECEIPT" if finalization_pending else "NONE"}</p>
@@ -7179,6 +7202,19 @@ class AdaptiveStateRuntime:
             "METRICS",
         )
 
+    def _write_audit_views_locked(self, state: dict[str, Any], transaction_id: str) -> None:
+        if state.get("schema_version", 1) < 3:
+            return
+        targets = {
+            "audit-index.json": self.audit_index_path,
+            "business-timeline.json": self.business_timeline_path,
+            "goal-summaries.json": self.goal_summaries_path,
+        }
+        for name, payload in build_audit_views(state).items():
+            self._atomic_replace_bytes(
+                targets[name], payload, transaction_id, "AUDIT_VIEW"
+            )
+
     def _ensure_projections_locked(self, state: dict[str, Any]) -> None:
         target = state.get("status_projection_target")
         if (
@@ -7205,6 +7241,16 @@ class AdaptiveStateRuntime:
             or self.metrics_path.read_bytes() != self._render_loop_metrics(state)
         ):
             self._write_loop_metrics_locked(state, "projection-recovery")
+        if state.get("schema_version", 1) >= 3:
+            expected_views = build_audit_views(state)
+            for name, target in {
+                "audit-index.json": self.audit_index_path,
+                "business-timeline.json": self.business_timeline_path,
+                "goal-summaries.json": self.goal_summaries_path,
+            }.items():
+                if not target.exists() or target.read_bytes() != expected_views[name]:
+                    self._write_audit_views_locked(state, "projection-recovery")
+                    break
 
     def _write_journal_locked(
         self,
@@ -7230,6 +7276,36 @@ class AdaptiveStateRuntime:
         *,
         final_mode: int = 0o600,
     ) -> None:
+        content_addressed = (
+            path.parent in {self.reports_dir, self.report_staging_dir, self.projection_transactions_dir}
+            or path
+            in {
+                self.goals_path,
+                self.dashboard_path,
+                self.status_path,
+                self.metrics_path,
+                self.audit_index_path,
+                self.goal_summaries_path,
+                self.business_timeline_path,
+            }
+        )
+        if content_addressed:
+            try:
+                self.content_store.replace_facade(
+                    path,
+                    payload,
+                    category=stage_prefix,
+                    transaction_id=transaction_id,
+                    final_mode=final_mode,
+                    inject=self._inject,
+                )
+            except (ContentAddressingError, OSError) as exc:
+                raise RuntimeRejection(
+                    "CONTENT_STORE_WRITE_FAILED",
+                    f"/{stage_prefix.lower()}",
+                    {"error_type": type(exc).__name__},
+                ) from exc
+            return
         self._reject_symlink(path.parent, f"/{stage_prefix.lower()}/parent")
         self._reject_symlink(path, f"/{stage_prefix.lower()}")
         self._assert_confined(path, path.parent, f"/{stage_prefix.lower()}")
@@ -8147,6 +8223,7 @@ class AdaptiveStateRuntime:
             "external_actions": [],
             "external_action_count": 0,
             "recovery": recovery,
+            "next_operation_template": copy.deepcopy(recovery["next_operation"]),
         }
         if request is not None:
             response["state_request_id"] = (

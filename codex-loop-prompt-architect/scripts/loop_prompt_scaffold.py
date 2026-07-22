@@ -32,6 +32,7 @@ from loop_architect.adaptive_renderer import (  # noqa: E402
     state_gateway_reviewer_protocol,
     state_writer_adaptive_protocol,
 )
+from loop_architect.active_policy import active_prompt_source  # noqa: E402
 from loop_architect.forecast import dashboard_required, local_verifier_needed  # noqa: E402
 from loop_architect.human_control import (  # noqa: E402
     VALIDATION_DIMENSIONS,
@@ -3664,6 +3665,7 @@ Stop Conditions: hard blocker; phase permission conflict; missing exact source; 
 
 
 def _render_controller_pack_base(data: dict[str, Any], mode: str) -> str:
+    data = active_prompt_source(data)
     errors = validation_errors(data)
     adaptive = data.get("coordination_mode") == "adaptive"
     workers = normalize_workers(data)
@@ -4162,6 +4164,7 @@ SEND TO: Controller thread
 
 {prompt_fence}text
 Role: read-only Controller/router for a Codex macOS App loop. Do not edit product files, durable state, deploy, push, merge, or delete artifacts.
+当前 task 即唯一 Controller，禁止创建第二 Controller。
 Objective: {objective}
 Codex Surface: {surface}
 Project Name: {project_name}

@@ -98,6 +98,7 @@ def _runtime_error(
     path: str = "/",
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    recovery = recovery_for(code)
     return {
         "ok": False,
         "status": code,
@@ -106,7 +107,8 @@ def _runtime_error(
         "evidence_paths": [],
         "external_actions": [],
         "external_action_count": 0,
-        "recovery": recovery_for(code),
+        "recovery": recovery,
+        "next_operation_template": copy.deepcopy(recovery["next_operation"]),
     }
 
 

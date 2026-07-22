@@ -285,6 +285,21 @@
       "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
       "stop_condition": "Stop when the required authority or observation is unavailable."
     },
+    "ARCHIVE_STATE_NOT_INITIALIZED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "ARCHIVE_STATE_NOT_INITIALIZED",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
     "ARTIFACT_CONTENT_TOO_LARGE": {
       "classification": "NON_RETRYABLE",
       "identity_reuse": "Use a new request identity; retain the rejected digest as history.",
@@ -1671,6 +1686,36 @@
       "next_operation": {
         "arguments": {
           "error_code": "CONSUMED_LEASE_ID_CONFLICT",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CONTENT_STORE_INVALID": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CONTENT_STORE_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "CONTENT_STORE_WRITE_FAILED": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "CONTENT_STORE_WRITE_FAILED",
           "use_original_evidence": true
         },
         "operation": "RESUBMIT_CORRECTED_REQUEST"
@@ -7536,6 +7581,21 @@
       "next_operation": {
         "arguments": {
           "error_code": "REVIEW_SURFACE_INVALID",
+          "use_original_evidence": true
+        },
+        "operation": "RESUBMIT_CORRECTED_REQUEST"
+      },
+      "operation": "RESUBMIT_CORRECTED_REQUEST",
+      "preconditions": "Read the error path and canonical state before correction.",
+      "side_effect_boundary": "Rejection audit append only until recovery preconditions hold.",
+      "stop_condition": "Stop if correction requires broader authority or cannot preserve identity."
+    },
+    "RISK_SCAN_CREDENTIAL_FOUND": {
+      "classification": "RECOVERABLE",
+      "identity_reuse": "Preserve artifact and outbox identities unless the registry says otherwise.",
+      "next_operation": {
+        "arguments": {
+          "error_code": "RISK_SCAN_CREDENTIAL_FOUND",
           "use_original_evidence": true
         },
         "operation": "RESUBMIT_CORRECTED_REQUEST"

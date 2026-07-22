@@ -17,13 +17,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-from loop_architect.recovery_registry import registry_document
+from loop_architect.recovery_registry import recovery_for, registry_document
 from loop_architect.rejection_journal import read_rejections
 from loop_architect.capability_envelope import (
     CapabilityEnvelope,
     CapabilityEnvelopeError,
 )
 from loop_architect.p1_runtime import privacy_safe_export
+from loop_architect.archive_manifest_v2 import build_manifest, write_manifest
+from loop_architect.risky_artifact_scanner import scan, unallowed_credentials
 
 
 SKILL_NAME = "codex-loop-prompt-architect"
@@ -849,11 +851,107 @@ def export_metrics(root: Path) -> dict[str, Any]:
     return {"ok": True, "status": "PRIVACY_SAFE_METRICS_EXPORTED", **result}
 
 
+def archive_root(root: Path, reason: str) -> dict[str, Any]:
+    """Build a v2 archive inventory without copying private payload bytes."""
+
+    from loop_architect.state_runtime import AdaptiveStateRuntime
+
+    resolved = root.expanduser().resolve(strict=False)
+    state = AdaptiveStateRuntime(resolved).read_state()
+    if state is None:
+        raise LoopctlError("ARCHIVE_STATE_NOT_INITIALIZED", "/root")
+    control = resolved / ".codex-loop"
+    files: list[dict[str, Any]] = []
+    for path in sorted(control.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        payload = path.read_bytes()
+        files.append(
+            {
+                "digest": _digest(payload),
+                "path": path.relative_to(resolved).as_posix(),
+                "privacy_classification": "PRIVATE",
+                "size": len(payload),
+            }
+        )
+    outboxes = [
+        {"kind": field, "id": outbox_id, "status": record.get("status")}
+        for field in (
+            "dispatch_outbox",
+            "assurance_dispatch_outbox",
+            "local_verification_outbox",
+            "automation_outbox",
+            "controller_goal_outbox",
+            "thread_creation_outbox",
+        )
+        for outbox_id, record in state.get(field, {}).items()
+    ]
+    manifest = build_manifest(
+        reason=reason,
+        root=str(resolved),
+        git={
+            "branch": _git(resolved, "branch", "--show-current"),
+            "head": _git(resolved, "rev-parse", "HEAD"),
+            "remote": _git(resolved, "remote", "get-url", "origin"),
+        },
+        state={
+            "schema_version": state.get("schema_version"),
+            "state_version": state.get("state_version"),
+            "terminal_status": state.get("terminal_status"),
+        },
+        events=[
+            {
+                "event_id": event_id,
+                "mutation_type": record.get("mutation_type"),
+                "state_version": record.get("applied_state_version"),
+            }
+            for event_id, record in sorted(state.get("event_ledger", {}).items())
+        ],
+        outboxes=outboxes,
+        roles=[
+            {
+                "role": record.get("role"),
+                "status": record.get("status"),
+                "thread_digest": _digest(thread_id.encode("utf-8")),
+            }
+            for thread_id, record in sorted(state.get("thread_registry", {}).items())
+        ],
+        heartbeat={
+            key: value
+            for key, value in (state.get("heartbeat_prompt_identity") or {}).items()
+            if key not in {"target_thread_id", "prompt"}
+        },
+        files=files,
+        privacy_classification="PRIVATE",
+    )
+    return {"ok": True, "status": "ARCHIVE_MANIFEST_READY", "manifest": manifest}
+
+
+def risk_scan_root(root: Path) -> dict[str, Any]:
+    findings = scan(root.expanduser().resolve(strict=False))
+    unsafe = unallowed_credentials(findings)
+    if unsafe:
+        raise LoopctlError(
+            "RISK_SCAN_CREDENTIAL_FOUND",
+            "/root",
+            {"finding_count": len(unsafe), "findings": unsafe},
+        )
+    return {
+        "ok": True,
+        "status": "RISK_SCAN_PASS",
+        "finding_count": len(findings),
+        "findings": findings,
+    }
+
+
 def _error(exc: LoopctlError) -> dict[str, Any]:
+    recovery = recovery_for(exc.code)
     return {
         "ok": False,
         "status": exc.code,
         "error": {"code": exc.code, "path": exc.path, "details": exc.details},
+        "recovery": recovery,
+        "next_operation_template": copy.deepcopy(recovery["next_operation"]),
     }
 
 
@@ -862,6 +960,7 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     doctor = subparsers.add_parser("doctor")
     doctor.add_argument("--check", action="store_true")
+    doctor.add_argument("--emit", action="store_true")
     doctor.add_argument("--json", action="store_true")
     doctor.add_argument("--source", type=Path, default=PROJECT_DIR)
     doctor.add_argument("--codex-home", type=Path)
@@ -879,13 +978,30 @@ def _parser() -> argparse.ArgumentParser:
     compile_command.add_argument("--json", action="store_true")
     canary = subparsers.add_parser("canary")
     canary.add_argument("--input", required=True, type=Path)
+    canary.add_argument("--check", action="store_true")
+    canary.add_argument("--emit", action="store_true")
     canary.add_argument("--json", action="store_true")
     audit = subparsers.add_parser("audit")
     audit.add_argument("--root", required=True, type=Path)
+    audit.add_argument("--check", action="store_true")
+    audit.add_argument("--emit", action="store_true")
     audit.add_argument("--json", action="store_true")
     metrics = subparsers.add_parser("metrics-export")
     metrics.add_argument("--root", required=True, type=Path)
+    metrics.add_argument("--check", action="store_true")
+    metrics.add_argument("--emit", action="store_true")
     metrics.add_argument("--json", action="store_true")
+    archive = subparsers.add_parser("archive")
+    archive.add_argument("--root", required=True, type=Path)
+    archive.add_argument("--reason", required=True)
+    archive.add_argument("--check", action="store_true")
+    archive.add_argument("--emit", type=Path)
+    archive.add_argument("--json", action="store_true")
+    risk_scan = subparsers.add_parser("risk-scan")
+    risk_scan.add_argument("--root", required=True, type=Path)
+    risk_scan.add_argument("--check", action="store_true")
+    risk_scan.add_argument("--emit", action="store_true")
+    risk_scan.add_argument("--json", action="store_true")
     return parser
 
 
@@ -902,6 +1018,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "compile":
             result = compile_manifest(_read_document(args.input))
+            # Legacy compile accepted --check together with --emit PATH.  Keep
+            # that one-cycle compatibility surface while newer commands use
+            # boolean --emit.
             if args.emit:
                 args.emit.write_bytes(_canonical(result) + b"\n")
             result = {"ok": True, "status": "COMPILE_PASS", "compiled_manifest": result}
@@ -909,10 +1028,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = verify_canary(_read_document(args.input))
         elif args.command == "audit":
             result = audit_root(args.root)
-        else:
+        elif args.command == "metrics-export":
             result = export_metrics(args.root)
+        elif args.command == "archive":
+            result = archive_root(args.root, args.reason)
+            if args.emit and not args.check:
+                write_manifest(args.emit, result["manifest"])
+        else:
+            result = risk_scan_root(args.root)
     except LoopctlError as exc:
         result = _error(exc)
+    result.setdefault("cli_envelope_version", "loopctl-envelope-v1")
+    result.setdefault("command", args.command)
+    result.setdefault("mode", "CHECK" if getattr(args, "check", False) else "EMIT")
+    result.setdefault("exit_code", 0 if result.get("ok") else 1)
     print(json.dumps(result, sort_keys=True) if getattr(args, "json", False) else result["status"])
     return 0 if result.get("ok") else 1
 
