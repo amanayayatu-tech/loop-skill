@@ -820,7 +820,24 @@ def replay_recent_main_plans(repo: Path, limit: int = 5) -> dict[str, Any]:
 
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 20:
         raise CompatibilityError("shadow replay limit must be between 1 and 20")
-    result = _run_git(repo, ["rev-list", "--merges", f"--max-count={limit}", "main"])
+    main_ref = next(
+        (
+            candidate
+            for candidate in ("refs/remotes/origin/main", "refs/heads/main")
+            if subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", candidate],
+                cwd=repo,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            ).returncode
+            == 0
+        ),
+        None,
+    )
+    if main_ref is None:
+        raise CompatibilityError("shadow replay cannot resolve the main branch")
+    result = _run_git(repo, ["rev-list", "--merges", f"--max-count={limit}", main_ref])
     merges = [value for value in result.stdout.splitlines() if value]
     replays: list[dict[str, Any]] = []
     for merge in merges:

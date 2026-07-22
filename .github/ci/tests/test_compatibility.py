@@ -273,6 +273,23 @@ class ManifestAndArtifactTests(unittest.TestCase):
         with self.assertRaises(compatibility.CompatibilityError):
             compatibility.replay_recent_main_plans(REPO, 0)
 
+    def test_shadow_replay_uses_remote_main_without_a_local_branch(self) -> None:
+        original_run = compatibility.subprocess.run
+        observed: list[list[str]] = []
+
+        def run(argv, *args, **kwargs):
+            observed.append(list(argv))
+            if argv[:4] == ["git", "rev-parse", "--verify", "--quiet"]:
+                return original_run(argv, *args, **kwargs)
+            return original_run(argv, *args, **kwargs)
+
+        with mock.patch.object(compatibility.subprocess, "run", side_effect=run):
+            compatibility.replay_recent_main_plans(REPO, 1)
+        self.assertIn(
+            ["git", "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"],
+            observed,
+        )
+
     def test_artifact_verifier_accepts_exact_unique_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             artifact_dir = Path(temporary)
