@@ -211,6 +211,14 @@ P1 canonical runtime 会把 defect family、同轮 sibling/unchecked-surface 披
 
 输出详细度 `compact` / `full` / `minimal_patch` 与协作模式 `standard` / `adaptive` 是两条独立轴，不要混为一谈。
 
+## Adaptive v3.3.11 local candidate：App heartbeat 精确合同
+
+v3.3.11 local candidate 让 schema-v3/state-gateway Pack 直接携带完整、可复制的
+App heartbeat create 调用，并明确区分 App 的 `kind="heartbeat"` 与 Gateway
+receipt 的 `kind=HEARTBEAT`。生成与 fail-closed validator 共享同一合同源，测试会
+拒绝大写 App kind、缺少 `destination="thread"`、缺少真实 Controller target 或
+混淆两侧枚举。它是本地候选身份，不是公开发布或效果证据。
+
 ## Adaptive v3.3.10 local candidate：精确 STAGE_REPORT 合同
 
 v3.3.10 local candidate 将 `STAGE_REPORT` 的顶层请求与

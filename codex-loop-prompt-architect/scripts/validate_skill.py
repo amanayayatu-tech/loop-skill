@@ -367,6 +367,12 @@ def validate(skill_dir: Path) -> list[str]:
             adaptive_markers = (
                 "HEARTBEAT_PROMPT_BEGIN",
                 "HEARTBEAT_PROMPT_END",
+                "APP_HEARTBEAT_CREATE_CONTRACT_BEGIN",
+                "APP_HEARTBEAT_CREATE_CONTRACT_END",
+                'automation_update(mode="create", kind="heartbeat", destination="thread", status="ACTIVE"',
+                "targetThreadId=CONTROLLER_THREAD_ID",
+                'App automation_update uses kind="heartbeat"',
+                "Gateway REGISTER_HEARTBEAT and heartbeat receipts use kind=HEARTBEAT",
                 "Canonical Prompt Digest: sha256:",
                 "Adaptive v3 Controller Routing Protocol",
                 "Adaptive v3 MCP State Gateway Protocol",

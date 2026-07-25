@@ -837,6 +837,10 @@ Budget And Automation:
 - active_stale_after_minutes: 60
 - HEARTBEAT_AUTOMATION_NAME is the exact string `adaptive-passkey-app loop heartbeat ` plus loop_id from canonical state. Its prompt digest is SHA-256 of the exact HEARTBEAT_PROMPT text.
 - Reconcile/create only one business heartbeat after schema-v3 Gateway initialization. After the actual App create/adopt call, bind its real Controller target, exact rrule, prompt digest, status=ACTIVE, and readback through REGISTER_HEARTBEAT before First Goal. An optional stronger result carrier is strictly validated when present but never required.
+APP_HEARTBEAT_CREATE_CONTRACT_BEGIN
+automation_update(mode="create", kind="heartbeat", destination="thread", status="ACTIVE", rrule="FREQ=MINUTELY;INTERVAL=15", name=HEARTBEAT_AUTOMATION_NAME, prompt=HEARTBEAT_PROMPT, targetThreadId=CONTROLLER_THREAD_ID)
+APP_HEARTBEAT_CREATE_CONTRACT_END
+Heartbeat enum boundary: App automation_update uses kind="heartbeat" and destination="thread"; Gateway REGISTER_HEARTBEAT and heartbeat receipts use kind=HEARTBEAT. Never copy the Gateway enum into the App call.
 - A transport degradation threshold or PREPARE_FINALIZATION requires a real pause and PAUSED readback for that exact heartbeat; only the subsequent Gateway ACK projects PAUSED or terminal state. Do not create a replacement heartbeat, revive an old successor, or add an outer Supervisor loop.
 - Gateway heartbeat identity stores automation_name, kind=HEARTBEAT, real Controller target_thread_id, exact rrule, canonical prompt_digest, and prompt_normalization=LF_NORMALIZED_NO_TRAILING_NEWLINE. REGISTER_HEARTBEAT and RECORD_HEARTBEAT_OBSERVATION bind actual automation create/readback to the current host turn; ACK_FINALIZATION requires an actual PAUSED update/readback for that identity.
 - The canonical heartbeat body has no trailing newline. On tool/config readback normalize CRLF or CR to LF, verify there is still no trailing newline, and hash those exact UTF-8 bytes. Never hash delimiter lines or silently trim arbitrary whitespace.

@@ -214,6 +214,16 @@ Do not use it when:
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
 
+## Adaptive v3.3.11 local candidate: exact App heartbeat contract
+
+The v3.3.11 local candidate makes the schema-v3/state-gateway Pack carry the
+complete copyable App heartbeat create call and explicitly separates the App
+`kind="heartbeat"` enum from the Gateway receipt `kind=HEARTBEAT` enum. The
+renderer and fail-closed validator share one contract source, and regressions
+reject an uppercase App kind, missing `destination="thread"`, a missing real
+Controller target, or a confused cross-surface enum boundary. This is a local
+candidate identity, not a public release or effectiveness evidence.
+
 ## Adaptive v3.3.10 local candidate: exact STAGE_REPORT contract
 
 The v3.3.10 local candidate makes the top-level `STAGE_REPORT` request and its

@@ -170,6 +170,95 @@ class AdaptiveValidationTests(unittest.TestCase):
                     self.assertNotIn("State-Writer", body)
                     self.assertNotIn("FINALIZE_LOOP", body)
 
+    def test_gateway_pack_embeds_exact_app_heartbeat_create_contract(self) -> None:
+        payload = adaptive_payload()
+        payload["state_gateway_mode"] = "MCP_CANONICAL_WRITER"
+        payload["heartbeat_interval_minutes"] = 7
+        payload["_provided_keys"] = sorted(
+            key for key in payload if not key.startswith("_")
+        )
+        for mode in ("compact", "full"):
+            with self.subTest(mode=mode):
+                pack = scaffold.render_controller_pack(payload, mode)
+                self.assertIn("APP_HEARTBEAT_CREATE_CONTRACT_BEGIN", pack)
+                self.assertIn("APP_HEARTBEAT_CREATE_CONTRACT_END", pack)
+                self.assertIn(
+                    'automation_update(mode="create", kind="heartbeat", destination="thread", status="ACTIVE", rrule="FREQ=MINUTELY;INTERVAL=7", name=HEARTBEAT_AUTOMATION_NAME, prompt=HEARTBEAT_PROMPT, targetThreadId=CONTROLLER_THREAD_ID)',
+                    pack,
+                )
+                self.assertIn(
+                    'App automation_update uses kind="heartbeat" and destination="thread"',
+                    pack,
+                )
+                self.assertIn(
+                    "Gateway REGISTER_HEARTBEAT and heartbeat receipts use kind=HEARTBEAT",
+                    pack,
+                )
+                self.assertEqual(scaffold.validate_gateway_heartbeat_pack(pack), [])
+
+    def test_gateway_pack_rejects_app_gateway_heartbeat_contract_confusion(self) -> None:
+        payload = adaptive_payload()
+        payload["state_gateway_mode"] = "MCP_CANONICAL_WRITER"
+        payload["_provided_keys"] = sorted(
+            key for key in payload if not key.startswith("_")
+        )
+        for mode in ("compact", "full"):
+            pack = scaffold.render_controller_pack(payload, mode)
+            broken = {
+                "uppercase_app_kind": pack.replace(
+                    'kind="heartbeat", destination="thread"',
+                    'kind="HEARTBEAT", destination="thread"',
+                    1,
+                ),
+                "missing_destination": pack.replace(
+                    'kind="heartbeat", destination="thread", ',
+                    'kind="heartbeat", ',
+                    1,
+                ),
+                "missing_target_thread": pack.replace(
+                    ", targetThreadId=CONTROLLER_THREAD_ID)",
+                    ")",
+                    1,
+                ),
+                "gateway_enum_mislabeled": pack.replace(
+                    "Gateway REGISTER_HEARTBEAT and heartbeat receipts use kind=HEARTBEAT",
+                    "Gateway REGISTER_HEARTBEAT and heartbeat receipts use kind=heartbeat",
+                    1,
+                ),
+                "interval_mismatch": pack.replace(
+                    'rrule="FREQ=MINUTELY;INTERVAL=15"',
+                    'rrule="FREQ=MINUTELY;INTERVAL=7"',
+                    1,
+                ),
+                "extra_uppercase_create": pack
+                + '\nautomation_update(mode="create", kind="HEARTBEAT", destination="thread")\n',
+                "extra_project_create": pack
+                + '\nautomation_update(mode="create", kind="heartbeat", destination="project")\n',
+                "missing_interval_declaration": pack.replace(
+                    "- heartbeat_interval_minutes: 15",
+                    "- heartbeat cadence is fifteen minutes",
+                    1,
+                ),
+                "missing_controller_binding": pack.replace(
+                    "CONTROLLER_THREAD_ID is that real threadId.",
+                    "The target is the current Controller.",
+                    1,
+                ),
+                "missing_name_prompt_binding": pack.replace(
+                    "- HEARTBEAT_AUTOMATION_NAME is the exact string",
+                    "- The automation name is the string",
+                    1,
+                ),
+                "missing_prompt_identity_binding": pack.replace(
+                    scaffold.APP_HEARTBEAT_PROMPT_BINDING,
+                    "- Pass a heartbeat prompt to the App.",
+                    1,
+                ),
+            }
+            for name, candidate in broken.items():
+                with self.subTest(mode=mode, name=name):
+                    self.assertTrue(scaffold.validate_gateway_heartbeat_pack(candidate))
+
     def test_gateway_heartbeat_missing_body_is_rejected(self) -> None:
         payload = adaptive_payload()
         payload["state_gateway_mode"] = "MCP_CANONICAL_WRITER"

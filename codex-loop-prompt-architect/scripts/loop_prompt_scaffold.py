@@ -40,8 +40,10 @@ from loop_architect.human_control import (  # noqa: E402
     validate_review_surface,
 )
 from loop_architect.heartbeat_contract import (  # noqa: E402
+    APP_HEARTBEAT_PROMPT_BINDING,
     HEARTBEAT_PROMPT_BEGIN,
     HEARTBEAT_PROMPT_END,
+    app_heartbeat_create_contract,
     extract_heartbeat_prompt_body,
     heartbeat_prompt_digest,
     normalize_heartbeat_prompt_readback,
@@ -214,9 +216,7 @@ def heartbeat_prompt_identity_block(body: str) -> str:
         "delimiter lines, excluding the LF adjacent to each delimiter.\n"
         "- The extracted body starts with `Continue this Codex Loop` and ends at the final "
         "instruction byte; it has no trailing newline.\n"
-        "- Pass that exact body string as automation_update.prompt and compute prompt_digest "
-        "from the same UTF-8 bytes. Do not trim, append a newline, reserialize, or hash the "
-        "delimiters.\n"
+        f"{APP_HEARTBEAT_PROMPT_BINDING}\n"
         "- On persisted readback, normalize only CRLF/CR transport line endings to LF; never "
         "strip or append bytes before identity comparison.\n"
         f"- Canonical Prompt Digest: {digest}\n\n"
@@ -4127,6 +4127,8 @@ Required Report Fields:
     if adaptive and state_gateway:
         automation_setup_lines = (
             "- Reconcile/create only one business heartbeat after schema-v3 Gateway initialization. After the actual App create/adopt call, bind its real Controller target, exact rrule, prompt digest, status=ACTIVE, and readback through REGISTER_HEARTBEAT before First Goal. An optional stronger result carrier is strictly validated when present but never required.\n"
+            + app_heartbeat_create_contract(heartbeat_interval)
+            + "\n"
             "- A transport degradation threshold or PREPARE_FINALIZATION requires a real pause and PAUSED readback for that exact heartbeat; only the subsequent Gateway ACK projects PAUSED or terminal state. Do not create a replacement heartbeat, revive an old successor, or add an outer Supervisor loop."
         )
     heartbeat_budget_lines = (

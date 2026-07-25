@@ -5,6 +5,29 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.11-candidate]
+
+### Fixed
+
+- Made the Adaptive schema-v3/state-gateway Controller Pack self-contained at
+  the App heartbeat boundary. It now renders the complete copyable App call
+  with `mode="create"`, lowercase `kind="heartbeat"`,
+  `destination="thread"`, `status="ACTIVE"`, the exact RRULE, bound name and
+  prompt identities, and `targetThreadId=CONTROLLER_THREAD_ID`.
+- Explicitly separated the App enum `kind="heartbeat"` from the Gateway
+  canonical receipt enum `kind=HEARTBEAT`, preventing a Controller from
+  copying the latter into the App tool request.
+- Extended schema-v3 Pack validation and regressions to reject uppercase App
+  kind, missing destination or target thread, and an ambiguous App/Gateway
+  enum boundary while preserving compact/legacy byte boundaries.
+
+### Release boundary
+
+v3.3.11 is a local release candidate. It has no public tag or release and
+cannot support an effectiveness claim until focused/full validation,
+independent review, isolated install readback, and one new-identity non-scored
+canary all pass.
+
 ## [3.3.10-candidate]
 
 ### Fixed
