@@ -211,6 +211,14 @@ P1 canonical runtime 会把 defect family、同轮 sibling/unchecked-surface 披
 
 输出详细度 `compact` / `full` / `minimal_patch` 与协作模式 `standard` / `adaptive` 是两条独立轴，不要混为一谈。
 
+## Adaptive v3.3.10 local candidate：精确 STAGE_REPORT 合同
+
+v3.3.10 local candidate 将 `STAGE_REPORT` 的顶层请求与
+`evidence_sources` 嵌套字段收敛到产品内单一合同真源；runtime、MCP schema、
+生成的 Pack 和规范文档共享同一组精确键、路径/媒体对应关系与可复制 JSON
+示例。它保留 worktree confinement、原字节 digest 和报告绑定的 fail-closed
+校验；当前仅是本地候选身份，不是公开发布或效果证据。
+
 ## Adaptive v3.3.9 candidate：Git 与 non_git 的证据路线
 
 v3.3.9 candidate 修复了 schema-v3 Worker 输入门禁对所有仓库模式无条件要求

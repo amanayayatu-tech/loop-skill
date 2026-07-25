@@ -214,6 +214,15 @@ Do not use it when:
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
 
+## Adaptive v3.3.10 local candidate: exact STAGE_REPORT contract
+
+The v3.3.10 local candidate makes the top-level `STAGE_REPORT` request and its
+nested `evidence_sources` item one product contract shared by runtime
+enforcement, the MCP schema, generated Packs, and the normative reference. It
+keeps fail-closed worktree confinement, exact-byte digest verification, and
+report binding. This is a local candidate identity, not a public release or
+effectiveness evidence.
+
 ## Adaptive v3.3.9 candidate: Git and non-Git evidence routes
 
 The v3.3.9 candidate fixes the schema-v3 Worker gate that previously required

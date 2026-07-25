@@ -489,6 +489,16 @@ class ScaffoldValidationTests(unittest.TestCase):
         self.assertIn('"phase":"AFTER"', pack)
         self.assertIn("MANIFEST_DELTA_V1", pack)
         self.assertIn("Do not call runtime_codec CAPTURE_COMPLETE_DIFF", pack)
+        self.assertIn(scaffold.STAGE_REPORT_CONTRACT_PROMPT, pack)
+        self.assertIn(
+            '"evidence_sources":[{"path":".codex-loop/reports/<single_level_name>.txt","source_path":',
+            pack,
+        )
+        self.assertIn(
+            "Each evidence_sources item has exactly path, source_path, digest, and media_type with no additional keys.",
+            pack,
+        )
+        self.assertNotIn("exact destination path, target-worktree source path", pack)
         self.assertNotIn(
             "Capture a complete diff through runtime_codec CAPTURE_COMPLETE_DIFF when the artifact changes",
             pack,
@@ -518,6 +528,12 @@ class ScaffoldValidationTests(unittest.TestCase):
         self.assertIn('"base_ref"', pack)
         self.assertIn('"allowed_untracked_paths"', pack)
         self.assertNotIn("runtime_codec CAPTURE_MANIFEST_DELTA", pack)
+        self.assertIn(scaffold.STAGE_REPORT_CONTRACT_PROMPT, pack)
+        self.assertIn(
+            '"evidence_sources":[{"path":".codex-loop/reports/<single_level_name>.txt","source_path":',
+            pack,
+        )
+        self.assertNotIn("exact destination path, target-worktree source path", pack)
 
     def test_source_artifacts_are_explicitly_required(self) -> None:
         payload = base_payload()

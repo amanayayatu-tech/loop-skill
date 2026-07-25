@@ -5,6 +5,30 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.10-candidate]
+
+### Fixed
+
+- Made the public `STAGE_REPORT` request and `evidence_sources` item schema a
+  single product contract shared by runtime enforcement, the MCP input schema,
+  generated Adaptive Packs, and the normative contract reference. The request
+  requires `outbox_id`, `result`, and `report_text`; its only documented
+  optional keys are `provided_report_digest` and `evidence_sources`.
+- Expanded the MCP schema and generated Pack text with the exact closed
+  `path` / `source_path` / `digest` / `media_type` evidence item and a copyable
+  minimal JSON example, while retaining fail-closed worktree confinement,
+  suffix/media matching, source-byte digest verification, and report binding.
+- Added schema acceptance/rejection tests and a B3-isomorphic 47-byte non-Git
+  vertical rehearsal that stages evidence, ACKs the original route, reaches a
+  reviewable PASS, and proves the Git-only capture operation was not called.
+
+### Release boundary
+
+v3.3.10 is a local release candidate and is not released until the complete
+test suite, release validation, isolated install receipt/readback, independent
+review, and a new-identity non-scored canary all pass. Installation and canary
+identity checks fail closed; this candidate has no public tag or release.
+
 ## [3.3.9-candidate]
 
 ### Fixed

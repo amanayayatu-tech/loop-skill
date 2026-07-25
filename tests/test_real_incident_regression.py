@@ -382,7 +382,7 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
                     },
                 )
             )
-            staged = harness.runtime.stage_formal_report(
+            staged = harness.runtime.stage_legacy_formal_report(
                 {
                     "outbox_id": "validation-matrix-rejected",
                     "result": {
@@ -412,7 +412,7 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             with self.assertRaises(
                 state_runtime_module.RuntimeRejection
             ) as context:
-                harness.runtime.stage_formal_report(
+                harness.runtime.stage_legacy_formal_report(
                     {
                         "outbox_id": "classification-conflict",
                         "result": {
@@ -448,7 +448,7 @@ class RealIncidentRepairAccountingTests(AdaptiveStateRuntimeTestCase):  # noqa: 
             with self.assertRaises(
                 state_runtime_module.RuntimeRejection
             ) as context:
-                harness.runtime.stage_formal_report(
+                harness.runtime.stage_legacy_formal_report(
                     {
                         "outbox_id": "unapproved-top-level-blocker",
                         "result": {

@@ -13,10 +13,20 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from jsonschema import Draft202012Validator
+
 from state_runtime_support import *  # noqa: F403
 
 import adaptive_state_mcp as mcp  # noqa: E402
 from loop_architect import state_runtime as state_runtime_module  # noqa: E402
+from loop_architect.report_contract import (  # noqa: E402
+    EVIDENCE_MEDIA_TYPE_SUFFIXES,
+    EVIDENCE_SOURCE_REQUIRED_KEYS,
+    STAGE_REPORT_CONTRACT_PROMPT,
+    STAGE_REPORT_OPTIONAL_KEYS,
+    STAGE_REPORT_REQUIRED_KEYS,
+    stage_report_request_schema,
+)
 
 
 _ISOLATED_MCP_BRIDGE = """
@@ -332,6 +342,42 @@ class AdaptiveStateMcpTests(unittest.TestCase):
             for item in codec["inputSchema"]["oneOf"]
         }
         self.assertEqual(len(codec_variants), 7)
+        stage_report_request = codec_variants["STAGE_REPORT"]["properties"][
+            "request"
+        ]
+        self.assertEqual(stage_report_request, stage_report_request_schema())
+        self.assertEqual(
+            stage_report_request["required"],
+            ["outbox_id", "result", "report_text"],
+        )
+        self.assertFalse(stage_report_request["additionalProperties"])
+        evidence_schema = stage_report_request["properties"][
+            "evidence_sources"
+        ]
+        self.assertEqual(evidence_schema["maxItems"], 15)
+        evidence_variants = evidence_schema["items"]["oneOf"]
+        self.assertEqual(
+            {
+                item["properties"]["media_type"]["const"]:
+                item["properties"]["path"]["pattern"]
+                for item in evidence_variants
+            },
+            {
+                "application/json": r"^\.codex-loop/reports/[^/\\]+\.json$",
+                "text/markdown": r"^\.codex-loop/reports/[^/\\]+\.md$",
+                "text/plain": r"^\.codex-loop/reports/[^/\\]+\.txt$",
+            },
+        )
+        for item in evidence_variants:
+            self.assertEqual(
+                item["required"],
+                ["path", "source_path", "digest", "media_type"],
+            )
+            self.assertFalse(item["additionalProperties"])
+            self.assertEqual(
+                item["properties"]["source_path"],
+                {"type": "string", "pattern": "^/"},
+            )
         complete_diff_request = codec_variants["CAPTURE_COMPLETE_DIFF"][
             "properties"
         ]["request"]
@@ -350,6 +396,22 @@ class AdaptiveStateMcpTests(unittest.TestCase):
                     },
                 },
             },
+        )
+        self.assertEqual(
+            state_runtime_module.STAGE_REPORT_REQUIRED_KEYS,
+            STAGE_REPORT_REQUIRED_KEYS,
+        )
+        self.assertEqual(
+            state_runtime_module.STAGE_REPORT_OPTIONAL_KEYS,
+            STAGE_REPORT_OPTIONAL_KEYS,
+        )
+        self.assertEqual(
+            state_runtime_module.EVIDENCE_SOURCE_REQUIRED_KEYS,
+            EVIDENCE_SOURCE_REQUIRED_KEYS,
+        )
+        self.assertEqual(
+            state_runtime_module.EVIDENCE_MEDIA_TYPE_SUFFIXES,
+            EVIDENCE_MEDIA_TYPE_SUFFIXES,
         )
         manifest_request = codec_variants["CAPTURE_MANIFEST_DELTA"][
             "properties"
@@ -373,6 +435,65 @@ class AdaptiveStateMcpTests(unittest.TestCase):
         self.assertEqual(lifecycle["name"], mcp.MCP_HOST_LIFECYCLE_TOOL_NAME)
         self.assertTrue(lifecycle["annotations"]["readOnlyHint"])
         self.assertEqual(lifecycle["inputSchema"]["properties"], {})
+
+    def test_stage_report_public_schema_accepts_only_exact_contract(self) -> None:
+        validator = Draft202012Validator(stage_report_request_schema())
+        valid = {
+            "outbox_id": "worker-route-1",
+            "result": {
+                "status": "PASS",
+                "artifact_digest": "sha256:" + "a" * 64,
+            },
+            "report_text": "{}",
+            "evidence_sources": [
+                {
+                    "path": ".codex-loop/reports/worker-validation.txt",
+                    "source_path": "/registered/worktree/validation.txt",
+                    "digest": "sha256:" + "b" * 64,
+                    "media_type": "text/plain",
+                }
+            ],
+        }
+        self.assertEqual(list(validator.iter_errors(valid)), [])
+
+        invalid_requests = []
+        for mutate in (
+            lambda request: request.update(destination_path="semantic-alias"),
+            lambda request: request["evidence_sources"][0].update(
+                destination_path=request["evidence_sources"][0].pop("path")
+            ),
+            lambda request: request["evidence_sources"][0].update(
+                path=".codex-loop/reports/nested/validation.txt"
+            ),
+            lambda request: request["evidence_sources"][0].update(
+                path=r".codex-loop/reports/nested\validation.txt"
+            ),
+            lambda request: request["evidence_sources"][0].update(
+                path=".codex-loop/reports/validation.json"
+            ),
+            lambda request: request["evidence_sources"][0].update(
+                source_path="relative/validation.txt"
+            ),
+            lambda request: request["evidence_sources"][0].update(
+                digest="sha256:" + "B" * 64
+            ),
+            lambda request: request["result"].update(extra="forbidden"),
+        ):
+            request = copy.deepcopy(valid)
+            mutate(request)
+            invalid_requests.append(request)
+        for request in invalid_requests:
+            with self.subTest(request=request):
+                self.assertTrue(list(validator.iter_errors(request)))
+
+    def test_normative_contract_embeds_generated_prompt_without_drift(self) -> None:
+        contract_path = (
+            Path(mcp.__file__).resolve().parents[1]
+            / "references"
+            / "adaptive-loop-contract.md"
+        )
+        contract = contract_path.read_text(encoding="utf-8")
+        self.assertIn(STAGE_REPORT_CONTRACT_PROMPT, contract)
 
     def test_host_lifecycle_readback_derives_zero_counts_and_host_identities(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

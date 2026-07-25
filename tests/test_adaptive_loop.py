@@ -657,6 +657,24 @@ class AdaptiveGeneratedPackTests(unittest.TestCase):
             "RUNTIME_CODEC_TOOL_UNAVAILABLE",
         ):
             self.assertIn(marker, self.pack)
+        gateway_payload = adaptive_payload()
+        gateway_payload["state_gateway_mode"] = "MCP_CANONICAL_WRITER"
+        gateway_payload["_provided_keys"] = sorted(
+            key for key in gateway_payload if not key.startswith("_")
+        )
+        gateway_pack = scaffold.render_controller_pack(
+            gateway_payload, "compact"
+        )
+        for marker in (
+            "Each evidence_sources item has exactly path, source_path, digest, and media_type with no additional keys.",
+            '"path":".codex-loop/reports/<single_level_name>.txt"',
+            '"source_path":"<absolute_registered_target_worktree_file_outside_.codex-loop>"',
+        ):
+            self.assertIn(marker, gateway_pack)
+        self.assertNotIn(
+            "exact destination path, target-worktree source path",
+            gateway_pack,
+        )
         weakened = self.pack + "\nUse `dd` and `stty` to read a fixed byte count."
         errors = validate_adaptive_pack_transport_contract(weakened)
         self.assertIn(

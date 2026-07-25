@@ -1099,7 +1099,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 state_runtime_module.RuntimeRejection,
                 "WORKER_REVIEW_HANDOFF_MISSING",
             ):
-                harness.runtime.stage_formal_report(
+                harness.runtime.stage_legacy_formal_report(
                     {"outbox_id": dispatch_id, "result": result, "report": report}
                 )
             self.assertEqual(persisted_snapshot(root), before)
@@ -1125,7 +1125,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 state_runtime_module.RuntimeRejection,
                 "WORKER_REVIEW_HANDOFF_EVIDENCE_UNARCHIVED",
             ):
-                harness.runtime.stage_formal_report(
+                harness.runtime.stage_legacy_formal_report(
                     {"outbox_id": dispatch_id, "result": result, "report": report}
                 )
             self.assertEqual(persisted_snapshot(root), before)
@@ -1274,7 +1274,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 state_runtime_module.RuntimeRejection,
                 "MANIFEST_DELTA_IDENTITY_MISMATCH",
             ):
-                harness.runtime.stage_formal_report(
+                harness.runtime.stage_legacy_formal_report(
                     {"outbox_id": dispatch_id, "result": result, "report": tampered}
                 )
             self.assertEqual(persisted_snapshot(root), before)
@@ -1368,7 +1368,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 state_runtime_module.RuntimeRejection,
                 "ARTIFACT_CONTENT_TOO_LARGE",
             ):
-                harness.runtime.stage_formal_report(
+                harness.runtime.stage_legacy_formal_report(
                     {
                         "outbox_id": dispatch_id,
                         "result": result,
@@ -1390,7 +1390,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 harness.formal_report_content("DISPATCH", dispatch_id, result)
             )
             stage_input = {"outbox_id": dispatch_id, "result": result, "report": report}
-            staged = harness.runtime.stage_formal_report(stage_input)
+            staged = harness.runtime.stage_legacy_formal_report(stage_input)
             source = Path(staged["source_path"])
             source.unlink()
             mutation = {
@@ -1410,7 +1410,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                 harness.state()["dispatch_outbox"][dispatch_id]["status"], "SENT"
             )
 
-            restaged = harness.runtime.stage_formal_report(stage_input)
+            restaged = harness.runtime.stage_legacy_formal_report(stage_input)
             self.assertEqual(restaged["source_path"], staged["source_path"])
             copied = Path(restaged["source_path"]).with_name(
                 "wrong." + Path(restaged["source_path"]).name
@@ -1482,7 +1482,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             report = json.loads(
                 harness.formal_report_content("DISPATCH", dispatch_id, result)
             )
-            staged = harness.runtime.stage_formal_report(
+            staged = harness.runtime.stage_legacy_formal_report(
                 {"outbox_id": dispatch_id, "result": result, "report": report}
             )
             request = harness.make_request(

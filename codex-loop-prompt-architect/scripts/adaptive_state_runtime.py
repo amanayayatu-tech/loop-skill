@@ -387,7 +387,9 @@ def main(argv: list[str] | None = None) -> int:
                     {"error_type": type(exc).__name__},
                 )
             else:
-                response = AdaptiveStateRuntime(root).stage_formal_report(request)
+                response = AdaptiveStateRuntime(root).stage_legacy_formal_report(
+                    request
+                )
         elif mode == "external-receipt-stage":
             assert root is not None
             try:

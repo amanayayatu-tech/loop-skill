@@ -34,6 +34,14 @@ from .human_control import (
 )
 from .recovery_registry import recovery_for
 from .rejection_journal import RejectionJournalError, append_rejection
+from .report_contract import (
+    EVIDENCE_MEDIA_TYPE_SUFFIXES,
+    EVIDENCE_SOURCE_REQUIRED_KEYS,
+    MAX_EVIDENCE_SOURCES,
+    SHA256_DIGEST_PATTERN,
+    STAGE_REPORT_OPTIONAL_KEYS,
+    STAGE_REPORT_REQUIRED_KEYS,
+)
 from .audit_views import build_audit_views
 from .content_addressing import ContentAddressedStore, ContentAddressingError
 from .p1_runtime import (
@@ -76,7 +84,7 @@ STATE_BEGIN = "STATE_JSON_BEGIN"
 STATE_END = "STATE_JSON_END"
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 GATEWAY_ROUTE_ID_MAX_LENGTH = 48
-DIGEST_RE = re.compile(r"sha256:[a-f0-9]{64}\Z")
+DIGEST_RE = re.compile(SHA256_DIGEST_PATTERN)
 SHA256_HEX_RE = re.compile(r"[a-f0-9]{64}\Z")
 HEARTBEAT_RRULE_RE = re.compile(
     r"(?:FREQ=MINUTELY;INTERVAL=[1-9][0-9]{0,3}|"
@@ -265,7 +273,7 @@ PHASE_PERMISSION_FIELDS = (
     "external_write",
 )
 MAX_ARTIFACT_CONTENT_SIZE = 4_000_000
-MAX_STAGED_REPORT_EVIDENCE = 15
+MAX_STAGED_REPORT_EVIDENCE = MAX_EVIDENCE_SOURCES
 
 ZERO_EXECUTION_BLOCKER_CODES = {
     "DISPATCH_VALIDATION_MATRIX_MISMATCH",
@@ -2983,28 +2991,42 @@ class AdaptiveStateRuntime:
             )
 
     def stage_formal_report(self, request: Any) -> dict[str, Any]:
+        """Stage one exact public report request for a canonical SENT outbox."""
+
+        return self._stage_formal_report(request, allow_legacy=False)
+
+    def stage_legacy_formal_report(self, request: Any) -> dict[str, Any]:
+        """Compatibility-only CLI entry; the MCP/runtime codec never calls this."""
+
+        return self._stage_formal_report(request, allow_legacy=True)
+
+    def _stage_formal_report(
+        self,
+        request: Any,
+        *,
+        allow_legacy: bool,
+    ) -> dict[str, Any]:
         """Validate and stage one formal report for an exact canonical SENT outbox."""
 
         self._ensure_json_value(request, "/")
         legacy_keys = {"outbox_id", "result", "report"}
-        exact_required_keys = {"outbox_id", "result", "report_text"}
+        exact_required_keys = STAGE_REPORT_REQUIRED_KEYS
         if not isinstance(request, dict) or not (
-            set(request) == legacy_keys
+            (allow_legacy and set(request) == legacy_keys)
             or (
                 exact_required_keys.issubset(request)
                 and set(request).issubset(
-                    exact_required_keys
-                    | {"provided_report_digest", "evidence_sources"}
+                    exact_required_keys | STAGE_REPORT_OPTIONAL_KEYS
                 )
             )
         ):
+            details = {
+                "required_keys": ["outbox_id", "report_text", "result"],
+            }
+            if allow_legacy:
+                details["legacy_keys"] = ["outbox_id", "report", "result"]
             raise RuntimeRejection(
-                "FORMAL_REPORT_STAGE_INPUT_INVALID",
-                "/",
-                {
-                    "required_keys": ["outbox_id", "report_text", "result"],
-                    "legacy_keys": ["outbox_id", "report", "result"],
-                },
+                "FORMAL_REPORT_STAGE_INPUT_INVALID", "/", details
             )
         outbox_id = request["outbox_id"]
         result_input = copy.deepcopy(request["result"])
@@ -3189,11 +3211,7 @@ class AdaptiveStateRuntime:
             self._ensure_report_staging_locked()
             staged_evidence: list[dict[str, Any]] = []
             for evidence_path, evidence in sorted(pending_evidence.items()):
-                suffix = {
-                    "application/json": ".json",
-                    "text/markdown": ".md",
-                    "text/plain": ".txt",
-                }[evidence["media_type"]]
+                suffix = EVIDENCE_MEDIA_TYPE_SUFFIXES[evidence["media_type"]]
                 path_locator = hashlib.sha256(
                     evidence_path.encode("utf-8")
                 ).hexdigest()[:16]
@@ -3345,7 +3363,7 @@ class AdaptiveStateRuntime:
         )
 
         pending: dict[str, dict[str, Any]] = {}
-        required_keys = {"path", "source_path", "digest", "media_type"}
+        required_keys = EVIDENCE_SOURCE_REQUIRED_KEYS
         for index, item in enumerate(evidence_sources):
             item_path = f"/evidence_sources/{index}"
             if not isinstance(item, dict) or set(item) != required_keys:
@@ -3364,11 +3382,7 @@ class AdaptiveStateRuntime:
                     "FORMAL_REPORT_EVIDENCE_PATH_INVALID", f"{item_path}/path"
                 )
             media_type = item["media_type"]
-            suffix = {
-                "application/json": ".json",
-                "text/markdown": ".md",
-                "text/plain": ".txt",
-            }.get(media_type)
+            suffix = EVIDENCE_MEDIA_TYPE_SUFFIXES.get(media_type)
             if suffix is None:
                 raise RuntimeRejection(
                     "FORMAL_REPORT_EVIDENCE_MEDIA_TYPE_INVALID",

@@ -84,10 +84,15 @@ class NonGitManifestPipelineTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary)
-            subprocess.run(["git", "init", "-q", str(parent)], check=True)
-            root = parent / "non-git-project"
+            root = Path(temporary) / "non-git-project"
             root.mkdir()
+            git_probe = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(git_probe.returncode, 0, git_probe.stdout)
             scaffold_payload = non_git_scaffold_payload(root)
             self.assertEqual(scaffold.validation_errors(scaffold_payload), [])
             pack = scaffold.render_controller_pack(scaffold_payload, "compact")
@@ -245,6 +250,10 @@ class NonGitManifestPipelineTests(unittest.TestCase):
                 "status": "PASS",
                 "artifact_digest": after["artifact_digest"],
             }
+            evidence_path = (
+                ".codex-loop/reports/non-git-worker-validation.txt"
+            )
+            evidence_digest = "sha256:" + ARTIFACT_SHA256
             report = json.loads(
                 state.formal_report_content(
                     "DISPATCH", "non-git-worker-route", worker_result
@@ -266,8 +275,14 @@ class NonGitManifestPipelineTests(unittest.TestCase):
                     "complete_diff_reference": after[
                         "complete_diff_reference"
                     ],
-                    "evidence_artifacts": state.state()["dispatch_outbox"]
-                    ["non-git-worker-route"]["sent_evidence_paths"],
+                    "evidence_artifacts": [
+                        {
+                            "path": evidence_path,
+                            "size_bytes": 47,
+                            "digest": evidence_digest,
+                            "media_type": "text/plain",
+                        }
+                    ],
                 }
             )
             report_text = json.dumps(
@@ -285,6 +300,14 @@ class NonGitManifestPipelineTests(unittest.TestCase):
                         "outbox_id": "non-git-worker-route",
                         "result": worker_result,
                         "report_text": report_text,
+                        "evidence_sources": [
+                            {
+                                "path": evidence_path,
+                                "source_path": str(artifact.resolve()),
+                                "digest": evidence_digest,
+                                "media_type": "text/plain",
+                            }
+                        ],
                     },
                 },
                 thread_id="worker-1",
@@ -303,6 +326,9 @@ class NonGitManifestPipelineTests(unittest.TestCase):
                         "staged_report": {
                             **staged["artifact"],
                             "result": staged["result"],
+                            "evidence_artifacts": staged[
+                                "evidence_artifacts"
+                            ],
                         },
                     },
                 },
@@ -313,9 +339,20 @@ class NonGitManifestPipelineTests(unittest.TestCase):
             ]
             self.assertEqual(latest["status"], "PASS")
             self.assertEqual(
+                latest["review_handoff"]["evidence_refs"],
+                [evidence_path],
+            )
+            self.assertEqual(
+                state.state()["artifact_ledger"][evidence_path]["digest"],
+                evidence_digest,
+            )
+            self.assertEqual(
                 latest["review_handoff"]["artifact_identity"]
                 ["complete_diff_reference"]["kind"],
                 "MANIFEST_DELTA_V1",
+            )
+            self.assertEqual(
+                (root / evidence_path).read_bytes(), ARTIFACT_BYTES
             )
             self.assertFalse(
                 (root / ".codex-loop" / "diff-captures").exists()

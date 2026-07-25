@@ -40,6 +40,7 @@ from loop_architect.state_runtime import (
     TrustedTurnMetadata,
 )
 from loop_architect.recovery_registry import recovery_for
+from loop_architect.report_contract import stage_report_request_schema
 from verify_installation import validate_manifest
 
 
@@ -2162,7 +2163,7 @@ class AdaptiveStateMcpServer:
                                         "properties": {
                                             "operation": {"const": "STAGE_REPORT"},
                                             "root": {"type": "string"},
-                                            "request": {"type": "object"},
+                                            "request": stage_report_request_schema(),
                                         },
                                     },
                                     {

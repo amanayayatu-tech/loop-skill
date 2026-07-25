@@ -374,10 +374,16 @@ an archive failure without re-executing product work.
 
 When a Worker PASS introduces validation evidence that is not yet in the
 canonical artifact ledger, the same target-owned `STAGE_REPORT` request adds
-`evidence_sources`, each with exact destination path, source path, digest, and
-media type. Runtime accepts a source only from the registered target worktree,
-rejects symlinks/path escape/non-UTF-8/wrong digest/unreferenced paths, and
-copies the bytes to immutable report staging. `ACK_ROUTE_RESULT` or
+`evidence_sources`. The normative schema is exported by
+`scripts/loop_architect/report_contract.py` and is reused by runtime, MCP
+`inputSchema`, and generated role prompts. The generated prompt is reproduced
+byte-for-byte below; a release test rejects any drift:
+
+Exact STAGE_REPORT contract: request requires exactly outbox_id, result, and report_text; only provided_report_digest and evidence_sources are optional. Each evidence_sources item has exactly path, source_path, digest, and media_type with no additional keys. path must be a single-level filename under .codex-loop/reports/ and end in .json for application/json, .md for text/markdown, or .txt for text/plain. source_path must be an absolute regular non-symlink file inside the registered target worktree and outside every .codex-loop path. digest must be sha256: plus 64 lowercase hex characters and must match the exact source bytes. The report evidence_artifacts entry must use the same path, digest, and media_type and, when size_bytes is present, the exact source byte count. Copyable minimal PASS example: {"outbox_id":"<received_outbox_id>","result":{"status":"PASS","artifact_digest":"sha256:<64_lowercase_hex>"},"report_text":"<exact_strict_JSON_report_text>","evidence_sources":[{"path":".codex-loop/reports/<single_level_name>.txt","source_path":"<absolute_registered_target_worktree_file_outside_.codex-loop>","digest":"sha256:<64_lowercase_hex_matching_source_bytes>","media_type":"text/plain"}]}
+
+Runtime accepts a source only from the registered target worktree, rejects
+symlinks/path escape/non-UTF-8/wrong digest/unreferenced paths, and copies the
+bytes to immutable report staging. `ACK_ROUTE_RESULT` or
 `REPORT_RECOVERY` then archives the staged evidence and report in one canonical
 transaction on the original outbox. A send observation is never a substitute
 for validation evidence. The target may introduce at most 15 evidence files,

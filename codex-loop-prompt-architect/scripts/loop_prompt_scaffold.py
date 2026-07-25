@@ -75,6 +75,7 @@ from loop_architect.schema import (  # noqa: E402
     VALID_SURFACES,
     WORKER_FIELDS,
 )
+from loop_architect.report_contract import STAGE_REPORT_CONTRACT_PROMPT  # noqa: E402
 from loop_architect.standard_renderer import (  # noqa: E402
     render_full_mode_sections as standard_full_mode_sections,
     render_goal_queue_table as standard_goal_queue_table,
@@ -3277,9 +3278,21 @@ def sandbox_text(worker: dict[str, Any], adaptive: bool = False) -> str:
     return "workspace_write only inside the current goal's allowed write scope"
 
 
-def formal_role_delegation_boundary(adaptive: bool = False) -> str:
+def formal_role_delegation_boundary(
+    adaptive: bool = False,
+    state_gateway: bool = False,
+) -> str:
     if not adaptive:
         return ""
+    report_evidence_contract = (
+        STAGE_REPORT_CONTRACT_PROMPT + " Never reuse send evidence as validation. "
+        if state_gateway
+        else (
+            "A Worker PASS with new validation files also supplies evidence_sources "
+            "entries containing exact destination path, target-worktree source path, "
+            "digest, and media type; never reuse send evidence as validation. "
+        )
+    )
     return (
         "\nFormal Role Delegation Boundary: perform this role directly. Never call any "
         "subagent/collaboration spawn tool or create/fork/message/replace another formal task. "
@@ -3287,10 +3300,9 @@ def formal_role_delegation_boundary(adaptive: bool = False) -> str:
         "evidence instead of delegating. Worker/Reviewer/Local builds strict exact report_text "
         "with report_digest=PENDING_CONTROLLER_ARCHIVE and, before App reply, sends "
         "{outbox_id,result:{status,artifact_digest},report_text} through installed "
-        "runtime_codec operation STAGE_REPORT. A Worker PASS with new validation files also "
-        "supplies evidence_sources entries containing exact destination path, target-worktree "
-        "source path, digest, and media type; never reuse send evidence as validation. "
-        "Runtime preserves/validates exact UTF-8 JSON bytes and returns FORMAL_REPORT_STAGED "
+        "runtime_codec operation STAGE_REPORT. "
+        + report_evidence_contract
+        + "Runtime preserves/validates exact UTF-8 JSON bytes and returns FORMAL_REPORT_STAGED "
         "with confined report/evidence source handles, media type, computed digest/size, and result. Controller "
         "forwards that handle only; never read, write, transport, or hash REPORT bytes."
     )
@@ -3911,7 +3923,7 @@ Repo Mode: {repo_mode}
 Target Branch: {target_branch}
 Permission Declaration: {worker['permission']} ({worker['permission_source']})
 Sandbox expectation: {sandbox_text(worker, adaptive)}.
-Prompt Injection Boundary: {PROMPT_INJECTION_BOUNDARY}{formal_role_delegation_boundary(adaptive)}
+Prompt Injection Boundary: {PROMPT_INJECTION_BOUNDARY}{formal_role_delegation_boundary(adaptive, state_gateway)}
 
 {worker_input_gate(worker, adaptive, state_gateway, repo_mode)}
 

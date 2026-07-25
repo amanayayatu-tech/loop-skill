@@ -702,12 +702,23 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
             noncanonical_input = json.dumps(
                 report, ensure_ascii=False, sort_keys=True
             )
-            staged = harness.runtime.stage_formal_report(
-                {
-                    "outbox_id": review_dispatch_id,
-                    "result": result,
-                    "report": json.loads(noncanonical_input),
-                }
+            legacy_request = {
+                "outbox_id": review_dispatch_id,
+                "result": result,
+                "report": json.loads(noncanonical_input),
+            }
+            exact_before = persisted_snapshot(root)
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as exact_context:
+                harness.runtime.stage_formal_report(legacy_request)
+            self.assertEqual(
+                exact_context.exception.code,
+                "FORMAL_REPORT_STAGE_INPUT_INVALID",
+            )
+            self.assertEqual(persisted_snapshot(root), exact_before)
+            staged = harness.runtime.stage_legacy_formal_report(
+                legacy_request
             )
             self.assertEqual(staged["status"], "FORMAL_REPORT_STAGED")
             self.assertEqual(staged["report_digest"], digest(content))
@@ -717,7 +728,7 @@ class AdaptiveStateRuntimeReportTests(AdaptiveStateRuntimeTestCase):  # noqa: F4
             nonfinite = copy.deepcopy(report)
             nonfinite["roadmap_version"] = float("nan")
             with self.assertRaises(state_runtime_module.RuntimeRejection) as caught:
-                harness.runtime.stage_formal_report(
+                harness.runtime.stage_legacy_formal_report(
                     {
                         "outbox_id": review_dispatch_id,
                         "result": result,
