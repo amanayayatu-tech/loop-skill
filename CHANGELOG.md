@@ -5,6 +5,35 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.9-candidate]
+
+### Fixed
+
+- Made Adaptive schema-v3 Worker artifact capture explicitly depend on
+  `repo_mode`. Git Workers retain the Git-only `CAPTURE_COMPLETE_DIFF` route
+  with the exact `base_ref` / `allowed_untracked_paths` request schema.
+- Added the first-class `CAPTURE_MANIFEST_DELTA` runtime/MCP operation for
+  `non_git` Workers. The Gateway binds the Goal's complete canonical allowed
+  scope to the outbox and captures its immutable runtime-owned BEFORE receipt
+  before `PREPARE_ROUTE` returns; AFTER re-enumerates the same scope and emits
+  sorted LF `MANIFEST_DELTA_V1` or `NO_DIFF` identity with Git fields set to
+  `NOT_APPLICABLE`.
+- Bound non-Git `MANIFEST_DELTA_V1` and `NO_DIFF` PASS reports to those runtime
+  receipts and current regular non-symlink artifact bytes, preventing
+  model-authored snapshot or manifest identities from satisfying review
+  handoff. New Gateway Worker outboxes persist the derived `repo_mode` so this
+  requirement is enforced without changing legacy outbox identity.
+- Added unit, scaffold, MCP-schema, and vertical non-Git Gateway regressions,
+  including the frozen 47-byte synthetic artifact rehearsal through
+  materialize/verify, report staging, route ACK, and reviewable PASS.
+
+### Release boundary
+
+v3.3.9 is a local release candidate and is not released until the complete
+test suite, release validation, isolated install receipt/readback, independent
+review, and a new-identity non-scored canary all pass. Installation and canary
+identity checks fail closed; this candidate has no public tag or release.
+
 ## [3.3.8] - 2026-07-23
 
 ### Fixed

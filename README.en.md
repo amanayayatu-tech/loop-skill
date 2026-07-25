@@ -214,6 +214,18 @@ Do not use it when:
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
 
+## Adaptive v3.3.9 candidate: Git and non-Git evidence routes
+
+The v3.3.9 candidate fixes the schema-v3 Worker gate that previously required
+Git-only `CAPTURE_COMPLETE_DIFF` for every repository mode. Git routes accept
+only the exact `base_ref` and `allowed_untracked_paths` request keys. A
+`non_git` route forbids that operation and instead uses the first-class
+`CAPTURE_MANIFEST_DELTA` operation before and after product writes. The runtime
+binds both immutable snapshots to the SENT Worker outbox and emits a sorted,
+LF-terminated strict `MANIFEST_DELTA_V1`. This remains a local candidate, not a
+release or effectiveness claim, until the full suite, independent review,
+install receipt, and new-identity canary pass.
+
 ## Adaptive v3.3.8: who writes state and who advances a route
 
 New Adaptive Packs default to schema v3. They do not create a session State-Writer task. The installed MCP `state_gateway({root, request})` is the sole canonical writer. The Controller remains read-only, Workers perform product work, Reviewer/Local Verifier tasks submit evidence, and an outer Supervisor is not a product role.

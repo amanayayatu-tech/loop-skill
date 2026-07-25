@@ -311,6 +311,387 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
                     {"base_ref": base, "allowed_untracked_paths": []},
                 )
 
+    def test_complete_diff_requires_exact_schema_and_a_git_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for request in (
+                {"outbox_id": "dispatch-1"},
+                {
+                    "dispatch_id": "dispatch-1",
+                    "repo_mode": "non_git",
+                    "allowed_write_scope": ["src/result.txt"],
+                },
+            ):
+                with self.subTest(request=request), self.assertRaises(
+                    state_runtime_module.RuntimeRejection
+                ) as context:
+                    state_runtime_module.capture_complete_diff(root, request)
+                self.assertEqual(
+                    context.exception.code,
+                    "COMPLETE_DIFF_CAPTURE_INPUT_INVALID",
+                )
+
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                state_runtime_module.capture_complete_diff(
+                    root,
+                    {"base_ref": "HEAD", "allowed_untracked_paths": []},
+                )
+            self.assertEqual(context.exception.code, "COMPLETE_DIFF_GIT_REQUIRED")
+
+    def test_non_git_manifest_capture_owns_before_after_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _, dispatch_id, _ = self._prepare_sent_worker(
+                root, "dispatch-non-git-manifest"
+            )
+            runtime = harness.runtime
+            before = runtime.capture_manifest_delta(
+                {
+                    "phase": "BEFORE",
+                    "outbox_id": dispatch_id,
+                    "approved_product_paths": ["src/**"],
+                }
+            )
+            self.assertEqual(before["status"], "MANIFEST_SNAPSHOT_CAPTURED")
+            self.assertEqual(before["phase"], "BEFORE")
+            (root / "src").mkdir()
+            artifact = root / "src" / "result.txt"
+            artifact.write_text("manifest route\n", encoding="utf-8")
+            after = runtime.capture_manifest_delta(
+                {
+                    "phase": "AFTER",
+                    "outbox_id": dispatch_id,
+                    "approved_product_paths": ["src/**"],
+                    "before_snapshot_sha256": before["snapshot_sha256"],
+                }
+            )
+            artifact_sha256 = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            expected_content = (
+                f"A\tsrc/result.txt\t15\t{artifact_sha256}\n"
+            )
+            self.assertEqual(after["status"], "MANIFEST_DELTA_CAPTURED")
+            self.assertEqual(after["changed_files"], ["src/result.txt"])
+            self.assertEqual(after["diff_sha256"], hashlib.sha256(expected_content.encode()).hexdigest())
+            self.assertEqual(
+                after["complete_diff_reference"],
+                {
+                    "kind": "MANIFEST_DELTA_V1",
+                    "hash_algorithm": "sha256",
+                    "media_type": "text/tab-separated-values",
+                    "content": expected_content,
+                    "sha256": after["diff_sha256"],
+                },
+            )
+            self.assertEqual(after["current_branch"], "NOT_APPLICABLE")
+            self.assertEqual(after["base_sha"], "NOT_APPLICABLE")
+            self.assertEqual(after["head_sha"], "NOT_APPLICABLE")
+
+            result = {
+                "status": "PASS",
+                "artifact_digest": after["artifact_digest"],
+            }
+            report = json.loads(
+                harness.formal_report_content(
+                    "DISPATCH", dispatch_id, result
+                )
+            )
+            report.update(
+                {
+                    key: copy.deepcopy(after[key])
+                    for key in (
+                        "before_snapshot_sha256",
+                        "after_snapshot_sha256",
+                        "current_branch",
+                        "base_sha",
+                        "head_sha",
+                        "changed_files",
+                        "diff_sha256",
+                        "complete_diff_reference",
+                    )
+                }
+            )
+            artifact.write_text("changed after capture\n", encoding="utf-8")
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                runtime.stage_formal_report(
+                    {
+                        "outbox_id": dispatch_id,
+                        "result": result,
+                        "report_text": json.dumps(
+                            report,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    }
+                )
+            self.assertEqual(
+                context.exception.code,
+                "MANIFEST_DELTA_PATH_STATE_MISMATCH",
+            )
+
+    def test_non_git_manifest_capture_rejects_git_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                state_runtime_module.AdaptiveStateRuntime(root).capture_manifest_delta(
+                    {
+                        "phase": "BEFORE",
+                        "outbox_id": "dispatch-1",
+                        "approved_product_paths": ["src/**"],
+                    }
+                )
+            self.assertEqual(
+                context.exception.code,
+                "MANIFEST_DELTA_NON_GIT_REQUIRED",
+            )
+
+    def test_non_git_manifest_capture_rejects_dangling_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _, dispatch_id, _ = self._prepare_sent_worker(
+                root, "dispatch-non-git-dangling-symlink"
+            )
+            (root / "src").mkdir()
+            (root / "src" / "result.txt").symlink_to("missing-target.txt")
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                harness.runtime.capture_manifest_delta(
+                    {
+                        "phase": "BEFORE",
+                        "outbox_id": dispatch_id,
+                        "approved_product_paths": ["src/**"],
+                    }
+                )
+            self.assertEqual(context.exception.code, "SYMLINK_NOT_ALLOWED")
+
+    def test_non_git_manifest_scope_delta_sorts_add_modify_delete_with_lf(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _, dispatch_id, _ = self._prepare_sent_worker(
+                root, "dispatch-non-git-scope-delta"
+            )
+            source = root / "src"
+            source.mkdir()
+            deleted = source / "a.txt"
+            modified = source / "z.txt"
+            deleted.write_text("delete me\n", encoding="utf-8")
+            modified.write_text("before\n", encoding="utf-8")
+            deleted_bytes = deleted.read_bytes()
+            before = harness.runtime.capture_manifest_delta(
+                {
+                    "phase": "BEFORE",
+                    "outbox_id": dispatch_id,
+                    "approved_product_paths": ["src/**"],
+                }
+            )
+            deleted.unlink()
+            added = source / "m.txt"
+            added.write_text("added\n", encoding="utf-8")
+            modified.write_text("after\n", encoding="utf-8")
+            after = harness.runtime.capture_manifest_delta(
+                {
+                    "phase": "AFTER",
+                    "outbox_id": dispatch_id,
+                    "approved_product_paths": ["src/**"],
+                    "before_snapshot_sha256": before["snapshot_sha256"],
+                }
+            )
+            expected = "".join(
+                [
+                    "D\tsrc/a.txt\t"
+                    f"{len(deleted_bytes)}\t{hashlib.sha256(deleted_bytes).hexdigest()}\n",
+                    "A\tsrc/m.txt\t"
+                    f"{added.stat().st_size}\t{hashlib.sha256(added.read_bytes()).hexdigest()}\n",
+                    "M\tsrc/z.txt\t"
+                    f"{modified.stat().st_size}\t{hashlib.sha256(modified.read_bytes()).hexdigest()}\n",
+                ]
+            )
+            self.assertEqual(after["changed_files"], [
+                "src/a.txt", "src/m.txt", "src/z.txt"
+            ])
+            self.assertEqual(
+                after["complete_diff_reference"]["content"], expected
+            )
+            self.assertNotIn("\r", expected)
+            self.assertTrue(expected.endswith("\n"))
+
+    def test_non_git_manifest_scope_rejects_casefolded_control_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _, dispatch_id, _ = self._prepare_sent_worker(
+                root, "dispatch-non-git-control-alias"
+            )
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                harness.runtime.capture_manifest_delta(
+                    {
+                        "phase": "BEFORE",
+                        "outbox_id": dispatch_id,
+                        "approved_product_paths": [".CODEX-LOOP/**"],
+                    }
+                )
+            self.assertEqual(context.exception.code, "PATH_SCOPE_ESCAPE")
+
+    def test_non_git_manifest_scope_rejects_fifo_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _, dispatch_id, _ = self._prepare_sent_worker(
+                root, "dispatch-non-git-fifo"
+            )
+            source = root / "src"
+            source.mkdir()
+            os.mkfifo(source / "blocked.pipe")
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                harness.runtime.capture_manifest_delta(
+                    {
+                        "phase": "BEFORE",
+                        "outbox_id": dispatch_id,
+                        "approved_product_paths": ["src/**"],
+                    }
+                )
+            self.assertEqual(
+                context.exception.code,
+                "MANIFEST_DELTA_PATH_NOT_REGULAR",
+            )
+
+    def test_non_git_manifest_scope_rejects_exact_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "src").mkdir()
+            runtime = state_runtime_module.AdaptiveStateRuntime(root)
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as context:
+                runtime._manifest_snapshot_entries(["src"])
+            self.assertEqual(
+                context.exception.code,
+                "MANIFEST_DELTA_PATH_NOT_REGULAR",
+            )
+
+    def test_non_git_no_diff_requires_runtime_before_after_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness, _, dispatch_id, _ = self._prepare_sent_worker(
+                root, "dispatch-non-git-no-diff"
+            )
+            empty_sha256 = hashlib.sha256(b"").hexdigest()
+            fake_snapshot = hashlib.sha256(b"model-authored").hexdigest()
+            fake_report = {
+                "dispatch_id": dispatch_id,
+                "before_snapshot_sha256": fake_snapshot,
+                "after_snapshot_sha256": fake_snapshot,
+                "current_branch": "NOT_APPLICABLE",
+                "base_sha": "NOT_APPLICABLE",
+                "head_sha": "NOT_APPLICABLE",
+                "changed_files": [],
+                "diff_sha256": empty_sha256,
+                "complete_diff_reference": {
+                    "kind": "NO_DIFF",
+                    "hash_algorithm": "sha256",
+                    "sha256": empty_sha256,
+                },
+            }
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as missing_context:
+                harness.runtime._validate_complete_diff_reference(
+                    root,
+                    fake_report,
+                    empty_sha256,
+                    [],
+                    require_runtime_manifest_receipts=True,
+                )
+            self.assertEqual(
+                missing_context.exception.code,
+                "MANIFEST_SNAPSHOT_RECEIPT_UNAVAILABLE",
+            )
+
+            before = harness.runtime.capture_manifest_delta(
+                {
+                    "phase": "BEFORE",
+                    "outbox_id": dispatch_id,
+                    "approved_product_paths": ["src/**"],
+                }
+            )
+            after = harness.runtime.capture_manifest_delta(
+                {
+                    "phase": "AFTER",
+                    "outbox_id": dispatch_id,
+                    "approved_product_paths": ["src/**"],
+                    "before_snapshot_sha256": before["snapshot_sha256"],
+                }
+            )
+            real_report = {
+                **fake_report,
+                "before_snapshot_sha256": after["before_snapshot_sha256"],
+                "after_snapshot_sha256": after["after_snapshot_sha256"],
+                "complete_diff_reference": after["complete_diff_reference"],
+            }
+            harness.runtime._validate_complete_diff_reference(
+                root,
+                real_report,
+                after["diff_sha256"],
+                after["changed_files"],
+                require_runtime_manifest_receipts=True,
+            )
+
+            forged_git_identity = {
+                **real_report,
+                "current_branch": "main",
+                "base_sha": "0" * 40,
+                "head_sha": "1" * 40,
+            }
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as git_context:
+                harness.runtime._validate_complete_diff_reference(
+                    root,
+                    forged_git_identity,
+                    after["diff_sha256"],
+                    after["changed_files"],
+                    require_runtime_manifest_receipts=True,
+                )
+            self.assertEqual(
+                git_context.exception.code,
+                "COMPLETE_DIFF_REFERENCE_NO_DIFF_INVALID",
+            )
+
+            forbidden_reference = {
+                **real_report,
+                "complete_diff_reference": {
+                    "kind": "PATCH_FILE_V1",
+                    "hash_algorithm": "sha256",
+                    "media_type": "text/x-diff",
+                    "artifact_path": "src/patch.diff",
+                    "sha256": empty_sha256,
+                },
+            }
+            with self.assertRaises(
+                state_runtime_module.RuntimeRejection
+            ) as kind_context:
+                harness.runtime._validate_complete_diff_reference(
+                    root,
+                    forbidden_reference,
+                    empty_sha256,
+                    [],
+                    require_runtime_manifest_receipts=True,
+                )
+            self.assertEqual(
+                kind_context.exception.code,
+                "MANIFEST_DELTA_REFERENCE_KIND_REQUIRED",
+            )
+
     def test_worker_pass_consumes_runtime_captured_binary_diff_without_patch_transport(self) -> None:
         """A Worker PASS can cite a digest-addressed capture, never patch bytes."""
 
@@ -828,43 +1209,53 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             harness, claim, dispatch_id, payload = self._prepare_sent_worker(
                 root, "dispatch-manifest-delta"
             )
-            artifact = root / "artifact" / "result.md"
+            captured_before = harness.runtime.capture_manifest_delta(
+                {
+                    "phase": "BEFORE",
+                    "outbox_id": dispatch_id,
+                    "approved_product_paths": ["src/**"],
+                }
+            )
+            artifact = root / "src" / "result.md"
             artifact.parent.mkdir()
             artifact.write_text("bounded artifact\n", encoding="utf-8")
             file_bytes = artifact.read_bytes()
             file_sha256 = hashlib.sha256(file_bytes).hexdigest()
-            after_manifest = (
-                f"artifact/result.md\t{len(file_bytes)}\t{file_sha256}\n"
+            captured_after = harness.runtime.capture_manifest_delta(
+                {
+                    "phase": "AFTER",
+                    "outbox_id": dispatch_id,
+                    "approved_product_paths": ["src/**"],
+                    "before_snapshot_sha256": captured_before[
+                        "snapshot_sha256"
+                    ],
+                }
             )
-            after_snapshot = hashlib.sha256(
-                after_manifest.encode("utf-8")
-            ).hexdigest()
-            delta_content = (
-                f"A\tartifact/result.md\t{len(file_bytes)}\t{file_sha256}\n"
-            )
-            diff_sha256 = hashlib.sha256(delta_content.encode("utf-8")).hexdigest()
+            delta_content = captured_after["complete_diff_reference"]["content"]
+            diff_sha256 = captured_after["diff_sha256"]
             result = {
                 "status": "PASS",
-                "artifact_digest": f"sha256:{after_snapshot}",
+                "artifact_digest": captured_after["artifact_digest"],
             }
             report = json.loads(
                 harness.formal_report_content("DISPATCH", dispatch_id, result)
             )
             report.update(
                 {
-                    "before_snapshot_sha256": hashlib.sha256(b"").hexdigest(),
-                    "changed_files": ["artifact/result.md"],
+                    "before_snapshot_sha256": captured_before[
+                        "snapshot_sha256"
+                    ],
+                    "after_snapshot_sha256": captured_after[
+                        "after_snapshot_sha256"
+                    ],
+                    "changed_files": captured_after["changed_files"],
                     "diff_sha256": diff_sha256,
-                    "complete_diff_reference": {
-                        "kind": "MANIFEST_DELTA_V1",
-                        "hash_algorithm": "sha256",
-                        "media_type": "text/tab-separated-values",
-                        "content": delta_content,
-                        "sha256": diff_sha256,
-                    },
+                    "complete_diff_reference": captured_after[
+                        "complete_diff_reference"
+                    ],
                     "evidence_artifacts": [
                         {
-                            "path": "artifact/result.md",
+                            "path": "src/result.md",
                             "media_type": "text/markdown",
                             "sha256": file_sha256,
                             "size_bytes": len(file_bytes),
@@ -917,7 +1308,7 @@ class AdaptiveStateRuntimeIOTests(AdaptiveStateRuntimeTestCase):  # noqa: F405
             self.assertEqual(
                 latest["review_handoff"]["evidence_refs"],
                 [
-                    "artifact/result.md",
+                        "src/result.md",
                     ".codex-loop/reports/dispatch-manifest-delta-send.json",
                 ],
             )

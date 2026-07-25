@@ -327,7 +327,41 @@ class AdaptiveStateMcpTests(unittest.TestCase):
         self.assertNotIn("recovery-scoped lease acquisition", tool["description"])
         codec = listed["result"]["tools"][1]
         self.assertEqual(codec["name"], mcp.MCP_RUNTIME_CODEC_TOOL_NAME)
-        self.assertEqual(len(codec["inputSchema"]["oneOf"]), 6)
+        codec_variants = {
+            item["properties"]["operation"]["const"]: item
+            for item in codec["inputSchema"]["oneOf"]
+        }
+        self.assertEqual(len(codec_variants), 7)
+        complete_diff_request = codec_variants["CAPTURE_COMPLETE_DIFF"][
+            "properties"
+        ]["request"]
+        self.assertEqual(
+            complete_diff_request,
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["base_ref", "allowed_untracked_paths"],
+                "properties": {
+                    "base_ref": {"type": "string", "minLength": 1},
+                    "allowed_untracked_paths": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "uniqueItems": True,
+                    },
+                },
+            },
+        )
+        manifest_request = codec_variants["CAPTURE_MANIFEST_DELTA"][
+            "properties"
+        ]["request"]
+        self.assertEqual(len(manifest_request["oneOf"]), 2)
+        self.assertEqual(
+            {
+                item["properties"]["phase"]["const"]
+                for item in manifest_request["oneOf"]
+            },
+            {"BEFORE", "AFTER"},
+        )
         gateway = listed["result"]["tools"][2]
         self.assertEqual(gateway["name"], mcp.MCP_STATE_GATEWAY_TOOL_NAME)
         self.assertEqual(gateway["inputSchema"]["required"], ["root", "request"])

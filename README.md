@@ -211,6 +211,15 @@ P1 canonical runtime 会把 defect family、同轮 sibling/unchecked-surface 披
 
 输出详细度 `compact` / `full` / `minimal_patch` 与协作模式 `standard` / `adaptive` 是两条独立轴，不要混为一谈。
 
+## Adaptive v3.3.9 candidate：Git 与 non_git 的证据路线
+
+v3.3.9 candidate 修复了 schema-v3 Worker 输入门禁对所有仓库模式无条件要求
+Git-only `CAPTURE_COMPLETE_DIFF` 的矛盾。`existing_git`/已建立 Git 基线的路线只可用
+精确请求键 `base_ref` 和 `allowed_untracked_paths`；`non_git` 路线禁止调用该操作，
+改由一等的 `CAPTURE_MANIFEST_DELTA` 在产品写入前后捕获绑定 SENT Worker outbox 的
+runtime-owned 快照，并生成排序、LF 结尾的严格 `MANIFEST_DELTA_V1`。这只是本地候选，
+在完整测试、独立复核、安装 receipt 和新身份 canary 通过前不构成发布或效果证据。
+
 ## Adaptive v3.3.8：谁写状态、谁推进路线
 
 新生成的 Adaptive Pack 默认使用 schema v3。它不再创建会话式 State-Writer 任务；已安装的 MCP `state_gateway({root, request})` 是唯一 canonical writer。Controller 仍然只读，Worker 只做产品工作，Reviewer/Local Verifier 只提交证据，任何外层 Supervisor 都不属于产品角色。

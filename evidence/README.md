@@ -17,6 +17,7 @@ successes and must not be rewritten to make a later result look cleaner.
 | 2026-07-14 | [v3.2.1 transport/repair hotfix](v3.2.1-payload-transport-repair-exhaustion.md) | Local release gates and App canary pass | Repository and App smoke only; not app-server process-reaping acceptance |
 | 2026-07-14 | [v3.2.2 real Loop control incident](v3.2.2-real-loop-control-incident.md) | Sanitized regression fixture | Repository runtime/Pack regression only; not cross-version App acceptance |
 | 2026-07-14 | [v3.2.3 Worker classification reconciliation](v3.2.3-worker-classification-reconciliation.md) | Real-incident accounting hotfix | Repository runtime reconciliation only; does not turn Local FAIL into PASS |
+| 2026-07-25 | [v3.3.9 non-Git manifest fix](v3.3.9-nongit-manifest-fix-validation-20260725.md) | 806-test repository validation and no-App exact rehearsal pass | Local candidate evidence only; not release, canary, benchmark, or effectiveness evidence |
 
 The final successful record does not constitute production, long-run,
 cross-version, formal, science, or public acceptance. Historical absolute local

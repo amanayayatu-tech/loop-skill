@@ -1339,6 +1339,21 @@ def verify_dispatch_payload(transport_text: Any) -> dict[str, Any]:
     }
 
 
+def _enclosing_git_worktree_root(root: Path) -> Path | None:
+    """Return Git's enclosing top level, or None outside a worktree."""
+
+    completed = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return None
+    return Path(completed.stdout.strip()).expanduser().resolve(strict=False)
+
+
 def capture_complete_diff(
     root: str | os.PathLike[str], request: Any
 ) -> dict[str, Any]:
@@ -1689,6 +1704,8 @@ def verify_dispatch_payload_against_state(
             "target_thread_id": payload["target_thread_id"],
             "worker_role_kind": payload["worker_role_kind"],
         }
+        if "repo_mode" in identity:
+            expected["repo_mode"] = payload["repo_mode"]
         v32_enabled = state.get("schema_version", 1) >= 2
         if (
             identity != expected
@@ -1940,6 +1957,7 @@ class AdaptiveStateRuntime:
         self.report_staging_dir = self.control_dir / "report-staging"
         self.report_attestations_dir = self.control_dir / "report-attestations"
         self.external_receipts_dir = self.control_dir / "external-receipts"
+        self.manifest_snapshots_dir = self.control_dir / "manifest-snapshots"
         self.content_store = ContentAddressedStore(self.control_dir)
         # Lock the stable project-root inode. A lock file that is deleted during
         # virgin-layout cleanup can split writers across old and new inodes.
@@ -2340,6 +2358,539 @@ class AdaptiveStateRuntime:
                 return None
             self._ensure_layout()
             return self._read_state_locked(state_validator)
+
+    @staticmethod
+    def _manifest_snapshot_identity(
+        approved_product_paths: list[str],
+        entries: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "NON_GIT_PRODUCT_SNAPSHOT_V1",
+            "approved_product_paths": approved_product_paths,
+            "entries": entries,
+        }
+
+    def _manifest_snapshot_entries(
+        self, approved_product_paths: list[str]
+    ) -> list[dict[str, Any]]:
+        """Snapshot every regular file selected by canonical scope expressions.
+
+        Exact scopes retain an ABSENT entry so later creation is observable.
+        Wildcard scopes are re-enumerated for AFTER, allowing newly-created
+        files to enter the union delta without a Worker-authored path list.
+        """
+
+        entries: list[dict[str, Any]] = []
+        observed: set[str] = set()
+        exact_paths = {
+            scope
+            for scope in approved_product_paths
+            if not any(marker in scope for marker in ("*", "?", "["))
+        }
+        try:
+            walker = os.fwalk(self.root, topdown=True, follow_symlinks=False)
+            for directory, dirnames, filenames, directory_fd in walker:
+                directory_path = Path(directory)
+                relative_directory = directory_path.relative_to(self.root)
+                retained_directories: list[str] = []
+                for name in sorted(dirnames):
+                    relative = (relative_directory / name).as_posix()
+                    if relative == ".":
+                        relative = name
+                    if relative.split("/", 1)[0].casefold() == ".codex-loop":
+                        continue
+                    metadata = os.stat(
+                        name, dir_fd=directory_fd, follow_symlinks=False
+                    )
+                    if stat.S_ISLNK(metadata.st_mode):
+                        if any(
+                            self._scope_contains(scope, relative)
+                            or scope.startswith(relative + "/")
+                            for scope in approved_product_paths
+                        ):
+                            raise RuntimeRejection(
+                                "SYMLINK_NOT_ALLOWED",
+                                f"/approved_product_paths/{relative}",
+                            )
+                        continue
+                    if relative in exact_paths:
+                        raise RuntimeRejection(
+                            "MANIFEST_DELTA_PATH_NOT_REGULAR",
+                            f"/approved_product_paths/{relative}",
+                        )
+                    retained_directories.append(name)
+                dirnames[:] = retained_directories
+                for name in sorted(filenames):
+                    relative_path = (relative_directory / name).as_posix()
+                    if relative_path == ".":
+                        relative_path = name
+                    if not any(
+                        self._scope_contains(scope, relative_path)
+                        for scope in approved_product_paths
+                    ):
+                        continue
+                    json_path = f"/approved_product_paths/{relative_path}"
+                    metadata = os.stat(
+                        name, dir_fd=directory_fd, follow_symlinks=False
+                    )
+                    if stat.S_ISLNK(metadata.st_mode):
+                        raise RuntimeRejection("SYMLINK_NOT_ALLOWED", json_path)
+                    if not stat.S_ISREG(metadata.st_mode):
+                        raise RuntimeRejection(
+                            "MANIFEST_DELTA_PATH_NOT_REGULAR", json_path
+                        )
+                    try:
+                        descriptor = os.open(
+                            name,
+                            os.O_RDONLY
+                            | getattr(os, "O_NOFOLLOW", 0)
+                            | getattr(os, "O_NONBLOCK", 0),
+                            dir_fd=directory_fd,
+                        )
+                    except OSError as exc:
+                        raise RuntimeRejection(
+                            "MANIFEST_DELTA_PATH_UNAVAILABLE",
+                            json_path,
+                            {"error_type": type(exc).__name__},
+                        ) from exc
+                    try:
+                        before = os.fstat(descriptor)
+                        if not stat.S_ISREG(before.st_mode):
+                            raise RuntimeRejection(
+                                "MANIFEST_DELTA_PATH_NOT_REGULAR", json_path
+                            )
+                        digest = hashlib.sha256()
+                        size = 0
+                        while True:
+                            chunk = os.read(descriptor, 64 * 1024)
+                            if not chunk:
+                                break
+                            digest.update(chunk)
+                            size += len(chunk)
+                        after = os.fstat(descriptor)
+                        if (
+                            before.st_size != size
+                            or after.st_size != size
+                            or before.st_mtime_ns != after.st_mtime_ns
+                            or before.st_ctime_ns != after.st_ctime_ns
+                        ):
+                            raise RuntimeRejection(
+                                "MANIFEST_DELTA_PATH_CHANGED_DURING_CAPTURE",
+                                json_path,
+                            )
+                    finally:
+                        os.close(descriptor)
+                    observed.add(relative_path)
+                    entries.append(
+                        {
+                            "path": relative_path,
+                            "state": "FILE",
+                            "size": size,
+                            "sha256": digest.hexdigest(),
+                        }
+                    )
+        except RuntimeRejection:
+            raise
+        except OSError as exc:
+            raise RuntimeRejection(
+                "MANIFEST_DELTA_PATH_UNAVAILABLE",
+                "/approved_product_paths",
+                {"error_type": type(exc).__name__},
+            ) from exc
+        for relative_path in sorted(exact_paths - observed):
+            entries.append({"path": relative_path, "state": "ABSENT"})
+        entries.sort(key=lambda item: item["path"])
+        return entries
+
+    def _manifest_receipt_path(self, outbox_id: str, phase: str) -> Path:
+        return self.manifest_snapshots_dir / f"{outbox_id}.{phase.lower()}.json"
+
+    def _persist_manifest_receipt_locked(
+        self,
+        receipt: dict[str, Any],
+    ) -> Path:
+        path = self._manifest_receipt_path(receipt["outbox_id"], receipt["phase"])
+        payload = (_canonical_json(receipt) + "\n").encode("utf-8")
+        self._reject_symlink(self.manifest_snapshots_dir, "/manifest-snapshots")
+        self._assert_confined(
+            self.manifest_snapshots_dir,
+            self.control_dir,
+            "/manifest-snapshots",
+        )
+        self.manifest_snapshots_dir.mkdir(mode=0o700, parents=False, exist_ok=True)
+        directory_metadata = os.stat(
+            self.manifest_snapshots_dir, follow_symlinks=False
+        )
+        if (
+            not stat.S_ISDIR(directory_metadata.st_mode)
+            or directory_metadata.st_uid != os.getuid()
+            or stat.S_IMODE(directory_metadata.st_mode) != 0o700
+        ):
+            raise RuntimeRejection(
+                "MANIFEST_SNAPSHOT_DIRECTORY_INVALID", "/manifest-snapshots"
+            )
+        self._assert_confined(path, self.manifest_snapshots_dir, "/manifest-snapshot")
+        if path.exists():
+            self._reject_symlink(path, "/manifest-snapshot")
+            metadata = os.stat(path, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o444
+                or path.read_bytes() != payload
+            ):
+                raise RuntimeRejection(
+                    "MANIFEST_SNAPSHOT_IMMUTABILITY_CONFLICT",
+                    "/manifest-snapshot",
+                )
+            return path
+        self._atomic_replace_bytes(
+            path,
+            payload,
+            f"manifest-{receipt['outbox_id']}-{receipt['phase'].lower()}",
+            "MANIFEST_SNAPSHOT",
+            final_mode=0o444,
+        )
+        return path
+
+    def _load_manifest_receipt(
+        self,
+        outbox_id: str,
+        phase: str,
+        expected_snapshot_sha256: str,
+    ) -> dict[str, Any]:
+        path = self._manifest_receipt_path(outbox_id, phase)
+        self._assert_confined(path, self.manifest_snapshots_dir, "/manifest-snapshot")
+        self._reject_symlink(path, "/manifest-snapshot")
+        try:
+            metadata = os.stat(path, follow_symlinks=False)
+            payload = path.read_bytes()
+        except OSError as exc:
+            raise RuntimeRejection(
+                "MANIFEST_SNAPSHOT_RECEIPT_UNAVAILABLE",
+                "/manifest-snapshot",
+                {"phase": phase, "error_type": type(exc).__name__},
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o444
+        ):
+            raise RuntimeRejection(
+                "MANIFEST_SNAPSHOT_RECEIPT_INVALID", "/manifest-snapshot"
+            )
+        receipt = _strict_json_loads(
+            payload.decode("utf-8"),
+            code="MANIFEST_SNAPSHOT_RECEIPT_INVALID",
+            path="/manifest-snapshot",
+        )
+        required = {
+            "schema_version",
+            "kind",
+            "phase",
+            "outbox_id",
+            "root",
+            "approved_product_paths",
+            "entries",
+            "snapshot_sha256",
+        }
+        if (
+            not isinstance(receipt, dict)
+            or set(receipt) != required
+            or receipt.get("schema_version") != 1
+            or receipt.get("kind") != "NON_GIT_PRODUCT_SNAPSHOT_RECEIPT_V1"
+            or receipt.get("phase") != phase
+            or receipt.get("outbox_id") != outbox_id
+            or receipt.get("root") != str(self.root)
+            or receipt.get("snapshot_sha256") != expected_snapshot_sha256
+        ):
+            raise RuntimeRejection(
+                "MANIFEST_SNAPSHOT_RECEIPT_INVALID", "/manifest-snapshot"
+            )
+        approved_paths = receipt["approved_product_paths"]
+        entries = receipt["entries"]
+        if (
+            not isinstance(approved_paths, list)
+            or not approved_paths
+            or approved_paths != sorted(approved_paths)
+            or len(approved_paths) != len(set(approved_paths))
+            or not isinstance(entries, list)
+        ):
+            raise RuntimeRejection(
+                "MANIFEST_SNAPSHOT_RECEIPT_INVALID", "/manifest-snapshot"
+            )
+        if any(
+            not isinstance(scope, str) or not scope
+            for scope in approved_paths
+        ):
+            raise RuntimeRejection(
+                "MANIFEST_SNAPSHOT_RECEIPT_INVALID", "/manifest-snapshot"
+            )
+        entry_paths: list[str] = []
+        for index, entry in enumerate(entries):
+            entry_path = f"/manifest-snapshot/entries/{index}"
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("path"), str)
+                or entry.get("state") not in {"ABSENT", "FILE"}
+                or not any(
+                    self._scope_contains(scope, entry["path"])
+                    for scope in approved_paths
+                )
+            ):
+                raise RuntimeRejection(
+                    "MANIFEST_SNAPSHOT_RECEIPT_INVALID", entry_path
+                )
+            entry_paths.append(entry["path"])
+            if entry["state"] == "ABSENT":
+                valid = set(entry) == {"path", "state"}
+            else:
+                valid = (
+                    set(entry) == {"path", "state", "size", "sha256"}
+                    and isinstance(entry["size"], int)
+                    and not isinstance(entry["size"], bool)
+                    and entry["size"] >= 0
+                    and isinstance(entry["sha256"], str)
+                    and SHA256_HEX_RE.fullmatch(entry["sha256"]) is not None
+                )
+            if not valid:
+                raise RuntimeRejection(
+                    "MANIFEST_SNAPSHOT_RECEIPT_INVALID", entry_path
+                )
+        if entry_paths != sorted(entry_paths) or len(entry_paths) != len(set(entry_paths)):
+            raise RuntimeRejection(
+                "MANIFEST_SNAPSHOT_RECEIPT_INVALID", "/manifest-snapshot/entries"
+            )
+        identity = self._manifest_snapshot_identity(
+            approved_paths, entries
+        )
+        if hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest() != expected_snapshot_sha256:
+            raise RuntimeRejection(
+                "MANIFEST_SNAPSHOT_IDENTITY_MISMATCH", "/manifest-snapshot"
+            )
+        return receipt
+
+    @staticmethod
+    def _manifest_delta_from_receipts(
+        before: dict[str, Any],
+        after: dict[str, Any],
+    ) -> tuple[list[str], str]:
+        before_entries = {item["path"]: item for item in before["entries"]}
+        after_entries = {item["path"]: item for item in after["entries"]}
+        lines: list[str] = []
+        changed_files: list[str] = []
+        for relative_path in sorted(set(before_entries) | set(after_entries)):
+            old = before_entries.get(
+                relative_path, {"path": relative_path, "state": "ABSENT"}
+            )
+            new = after_entries.get(
+                relative_path, {"path": relative_path, "state": "ABSENT"}
+            )
+            if old == new:
+                continue
+            changed_files.append(relative_path)
+            if old["state"] == "ABSENT":
+                status, identity = "A", new
+            elif new["state"] == "ABSENT":
+                status, identity = "D", old
+            else:
+                status, identity = "M", new
+            lines.append(
+                f"{status}\t{relative_path}\t{identity['size']}\t{identity['sha256']}\n"
+            )
+        return changed_files, "".join(lines)
+
+    def _capture_prepared_manifest_baseline_locked(
+        self,
+        outbox_id: str,
+        approved_product_paths: list[str],
+    ) -> dict[str, Any]:
+        """Persist the non-Git BEFORE receipt before a Worker can be sent."""
+
+        scopes = sorted(approved_product_paths)
+        entries = self._manifest_snapshot_entries(scopes)
+        identity = self._manifest_snapshot_identity(scopes, entries)
+        snapshot_sha256 = hashlib.sha256(
+            _canonical_json(identity).encode("utf-8")
+        ).hexdigest()
+        receipt = {
+            "schema_version": 1,
+            "kind": "NON_GIT_PRODUCT_SNAPSHOT_RECEIPT_V1",
+            "phase": "BEFORE",
+            "outbox_id": outbox_id,
+            "root": str(self.root),
+            "approved_product_paths": scopes,
+            "entries": entries,
+            "snapshot_sha256": snapshot_sha256,
+        }
+        receipt_path = self._persist_manifest_receipt_locked(receipt)
+        return {
+            "snapshot_sha256": snapshot_sha256,
+            "receipt_path": receipt_path.relative_to(self.root).as_posix(),
+            "approved_product_paths": scopes,
+        }
+
+    def capture_manifest_delta(self, request: Any) -> dict[str, Any]:
+        """Capture a runtime-owned deterministic delta for an exact non-Git scope."""
+
+        if not isinstance(request, dict) or request.get("phase") not in {
+            "BEFORE", "AFTER"
+        }:
+            raise RuntimeRejection("MANIFEST_DELTA_CAPTURE_INPUT_INVALID", "/")
+        phase = request["phase"]
+        required = {"phase", "outbox_id", "approved_product_paths"}
+        if phase == "AFTER":
+            required.add("before_snapshot_sha256")
+        if set(request) != required:
+            raise RuntimeRejection("MANIFEST_DELTA_CAPTURE_INPUT_INVALID", "/")
+        outbox_id = request["outbox_id"]
+        paths = request["approved_product_paths"]
+        if not isinstance(outbox_id, str) or SAFE_ID_RE.fullmatch(outbox_id) is None:
+            raise RuntimeRejection(
+                "MANIFEST_DELTA_CAPTURE_INPUT_INVALID", "/outbox_id"
+            )
+        if (
+            not isinstance(paths, list)
+            or not paths
+            or len(paths) != len(set(paths))
+            or any(not isinstance(path, str) or not path for path in paths)
+        ):
+            raise RuntimeRejection(
+                "MANIFEST_DELTA_CAPTURE_INPUT_INVALID", "/approved_product_paths"
+            )
+        paths = sorted(paths)
+        for index, relative_path in enumerate(paths):
+            path = f"/approved_product_paths/{index}"
+            self._validate_scope(relative_path, path)
+            if (
+                PurePosixPath(relative_path).as_posix() != relative_path
+                or (
+                    any(marker in relative_path for marker in ("*", "?", "["))
+                    and relative_path != "**"
+                    and not relative_path.endswith(("/*", "/**"))
+                )
+                or "?" in relative_path
+                or "[" in relative_path
+                or any(marker in relative_path for marker in ("\t", "\r", "\n"))
+                or relative_path in {"", "."}
+            ):
+                raise RuntimeRejection("MANIFEST_DELTA_PATH_INVALID", path)
+        if phase == "AFTER":
+            before_snapshot_sha256 = request["before_snapshot_sha256"]
+            if (
+                not isinstance(before_snapshot_sha256, str)
+                or SHA256_HEX_RE.fullmatch(before_snapshot_sha256) is None
+            ):
+                raise RuntimeRejection(
+                    "MANIFEST_DELTA_CAPTURE_INPUT_INVALID",
+                    "/before_snapshot_sha256",
+                )
+        if _enclosing_git_worktree_root(self.root) == self.root:
+            raise RuntimeRejection("MANIFEST_DELTA_NON_GIT_REQUIRED", "/root")
+
+        _, state_validator = self._load_validators()
+        self._require_root()
+        with self._exclusive_lock():
+            self._ensure_layout()
+            state = self._read_state_locked(state_validator)
+            if state is None:
+                raise RuntimeRejection("STATE_NOT_INITIALIZED", "/outbox_id")
+            record = state.get("dispatch_outbox", {}).get(outbox_id)
+            if not isinstance(record, dict) or record.get("status") != "SENT":
+                raise RuntimeRejection(
+                    "MANIFEST_DELTA_OUTBOX_NOT_SENT", "/outbox_id"
+                )
+            goal_id = record.get("identity", {}).get("goal_id")
+            definition = state.get("goal_definition_registry", {}).get(goal_id)
+            if not isinstance(definition, dict):
+                raise RuntimeRejection(
+                    "MANIFEST_DELTA_OUTBOX_IDENTITY_INVALID", "/outbox_id"
+                )
+            allowed_scopes = sorted(definition["allowed_write_scope"])
+            if paths != allowed_scopes:
+                raise RuntimeRejection(
+                    "MANIFEST_DELTA_SCOPE_MISMATCH",
+                    "/approved_product_paths",
+                    {"required": allowed_scopes, "provided": paths},
+                )
+            before_receipt: dict[str, Any] | None = None
+            if phase == "AFTER":
+                before_receipt = self._load_manifest_receipt(
+                    outbox_id, "BEFORE", before_snapshot_sha256
+                )
+                if before_receipt["approved_product_paths"] != paths:
+                    raise RuntimeRejection(
+                        "MANIFEST_DELTA_SCOPE_MISMATCH",
+                        "/approved_product_paths",
+                    )
+            entries = self._manifest_snapshot_entries(paths)
+            identity = self._manifest_snapshot_identity(paths, entries)
+            snapshot_sha256 = hashlib.sha256(
+                _canonical_json(identity).encode("utf-8")
+            ).hexdigest()
+            receipt = {
+                "schema_version": 1,
+                "kind": "NON_GIT_PRODUCT_SNAPSHOT_RECEIPT_V1",
+                "phase": phase,
+                "outbox_id": outbox_id,
+                "root": str(self.root),
+                "approved_product_paths": paths,
+                "entries": entries,
+                "snapshot_sha256": snapshot_sha256,
+            }
+            receipt_path = self._persist_manifest_receipt_locked(receipt)
+            relative_receipt_path = receipt_path.relative_to(self.root).as_posix()
+            if phase == "BEFORE":
+                return {
+                    "ok": True,
+                    "status": "MANIFEST_SNAPSHOT_CAPTURED",
+                    "phase": "BEFORE",
+                    "outbox_id": outbox_id,
+                    "snapshot_sha256": snapshot_sha256,
+                    "approved_product_paths": paths,
+                    "receipt_path": relative_receipt_path,
+                    "external_actions": [],
+                    "external_action_count": 0,
+                }
+            assert before_receipt is not None
+            changed_files, content = self._manifest_delta_from_receipts(
+                before_receipt, receipt
+            )
+            diff_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            complete_diff_reference: dict[str, Any]
+            if content:
+                complete_diff_reference = {
+                    "kind": "MANIFEST_DELTA_V1",
+                    "hash_algorithm": "sha256",
+                    "media_type": "text/tab-separated-values",
+                    "content": content,
+                    "sha256": diff_sha256,
+                }
+            else:
+                complete_diff_reference = {
+                    "kind": "NO_DIFF",
+                    "hash_algorithm": "sha256",
+                    "sha256": diff_sha256,
+                }
+            return {
+                "ok": True,
+                "status": "MANIFEST_DELTA_CAPTURED",
+                "phase": "AFTER",
+                "outbox_id": outbox_id,
+                "before_snapshot_sha256": before_snapshot_sha256,
+                "after_snapshot_sha256": snapshot_sha256,
+                "artifact_digest": f"sha256:{snapshot_sha256}",
+                "changed_files": changed_files,
+                "diff_sha256": diff_sha256,
+                "complete_diff_reference": complete_diff_reference,
+                "current_branch": "NOT_APPLICABLE",
+                "base_sha": "NOT_APPLICABLE",
+                "head_sha": "NOT_APPLICABLE",
+                "receipt_path": relative_receipt_path,
+                "external_actions": [],
+                "external_action_count": 0,
+            }
 
     @staticmethod
     def _worker_blocker_code_from_report(report: Mapping[str, Any]) -> str | None:
@@ -6375,7 +6926,7 @@ class AdaptiveStateRuntime:
         ):
             raise RuntimeRejection("PATH_SCOPE_ESCAPE", path)
         parts = PurePosixPath(scope).parts
-        if ".." in parts or ".codex-loop" in parts:
+        if ".." in parts or any(part.casefold() == ".codex-loop" for part in parts):
             raise RuntimeRejection("PATH_SCOPE_ESCAPE", path)
 
     @staticmethod
@@ -8821,11 +9372,8 @@ class AdaptiveStateRuntime:
                 )
             except P1RuntimeError as exc:
                 raise RuntimeRejection(exc.code, exc.path) from exc
-        repository = subprocess.run(
-            ["git", "-C", str(self.root), "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, text=True, check=False, timeout=15,
-        )
-        if repository.returncode == 0 and repository.stdout.strip() == "true":
+        repository_root = _enclosing_git_worktree_root(self.root)
+        if repository_root == self.root:
             branch_result = subprocess.run(
                 ["git", "-C", str(self.root), "branch", "--show-current"],
                 capture_output=True, text=True, check=False, timeout=15,
@@ -8840,10 +9388,19 @@ class AdaptiveStateRuntime:
             target_branch = "NOT_APPLICABLE"
         role_kind = definition["worker_role_kind"]
         permission = "read_only" if role_kind in {"triage", "explorer"} else "workspace_write"
+        artifact_identity_rule = (
+            "For non_git, runtime_codec CAPTURE_MANIFEST_DELTA owns exact BEFORE/AFTER "
+            "approved-product-path snapshots and emits strict MANIFEST_DELTA_V1 or NO_DIFF; "
+            "CAPTURE_COMPLETE_DIFF is forbidden."
+            if repo_mode == "non_git"
+            else
+            "For Git, runtime_codec CAPTURE_COMPLETE_DIFF accepts only base_ref and "
+            "allowed_untracked_paths and emits a runtime-owned complete diff."
+        )
         payload = {
             "acceptance_criteria": list(definition["success_criteria"]),
             "allowed_write_scope": list(definition["allowed_write_scope"]),
-            "artifact_identity_rule": "Runtime-owned complete diff manifest; exclude .codex-loop and secrets.",
+            "artifact_identity_rule": artifact_identity_rule,
             "canonical_state_path": ".codex-loop/LOOP_STATE.md",
             "canonical_state_snapshot": snapshot,
             "claim_boundary": "Local implementation and evidence only.",
@@ -10209,6 +10766,7 @@ class AdaptiveStateRuntime:
             "goal_id": goal_id,
             "goal_definition_digest": definition["payload_template_digest"],
             "payload_digest": materialized["payload_digest"],
+            "repo_mode": specification["payload"]["repo_mode"],
             "target_thread_id": target_thread_id,
             "worker_role_kind": definition["worker_role_kind"],
         }
@@ -10240,6 +10798,12 @@ class AdaptiveStateRuntime:
             "ack_evidence_paths": [],
             "result": None,
         }
+        manifest_baseline = None
+        if identity["repo_mode"] == "non_git":
+            manifest_baseline = self._capture_prepared_manifest_baseline_locked(
+                route_id,
+                definition["allowed_write_scope"],
+            )
         state["goal_execution_ledger"][goal_id]["status"] = "IN_PROGRESS"
         state["gateway_route_ledger"][route_id] = {
             "route_id": route_id,
@@ -10278,6 +10842,7 @@ class AdaptiveStateRuntime:
                 "payload_digest": materialized["payload_digest"],
                 "payload_specification": specification,
                 "required_codec_operation": "MATERIALIZE_DISPATCH",
+                "manifest_before_snapshot": manifest_baseline,
             },
         }
 
@@ -15868,18 +16433,39 @@ class AdaptiveStateRuntime:
                 {"reason": "CONTROL_PLANE_ACTION_DENIED", "outbox_kind": kind},
             )
         if kind == "DISPATCH":
-            self._require_exact_keys(
-                identity,
-                {
-                    "dispatch_id",
-                    "goal_id",
-                    "goal_definition_digest",
-                    "payload_digest",
-                    "target_thread_id",
-                    "worker_role_kind",
-                },
-                "/mutation/identity",
-            )
+            legacy_identity_keys = {
+                "dispatch_id",
+                "goal_id",
+                "goal_definition_digest",
+                "payload_digest",
+                "target_thread_id",
+                "worker_role_kind",
+            }
+            identity_keys = set(identity)
+            if (
+                identity_keys != legacy_identity_keys
+                and identity_keys != legacy_identity_keys | {"repo_mode"}
+            ):
+                raise RuntimeRejection(
+                    "OBJECT_KEYS_INVALID",
+                    "/mutation/identity",
+                    {
+                        "expected": sorted(legacy_identity_keys),
+                        "expected_with_repo_mode": sorted(
+                            legacy_identity_keys | {"repo_mode"}
+                        ),
+                        "actual": sorted(identity_keys),
+                    },
+                )
+            if "repo_mode" in identity and identity["repo_mode"] not in {
+                "existing_git",
+                "new_git",
+                "non_git",
+            }:
+                raise RuntimeRejection(
+                    "DISPATCH_REPO_MODE_INVALID",
+                    "/mutation/identity/repo_mode",
+                )
             if (
                 identity["dispatch_id"] != outbox_id
                 or identity["payload_digest"] != payload_digest
@@ -18347,6 +18933,14 @@ class AdaptiveStateRuntime:
             report,
             diff_sha256,
             changed_files,
+            require_runtime_manifest_receipts=(
+                isinstance(report.get("dispatch_id"), str)
+                and state.get("dispatch_outbox", {})
+                .get(report["dispatch_id"], {})
+                .get("identity", {})
+                .get("repo_mode")
+                == "non_git"
+            ),
         )
         artifact_identity = {
             field: copy.deepcopy(report[field]) for field in identity_fields
@@ -18521,6 +19115,8 @@ class AdaptiveStateRuntime:
         report: dict[str, Any],
         diff_sha256: str,
         changed_files: list[str],
+        *,
+        require_runtime_manifest_receipts: bool = False,
     ) -> None:
         reference = report["complete_diff_reference"]
         path = "/artifacts/report/complete_diff_reference"
@@ -18537,6 +19133,14 @@ class AdaptiveStateRuntime:
                 "COMPLETE_DIFF_REFERENCE_HASH_MISMATCH",
                 f"{path}/sha256",
             )
+        if (
+            require_runtime_manifest_receipts
+            and kind not in {"MANIFEST_DELTA_V1", "NO_DIFF"}
+        ):
+            raise RuntimeRejection(
+                "MANIFEST_DELTA_REFERENCE_KIND_REQUIRED",
+                f"{path}/kind",
+            )
 
         empty_sha256 = hashlib.sha256(b"").hexdigest()
         if kind == "NO_DIFF":
@@ -18546,8 +19150,17 @@ class AdaptiveStateRuntime:
                 or changed_files
                 or report["before_snapshot_sha256"]
                 != report["after_snapshot_sha256"]
+                or (
+                    require_runtime_manifest_receipts
+                    and any(
+                        report[field] != "NOT_APPLICABLE"
+                        for field in ("current_branch", "base_sha", "head_sha")
+                    )
+                )
             ):
                 raise RuntimeRejection("COMPLETE_DIFF_REFERENCE_NO_DIFF_INVALID", path)
+            if require_runtime_manifest_receipts:
+                self._validate_runtime_manifest_receipts(worktree, report, "")
             return
 
         if kind == "MANIFEST_DELTA_V1":
@@ -18594,6 +19207,11 @@ class AdaptiveStateRuntime:
                 ):
                     raise RuntimeRejection("MANIFEST_DELTA_LINE_INVALID", line_path)
                 manifest_paths.append(relative_path)
+                if require_runtime_manifest_receipts:
+                    # Runtime receipts are reloaded below and the complete
+                    # canonical scope is reopened through directory fds. Avoid
+                    # a second path-based read with a weaker ancestor boundary.
+                    continue
                 candidate = worktree / relative_path
                 self._assert_confined(candidate, worktree, line_path)
                 if status == "D":
@@ -18628,6 +19246,11 @@ class AdaptiveStateRuntime:
                 raise RuntimeRejection(
                     "MANIFEST_DELTA_CHANGED_FILES_MISMATCH", path
                 )
+            self._validate_runtime_manifest_receipts(
+                worktree,
+                report,
+                content,
+            )
             return
 
         if kind == "PATCH_FILE_V1":
@@ -18699,6 +19322,60 @@ class AdaptiveStateRuntime:
             return
 
         raise RuntimeRejection("COMPLETE_DIFF_REFERENCE_KIND_INVALID", f"{path}/kind")
+
+    def _validate_runtime_manifest_receipts(
+        self,
+        worktree: Path,
+        report: dict[str, Any],
+        content: str,
+    ) -> None:
+        """Bind a non-Git PASS report to runtime-owned before/after receipts."""
+
+        path = "/artifacts/report/complete_diff_reference"
+        if worktree.resolve(strict=False) != self.root:
+            raise RuntimeRejection(
+                "MANIFEST_DELTA_WORKTREE_MISMATCH",
+                "/artifacts/report/worktree_path",
+            )
+        outbox_id = report.get("dispatch_id")
+        if not isinstance(outbox_id, str) or SAFE_ID_RE.fullmatch(outbox_id) is None:
+            raise RuntimeRejection(
+                "MANIFEST_DELTA_OUTBOX_IDENTITY_INVALID",
+                "/artifacts/report/dispatch_id",
+            )
+        before = self._load_manifest_receipt(
+            outbox_id,
+            "BEFORE",
+            report["before_snapshot_sha256"],
+        )
+        after = self._load_manifest_receipt(
+            outbox_id,
+            "AFTER",
+            report["after_snapshot_sha256"],
+        )
+        if before["approved_product_paths"] != after["approved_product_paths"]:
+            raise RuntimeRejection(
+                "MANIFEST_DELTA_SCOPE_MISMATCH", path
+            )
+        changed_files, expected_content = self._manifest_delta_from_receipts(
+            before, after
+        )
+        if (
+            expected_content != content
+            or changed_files != report["changed_files"]
+            or hashlib.sha256(expected_content.encode("utf-8")).hexdigest()
+            != report["diff_sha256"]
+        ):
+            raise RuntimeRejection(
+                "MANIFEST_DELTA_RUNTIME_RECEIPT_MISMATCH", path
+            )
+        live_entries = self._manifest_snapshot_entries(
+            after["approved_product_paths"]
+        )
+        if live_entries != after["entries"]:
+            raise RuntimeRejection(
+                "MANIFEST_DELTA_ARTIFACT_CHANGED_AFTER_CAPTURE", path
+            )
 
     @staticmethod
     def _validate_estimate_revision(value: Any, path: str) -> None:

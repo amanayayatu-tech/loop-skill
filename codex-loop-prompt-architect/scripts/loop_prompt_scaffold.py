@@ -3300,6 +3300,7 @@ def worker_input_gate(
     worker: dict[str, Any],
     adaptive: bool = False,
     state_gateway: bool = False,
+    repo_mode: str = "existing_git",
 ) -> str:
     if adaptive and state_gateway:
         verification_contract = (
@@ -3332,6 +3333,26 @@ def worker_input_gate(
                 "- Stage the exact strict JSON result with runtime_codec STAGE_REPORT and return "
                 "only FORMAL_REPORT_STAGED."
             )
+        artifact_capture = (
+            "- Before any product write, call runtime_codec CAPTURE_MANIFEST_DELTA "
+            "with exactly {\"phase\":\"BEFORE\",\"outbox_id\":\"<received "
+            "dispatch_id>\",\"approved_product_paths\":<the sorted allowed_write_scope "
+            "array from this dispatch verbatim>}; the Gateway has already captured this "
+            "same canonical scope before route preparation returned, so this call can only "
+            "read back the unchanged baseline. After all product writes and before "
+            "STAGE_REPORT, call the same "
+            "operation with exactly {\"phase\":\"AFTER\",\"outbox_id\":\"<received "
+            "dispatch_id>\",\"approved_product_paths\":<the same sorted scope array>,"
+            "\"before_snapshot_sha256\":\"<runtime BEFORE digest>\"}. Copy the "
+            "runtime-owned MANIFEST_DELTA_V1 or NO_DIFF identity into the PASS report. "
+            "Do not call runtime_codec CAPTURE_COMPLETE_DIFF in repo_mode=non_git."
+            if repo_mode == "non_git"
+            else
+            "- When the artifact changes, call runtime_codec CAPTURE_COMPLETE_DIFF "
+            "with request keys exactly {\"base_ref\":\"<verified base commit>\","
+            "\"allowed_untracked_paths\":[\"<exact repo-relative path>\"]}; do not "
+            "supply outbox_id, dispatch_id, repo_mode, or allowed_write_scope to that operation."
+        )
         return (
             "Input Gate:\n"
             "- BOOTSTRAP_ONLY: do not execute and reply READY_IDLE_AWAITING_GOAL.\n"
@@ -3339,8 +3360,8 @@ def worker_input_gate(
             "- The exact Gateway route owns the prepared/sent outbox, current Goal, immutable "
             "definition, freshness, validation, and target identity. Reject unresolved "
             "MATERIALIZE_* tokens or a duplicate dispatch without executing it again.\n"
-            "- Capture a complete diff through runtime_codec CAPTURE_COMPLETE_DIFF when the "
-            "artifact changes; stage the exact strict JSON result through STAGE_REPORT and "
+            f"{artifact_capture}\n"
+            "- Stage the exact strict JSON result through STAGE_REPORT and "
             "return only FORMAL_REPORT_STAGED."
         )
     if worker["permission"] == "state_write_only":
@@ -3892,7 +3913,7 @@ Permission Declaration: {worker['permission']} ({worker['permission_source']})
 Sandbox expectation: {sandbox_text(worker, adaptive)}.
 Prompt Injection Boundary: {PROMPT_INJECTION_BOUNDARY}{formal_role_delegation_boundary(adaptive)}
 
-{worker_input_gate(worker, adaptive, state_gateway)}
+{worker_input_gate(worker, adaptive, state_gateway, repo_mode)}
 
 Allowed Write Scope:
 {worker_allowed_scope(worker, worker.get('allowed') or allowed, audit_paths, adaptive=adaptive)}

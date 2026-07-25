@@ -821,6 +821,7 @@ class AdaptiveStateMcpServer:
                 "STAGE_EXTERNAL_RECEIPT": {"operation", "root", "request"},
                 "NORMALIZE_FINGERPRINT": {"operation", "request"},
                 "CAPTURE_COMPLETE_DIFF": {"operation", "root", "request"},
+                "CAPTURE_MANIFEST_DELTA": {"operation", "root", "request"},
             }
             if operation not in allowed_keys or set(arguments) != allowed_keys[operation]:
                 raise McpBridgeError(
@@ -979,6 +980,8 @@ class AdaptiveStateMcpServer:
             return
         if operation == "CAPTURE_COMPLETE_DIFF" and caller.get("role_kind") not in {"CONTROLLER", "WORKER"}:
             raise McpBridgeError("CODEC_DIFF_CALLER_ROLE_INVALID", "/params/_meta")
+        if operation == "CAPTURE_MANIFEST_DELTA" and caller.get("role_kind") != "WORKER":
+            raise McpBridgeError("CODEC_MANIFEST_CALLER_ROLE_INVALID", "/params/_meta")
 
     def _authorize_codec_caller(
         self,
@@ -997,7 +1000,8 @@ class AdaptiveStateMcpServer:
         """
 
         if operation not in {
-            "STAGE_REPORT", "STAGE_EXTERNAL_RECEIPT", "CAPTURE_COMPLETE_DIFF"
+            "STAGE_REPORT", "STAGE_EXTERNAL_RECEIPT", "CAPTURE_COMPLETE_DIFF",
+            "CAPTURE_MANIFEST_DELTA",
         }:
             return
         state = AdaptiveStateRuntime(root).read_state()
@@ -1028,6 +1032,28 @@ class AdaptiveStateMcpServer:
                 or caller.get("role_kind") != "LOCAL_VERIFIER"
             ):
                 raise McpBridgeError("CODEC_EXTERNAL_RECEIPT_TARGET_ATTESTATION_MISMATCH", "/params/_meta")
+            return
+        if operation == "CAPTURE_MANIFEST_DELTA":
+            if (
+                caller.get("role_kind") != "WORKER"
+                or not isinstance(request, dict)
+                or not isinstance(request.get("outbox_id"), str)
+            ):
+                raise McpBridgeError(
+                    "CODEC_MANIFEST_CALLER_ROLE_INVALID", "/params/_meta"
+                )
+            kind, record = self._codec_outbox_record(
+                state, request["outbox_id"]
+            )
+            if (
+                kind != "DISPATCH"
+                or record.get("status") != "SENT"
+                or record.get("target_id") != metadata.thread_id
+            ):
+                raise McpBridgeError(
+                    "CODEC_MANIFEST_TARGET_ATTESTATION_MISMATCH",
+                    "/params/_meta",
+                )
             return
         if caller.get("role_kind") not in {"CONTROLLER", "WORKER"}:
             raise McpBridgeError("CODEC_DIFF_CALLER_ROLE_INVALID", "/params/_meta")
@@ -2104,8 +2130,9 @@ class AdaptiveStateMcpServer:
                             "name": MCP_RUNTIME_CODEC_TOOL_NAME,
                             "description": (
                                 "Materialize or verify exact dispatch payloads, stage "
-                                "formal reports or external receipts, and normalize "
-                                "failure fingerprints without a shell stdin session."
+                                "formal reports or external receipts, capture Git-only "
+                                "complete diffs or runtime-owned non-Git manifest deltas, "
+                                "and normalize failure fingerprints without a shell stdin session."
                             ),
                             "inputSchema": {
                                 "oneOf": [
@@ -2164,7 +2191,72 @@ class AdaptiveStateMcpServer:
                                         "properties": {
                                             "operation": {"const": "CAPTURE_COMPLETE_DIFF"},
                                             "root": {"type": "string"},
-                                            "request": {"type": "object"},
+                                            "request": {
+                                                "type": "object",
+                                                "additionalProperties": False,
+                                                "required": ["base_ref", "allowed_untracked_paths"],
+                                                "properties": {
+                                                    "base_ref": {"type": "string", "minLength": 1},
+                                                    "allowed_untracked_paths": {
+                                                        "type": "array",
+                                                        "items": {"type": "string", "minLength": 1},
+                                                        "uniqueItems": True,
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                    {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["operation", "root", "request"],
+                                        "properties": {
+                                            "operation": {"const": "CAPTURE_MANIFEST_DELTA"},
+                                            "root": {"type": "string"},
+                                            "request": {
+                                                "oneOf": [
+                                                    {
+                                                        "type": "object",
+                                                        "additionalProperties": False,
+                                                        "required": ["phase", "outbox_id", "approved_product_paths"],
+                                                        "properties": {
+                                                            "phase": {"const": "BEFORE"},
+                                                            "outbox_id": {
+                                                                "type": "string",
+                                                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                                            },
+                                                            "approved_product_paths": {
+                                                                "type": "array",
+                                                                "minItems": 1,
+                                                                "items": {"type": "string", "minLength": 1},
+                                                                "uniqueItems": True,
+                                                            },
+                                                        },
+                                                    },
+                                                    {
+                                                        "type": "object",
+                                                        "additionalProperties": False,
+                                                        "required": ["phase", "outbox_id", "approved_product_paths", "before_snapshot_sha256"],
+                                                        "properties": {
+                                                            "phase": {"const": "AFTER"},
+                                                            "outbox_id": {
+                                                                "type": "string",
+                                                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                                            },
+                                                            "approved_product_paths": {
+                                                                "type": "array",
+                                                                "minItems": 1,
+                                                                "items": {"type": "string", "minLength": 1},
+                                                                "uniqueItems": True,
+                                                            },
+                                                            "before_snapshot_sha256": {
+                                                                "type": "string",
+                                                                "pattern": "^[a-f0-9]{64}$",
+                                                            },
+                                                        },
+                                                    },
+                                                ],
+                                            },
                                         },
                                     },
                                 ]

@@ -456,6 +456,23 @@ class ScaffoldValidationTests(unittest.TestCase):
     def test_non_git_rejects_branch_fields_and_uses_local_integration(self) -> None:
         payload = base_payload()
         payload["repo_mode"] = "non_git"
+        payload["coordination_mode"] = "adaptive"
+        payload["adaptive_reason"] = "A durable state gateway owns one bounded implementation route"
+        payload["workers"][0]["role_kind"] = "implementation"
+        payload["goals"][0]["milestone_id"] = "M1"
+        payload["milestones"] = [
+            {
+                "milestone_id": "M1",
+                "outcome": "Produce one reviewable artifact",
+                "scope": ["src/**", "tests/**"],
+                "decisions": [],
+                "blockers": [],
+                "required_evidence": ["exact artifact identity"],
+                "status": "ACTIVE",
+                "depends_on": [],
+                "references": ["G1"],
+            }
+        ]
         payload["goals"][0]["phase_permissions"]["branch_create"] = False
         errors = scaffold.validation_errors(payload)
         self.assertIn("non_git:branch_fields_must_be_omitted", errors)
@@ -467,6 +484,40 @@ class ScaffoldValidationTests(unittest.TestCase):
         self.assertIn("non_git local integration directory only", pack)
         self.assertIn("Use one shared local integration directory", pack)
         self.assertNotIn("Use one shared integration worktree for sequential", pack)
+        self.assertIn("runtime_codec CAPTURE_MANIFEST_DELTA", pack)
+        self.assertIn('"phase":"BEFORE"', pack)
+        self.assertIn('"phase":"AFTER"', pack)
+        self.assertIn("MANIFEST_DELTA_V1", pack)
+        self.assertIn("Do not call runtime_codec CAPTURE_COMPLETE_DIFF", pack)
+        self.assertNotIn(
+            "Capture a complete diff through runtime_codec CAPTURE_COMPLETE_DIFF when the artifact changes",
+            pack,
+        )
+
+    def test_existing_git_worker_uses_exact_complete_diff_request_schema(self) -> None:
+        payload = base_payload()
+        payload["coordination_mode"] = "adaptive"
+        payload["adaptive_reason"] = "A durable state gateway owns one bounded implementation route"
+        payload["workers"][0]["role_kind"] = "implementation"
+        payload["goals"][0]["milestone_id"] = "M1"
+        payload["milestones"] = [
+            {
+                "milestone_id": "M1",
+                "outcome": "Produce one reviewable artifact",
+                "scope": ["src/**", "tests/**"],
+                "decisions": [],
+                "blockers": [],
+                "required_evidence": ["exact artifact identity"],
+                "status": "ACTIVE",
+                "depends_on": [],
+                "references": ["G1"],
+            }
+        ]
+        pack = scaffold.render_controller_pack(payload, "compact")
+        self.assertIn("runtime_codec CAPTURE_COMPLETE_DIFF", pack)
+        self.assertIn('"base_ref"', pack)
+        self.assertIn('"allowed_untracked_paths"', pack)
+        self.assertNotIn("runtime_codec CAPTURE_MANIFEST_DELTA", pack)
 
     def test_source_artifacts_are_explicitly_required(self) -> None:
         payload = base_payload()

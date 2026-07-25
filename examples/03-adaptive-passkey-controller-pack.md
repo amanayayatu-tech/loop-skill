@@ -930,7 +930,8 @@ Input Gate:
 - BOOTSTRAP_ONLY: do not execute and reply READY_IDLE_AWAITING_GOAL.
 - Execute only a Gateway-derived WORKER_DISPATCH. Pass CANONICAL_REPO_ROOT and the exact received codexDelegation.input string to runtime_codec operation VERIFY_DISPATCH and proceed only on PAYLOAD_VERIFIED. The runtime alone may normalize CRLF to LF and remove at most one trailing newline before strict JSON semantic canonicalization. Never hash or reserialize a UI wrapper, manually replace payload fields, or treat PAYLOAD_BYTES_VERIFIED as execution permission.
 - The exact Gateway route owns the prepared/sent outbox, current Goal, immutable definition, freshness, validation, and target identity. Reject unresolved MATERIALIZE_* tokens or a duplicate dispatch without executing it again.
-- Capture a complete diff through runtime_codec CAPTURE_COMPLETE_DIFF when the artifact changes; stage the exact strict JSON result through STAGE_REPORT and return only FORMAL_REPORT_STAGED.
+- When the artifact changes, call runtime_codec CAPTURE_COMPLETE_DIFF with request keys exactly {"base_ref":"<verified base commit>","allowed_untracked_paths":["<exact repo-relative path>"]}; do not supply outbox_id, dispatch_id, repo_mode, or allowed_write_scope to that operation.
+- Stage the exact strict JSON result through STAGE_REPORT and return only FORMAL_REPORT_STAGED.
 
 Allowed Write Scope:
 - app/**

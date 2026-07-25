@@ -76,9 +76,26 @@ PREPARED finalization outbox while `terminal_status` remains null. Only the
 pause/readback-bound ACK creates the terminal projection.
 Schema v3 disables native Goal adapters and records `GATEWAY_NO_NATIVE_GOAL` as
 a local sentinel, never as an external Goal-tool outcome.
-`CAPTURE_COMPLETE_DIFF` captures raw Git binary bytes, allows only confined
-untracked paths, reverse-checks the patch and emits a manifest; no model
-transports binary patch text.
+`CAPTURE_COMPLETE_DIFF` is Git-only. Its request has exactly `base_ref` and
+`allowed_untracked_paths`; it captures raw Git binary bytes, allows only
+confined untracked paths, reverse-checks the patch and emits a manifest. No
+model transports binary patch text. A `non_git` Worker must not call it.
+Instead, `CAPTURE_MANIFEST_DELTA` accepts an exact SENT Worker `outbox_id` and
+the sorted canonical `allowed_write_scope` array verbatim. Before
+`PREPARE_ROUTE` returns—and therefore before the Worker can receive the
+dispatch—the Gateway persists the runtime-owned BEFORE snapshot. The Worker
+invokes `phase=BEFORE` as its first action to read back that same immutable
+identity, then `phase=AFTER` with the runtime-returned
+`before_snapshot_sha256` after all writes. Exact file scopes retain ABSENT
+entries; `/*`, `/**`, and `**` scopes are enumerated again at AFTER so new and
+deleted files cannot be omitted by a Worker-supplied subset. The runtime
+rejects a Git root owned by the project, control-plane aliases, symlinks,
+non-regular files, any scope array different from the Goal definition, a
+non-SENT/foreign outbox, or a changed BEFORE identity. A project directory
+contained by some parent Git repository remains `non_git` unless the project
+root itself is that repository's top level. Runtime receipts are read-only and
+return the report-ready artifact and diff identity. This is a first-class
+runtime operation, not an adapter, wrapper, or model-authored manifest.
 
 For a matching transport fingerprint/outbox, the first real
 registered-heartbeat observation retains the outbox. Gateway binds its
@@ -897,14 +914,21 @@ unchanged roadmap/Goal/lease/target/payload/definition or artifact identity. It
 does not require the embedded snapshot version to equal the later latest state.
 For `non_git`, report `current_branch`, `base_sha`, and `head_sha` as the exact
 string `NOT_APPLICABLE`, never null or empty. `changed_files` uses repo-relative
-POSIX paths; before/after manifests and `diff_sha256` carry artifact identity.
+POSIX paths. The Worker must obtain before/after snapshot identities and
+`diff_sha256` from `CAPTURE_MANIFEST_DELTA`; it must not calculate, transcribe,
+or repair those identities itself.
 Every Worker `PASS` report also carries one machine-replayable
 `complete_diff_reference`. `MANIFEST_DELTA_V1` is UTF-8 text containing exactly
 `STATUS<TAB>repo-relative-path<TAB>size_bytes<TAB>file_sha256` per line, with
 `A`, `M`, or `D` status, unique path ordering, and one final LF. Its SHA-256
-must equal `diff_sha256`, and every non-deleted file entry must match the
-current regular non-symlink file. `NO_DIFF` uses the SHA-256 of empty bytes,
-empty `changed_files`, and equal before/after snapshots. `PATCH_FILE_V1` names
+must equal `diff_sha256`. For `non_git`, the runtime reloads the immutable
+outbox-bound BEFORE/AFTER receipts, reconstructs the exact delta, and requires
+every current approved path to match the AFTER receipt before it stages a PASS.
+`NO_DIFF` uses the SHA-256 of empty bytes, empty `changed_files`, and equal
+before/after snapshots. For a new Gateway `non_git` Worker, it is valid only
+when runtime-owned BEFORE and AFTER receipts bind the same approved product
+paths and identical snapshots; a model-authored empty delta without those
+receipts is rejected. `PATCH_FILE_V1` names
 a root-confined regular non-symlink diff artifact whose bytes hash to
 `diff_sha256`. `CAPTURED_GIT_DIFF_V1` instead names only the SHA-256 returned
 by runtime `CAPTURE_COMPLETE_DIFF`; runtime derives the digest-addressed

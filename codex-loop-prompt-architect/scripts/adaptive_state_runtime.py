@@ -312,6 +312,12 @@ def execute_runtime_codec(
             if root is None or request is None or transport_text is not None:
                 raise ValueError("CAPTURE_COMPLETE_DIFF_ARGUMENTS_INVALID")
             return capture_complete_diff(root, copy.deepcopy(request))
+        if operation == "CAPTURE_MANIFEST_DELTA":
+            if root is None or request is None or transport_text is not None:
+                raise ValueError("CAPTURE_MANIFEST_DELTA_ARGUMENTS_INVALID")
+            return AdaptiveStateRuntime(root).capture_manifest_delta(
+                copy.deepcopy(request)
+            )
         raise ValueError("RUNTIME_CODEC_OPERATION_INVALID")
     except RuntimeRejection as exc:
         return _response(exc.code, exc.path, exc.details)

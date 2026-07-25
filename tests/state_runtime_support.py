@@ -862,6 +862,39 @@ class Harness:
         record = state[field][outbox_id]
         identity = record["identity"]
         goal_id = identity["goal_id"]
+        if kind in {"ASSURANCE", "LOCAL"}:
+            result["artifact_digest"] = identity["artifact_digest"]
+        manifest_identity: dict[str, Any] | None = None
+        if (
+            kind == "DISPATCH"
+            and result["status"] == "PASS"
+            and identity.get("repo_mode") == "non_git"
+            and not (
+                self.root
+                / ".codex-loop"
+                / "manifest-snapshots"
+                / f"{outbox_id}.after.json"
+            ).exists()
+        ):
+            approved_scopes = sorted(
+                state["goal_definition_registry"][goal_id]["allowed_write_scope"]
+            )
+            before = self.runtime.capture_manifest_delta(
+                {
+                    "phase": "BEFORE",
+                    "outbox_id": outbox_id,
+                    "approved_product_paths": approved_scopes,
+                }
+            )
+            manifest_identity = self.runtime.capture_manifest_delta(
+                {
+                    "phase": "AFTER",
+                    "outbox_id": outbox_id,
+                    "approved_product_paths": approved_scopes,
+                    "before_snapshot_sha256": before["snapshot_sha256"],
+                }
+            )
+            result["artifact_digest"] = manifest_identity["artifact_digest"]
         milestone_id = (
             state["goal_definition_registry"][goal_id]["milestone_id"]
             if kind == "DISPATCH"
@@ -919,19 +952,45 @@ class Harness:
                 report.update(
                     {
                         "worktree_path": str(self.root.resolve()),
-                        "current_branch": "NOT_APPLICABLE",
-                        "base_sha": "NOT_APPLICABLE",
-                        "head_sha": "NOT_APPLICABLE",
-                        "before_snapshot_sha256": result[
-                            "artifact_digest"
-                        ].removeprefix("sha256:"),
-                        "changed_files": [],
-                        "diff_sha256": empty_sha256,
-                        "complete_diff_reference": {
-                            "kind": "NO_DIFF",
-                            "hash_algorithm": "sha256",
-                            "sha256": empty_sha256,
-                        },
+                        "current_branch": (
+                            manifest_identity["current_branch"]
+                            if manifest_identity is not None
+                            else "NOT_APPLICABLE"
+                        ),
+                        "base_sha": (
+                            manifest_identity["base_sha"]
+                            if manifest_identity is not None
+                            else "NOT_APPLICABLE"
+                        ),
+                        "head_sha": (
+                            manifest_identity["head_sha"]
+                            if manifest_identity is not None
+                            else "NOT_APPLICABLE"
+                        ),
+                        "before_snapshot_sha256": (
+                            manifest_identity["before_snapshot_sha256"]
+                            if manifest_identity is not None
+                            else result["artifact_digest"].removeprefix("sha256:")
+                        ),
+                        "changed_files": (
+                            manifest_identity["changed_files"]
+                            if manifest_identity is not None
+                            else []
+                        ),
+                        "diff_sha256": (
+                            manifest_identity["diff_sha256"]
+                            if manifest_identity is not None
+                            else empty_sha256
+                        ),
+                        "complete_diff_reference": (
+                            manifest_identity["complete_diff_reference"]
+                            if manifest_identity is not None
+                            else {
+                                "kind": "NO_DIFF",
+                                "hash_algorithm": "sha256",
+                                "sha256": empty_sha256,
+                            }
+                        ),
                         "validation_results": projected_validations,
                         "evidence_artifacts": validation_evidence_paths,
                     }
