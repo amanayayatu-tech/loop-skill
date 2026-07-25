@@ -211,6 +211,14 @@ P1 canonical runtime 会把 defect family、同轮 sibling/unchecked-surface 披
 
 输出详细度 `compact` / `full` / `minimal_patch` 与协作模式 `standard` / `adaptive` 是两条独立轴，不要混为一谈。
 
+## Adaptive v3.3.12 local candidate：PREPARE_ROUTE 响应恢复
+
+v3.3.12 local candidate 在 canonical request ledger 中持久化成功
+`PREPARE_ROUTE` 的完整结果。同一 public request 的幂等 replay 会返回完全相同的
+`payload_specification` 与 digest，不新建 route、不发送、不增加 attempt、也不消耗
+repair budget。Controller 不需要也不得从 session 提取或人工重建 payload。这只是
+本地候选身份，不是公开发布或效果证据。
+
 ## Adaptive v3.3.11 local candidate：App heartbeat 精确合同
 
 v3.3.11 local candidate 让 schema-v3/state-gateway Pack 直接携带完整、可复制的

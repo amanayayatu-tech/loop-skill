@@ -2192,6 +2192,7 @@ class AdaptiveStateRuntime:
                     normalized,
                     request_digest,
                     after_version,
+                    operation_result,
                 )
                 self._record_artifacts(next_state, normalized["artifacts"], after_version)
                 self._refresh_roadmap_projection(next_state)
@@ -8424,6 +8425,7 @@ class AdaptiveStateRuntime:
         request: dict[str, Any],
         request_digest: str,
         after_version: int,
+        operation_result: dict[str, Any],
     ) -> None:
         request_id = request["state_request_id"]
         event_id = request["event_id"]
@@ -8438,6 +8440,16 @@ class AdaptiveStateRuntime:
             state["request_ledger"][request_id]["gateway_public_request_digest"] = (
                 request["gateway_public_request_digest"]
             )
+        if (
+            request["mutation"].get("type") == "STATE_GATEWAY"
+            and request["mutation"].get("operation") == "PREPARE_ROUTE"
+            and operation_result.get("code") == "GATEWAY_ROUTE_PREPARED"
+        ):
+            state["request_ledger"][request_id]["idempotent_replay_response"] = {
+                "operation_status": operation_result["code"],
+                "next_action_code": operation_result["next_action_code"],
+                "result": copy.deepcopy(operation_result.get("result", {})),
+            }
         state["event_ledger"][event_id] = {
             "state_request_id": request_id,
             "request_digest": request_digest,
@@ -8516,7 +8528,11 @@ class AdaptiveStateRuntime:
                     "/transactions",
                     {"state_request_id": request_id},
                 )
-            return self._already_applied_response(request, applied_version)
+            return self._already_applied_response(
+                request,
+                applied_version,
+                state_request=state_request,
+            )
         if journal is not None:
             raise RuntimeRejection(
                 "RECOVERY_REQUIRED",
@@ -8750,9 +8766,13 @@ class AdaptiveStateRuntime:
         return response
 
     def _already_applied_response(
-        self, request: dict[str, Any], applied_version: int
+        self,
+        request: dict[str, Any],
+        applied_version: int,
+        *,
+        state_request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {
+        response = {
             "ok": True,
             "status": "STATE_WRITE_ALREADY_APPLIED",
             "operation_status": "IDEMPOTENT_REPLAY",
@@ -8765,6 +8785,15 @@ class AdaptiveStateRuntime:
             "external_actions": [],
             "external_action_count": 0,
         }
+        replay = (
+            state_request.get("idempotent_replay_response")
+            if isinstance(state_request, dict)
+            else None
+        )
+        if isinstance(replay, dict):
+            response["next_action_code"] = replay["next_action_code"]
+            response["result"] = copy.deepcopy(replay["result"])
+        return response
 
     def _rejection_response(
         self,

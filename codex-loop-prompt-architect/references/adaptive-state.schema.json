@@ -1993,7 +1993,17 @@
         "gateway_public_request_digest": {"$ref": "#/$defs/digest"},
         "event_id": {"$ref": "#/$defs/safeId"},
         "mutation_type": {"$ref": "#/$defs/safeId"},
-        "applied_state_version": {"type": "integer", "minimum": 1}
+        "applied_state_version": {"type": "integer", "minimum": 1},
+        "idempotent_replay_response": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation_status", "next_action_code", "result"],
+          "properties": {
+            "operation_status": {"const": "GATEWAY_ROUTE_PREPARED"},
+            "next_action_code": {"const": "MATERIALIZE_AND_SEND_ONCE"},
+            "result": {"$ref": "#/$defs/jsonObject"}
+          }
+        }
       }
     },
     "requestLedger": {

@@ -5,6 +5,26 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [3.3.12-candidate]
+
+### Fixed
+
+- Persist the complete successful schema-v3 `PREPARE_ROUTE` result in the
+  canonical request ledger. Replaying the identical public request after a
+  lost first response now returns the exact same `payload_specification`,
+  payload digest, codec operation and non-Git baseline without another route,
+  state version, send, attempt or repair-budget consumption.
+- Add longitudinal normal and lost-response paths that materialize and verify
+  the recovered dispatch, perform exactly one simulated App send, bind it with
+  `RECORD_ROUTE_SENT`, stage the Worker report and ACK the original outbox.
+
+### Release boundary
+
+v3.3.12 is a local release candidate. It has no public tag or release and is
+not effectiveness evidence. It requires the complete local suite, independent
+review, isolated install readback, source-bound doctor, host lifecycle check
+and one new-identity non-scored canary before use in a new study.
+
 ## [3.3.11-candidate]
 
 ### Fixed

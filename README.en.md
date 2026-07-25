@@ -214,6 +214,16 @@ Do not use it when:
 
 Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
 
+## Adaptive v3.3.12 local candidate: PREPARE_ROUTE response recovery
+
+The v3.3.12 local candidate persists the complete successful `PREPARE_ROUTE`
+result in the canonical request ledger. An idempotent replay of the identical
+public request returns the exact same `payload_specification` and digest without
+creating a route, sending, adding an attempt, or consuming repair budget. A
+Controller neither needs nor may extract the payload from a session or rebuild
+it manually. This is a local candidate identity, not a public release or
+effectiveness evidence.
+
 ## Adaptive v3.3.11 local candidate: exact App heartbeat contract
 
 The v3.3.11 local candidate makes the schema-v3/state-gateway Pack carry the

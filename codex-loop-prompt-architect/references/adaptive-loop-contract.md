@@ -431,6 +431,14 @@ Every `MARK_OUTBOX_SENT` binds at least one immutable `application/json` send
 observation already archived or atomically archived by that mutation; empty,
 duplicate, unarchived, or digest-mismatched evidence is rejected.
 `IDEMPOTENT_REPLAY` is a successful no-change runtime response, not a new state.
+For a successfully applied schema-v3 `PREPARE_ROUTE`, canonical
+`request_ledger` state retains the complete exact `result`, including
+`payload_specification`, `payload_digest`, codec operation and any non-Git
+manifest baseline. Replaying the identical public request returns that retained
+result byte-for-byte as JSON data with `next_action_code=MATERIALIZE_AND_SEND_ONCE`.
+It creates no route, state version, send, attempt, or repair-budget side effect.
+This is the only supported recovery when the first PREPARE response is lost;
+the Controller must not reconstruct a payload or read it from a session log.
 
 Every formal task bootstrap is identity-bearing input. `ROLE_KIND` is the exact
 literal from its generated `Role Kind:` line; never infer it from display Role,

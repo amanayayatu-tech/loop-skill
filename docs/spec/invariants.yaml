@@ -272,6 +272,23 @@ invariants:
     adr: [docs/adr/0010-mcp-state-gateway.md]
     introduced_version: 3.3.0
 
+  - id: INV-PREPARED-ROUTE-REPLAY-001
+    title: A lost PREPARE response is recoverable without another route or send
+    level: CORE_INVARIANT
+    status: ACTIVE
+    scope: [schema-v3 PREPARE_ROUTE, idempotent replay, dispatch materialization]
+    rationale: Losing the first successful PREPARE response must not force a Controller to reconstruct a payload, inspect session logs, or create a duplicate route.
+    normative_statement: A successful PREPARE_ROUTE persists its complete exact result in canonical request-ledger state. Replaying the identical public request returns the same payload_specification and payload_digest with no state-version route send attempt or repair-budget side effect. Normal first-response and recovered-response paths both materialize verify send exactly once record and close through the original outbox.
+    non_goals: [session-log extraction, Controller-authored payload reconstruction, a second route, automatic App resend]
+    allowed_evolution: [add a read-only prepared-route readback that returns the same persisted result under the same identity and zero-effect rules]
+    authoritative_sources: [codex-loop-prompt-architect/references/adaptive-loop-contract.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/loop_architect/state_runtime.py, codex-loop-prompt-architect/scripts/adaptive_state_mcp.py]
+    schema_surfaces: [codex-loop-prompt-architect/references/adaptive-state.schema.json]
+    test_surfaces: [tests/test_prepare_route_replay_recovery.py]
+    evidence_surfaces: [CHANGELOG.md]
+    adr: [docs/adr/0010-mcp-state-gateway.md]
+    introduced_version: 3.3.12
+
   - id: INV-TARGET-VALIDATION-EVIDENCE-001
     title: Target-owned validation bytes archive with the original report
     level: CORE_INVARIANT

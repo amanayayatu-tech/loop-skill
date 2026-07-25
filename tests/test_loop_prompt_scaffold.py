@@ -1044,6 +1044,8 @@ class GeneratedPackTests(unittest.TestCase):
             "PREPARE_FINALIZATION",
             "ACK_FINALIZATION yields FINALIZATION_ACKED",
             "one Gateway PREPARE_ROUTE owns the only current route",
+            "replay the identical public request and use only its exact persisted result",
+            "never reconstruct or session-extract a payload",
             "retained outbox storage remains actively written and validated only by State Gateway operations",
             "no terminal status exists before that ACK",
             "two same-fingerprint natural observations or 15 minutes",
