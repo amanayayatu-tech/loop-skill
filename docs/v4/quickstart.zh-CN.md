@@ -1,6 +1,6 @@
 # LoopSkill 4 快速开始
 
-状态：4.0.0 候选；tag 和 GitHub Release 完成前不称为已发布稳定版。
+状态：LoopSkill 4.0.0 稳定版；公开发行身份以 `v4.0.0` tag 与 GitHub Release 的最终 readback 为准。
 
 ## 安装
 

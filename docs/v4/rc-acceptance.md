@@ -41,6 +41,11 @@ acceptance. The active release gate requires the stable zero-write
 `USER_UNSUPPORTED_LEGACY_VERSION` boundary and absence of v3 importer/runtime/
 MCP/Pack/State-Writer/dual-write production surfaces.
 
+The final local validator emits
+`LOOPSKILL_4_0_PUBLICATION_CANDIDATE_VALIDATED`, not a publication claim. Only
+the GitHub readback at the end of this document establishes that 4.0.0 is
+public, latest, and non-prerelease.
+
 ## Publication gates
 
 Before external Git writes, fetch origin/tags, integrate any main drift

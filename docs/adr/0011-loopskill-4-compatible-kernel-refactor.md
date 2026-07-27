@@ -938,7 +938,7 @@ interactions against 19 v3 interactions. Beta blocks on all
 remaining `UX-001..008`, `UX-010..016`, the preservation subset assigned to
 beta, and minimal-profile isolation.
 
-### RC: local candidate and approval packet authorized; stable remains unauthorized
+### Historical RC-only boundary (superseded by the v4-only release addendum)
 
 Local isolated install/uninstall/rollback, the full Host/artifact fault matrix,
 one exact-candidate disposable App canary, independent read-only review, fixed
@@ -946,20 +946,19 @@ candidate SHA, and an author approval packet are authorized. Every failure and
 UNKNOWN must remain preserved. RC requires one real, non-research,
 private-data-free new-user usability canary from the isolated installation
 through starting a minimal disposable loop, with no manual transcription of
-control identity. Push, tag, public release, installation-channel changes,
-automatic migration of real v3 loops, and any stable claim require a separate
-author decision. Stable retains all UX gates and the one-entry plus explicit
-confirmation contract.
+control identity. This paragraph recorded the earlier RC-only authorization and
+is not the current release boundary. The hard-break addendum now authorizes
+push, PR, merge, annotated tag, and a public GitHub 4.0.0 Release only after the
+exact-SHA local, CI, canary, review, and readback gates pass. Automatic
+migration of real v3 loops remains forbidden. Stable retains all UX gates and
+the one-entry plus explicit-confirmation contract.
 
-The P8 distribution path reuses the existing conflict-safe whole-Skill staging,
-absolute Python/MCP registration and source/install verifier. The registered v3
-MCP bridge remains a one-major-cycle anti-corruption facade for old loops; it is
-not imported by v4 Kernel and never becomes the v4 protocol truth. A receipt-
-bound uninstaller restores the install-time backup rather than reverse-editing
-TOML. Its supported atomicity claim is bounded process-failure recovery with
-exact macOS readback, not one transaction spanning arbitrary filesystem power
-loss. `loopskill4 doctor` lazy-loads the optional operability projection, and
-`compile` validates prepared bytes without Host or execution effect.
+That predecessor P8 distribution path and its v3 MCP facade are superseded
+evidence and excluded from current acceptance. The v4-only installer owns a
+distinct installation root, never edits `config.toml`, never registers MCP,
+never requires a LoopSkill-driven App restart, and never overwrites v3. Its
+supported atomicity claim is bounded process-failure recovery with exact
+filesystem readback, not one transaction spanning arbitrary power loss.
 
 The candidate static gate records exact commit/tree, Python runtime, generated
 protocol counts, the complete installed-distribution SBOM and license inventory
@@ -969,9 +968,10 @@ of the machine-returned Host observation, never raw thread/task identity or
 content. These receipts are build evidence, not runtime authority.
 
 `scripts/validate_v4_rc.py` defaults to the final fail-closed mode: canary,
-343-instance conformance and author-packet receipts are all mandatory. The
-explicit `--static-only` mode is a pre-canary diagnostic and always records
-`rc_ready=false`; it cannot satisfy the RC gate. `scripts/run_v4_conformance.py`
+343-instance conformance, and privacy-minimized publication-packet receipts are
+all mandatory. The explicit `--static-only` mode is a pre-canary diagnostic and
+always records `publication_ready=false`; it cannot satisfy the publication
+candidate gate. `scripts/run_v4_conformance.py`
 expands the frozen exact catalog, executes every bound module, emits one result
 record for each of the 343 canonical case IDs, and additionally binds the two
 real-App cases to the exact canary receipt.

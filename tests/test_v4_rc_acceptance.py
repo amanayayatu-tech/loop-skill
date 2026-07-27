@@ -32,6 +32,9 @@ def canary(candidate: str) -> dict:
         "candidate_sha": candidate,
         "canary_output_sha256": "b" * 64,
         "confirmation_count": 1,
+        "confirmation_digest_bound": True,
+        "config_bytes_changed": 0,
+        "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
         "fresh_until": "2026-07-27T13:22:46Z",
         "host_receipt_issuer": validator.CANARY_ISSUER,
@@ -40,11 +43,19 @@ def canary(candidate: str) -> dict:
         "host_task_identity_digest": "c" * 64,
         "host_task_readback_count": 1,
         "intake_external_effects": 0,
+        "intake_heartbeat_count": 0,
+        "intake_host_task_count": 0,
+        "intake_loop_count": 0,
         "issued_at": "2026-07-27T13:12:46Z",
+        "loopskill_mcp_registration_count": 0,
         "machine_owned_identity": True,
         "manual_control_identity_count": 0,
         "observed_at": "2026-07-27T13:12:46Z",
+        "app_restart_count": 0,
+        "prepare_delivery_count": 0,
+        "prepare_heartbeat_count": 0,
         "prepare_host_effects": 0,
+        "prepare_host_task_count": 0,
         "private_data_used": False,
         "provider_resend_count": 0,
         "research_scored": False,
@@ -53,6 +64,7 @@ def canary(candidate: str) -> dict:
         "status": "PASS",
         "thread_content_retained": False,
         "unknown_preserved": True,
+        "v3_bytes_changed": 0,
     }
     value["provenance_digest"] = validator._domain_digest(
         validator.CANARY_PROVENANCE_DOMAIN, value
@@ -67,7 +79,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
         with mock.patch.object(
             validator,
             "static_receipt",
-            return_value={"artifact": "loopskill-v4-rc-static-receipt-v1"},
+            return_value={"artifact": "loopskill-v4-publication-static-receipt-v1"},
         ), redirect_stderr(stream):
             result = validator.main(
                 ["--root", str(ROOT), "--candidate", "a" * 40, "--allow-non-head"]
@@ -86,7 +98,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
         self.assertIn("does not ship v3 read/shadow/import", migration)
         self.assertIn("automatically migrate v3", release_notes)
         self.assertIn("patch-success superiority", limitations)
-        self.assertIn("candidate notes", release_notes)
+        self.assertIn("release notes for LoopSkill 4.0.0", release_notes)
         self.assertIn("docs/v4/quickstart.zh-CN.md", (ROOT / "README.md").read_text(encoding="utf-8"))
         self.assertIn("docs/v4/quickstart.en.md", (ROOT / "README.en.md").read_text(encoding="utf-8"))
         self.assertEqual(
@@ -98,10 +110,17 @@ class V4RcAcceptanceTests(unittest.TestCase):
         validator.validate_canary_receipt(canary(candidate), candidate)
         for field, invalid in (
             ("confirmation_count", 0),
+            ("confirmation_digest_bound", False),
+            ("config_bytes_changed", 1),
             ("host_task_create_count", 2),
+            ("intake_loop_count", 1),
+            ("loopskill_mcp_registration_count", 1),
             ("manual_control_identity_count", 1),
+            ("app_restart_count", 1),
+            ("prepare_delivery_count", 1),
             ("private_data_used", True),
             ("provider_resend_count", 1),
+            ("v3_bytes_changed", 1),
             ("finalization", "UNKNOWN"),
             ("host_receipt_issuer", "self-asserted"),
             ("host_receipt_trust", "untrusted"),
@@ -120,6 +139,32 @@ class V4RcAcceptanceTests(unittest.TestCase):
             validator.RcValidationError, "RC_CANARY_RECEIPT_SHAPE_INVALID"
         ):
             validator.validate_canary_receipt(value, candidate)
+
+    def test_publication_packet_requires_exact_files_and_zero_prior_release_effects(self) -> None:
+        candidate = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = {}
+            for index in range(12):
+                relative = f"safe/file-{index}.txt"
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"safe-{index}\n", encoding="utf-8")
+                files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+            packet = {
+                "artifact": "loopskill-v4-publication-packet-v1",
+                "candidate_sha": candidate,
+                "files": files,
+                "public_release_effects": 0,
+                "real_v3_loop_migrations": 0,
+                "status": "PUBLICATION_CANDIDATE_VALIDATED",
+            }
+            validator.validate_author_packet(packet, candidate, root)
+            packet["public_release_effects"] = 1
+            with self.assertRaisesRegex(
+                validator.RcValidationError, "RC_AUTHOR_PACKET_INVALID"
+            ):
+                validator.validate_author_packet(packet, candidate, root)
 
     def test_conformance_receipt_requires_all_343_canonical_results(self) -> None:
         candidate = subprocess.check_output(

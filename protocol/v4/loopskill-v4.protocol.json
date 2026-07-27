@@ -196,7 +196,7 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "protocol_version": "4.0-draft.2",
+  "protocol_version": "4.0.0",
   "reference_kinds": [
     "LoopRef",
     "ActorRef",

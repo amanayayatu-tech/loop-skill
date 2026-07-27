@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-MANIFEST_SHA256 = 'ba00dd1e7623d0318ffb96f45b39b0ce9bee1bfc236163c458f2bab6da44c259'
-PROTOCOL_VERSION = '4.0-draft.2'
+MANIFEST_SHA256 = '4b43ba3c20b1907145cbad42100f56ab0f1dcbd17d45ae9904c5a72c9fbf91ce'
+PROTOCOL_VERSION = '4.0.0'
 COMMAND_TYPES = (
     'AcknowledgeResult',
     'AdvanceGoal',

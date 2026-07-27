@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,9 +58,36 @@ class V4DocsTests(unittest.TestCase):
             with self.assertRaisesRegex(docs.DocsError, "DOC_STALE_V3_CURRENT_PRODUCT"):
                 docs.validate(root)
 
-    def test_release_mode_rejects_candidate_wording(self) -> None:
-        with self.assertRaisesRegex(docs.DocsError, "DOC_RELEASE_STATUS_NOT_STABLE"):
-            docs.validate(ROOT, release=True)
+    def test_release_mode_requires_stable_wording(self) -> None:
+        self.assertEqual(docs.validate(ROOT, release=True)["status"], "PASS")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(
+                ROOT,
+                root,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(".git", "__pycache__"),
+            )
+            replacements = {
+                "README.md": (
+                    "LoopSkill 4.0.0 稳定版",
+                    "4.0.0 候选正在接受发行门禁",
+                ),
+                "README.en.md": (
+                    "LoopSkill 4.0.0 stable release",
+                    "4.0.0 candidate is passing release gates",
+                ),
+            }
+            for relative, (stable, candidate) in replacements.items():
+                path = root / relative
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(stable, candidate),
+                    encoding="utf-8",
+                )
+            with self.assertRaisesRegex(
+                docs.DocsError, "DOC_RELEASE_STATUS_NOT_STABLE"
+            ):
+                docs.validate(root, release=True)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@
 [中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> Release status: the 4.0.0 candidate is passing release gates. It is not described as a published stable release until the tag and GitHub Release exist.
+> Release status: LoopSkill 4.0.0 stable release. Public-release identity is established by final readback of the `v4.0.0` tag and GitHub Release.
 
 LoopSkill turns long-running work into a recoverable loop with explicit authority, evidence, and stop conditions. An ordinary user supplies only a goal or goal file; machines own protocol identities, versions, receipts, and Host readback. The necessary human boundary remains:
 

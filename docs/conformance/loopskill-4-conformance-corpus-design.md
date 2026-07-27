@@ -1,9 +1,9 @@
 # LoopSkill 4.0 conformance corpus design
 
-- Status: Governing local implementation through an RC candidate; public release remains unauthorized
+- Status: Governing the authorized v4-only 4.0.0 implementation and public-release gates; no release claim exists before final GitHub readback
 - Date: 2026-07-27
 - Governing decision: `docs/adr/0011-loopskill-4-compatible-kernel-refactor.md`
-- Corpus draft version: `1.0.0-alpha-design.2`
+- Corpus version: `4.0.0`
 
 ## Purpose and boundary
 
@@ -1053,14 +1053,17 @@ receipt must be generated at the
 exact clean candidate HEAD and includes tree digest, generated protocol counts,
 absolute Python, all distributions installed in that bound runtime plus their
 license/dependency metadata, secret and large-artifact results, zero public
-effects, and `rc_ready=false`. Default/final validation fails closed unless the
-exact canary, 343-instance execution receipt, and author packet are all
+effects, and `publication_ready=false`. Default/final validation fails closed
+unless the exact canary, 343-instance execution receipt, and privacy-minimized
+publication packet are all
 provided. The App canary receipt rejects extra raw Host
-identity/content fields and independently requires: intake effects `0`, prepare
-Host effects `0`, confirmation `1`, create `1`, readback `1`, manual control
-identity `0`, resend `0`, acknowledged Result, PASS Review, acknowledged
-Finalization, and preserved UNKNOWN semantics. A synthetic fixture can validate
-this shape but cannot satisfy `CAP-RELEASE-CANARY` or `UX-009-a`.
+identity/content fields and independently requires: public entry `loopskill4`;
+intake loop/task/heartbeat/external effects `0`; prepare task/heartbeat/delivery
+effects `0`; one digest-bound confirmation; one create and one authoritative
+readback; manual control identity, MCP registration, App restart, config-byte
+change, v3-byte change, and resend all `0`; acknowledged Result; PASS Review;
+acknowledged Finalization; and preserved UNKNOWN semantics. A synthetic fixture
+can validate this shape but cannot satisfy `CAP-RELEASE-CANARY` or `UX-009-a`.
 
 `scripts/run_v4_conformance.py` reads the canonical exact-case catalog rather
 than retyping IDs. It maps every case to the responsible Kernel, Store,

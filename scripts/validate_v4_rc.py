@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static exact-SHA gate and privacy-minimized receipt helpers for v4 RC."""
+"""Exact-SHA gates and privacy-minimized receipts for v4 publication."""
 
 from __future__ import annotations
 
@@ -449,7 +449,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
     )
     sbom = _spdx_sbom(root, candidate, dependencies)
     body = {
-        "artifact": "loopskill-v4-rc-static-receipt-v1",
+        "artifact": "loopskill-v4-publication-static-receipt-v1",
         "candidate_sha": candidate,
         "dependency_inventory": dependencies,
         "dependency_inventory_scope": "all distributions installed in the exact bound Python runtime",
@@ -467,7 +467,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
         "runtime_identity": runtime_identity,
         "sbom": sbom,
         "sbom_sha256": hashlib.sha256(_canonical(sbom)).hexdigest(),
-        "rc_ready": False,
+        "publication_ready": False,
         "secret_findings": findings,
         "stale_production_findings": stale_production,
         "tracked_blob_count": len(entries),
@@ -482,6 +482,9 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "artifact",
         "candidate_sha",
         "confirmation_count",
+        "confirmation_digest_bound",
+        "config_bytes_changed",
+        "entry",
         "finalization",
         "host_receipt_digest",
         "host_receipt_issuer",
@@ -490,9 +493,17 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "host_task_create_count",
         "host_task_readback_count",
         "intake_external_effects",
+        "intake_heartbeat_count",
+        "intake_host_task_count",
+        "intake_loop_count",
+        "loopskill_mcp_registration_count",
         "machine_owned_identity",
         "manual_control_identity_count",
+        "app_restart_count",
+        "prepare_delivery_count",
+        "prepare_heartbeat_count",
         "prepare_host_effects",
+        "prepare_host_task_count",
         "private_data_used",
         "provenance_digest",
         "provider_resend_count",
@@ -506,6 +517,7 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "fresh_until",
         "thread_content_retained",
         "unknown_preserved",
+        "v3_bytes_changed",
     }
     if set(value) != expected_keys:
         raise RcValidationError("RC_CANARY_RECEIPT_SHAPE_INVALID")
@@ -513,15 +525,26 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "artifact": "loopskill-v4-disposable-app-canary-v1",
         "candidate_sha": candidate,
         "confirmation_count": 1,
+        "confirmation_digest_bound": True,
+        "config_bytes_changed": 0,
+        "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
         "host_task_create_count": 1,
         "host_task_readback_count": 1,
         "host_receipt_issuer": CANARY_ISSUER,
         "host_receipt_trust": CANARY_TRUST,
         "intake_external_effects": 0,
+        "intake_heartbeat_count": 0,
+        "intake_host_task_count": 0,
+        "intake_loop_count": 0,
+        "loopskill_mcp_registration_count": 0,
         "machine_owned_identity": True,
         "manual_control_identity_count": 0,
+        "app_restart_count": 0,
+        "prepare_delivery_count": 0,
+        "prepare_heartbeat_count": 0,
         "prepare_host_effects": 0,
+        "prepare_host_task_count": 0,
         "private_data_used": False,
         "provider_resend_count": 0,
         "research_scored": False,
@@ -530,6 +553,7 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "status": "PASS",
         "thread_content_retained": False,
         "unknown_preserved": True,
+        "v3_bytes_changed": 0,
     }
     for key, expected in required.items():
         if value.get(key) != expected:
@@ -663,9 +687,9 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
 
 def validate_author_packet(value: dict[str, Any], candidate: str, root: Path) -> None:
     if (
-        value.get("artifact") != "loopskill-v4-rc-author-packet-v1"
+        value.get("artifact") != "loopskill-v4-publication-packet-v1"
         or value.get("candidate_sha") != candidate
-        or value.get("status") != "READY_FOR_AUTHOR_APPROVAL"
+        or value.get("status") != "PUBLICATION_CANDIDATE_VALIDATED"
         or value.get("public_release_effects") != 0
         or value.get("real_v3_loop_migrations") != 0
     ):
@@ -724,8 +748,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt["author_packet_digest"] = hashlib.sha256(
                 _canonical(packet)
             ).hexdigest()
-            receipt["gate_status"] = "LOOPSKILL_4_0_RC_READY_FOR_AUTHOR_APPROVAL"
-            receipt["rc_ready"] = True
+            receipt["gate_status"] = "LOOPSKILL_4_0_PUBLICATION_CANDIDATE_VALIDATED"
+            receipt["publication_ready"] = True
         receipt.pop("receipt_digest", None)
         receipt["receipt_digest"] = hashlib.sha256(_canonical(receipt)).hexdigest()
         if args.output:

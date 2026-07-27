@@ -1,8 +1,8 @@
 # LoopSkill 4.0.0 release notes
 
-Status: candidate notes. They become public release notes only after exact-SHA
-local gates, v4 PR/main/tag CI, annotated tag `v4.0.0`, and GitHub Release
-readback all pass.
+These are the release notes for LoopSkill 4.0.0. Public-release identity is
+established only after exact-SHA local gates, v4 PR/main/tag CI, annotated tag
+`v4.0.0`, and GitHub Release readback all pass.
 
 LoopSkill 4 is a v4-only breaking release. It replaces the v3 protocol,
 persistence model, control identity transport, Pack/MCP execution path, and
