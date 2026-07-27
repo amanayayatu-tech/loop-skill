@@ -1048,15 +1048,29 @@ the exact installed pre-state. Config or installed-file drift rejects before
 mutation. The test root is disposable and never the current user `CODEX_HOME`.
 
 `CAP-RELEASE-*` binds `scripts/validate_v4_rc.py` and
-`tests/test_v4_rc_acceptance.py`. The static receipt must be generated at the
+`tests/test_v4_rc_acceptance.py`. The explicitly nonfinal `--static-only`
+receipt must be generated at the
 exact clean candidate HEAD and includes tree digest, generated protocol counts,
-absolute Python, dependency/license inventory, secret and large-artifact
-results, and zero public effects. The App canary receipt rejects extra raw Host
+absolute Python, all distributions installed in that bound runtime plus their
+license/dependency metadata, secret and large-artifact results, zero public
+effects, and `rc_ready=false`. Default/final validation fails closed unless the
+exact canary, 343-instance execution receipt, and author packet are all
+provided. The App canary receipt rejects extra raw Host
 identity/content fields and independently requires: intake effects `0`, prepare
 Host effects `0`, confirmation `1`, create `1`, readback `1`, manual control
 identity `0`, resend `0`, acknowledged Result, PASS Review, acknowledged
 Finalization, and preserved UNKNOWN semantics. A synthetic fixture can validate
 this shape but cannot satisfy `CAP-RELEASE-CANARY` or `UX-009-a`.
+
+`scripts/run_v4_conformance.py` reads the canonical exact-case catalog rather
+than retyping IDs. It maps every case to the responsible Kernel, Store,
+Artifact library, Codex Adapter, Entry, Policy/projection, compatibility, or RC
+gate module; every mapped module must run successfully in the same invocation.
+The output contains 343 sorted unique per-instance records and a canonical
+digest. `UX-009-a` and `CAP-RELEASE-CANARY` additionally require the real App
+receipt. One passing module may cover multiple explicitly parameterized atomic
+instances, but no family row alone produces PASS and no unbound instance may be
+omitted.
 
 32 KiB Pack and at least 50% control-interaction reduction were candidate beta
 targets, not alpha correctness gates. The P7 pre-comparison freeze makes them

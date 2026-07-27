@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -42,6 +45,19 @@ def canary(candidate: str) -> dict:
 
 
 class V4RcAcceptanceTests(unittest.TestCase):
+    def test_final_cli_requires_canary_conformance_and_author_packet(self) -> None:
+        stream = StringIO()
+        with mock.patch.object(
+            validator,
+            "static_receipt",
+            return_value={"artifact": "loopskill-v4-rc-static-receipt-v1"},
+        ), redirect_stderr(stream):
+            result = validator.main(
+                ["--root", str(ROOT), "--candidate", "a" * 40, "--allow-non-head"]
+            )
+        self.assertEqual(result, 1)
+        self.assertIn("RC_FINAL_RECEIPTS_REQUIRED", stream.getvalue())
+
     def test_bilingual_v4_docs_examples_and_release_boundary_are_present(self) -> None:
         chinese = (ROOT / "docs/v4/quickstart.zh-CN.md").read_text(encoding="utf-8")
         english = (ROOT / "docs/v4/quickstart.en.md").read_text(encoding="utf-8")
@@ -83,6 +99,32 @@ class V4RcAcceptanceTests(unittest.TestCase):
             validator.RcValidationError, "RC_CANARY_RECEIPT_SHAPE_INVALID"
         ):
             validator.validate_canary_receipt(value, candidate)
+
+    def test_conformance_receipt_requires_all_343_canonical_results(self) -> None:
+        results = [
+            {"case_id": f"CASE-{number:03d}", "status": "PASS"}
+            for number in range(343)
+        ]
+        value = {
+            "artifact": "loopskill-v4-conformance-execution-v1",
+            "candidate_sha": "a" * 40,
+            "canonical_case_ids": True,
+            "case_count": 343,
+            "case_results": results,
+            "case_results_digest": hashlib.sha256(
+                validator._canonical(results)
+            ).hexdigest(),
+            "failed": 0,
+            "passed": 343,
+            "real_external_effects": 1,
+            "status": "PASS",
+        }
+        validator.validate_conformance_receipt(value, "a" * 40)
+        value["case_results"][0]["status"] = "FAIL"
+        with self.assertRaisesRegex(
+            validator.RcValidationError, "RC_CONFORMANCE_RECEIPT_INVALID"
+        ):
+            validator.validate_conformance_receipt(value, "a" * 40)
 
     def test_static_gate_binds_exact_clean_sha_tree_sbom_and_scans(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,6 +1,6 @@
 # LoopSkill v3.3.8 → v4 capability preservation register
 
-- Status: architecture direction accepted; preservation gate pending validation and independent review
+- Status: architecture direction accepted; preservation gate passed at checkpoint `a00f9e6`; P8 exact-candidate review is a separate blocking gate
 - Public source: tag `v3.3.8`, commit `843945d9d34e7f065b65d9172ea4a2df66c0f2e3`
 - Paper reference: peeled `paper-treatment-v3.3.12` commit `54442e22c3ce483823c911dfa8d03a52c85922e6`; read-only provenance, never the public baseline
 - Machine registry: `docs/architecture/v3-to-v4-capability-preservation-register.json`

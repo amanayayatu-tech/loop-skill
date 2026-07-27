@@ -5,16 +5,16 @@
     "classification": "disposable non-research non-scored App conformance smoke",
     "completion_error": null,
     "duration_ms": 7129,
-    "host_id": "local",
+    "host_identity_digest": "36d9109f35773fa7e4720493f90f939bf745d6c688866b28df16ce0d6ce411f7",
     "output_bytes": 65,
     "output_sha256": "210bf4cd5f27f8e12bb0c0d4245318980b0aead3189f633ef43b28ec8ff4199c",
-    "projectless_root": "/Users/peachy/Documents/Codex/2026-07-27/loopskill-v4-p4-disposable-canary-20260727",
-    "readback": "CANARY_NONCE=loopskill-v4-p4-20260727-0001\nCANARY_STATUS=OBSERVED",
+    "projectless_root_digest": "f446ee978e131b5645b6685046af5a7a2119d014e82d6bfa6eb36620fdbb302a",
+    "readback_digest": "d34b5f06ec99a5c6b28b9cc6df5ed3c57da29bf4cda80e6568683b11e84ea2be",
     "repository_attached": false,
     "status": "PASS",
-    "thread_id": "019fa28f-0351-7fa1-a10a-ec3836fe4f71",
+    "thread_identity_digest": "2d85673d1d96beb0b36388a72a727fd29883ca07a48de3cbed96ee51a57c9371",
     "tool_marker": null,
-    "turn_id": "019fa28f-09a7-74d2-8fe7-ce9d914755e3"
+    "turn_identity_digest": "214b5cc79e4b45e969ab86403c1b8e8989fdc3398c0567ecc3954235362de551"
   },
   "checks": {
     "action_profiles": [

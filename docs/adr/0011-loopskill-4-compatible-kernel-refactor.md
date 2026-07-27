@@ -798,7 +798,10 @@ passed and were locked at the P0 checkpoint.
 SQLite persistence, manifest authority, existing-Git/non-Git/new-Git artifact
 profiles, and the Codex Adapter passed their frozen local synthetic gates. One
 separate projectless disposable App readback was retained as limited P4
-evidence; it is not the exact-RC installed usability canary.
+evidence; it is not the exact-RC installed usability canary. Current-tree P4
+evidence retains only domain-separated digests for project root, Host/task/turn
+identity and readback content; raw values remain only in historical Git
+provenance and must not be copied into an RC packet.
 
 ### P5.1 before P6: native entry authorization gate
 
@@ -913,10 +916,19 @@ loss. `loopskill4 doctor` lazy-loads the optional operability projection, and
 `compile` validates prepared bytes without Host or execution effect.
 
 The candidate static gate records exact commit/tree, Python runtime, generated
-protocol counts, dependency/SBOM and license inventory, secret scan, tracked
+protocol counts, the complete installed-distribution SBOM and license inventory
+for that exact Python runtime, secret scan, tracked
 large-artifact scan and zero public effect. The App receipt stores only a digest
 of the machine-returned Host observation, never raw thread/task identity or
 content. These receipts are build evidence, not runtime authority.
+
+`scripts/validate_v4_rc.py` defaults to the final fail-closed mode: canary,
+343-instance conformance and author-packet receipts are all mandatory. The
+explicit `--static-only` mode is a pre-canary diagnostic and always records
+`rc_ready=false`; it cannot satisfy the RC gate. `scripts/run_v4_conformance.py`
+expands the frozen exact catalog, executes every bound module, emits one result
+record for each of the 343 canonical case IDs, and additionally binds the two
+real-App cases to the exact canary receipt.
 
 ## Non-goals and safeguards
 

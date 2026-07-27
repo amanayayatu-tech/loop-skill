@@ -25,5 +25,5 @@
     "sha256": "8037bcb1cddd1686869c4743e6210e6f2d99e8120b1197b863fa38a5f241bd3f"
   },
   "status": "PASS",
-  "worktree": "/Users/peachy/.codex/worktrees/loopskill-4-alpha-pure-kernel"
+  "worktree_digest": "4e22add72684f5d034d760c8e4294ebf96978baa5116eb8ad09814424099111c"
 }

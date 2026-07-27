@@ -23,6 +23,12 @@ The exact candidate gate requires:
 - an author packet containing every receipt, limitation, `UNKNOWN`, rollback
   instruction, compatibility statement and draft release note.
 
+Use `scripts/validate_v4_rc.py --static-only` only before the App canary; it
+always emits `rc_ready=false`. Final invocation omits that flag and must provide
+`--canary-receipt`, `--conformance-receipt`, and `--author-packet`; any missing
+receipt is a hard failure. `scripts/run_v4_conformance.py` emits one result for
+each of the 343 frozen case IDs after running every bound test module.
+
 Any code change creates a new candidate SHA and reruns affected gates. Failure
 and `UNKNOWN` evidence stays in the packet. The author alone decides whether a
 future candidate may be tagged or publicly released.
