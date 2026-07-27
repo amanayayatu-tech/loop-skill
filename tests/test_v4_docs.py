@@ -21,6 +21,7 @@ class V4DocsTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["section_count"], 16)
         self.assertGreaterEqual(result["bash_command_blocks"], 6)
+        self.assertEqual(docs.validate(ROOT, mode="candidate")["status"], "PASS")
 
     def test_section_command_link_and_stale_wording_drift_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -62,7 +63,7 @@ class V4DocsTests(unittest.TestCase):
         with self.assertRaisesRegex(
             docs.DocsError, "DOC_RELEASE_STATUS_NOT_STABLE"
         ):
-            docs.validate(ROOT, release=True)
+            docs.validate(ROOT, mode="release")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shutil.copytree(
@@ -87,7 +88,12 @@ class V4DocsTests(unittest.TestCase):
                     path.read_text(encoding="utf-8").replace(candidate, stable),
                     encoding="utf-8",
                 )
-            self.assertEqual(docs.validate(root, release=True)["status"], "PASS")
+            self.assertEqual(docs.validate(root)["status"], "PASS")
+            self.assertEqual(docs.validate(root, mode="release")["status"], "PASS")
+            with self.assertRaisesRegex(
+                docs.DocsError, "DOC_RELEASE_STATUS_PREMATURE_OR_AMBIGUOUS"
+            ):
+                docs.validate(root, mode="candidate")
 
 
 if __name__ == "__main__":

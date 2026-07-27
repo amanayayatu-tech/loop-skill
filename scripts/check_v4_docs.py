@@ -99,7 +99,9 @@ def _check_bash(blocks: tuple[str, ...], name: str) -> None:
             raise DocsError(f"DOC_COMMAND_SYNTAX:{name}:{index}")
 
 
-def validate(root: Path, *, release: bool = False) -> dict[str, object]:
+def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
+    if mode not in {"auto", "candidate", "release"}:
+        raise DocsError("DOC_RELEASE_MODE_INVALID")
     root = root.resolve()
     zh = (root / "README.md").read_text(encoding="utf-8")
     en = (root / "README.en.md").read_text(encoding="utf-8")
@@ -135,15 +137,17 @@ def validate(root: Path, *, release: bool = False) -> dict[str, object]:
     stable_en = "4.0.0 stable release" in en
     if candidate_zh != candidate_en or stable_zh != stable_en:
         raise DocsError("DOC_RELEASE_STATUS_PARITY_DRIFT")
-    if release:
+    if mode == "release":
         if not stable_zh or candidate_zh:
             raise DocsError("DOC_RELEASE_STATUS_NOT_STABLE")
-    elif not candidate_zh or stable_zh:
+    elif mode == "candidate" and (not candidate_zh or stable_zh):
         raise DocsError("DOC_RELEASE_STATUS_PREMATURE_OR_AMBIGUOUS")
+    elif mode == "auto" and candidate_zh == stable_zh:
+        raise DocsError("DOC_RELEASE_STATUS_MISSING_OR_AMBIGUOUS")
     return {
         "bash_command_blocks": len(zh_bash),
         "link_targets": sum(_links(zh).values()),
-        "release_mode": release,
+        "release_mode": mode,
         "section_count": len(EXPECTED_SECTIONS),
         "status": "PASS",
     }
@@ -152,10 +156,13 @@ def validate(root: Path, *, release: bool = False) -> dict[str, object]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--release", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--candidate", action="store_true")
+    modes.add_argument("--release", action="store_true")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        result = validate(args.root, release=args.release)
+        mode = "release" if args.release else "candidate" if args.candidate else "auto"
+        result = validate(args.root, mode=mode)
     except (OSError, UnicodeDecodeError, DocsError) as exc:
         print(f"V4_DOCS_FAIL:{exc}", file=sys.stderr)
         return 1
