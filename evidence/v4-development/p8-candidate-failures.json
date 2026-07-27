@@ -60,6 +60,21 @@
       "status": "FAIL",
       "vertical_event_count_observed": 0,
       "vertical_operation_count_observed": 0
+    },
+    {
+      "provider_invocations": 0,
+      "candidate_sha": "d15cb5c3b0c0942a98153c68cd95e91cd12967ba",
+      "classification": "APPARATUS_PRECONDITION_AMBIGUITY",
+      "host_task_create_count": 1,
+      "host_task_readback_count": 1,
+      "output_sha256": "6fe4558acfe1061165c54955e7cb3729193b040b194813a6023457c61427c350",
+      "provider_resend_count": 0,
+      "reason": "The canary instruction described a new writable directory under a canary-work root but did not state that the task may create the missing parent. The task treated the absent parent as a failed precondition and stopped before INTAKE. The orchestrator must create and attest an empty root before the next exact-candidate task.",
+      "retry_on_same_candidate": false,
+      "stage": "exact_candidate_disposable_app_canary",
+      "status": "FAIL",
+      "vertical_event_count_observed": 0,
+      "vertical_operation_count_observed": 0
     }
   ],
   "public_release_effects": 0,
