@@ -796,7 +796,7 @@ other entry is an existing atomic corpus ID.
 <!-- INSTANCE-CATALOG-END -->
 
 The catalog contains exactly **101 families and 349 independently reportable
-instances**. Counts are machine-recomputed during readiness review; they are
+semantic coverage mappings**. Counts are machine-recomputed during readiness review; they are
 not inferred from prose.
 
 ## External-effect fault semantics
@@ -1054,8 +1054,8 @@ exact clean candidate HEAD and includes tree digest, generated protocol counts,
 absolute Python, all distributions installed in that bound runtime plus their
 license/dependency metadata, secret and large-artifact results, zero public
 effects, and `publication_ready=false`. Default/final validation fails closed
-unless the exact canary, 349-instance execution receipt, and privacy-minimized
-publication packet are all
+unless the exact canary, a 349-mapping conformance receipt with every unique
+bound executable test PASS, and a privacy-minimized publication packet are all
 provided. The App canary receipt rejects extra raw Host
 identity/content fields and independently requires: public entry `loopskill4`;
 intake loop/task/heartbeat/external effects `0`; prepare task/heartbeat/delivery
@@ -1078,18 +1078,16 @@ gate module; every mapped module must run successfully in the same invocation.
 For each case it derives a closed executable contract from the exact family row
 and parameter: provenance, precondition, stimulus, expected acceptance,
 expected effect state, ordered events, side-effect counts, replay expectation,
-capability profile, selector, and target assertion. The atomic gate consumes
-every field and its domain-separated contract digest before invoking the bound
-assertion. After that target passes, a test-side selector oracle that does not
-read the supplied expected fields records observed acceptance, effect state,
-event order, bounded counts, and replay class. The runner compares both sides
-and hashes the observation. A bogus case ID or any mutation of acceptance,
-effect state, event order, count, replay, selector, or target fails closed;
-mutating the active expected contract and its supplied digest together still
-fails against the independent observation. Repeating a family test without the
-exact selector observation cannot mint a per-case PASS. The output contains 349
-sorted unique per-instance records, their assertion identities and contract
-digests, plus a canonical aggregate digest. `UX-009-a` and
+capability profile, selector, and target assertion. The runner validates every
+field and its domain-separated contract digest, then executes every unique
+bound unittest target exactly once. Expected acceptance/effect/event/count and
+replay values remain semantic coverage declarations; they are not relabeled as
+observed product output. A bogus case ID, self-consistent mutation of a derived
+expected field, unrelated target substitution, or unexecuted target fails
+closed. The output contains 349 sorted unique coverage mappings, their target
+test identities and result digests, plus a canonical aggregate digest. It
+separately reports the number of unique executable test methods; it does not
+claim 349 independent executions. `UX-009-a` and
 `CAP-RELEASE-CANARY` additionally require the real App receipt. One bound
 assertion may cover multiple explicitly parameterized atomic instances only
 when each instance independently consumes and validates its own contract; no
@@ -1153,12 +1151,17 @@ The P7 policy/operability implementation binding is
 `tests/test_v4_product_policy_operability.py`. `CAP-MODES-*` bind default
 Standard, explicit Adaptive, fixed dependency order, bounded contiguous
 roadmap revision, author-envelope rejection, and zero-write decisions.
-The public Entry binding additionally prepares a typed `goal_plan`, asks the
-Kernel to allocate the Goal graph with `RegisterGoalPlan`, projects the exact
-canonical order/revision, and submits `ReviseGoalPlan` for Adaptive reordering.
+The public Entry binding additionally prepares a typed `goal_plan`; `CreateLoop`
+atomically commits that confirmed graph/envelope with the first Attempt,
+projects the exact canonical order/revision, and submits `ReviseGoalPlan` for
+Adaptive reordering.
 The Standard two-Goal fixture proves fixed dependency order; the Adaptive
 three-Goal fixture proves revision `1` to `2`, one active Goal, and rejection of
-an objective outside the prepared author envelope before any provider call.
+an objective outside the prepared author envelope and revision beyond the
+confirmed maximum before any provider call. A two-Goal fixture injects crashes
+after the initial START commit and after the first `AdvanceGoal` commit, then
+proves exact replay, two distinct Attempts, Results, Artifacts and Reviews, and
+one final closure without resend.
 `CAP-ROLES-*` bind JIT Worker/Reviewer/Local Verifier selection to the current
 Artifact. `CAP-HUMAN-*` bind Decision Card response, context freshness, expiry,
 and replay rejection. `CAP-REPAIR-*` bind total repair and same-failure limits

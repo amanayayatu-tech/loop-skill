@@ -279,6 +279,7 @@ def _boundary_value(manifest: PreparedLoopManifest) -> dict[str, Any]:
         "budget": manifest.budget,
         "external_actions": list(manifest.external_actions),
         "execution_mode": manifest.execution_mode,
+        "max_roadmap_revisions": manifest.max_roadmap_revisions,
         "goal": manifest.goal,
         "goal_plan": list(manifest.goal_plan),
         "selection_reason": manifest.selection_reason,
@@ -314,6 +315,7 @@ This is a human review/export view. `loop-manifest.json` is the machine source.
 ## Execution mode
 
 - {manifest.execution_mode}: {manifest.selection_reason}
+- Maximum canonical roadmap revisions: {manifest.max_roadmap_revisions}
 
 ## External actions
 
@@ -416,6 +418,7 @@ def prepare(
         execution_mode=(
             "ADAPTIVE" if decision.route == "ADAPTIVE_LOOP" else "STANDARD"
         ),
+        max_roadmap_revisions=(4 if decision.route == "ADAPTIVE_LOOP" else 1),
         selection_reason=decision.reason,
         write_scope=tuple(request.write_scope),
         budget=request.budget.strip(),

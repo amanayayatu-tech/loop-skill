@@ -311,6 +311,8 @@ def vertical_commands() -> tuple[CommandEnvelope, ...]:
                 "budget": "fixture-only",
                 "execution_mode": "STANDARD",
                 "external_actions": (),
+                "goal_plan": ("conformance bounded change",),
+                "max_roadmap_revisions": 1,
                 "objective": "conformance bounded change",
                 "stop_conditions": (),
                 "write_scope": (),

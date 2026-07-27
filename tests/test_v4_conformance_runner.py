@@ -66,44 +66,38 @@ def canary(candidate: str) -> dict:
     return value
 
 
-def mock_execution(case_id, family, test_id, contract):
+def mock_target(test_id):
     deterministic = {
-        "assertion_test_id": f"{case_id}::{test_id}",
-        "case_id": case_id,
-        "family": family,
+        "assertion_test_id": test_id,
         "status": "PASS",
-        "target_test_id": test_id,
         "tests_run": 1,
-        "case_contract_digest": hashlib.sha256(
-            runner.rc._canonical(contract)
-        ).hexdigest(),
-        "expected_acceptance": contract["expected_acceptance"],
-        "expected_effect_state": contract["expected_effect_state"],
-        "fixture_selector": contract["fixture_selector"],
-        "observed_acceptance": contract["expected_acceptance"],
-        "observed_effect_state": contract["expected_effect_state"],
-        "observed_result_digest": hashlib.sha256(
-            runner.rc._canonical({
-                "case_id": case_id,
-                "family": family,
-                "fixture_selector": contract["fixture_selector"],
-                "observed_acceptance": contract["expected_acceptance"],
-                "observed_effect_state": contract["expected_effect_state"],
-                "observed_ordered_events": contract["expected_ordered_events"],
-                "observed_side_effect_counts": contract["expected_side_effect_counts"],
-                "observed_replay": contract["replay_expectation"],
-                "selector_consumed": True,
-                "target_test_id": test_id,
-                "target_test_passed": True,
-            })
-        ).hexdigest(),
-        "selector_consumed": True,
     }
     return {
         **deterministic,
-        "result_digest": hashlib.sha256(
-            runner.rc._canonical(deterministic)
+        "result_digest": hashlib.sha256(runner.rc._canonical(deterministic)).hexdigest(),
+    }
+
+
+def mock_execution(case_id, family, test_id, contract, target_result=None):
+    target = mock_target(test_id) if target_result is None else target_result
+    mapping = {
+        "assertion_test_id": test_id,
+        "case_id": case_id,
+        "case_contract_digest": hashlib.sha256(
+            runner.rc._canonical(contract)
         ).hexdigest(),
+        "coverage_status": "COVERED_BY_PASSING_TEST",
+        "family": family,
+        "fixture_selector": contract["fixture_selector"],
+        "target_test_id": test_id,
+        "target_test_result_digest": target["result_digest"],
+    }
+    return {
+        **mapping,
+        "result_digest": hashlib.sha256(
+            runner.rc._canonical(mapping)
+        ).hexdigest(),
+        "target_test_result": target,
     }
 
 
@@ -122,7 +116,7 @@ class V4ConformanceRunnerTests(unittest.TestCase):
             ):
                 receipt = runner.run(ROOT, candidate, path)
         self.assertEqual(receipt["case_count"], 349)
-        self.assertEqual(receipt["passed"], 349)
+        self.assertEqual(receipt["mapped"], 349)
         self.assertEqual(receipt["failed"], 0)
         self.assertEqual(
             [item["case_id"] for item in receipt["case_results"]],
@@ -136,7 +130,7 @@ class V4ConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(set(real), {"CAP-RELEASE-CANARY", "UX-009-a"})
         self.assertGreater(receipt["test_method_count"], 1)
         self.assertTrue(
-            all(item["assertion_count"] == 1 for item in receipt["case_results"])
+            all(item["coverage_mapping_count"] == 1 for item in receipt["case_results"])
         )
         runner.rc.validate_conformance_receipt(receipt, candidate, ROOT)
 
@@ -179,14 +173,23 @@ class V4ConformanceRunnerTests(unittest.TestCase):
         original = runner._ACTIVE_CASE_CONTRACTS["CAP-INTAKE-G01"]
         runner._ACTIVE_CASE_CONTRACTS["CAP-INTAKE-G01"] = self_consistent_wrong
         try:
-            with self.assertRaisesRegex(
-                RuntimeError, "CONFORMANCE_CASE_OBSERVATION_MISMATCH"
-            ):
+            with self.assertRaisesRegex(RuntimeError, "CONFORMANCE_CASE_CONTRACT_INVALID"):
                 runner._run_case(
                     "CAP-INTAKE-G01",
                     intake_family,
                     intake_test,
                     self_consistent_wrong,
+                )
+        finally:
+            runner._ACTIVE_CASE_CONTRACTS["CAP-INTAKE-G01"] = original
+        unrelated = runner.FAMILY_TEST_BINDINGS["CAP-ARCHITECTURE"]
+        wrong_target = dict(intake_contract)
+        wrong_target["target_test_id"] = unrelated
+        runner._ACTIVE_CASE_CONTRACTS["CAP-INTAKE-G01"] = wrong_target
+        try:
+            with self.assertRaisesRegex(RuntimeError, "CONFORMANCE_CASE_CONTRACT_INVALID"):
+                runner._run_case(
+                    "CAP-INTAKE-G01", intake_family, unrelated, wrong_target
                 )
         finally:
             runner._ACTIVE_CASE_CONTRACTS["CAP-INTAKE-G01"] = original
@@ -204,12 +207,13 @@ class V4ConformanceRunnerTests(unittest.TestCase):
         candidate = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()
-        with mock.patch.object(
-            runner,
-            "_run_case",
-            side_effect=mock_execution,
-        ) as executed:
-            receipt = runner.hosted_run(ROOT, candidate)
+        with mock.patch.object(runner, "_run_test", side_effect=mock_target) as targets:
+            with mock.patch.object(
+                runner,
+                "_run_case",
+                side_effect=mock_execution,
+            ) as executed:
+                receipt = runner.hosted_run(ROOT, candidate)
         self.assertEqual(receipt["case_count"], 349)
         self.assertEqual(receipt["real_external_effects"], 0)
         self.assertEqual(receipt["status"], "PASS_LOCAL_APP_GATE_REQUIRED")
@@ -217,7 +221,8 @@ class V4ConformanceRunnerTests(unittest.TestCase):
             receipt["local_exact_sha_app_case_ids"],
             ["CAP-RELEASE-CANARY", "UX-009-a"],
         )
-        self.assertEqual(executed.call_count, receipt["deterministic_assertion_method_count"])
+        self.assertEqual(targets.call_count, receipt["deterministic_assertion_method_count"])
+        self.assertEqual(executed.call_count, receipt["semantic_coverage_mapping_count"])
 
 
 if __name__ == "__main__":

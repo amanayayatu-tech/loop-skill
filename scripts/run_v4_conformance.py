@@ -5,10 +5,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib
 import importlib.util
 import json
-import os
 import sys
 import unittest
 from io import StringIO
@@ -451,95 +449,55 @@ def _run_case(
     family: str,
     target_test_id: str,
     contract: dict[str, Any] | None = None,
+    target_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    parameter = case_id[len(family) + 1 :]
+    expected_target = CASE_TEST_OVERRIDES.get(
+        case_id, FAMILY_TEST_BINDINGS.get(family)
+    )
     if (
         contract is None
         or set(contract) != CASE_CONTRACT_FIELDS
         or contract.get("case_id") != case_id
         or contract.get("family") != family
         or contract.get("target_test_id") != target_test_id
-        or contract.get("parameter") != case_id[len(family) + 1 :]
+        or contract.get("parameter") != parameter
         or _ACTIVE_CASE_CONTRACTS.get(case_id) != contract
+        or target_test_id != expected_target
+        or contract.get("expected_acceptance")
+        != _expected_acceptance(case_id, family, parameter)
+        or contract.get("expected_effect_state")
+        != _expected_effect_state(family, parameter)
+        or contract.get("expected_ordered_events") != _expected_events(family, parameter)
+        or contract.get("expected_side_effect_counts")
+        != _side_effect_counts(family, parameter)
+        or contract.get("replay_expectation")
+        != _replay_expectation(family, parameter)
     ):
         raise RuntimeError(f"CONFORMANCE_CASE_CONTRACT_INVALID: {case_id}")
     contract_bytes = rc._canonical(contract)
     contract_digest = hashlib.sha256(contract_bytes).hexdigest()
-    wrapper = _test(
-        "test_v4_atomic_conformance",
-        "V4AtomicConformanceTests",
-        "test_case",
-    )
-    previous = {
-        key: os.environ.get(key)
-        for key in (
-            "LOOPSKILL4_CONFORMANCE_CASE_ID",
-            "LOOPSKILL4_CONFORMANCE_FAMILY",
-            "LOOPSKILL4_CONFORMANCE_TARGET",
-            "LOOPSKILL4_CONFORMANCE_CONTRACT",
-            "LOOPSKILL4_CONFORMANCE_CONTRACT_DIGEST",
-        )
-    }
-    os.environ.update(
-        {
-            "LOOPSKILL4_CONFORMANCE_CASE_ID": case_id,
-            "LOOPSKILL4_CONFORMANCE_FAMILY": family,
-            "LOOPSKILL4_CONFORMANCE_TARGET": target_test_id,
-            "LOOPSKILL4_CONFORMANCE_CONTRACT": contract_bytes.decode("utf-8"),
-            "LOOPSKILL4_CONFORMANCE_CONTRACT_DIGEST": contract_digest,
-        }
-    )
-    try:
-        atomic_module = importlib.import_module("test_v4_atomic_conformance")
-        atomic_module.LAST_OBSERVATION = None
-        suite = unittest.defaultTestLoader.loadTestsFromName(wrapper)
-        stream = StringIO()
-        result = unittest.TextTestRunner(stream=stream, verbosity=0).run(suite)
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-    if not result.wasSuccessful() or result.testsRun != 1 or result.skipped:
-        digest = hashlib.sha256(stream.getvalue().encode()).hexdigest()
-        raise RuntimeError(f"CONFORMANCE_CASE_FAILED: {case_id}: {digest}")
-    observation = atomic_module.LAST_OBSERVATION
-    expected_observation = {
+    target = _run_test(target_test_id) if target_result is None else target_result
+    if (
+        target.get("assertion_test_id") != target_test_id
+        or target.get("status") != "PASS"
+        or target.get("tests_run") != 1
+    ):
+        raise RuntimeError(f"CONFORMANCE_TEST_RESULT_INVALID: {target_test_id}")
+    mapping = {
+        "assertion_test_id": target_test_id,
         "case_id": case_id,
-        "family": family,
-        "fixture_selector": contract["fixture_selector"],
-        "observed_acceptance": contract["expected_acceptance"],
-        "observed_effect_state": contract["expected_effect_state"],
-        "observed_ordered_events": contract["expected_ordered_events"],
-        "observed_side_effect_counts": contract["expected_side_effect_counts"],
-        "observed_replay": contract["replay_expectation"],
-        "selector_consumed": True,
-        "target_test_id": target_test_id,
-        "target_test_passed": True,
-    }
-    if observation != expected_observation:
-        digest = hashlib.sha256(rc._canonical(observation)).hexdigest()
-        raise RuntimeError(f"CONFORMANCE_CASE_OBSERVATION_MISMATCH: {case_id}: {digest}")
-    observation_digest = hashlib.sha256(rc._canonical(observation)).hexdigest()
-    deterministic = {
-        "assertion_test_id": f"{case_id}::{target_test_id}",
-        "case_id": case_id,
-        "family": family,
-        "status": "PASS",
-        "target_test_id": target_test_id,
-        "tests_run": 1,
         "case_contract_digest": contract_digest,
-        "expected_acceptance": contract["expected_acceptance"],
-        "expected_effect_state": contract["expected_effect_state"],
+        "coverage_status": "COVERED_BY_PASSING_TEST",
+        "family": family,
         "fixture_selector": contract["fixture_selector"],
-        "observed_acceptance": observation["observed_acceptance"],
-        "observed_effect_state": observation["observed_effect_state"],
-        "observed_result_digest": observation_digest,
-        "selector_consumed": True,
+        "target_test_id": target_test_id,
+        "target_test_result_digest": target["result_digest"],
     }
     return {
-        **deterministic,
-        "result_digest": hashlib.sha256(rc._canonical(deterministic)).hexdigest(),
+        **mapping,
+        "result_digest": hashlib.sha256(rc._canonical(mapping)).hexdigest(),
+        "target_test_result": target,
     }
 
 
@@ -588,45 +546,49 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
     real_canary_cases = {"UX-009-a", "CAP-RELEASE-CANARY"}
     corpus_digest = hashlib.sha256(corpus.encode("utf-8")).hexdigest()
     results = []
-    case_executions = []
+    target_executions: dict[str, dict[str, Any]] = {}
     for case_id in sorted(catalog):
         family, test_id, contract = bindings[case_id]
-        execution = _run_case(case_id, family, test_id, contract)
+        execution = _run_case(
+            case_id,
+            family,
+            test_id,
+            contract,
+            target_executions.get(test_id),
+        )
+        target_executions.setdefault(test_id, execution["target_test_result"])
         parameter = case_id[len(family) + 1 :]
         receipt_contract = {**contract, "corpus_sha256": corpus_digest}
         result = {
-            "assertion_count": 1,
+            "coverage_mapping_count": 1,
             "assertion_test_id": execution["assertion_test_id"],
             "case_id": case_id,
             "case_contract_digest": execution["case_contract_digest"],
             "case_contract": contract,
             "evidence_kind": (
-                "REAL_APP_RECEIPT+PARAMETERIZED_UNITTEST_CASE"
+                "REAL_APP_RECEIPT+TEST_COVERAGE_MAPPING"
                 if case_id in real_canary_cases
-                else "PARAMETERIZED_UNITTEST_CASE"
+                else "TEST_COVERAGE_MAPPING"
             ),
             "family": family,
             "parameter": parameter,
-            "status": "PASS",
+            "status": "COVERED_BY_PASSING_TEST",
             "target_test_id": test_id,
-            "test_result_digest": execution["result_digest"],
+            "coverage_mapping_digest": execution["result_digest"],
+            "target_test_result_digest": execution["target_test_result_digest"],
             "expected_acceptance": receipt_contract["expected_acceptance"],
             "expected_effect_state": receipt_contract["expected_effect_state"],
             "fixture_selector": receipt_contract["fixture_selector"],
-            "observed_acceptance": execution["observed_acceptance"],
-            "observed_effect_state": execution["observed_effect_state"],
-            "observed_result_digest": execution["observed_result_digest"],
             "replay_expectation": receipt_contract["replay_expectation"],
-            "selector_consumed": execution["selector_consumed"],
         }
         if case_id in real_canary_cases:
             result["canary_receipt_sha256"] = hashlib.sha256(
                 rc._canonical(canary)
             ).hexdigest()
         results.append(result)
-        case_executions.append(execution)
+    test_method_results = [target_executions[key] for key in sorted(target_executions)]
     body = {
-        "artifact": "loopskill-v4-conformance-execution-v1",
+        "artifact": "loopskill-v4-conformance-execution-v2",
         "candidate_sha": candidate,
         "case_catalog_digest": preservation.EXACT_CASE_CATALOG_SHA256,
         "canonical_case_ids": True,
@@ -634,11 +596,12 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
         "case_results": results,
         "failed": 0,
         "corpus_sha256": corpus_digest,
-        "passed": len(results),
+        "mapped": len(results),
+        "passed_test_methods": len(test_method_results),
         "real_external_effects": 1,
         "status": "PASS",
-        "test_method_count": len(case_executions),
-        "test_method_results": case_executions,
+        "test_method_count": len(test_method_results),
+        "test_method_results": test_method_results,
     }
     body["case_results_digest"] = hashlib.sha256(rc._canonical(results)).hexdigest()
     body["binding_manifest_digest"] = hashlib.sha256(
@@ -660,12 +623,17 @@ def hosted_run(root: Path, candidate: str) -> dict[str, Any]:
     """Run every bound deterministic assertion without pretending to run App."""
 
     corpus, catalog, bindings = _catalog_and_bindings(root, candidate)
-    test_results = [
+    target_results = {
+        test_id: _run_test(test_id)
+        for test_id in sorted({value[1] for value in bindings.values()})
+    }
+    mapping_results = [
         _run_case(
             case_id,
             bindings[case_id][0],
             bindings[case_id][1],
             bindings[case_id][2],
+            target_results[bindings[case_id][1]],
         )
         for case_id in sorted(catalog)
     ]
@@ -675,9 +643,13 @@ def hosted_run(root: Path, candidate: str) -> dict[str, Any]:
         "case_catalog_digest": preservation.EXACT_CASE_CATALOG_SHA256,
         "case_count": len(catalog),
         "corpus_sha256": hashlib.sha256(corpus.encode("utf-8")).hexdigest(),
-        "deterministic_assertion_method_count": len(test_results),
+        "deterministic_assertion_method_count": len(target_results),
         "deterministic_assertion_results_digest": hashlib.sha256(
-            rc._canonical(test_results)
+            rc._canonical([target_results[key] for key in sorted(target_results)])
+        ).hexdigest(),
+        "semantic_coverage_mapping_count": len(mapping_results),
+        "semantic_coverage_mapping_digest": hashlib.sha256(
+            rc._canonical(mapping_results)
         ).hexdigest(),
         "local_exact_sha_app_case_ids": ["CAP-RELEASE-CANARY", "UX-009-a"],
         "real_external_effects": 0,

@@ -1006,6 +1006,137 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 ordered = snapshot["goal_plan"]["ordered_goal_refs"]
                 self.assertEqual(snapshot["goals"][ordered[1]]["depends_on"], ordered[0])
 
+    def test_confirmed_goal_plan_is_atomic_bounded_and_runs_two_goal_chains(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = replace(
+                ready_request("Atomic primary", horizon="adaptive"),
+                goal_plan=("Atomic primary", "Atomic dependent"),
+            )
+            prepared = prepare_loop(
+                request,
+                root / "prepared",
+                clock=lambda: NOW,
+                token_factory=lambda: "838484848484848484848484",
+                workspace_root=workspace,
+            )
+            prepared = confirm_loop(prepared.directory, confirmed=True, clock=lambda: NOW)
+            data = root / "data"
+            original_apply = SQLiteStore.apply
+            crashed = False
+
+            def crash_after_create(store, command, *args, **kwargs):
+                nonlocal crashed
+                result = original_apply(store, command, *args, **kwargs)
+                if command.command_type == "CreateLoop" and not crashed:
+                    crashed = True
+                    raise InjectedCrash("after committed atomic START")
+                return result
+
+            with mock.patch.object(SQLiteStore, "apply", crash_after_create):
+                with self.assertRaises(InjectedCrash):
+                    start_loop(
+                        prepared,
+                        root=data,
+                        clock=lambda: NOW,
+                        workspace_root=workspace,
+                    )
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                self.assertIsNotNone(snapshot)
+                self.assertEqual(len(snapshot["goals"]), 2)
+                self.assertEqual(len(snapshot["attempts"]), 1)
+                self.assertEqual(snapshot["goal_plan"]["revision"], 1)
+                self.assertEqual(snapshot["goal_plan"]["max_roadmap_revisions"], 4)
+                self.assertRegex(snapshot["goal_plan"]["envelope_digest"], r"^[0-9a-f]{64}$")
+
+            first = ("Atomic primary", "Atomic dependent")
+            second = ("Atomic primary", "Atomic dependent")
+            third = ("Atomic primary", "Atomic dependent")
+            for expected_revision, order in ((2, first), (3, second), (4, third)):
+                projection = revise_goal_plan(
+                    order,
+                    root=data,
+                    reason=f"Bounded revision {expected_revision}.",
+                    clock=lambda: NOW,
+                )
+                self.assertEqual(projection["policy"]["revision"], expected_revision)
+            with self.assertRaises(EntryError):
+                revise_goal_plan(
+                    first,
+                    root=data,
+                    reason="Attempt revision beyond confirmed envelope.",
+                    clock=lambda: NOW,
+                )
+            self.assertEqual(policy_view(root=data)["policy"]["revision"], 4)
+
+            provider = EntryProviderFixture(now=NOW)
+            start_loop(
+                prepared,
+                root=data,
+                clock=lambda: NOW,
+                host_provider=provider,
+                workspace_root=workspace,
+            )
+            advance_crashed = False
+
+            def crash_after_advance(store, command, *args, **kwargs):
+                nonlocal advance_crashed
+                if command.command_type == "AdvanceGoal" and not advance_crashed:
+                    advance_crashed = True
+                    return original_apply(
+                        store,
+                        command,
+                        *args,
+                        fault_at="after_commit_before_response",
+                        **kwargs,
+                    )
+                return original_apply(store, command, *args, **kwargs)
+
+            with mock.patch.object(SQLiteStore, "apply", crash_after_advance):
+                with self.assertRaises(InjectedCrash):
+                    sync_loop(
+                        root=data,
+                        host_provider=provider,
+                        clock=lambda: NOW,
+                        workspace_root=workspace,
+                    )
+            self.assertEqual(provider.invoke_count, 1)
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                self.assertIsNotNone(snapshot)
+                ordered = snapshot["goal_plan"]["ordered_goal_refs"]
+                self.assertEqual(snapshot["goals"][ordered[0]]["state"], "DONE")
+                self.assertEqual(snapshot["goals"][ordered[1]]["state"], "ACTIVE")
+                self.assertEqual(len(snapshot["attempts"]), 2)
+            terminal = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(terminal.progress, "Finished")
+            self.assertEqual(terminal.result, "SUCCEEDED")
+            self.assertEqual(provider.invoke_count, 2)
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                self.assertIsNotNone(snapshot)
+                self.assertEqual(
+                    [snapshot["goals"][ref]["state"] for ref in snapshot["goal_plan"]["ordered_goal_refs"]],
+                    ["DONE", "DONE"],
+                )
+                for collection in (
+                    "artifacts",
+                    "attempts",
+                    "external_effects",
+                    "reports",
+                    "results",
+                    "reviews",
+                ):
+                    self.assertEqual(len(snapshot[collection]), 2, collection)
+
     def test_bounded_repair_decision_exhausts_without_automatic_resend(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

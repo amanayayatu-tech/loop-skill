@@ -753,14 +753,17 @@ independently verified local criterion can produce Review PASS and SUCCEEDED.
 The optional policy surface is reachable through Entry without becoming a
 writer. Standard/Adaptive projections remain removable from the minimal path;
 pause/resume/stop submit ordinary machine-authorized Kernel commands.
-For a multi-Goal prepared manifest, Entry submits `RegisterGoalPlan` before any
-provider call. The Kernel alone allocates Goal references, stores a fixed
-dependency order, and activates exactly one Goal. `ReviseGoalPlan` accepts only
-an Adaptive semantic reordering of already-authorized pending objectives,
-requires the current plan revision, preserves the active Goal first, and emits
-one contiguous `RoadmapRevised`; an objective outside the prepared author
-envelope fails closed. Neither command creates a Host task or gives policy
-writer authority.
+For a multi-Goal prepared manifest, the confirmed plan, envelope digest,
+machine-allocated Goal chains, maximum roadmap revision, first startup Attempt,
+and outbox row are committed atomically by `CreateLoop` before any provider
+call. The Kernel alone stores the fixed dependency order and activates exactly
+one Goal. `ReviseGoalPlan` accepts only an Adaptive semantic reordering of
+already-authorized pending objectives, requires the current plan revision,
+preserves the active Goal first, enforces the confirmed maximum revision, and
+emits one contiguous `RoadmapRevised`; an objective outside the prepared author
+envelope fails closed. When one Goal passes review, `AdvanceGoal` atomically
+activates the next dependency and commits its distinct Attempt/outbox and
+artifact-baseline binding. Neither path gives policy writer authority.
 `RecordPolicyDecision` records a digest-bound current-context choice and a
 bounded repair authorization/exhaustion fact. It never invokes Host, retries an
 Attempt, or manufactures a successor. A repair authorization explicitly
@@ -1017,22 +1020,24 @@ Finalization digests. The raw store and Host identity are not published. These
 receipts are build evidence, not runtime authority.
 
 `scripts/validate_v4_rc.py` defaults to the final fail-closed mode: canary,
-349-instance conformance, and privacy-minimized publication-packet receipts are
+349-item semantic coverage mapping, its unique executable conformance tests,
+and privacy-minimized publication-packet receipts are
 all mandatory. The explicit `--static-only` mode is a pre-canary diagnostic and
 always records `publication_ready=false`; it cannot satisfy the publication
 candidate gate. `scripts/run_v4_conformance.py`
-expands the frozen exact catalog, executes every bound module, emits one result
-record for each of the 349 canonical case IDs, and additionally binds the two
-real-App cases to the exact canary receipt. Each local record must first consume
+expands the frozen exact catalog, executes every unique bound unittest target,
+emits one coverage-mapping record for each of the 349 canonical case IDs, and
+additionally binds the two real-App cases to the exact canary receipt. Each
+mapping must first consume
 a machine-derived per-case contract covering precondition, stimulus,
 acceptance, effect state, event order, side-effect count, replay, capability,
-selector, and target assertion. After the concrete target passes, a test-side
-observation oracle that is independent of the supplied expected contract emits
-the observed acceptance, effect state, event order, bounded side-effect counts,
-and replay class for that selector. The runner compares observed and expected
-values and binds the observed-result digest. Unknown IDs, a self-consistent
-mutation of the active expected contract, or a repeated family-level unittest
-result without the selector-specific observation fails closed.
+selector, and target assertion. The expected fields are design mappings, not
+fabricated runtime observations. The receipt separately reports the passing
+executable test result and never calls a mapped case independently observed
+unless its fixture actually returns such an observation. Unknown IDs,
+self-consistent expected-contract mutation, unrelated target substitution, or
+an unexecuted target fails closed. This intentionally replaces the earlier
+second hand-written observer table.
 
 ## Non-goals and safeguards
 

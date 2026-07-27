@@ -811,11 +811,11 @@ def validate_live_canary(
 
 def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Path) -> None:
     if (
-        value.get("artifact") != "loopskill-v4-conformance-execution-v1"
+        value.get("artifact") != "loopskill-v4-conformance-execution-v2"
         or value.get("candidate_sha") != candidate
         or value.get("status") != "PASS"
         or value.get("case_count") != 349
-        or value.get("passed") != 349
+        or value.get("mapped") != 349
         or value.get("failed") != 0
         or value.get("real_external_effects") != 1
         or value.get("canonical_case_ids") is not True
@@ -843,29 +843,14 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
         test_id = item.get("assertion_test_id")
         deterministic = {
             "assertion_test_id": test_id,
-            "case_id": item.get("case_id"),
-            "family": item.get("family"),
             "status": item.get("status"),
-            "target_test_id": item.get("target_test_id"),
             "tests_run": item.get("tests_run"),
-            "case_contract_digest": item.get("case_contract_digest"),
-            "expected_acceptance": item.get("expected_acceptance"),
-            "expected_effect_state": item.get("expected_effect_state"),
-            "fixture_selector": item.get("fixture_selector"),
-            "observed_acceptance": item.get("observed_acceptance"),
-            "observed_effect_state": item.get("observed_effect_state"),
-            "observed_result_digest": item.get("observed_result_digest"),
-            "selector_consumed": item.get("selector_consumed"),
         }
         if (
             not isinstance(test_id, str)
             or test_id in tests_by_id
             or deterministic["status"] != "PASS"
             or deterministic["tests_run"] != 1
-            or deterministic["selector_consumed"] is not True
-            or deterministic["observed_acceptance"] != deterministic["expected_acceptance"]
-            or deterministic["observed_effect_state"] != deterministic["expected_effect_state"]
-            or not isinstance(deterministic["observed_result_digest"], str)
             or item.get("result_digest") != hashlib.sha256(_canonical(deterministic)).hexdigest()
         ):
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
@@ -880,15 +865,13 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
         target_test_id = item.get("target_test_id")
         contract = item.get("case_contract")
         if (
-            item.get("status") != "PASS"
-            or item.get("assertion_count") != 1
+            item.get("status") != "COVERED_BY_PASSING_TEST"
+            or item.get("coverage_mapping_count") != 1
             or not isinstance(family, str)
             or case_id != f"{family}-{parameter}"
             or test_id not in tests_by_id
-            or tests_by_id[test_id].get("case_id") != case_id
-            or tests_by_id[test_id].get("family") != family
-            or tests_by_id[test_id].get("target_test_id") != target_test_id
-            or item.get("test_result_digest") != tests_by_id[test_id]["result_digest"]
+            or test_id != target_test_id
+            or item.get("target_test_result_digest") != tests_by_id[test_id]["result_digest"]
             or not isinstance(contract, dict)
             or contract.get("case_id") != case_id
             or contract.get("family") != family
@@ -897,17 +880,28 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
             or contract.get("fixture_selector") != item.get("fixture_selector")
             or contract.get("expected_acceptance") != item.get("expected_acceptance")
             or contract.get("expected_effect_state") != item.get("expected_effect_state")
-            or item.get("observed_acceptance") != item.get("expected_acceptance")
-            or item.get("observed_effect_state") != item.get("expected_effect_state")
-            or item.get("selector_consumed") is not True
             or contract.get("replay_expectation") != item.get("replay_expectation")
             or item.get("case_contract_digest") != hashlib.sha256(_canonical(contract)).hexdigest()
         ):
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+        mapping = {
+            "assertion_test_id": target_test_id,
+            "case_id": case_id,
+            "case_contract_digest": item["case_contract_digest"],
+            "coverage_status": "COVERED_BY_PASSING_TEST",
+            "family": family,
+            "fixture_selector": item.get("fixture_selector"),
+            "target_test_id": target_test_id,
+            "target_test_result_digest": item.get("target_test_result_digest"),
+        }
+        if item.get("coverage_mapping_digest") != hashlib.sha256(
+            _canonical(mapping)
+        ).hexdigest():
+            raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
         expected_kind = (
-            "REAL_APP_RECEIPT+PARAMETERIZED_UNITTEST_CASE"
+            "REAL_APP_RECEIPT+TEST_COVERAGE_MAPPING"
             if case_id in {"UX-009-a", "CAP-RELEASE-CANARY"}
-            else "PARAMETERIZED_UNITTEST_CASE"
+            else "TEST_COVERAGE_MAPPING"
         )
         if item.get("evidence_kind") != expected_kind:
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
@@ -923,7 +917,10 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
         binding_rows.append(
             {"case_id": case_id, "case_contract_digest": item["case_contract_digest"], "test_id": test_id}
         )
-    if set(tests_by_id) != {item["assertion_test_id"] for item in results}:
+    if (
+        set(tests_by_id) != {item["assertion_test_id"] for item in results}
+        or value.get("passed_test_methods") != len(tests_by_id)
+    ):
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
     if value.get("binding_manifest_digest") != hashlib.sha256(_canonical(binding_rows)).hexdigest():
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")

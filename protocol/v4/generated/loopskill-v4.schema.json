@@ -484,6 +484,9 @@
         "manifest_version": {
           "type": "string"
         },
+        "max_roadmap_revisions": {
+          "type": "integer"
+        },
         "prepared_at": {
           "type": "string"
         },
@@ -517,6 +520,7 @@
         "goal_plan",
         "task_horizon",
         "execution_mode",
+        "max_roadmap_revisions",
         "selection_reason",
         "write_scope",
         "budget",
@@ -694,6 +698,6 @@
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "e09551c3c61868caf58dd95b1d4bfcf0a741b713a84b132b71d426f3219bd9b1",
+  "manifest_sha256": "fbb6d37d7247ffac97b5652b39a8f1cde73848c9dfc02c11532d19b6895e1023",
   "title": "LoopSkill 4 protocol wire shapes"
 }

@@ -61,6 +61,13 @@
           "enum": ["STANDARD", "ADAPTIVE"],
           "type": "string"
         },
+        "goal_plan": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "max_roadmap_revisions": {
+          "type": "integer"
+        },
         "external_actions": {
           "items": {"type": "string"},
           "type": "array"
@@ -402,6 +409,7 @@
       ["goal_plan", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["task_horizon", "str", {"type": "string"}],
       ["execution_mode", "str", {"enum": ["STANDARD", "ADAPTIVE"], "type": "string"}],
+      ["max_roadmap_revisions", "int", {"type": "integer"}],
       ["selection_reason", "str", {"type": "string"}],
       ["write_scope", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["budget", "str", {"type": "string"}],

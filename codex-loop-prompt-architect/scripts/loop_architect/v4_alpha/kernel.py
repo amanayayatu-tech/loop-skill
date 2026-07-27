@@ -235,7 +235,12 @@ def _only_record(
 
 
 def _result_chain(snapshot: Mapping[str, Any]) -> dict[str, Any]:
-    result_ref, result = _only_record(snapshot, "results")
+    current_ref = snapshot.get("current_result_ref")
+    if isinstance(current_ref, str):
+        result_ref = current_ref
+        result = snapshot["results"][result_ref]
+    else:
+        result_ref, result = _only_record(snapshot, "results")
     report_ref = result["report_ref"]
     artifact_ref = result["artifact_ref"]
     attempt_ref = result["attempt_ref"]
@@ -323,7 +328,16 @@ def policy_context_digest(snapshot: Mapping[str, Any]) -> str:
 
 def _final_chain(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     chain = _result_chain(snapshot)
-    review_ref, review = _only_record(snapshot, "reviews")
+    matches = [
+        (review_ref, review)
+        for review_ref, review in snapshot["reviews"].items()
+        if review.get("result_ref") == chain["result_ref"]
+    ]
+    if len(matches) != 1:
+        raise ProtocolRejection(
+            "INTERNAL_INVARIANT_VIOLATION", "current Review is unavailable"
+        )
+    review_ref, review = matches[0]
     if review["result_ref"] != chain["result_ref"]:
         raise ProtocolRejection(
             "INTERNAL_INVARIANT_VIOLATION", "Review does not bind current Result"
@@ -373,6 +387,22 @@ def _create_loop(
     objective = command.semantic_payload.get("objective")
     if not isinstance(objective, str) or not objective.strip():
         raise ProtocolRejection("INVALID_COMMAND", "objective must not be empty")
+    objectives = command.semantic_payload.get("goal_plan")
+    mode = command.semantic_payload.get("execution_mode")
+    max_revisions = command.semantic_payload.get("max_roadmap_revisions")
+    if (
+        not isinstance(objectives, (list, tuple))
+        or not 1 <= len(objectives) <= 16
+        or not all(isinstance(item, str) and item.strip() for item in objectives)
+        or len({item.strip() for item in objectives}) != len(objectives)
+        or objectives[0].strip() != objective.strip()
+        or mode not in {"STANDARD", "ADAPTIVE"}
+        or isinstance(max_revisions, bool)
+        or not isinstance(max_revisions, int)
+        or not 1 <= max_revisions <= 16
+        or (mode == "STANDARD" and max_revisions != 1)
+    ):
+        raise ProtocolRejection("INVALID_COMMAND", "invalid confirmed Goal plan")
     objective_digest = domain_digest("loopskill-goal-objective-v1\n", objective)
     state = {
         "artifacts": {},
@@ -402,6 +432,102 @@ def _create_loop(
         _event("GoalActivated", goal_ref=goal_ref),
     ]
     response = {"goal_ref": goal_ref, "loop_ref": loop_ref}
+    if len(objectives) > 1:
+        chain_names = {
+            "artifact_ref": "ArtifactRef",
+            "attempt_ref": "AttemptRef",
+            "external_effect_ref": "ExternalEffectRef",
+            "goal_ref": "GoalRef",
+            "host_resource_ref": "HostResourceRef",
+            "provider_key": None,
+            "provider_target": None,
+            "report_ref": "ReportRef",
+            "result_ref": "ResultRef",
+            "review_ref": "ReviewRef",
+        }
+        chains: list[dict[str, str]] = []
+        for index in range(len(objectives)):
+            chain = {
+                name: command.machine_bindings["allocate_refs"].get(
+                    f"goal_chain_{index:03d}_{name}", ""
+                )
+                for name in chain_names
+            }
+            if not all(chain.values()):
+                raise ProtocolRejection("INVALID_COMMAND", "Goal chain allocation drift")
+            for name, kind in chain_names.items():
+                if kind is not None and _kind_for_ref(chain[name]) != kind:
+                    raise ProtocolRejection("WRONG_REFERENCE_KIND", chain[name])
+            chains.append(chain)
+        if chains[0]["goal_ref"] != goal_ref or any(
+            chains[0][key] != command.machine_bindings["allocate_refs"].get(binding)
+            for key, binding in {
+                "attempt_ref": "new_attempt_ref",
+                "external_effect_ref": "new_external_effect_ref",
+                "host_resource_ref": "new_host_resource_ref",
+                "provider_key": "provider_idempotency_key",
+            }.items()
+        ):
+            raise ProtocolRejection("INVALID_COMMAND", "primary Goal chain drift")
+        for name, kind in chain_names.items():
+            if kind is not None and len({chain[name] for chain in chains}) != len(chains):
+                raise ProtocolRejection("IDEMPOTENCY_CONFLICT", f"duplicate {name}")
+        ordered = []
+        previous = None
+        for index, (item, chain) in enumerate(zip(objectives, chains)):
+            current_ref = chain["goal_ref"]
+            record = state["goals"].get(current_ref)
+            if index == 0:
+                assert record is not None
+                record.update(
+                    {
+                        "chain_refs": chain,
+                        "depends_on": None,
+                        "objective": item.strip(),
+                        "order": 0,
+                    }
+                )
+            else:
+                if current_ref in state["goals"]:
+                    raise ProtocolRejection("FOREIGN_REFERENCE", current_ref)
+                state["goals"][current_ref] = {
+                    "chain_refs": chain,
+                    "depends_on": previous,
+                    "objective": item.strip(),
+                    "objective_digest": domain_digest(
+                        "loopskill-goal-objective-v1\n", item.strip()
+                    ),
+                    "order": index,
+                    "revision": 1,
+                    "state": "PENDING",
+                }
+                events.append(_event("GoalRegistered", goal_ref=current_ref))
+            ordered.append(current_ref)
+            previous = current_ref
+        envelope = {
+            "max_roadmap_revisions": max_revisions,
+            "mode": mode,
+            "objectives": [item.strip() for item in objectives],
+        }
+        envelope_digest = domain_digest("loopskill-goal-envelope-v1\n", envelope)
+        plan_digest = domain_digest("loopskill-goal-plan-v1\n", envelope)
+        state["goal_plan"] = {
+            "active_goal_ref": goal_ref,
+            "envelope_digest": envelope_digest,
+            "max_roadmap_revisions": max_revisions,
+            "mode": mode,
+            "ordered_goal_refs": ordered,
+            "plan_digest": plan_digest,
+            "revision": 1,
+        }
+        events.append(
+            _event(
+                "GoalPlanRegistered",
+                envelope_digest=envelope_digest,
+                mode=mode,
+                plan_digest=plan_digest,
+            )
+        )
     startup_allocate = {
         "new_attempt_ref",
         "new_external_effect_ref",
@@ -521,6 +647,7 @@ def _create_loop(
                     else {}
                 ),
                 "attempt_ref": attempt_ref,
+                **({"goal_ref": goal_ref} if len(objectives) > 1 else {}),
                 "host_resource_ref": host_resource_ref,
                 "revision": 1,
                 "state": "ATTEMPT_COMMITTED",
@@ -604,10 +731,23 @@ def _register_goal_plan(
         events.append(_event("GoalRegistered", goal_ref=goal_ref))
     plan_digest = domain_digest(
         "loopskill-goal-plan-v1\n",
-        {"mode": mode, "objectives": [item.strip() for item in objectives]},
+        {
+            "max_roadmap_revisions": 4 if mode == "ADAPTIVE" else 1,
+            "mode": mode,
+            "objectives": [item.strip() for item in objectives],
+        },
     )
     snapshot["goal_plan"] = {
         "active_goal_ref": existing_ref,
+        "envelope_digest": domain_digest(
+            "loopskill-goal-envelope-v1\n",
+            {
+                "max_roadmap_revisions": 4 if mode == "ADAPTIVE" else 1,
+                "mode": mode,
+                "objectives": [item.strip() for item in objectives],
+            },
+        ),
+        "max_roadmap_revisions": 4 if mode == "ADAPTIVE" else 1,
         "mode": mode,
         "ordered_goal_refs": ordered,
         "plan_digest": plan_digest,
@@ -629,6 +769,8 @@ def _revise_goal_plan(
     reason = command.semantic_payload.get("reason")
     if not isinstance(plan, dict) or plan.get("mode") != "ADAPTIVE":
         raise ProtocolRejection("INVALID_TRANSITION", "Adaptive plan is unavailable")
+    if int(plan.get("revision", 0)) >= int(plan.get("max_roadmap_revisions", 0)):
+        raise ProtocolRejection("INVALID_TRANSITION", "roadmap revision budget exhausted")
     if (
         not isinstance(order, list)
         or not all(isinstance(item, str) and item.strip() for item in order)
@@ -659,7 +801,11 @@ def _revise_goal_plan(
     revision = int(plan["revision"]) + 1
     plan_digest = domain_digest(
         "loopskill-goal-plan-v1\n",
-        {"mode": "ADAPTIVE", "objectives": [item.strip() for item in order]},
+        {
+            "max_roadmap_revisions": int(plan["max_roadmap_revisions"]),
+            "mode": "ADAPTIVE",
+            "objectives": [item.strip() for item in order],
+        },
     )
     plan.update(
         {
@@ -973,6 +1119,8 @@ def _stage_result(
         "revision": 1,
         "state": "STAGED",
     }
+    if "goal_plan" in snapshot:
+        snapshot["current_result_ref"] = result_ref
     return snapshot, [
         _event("ResultStaged", result_ref=result_ref),
         _event("ReportStaged", report_ref=report_ref),
@@ -1034,6 +1182,8 @@ def _stage_external_result(
         "revision": 1,
         "state": "STAGED",
     }
+    if "goal_plan" in snapshot:
+        snapshot["current_result_ref"] = result_ref
     return snapshot, [
         _event("ResultStaged", result_ref=result_ref),
         _event("ReportStaged", report_ref=report_ref),
@@ -1188,9 +1338,87 @@ def _advance_goal(
             next_goal.update(
                 {"revision": next_goal["revision"] + 1, "state": "ACTIVE"}
             )
+            chain = next_goal.get("chain_refs")
+            if not isinstance(chain, dict):
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION", "next Goal chain is absent"
+                )
+            required_chain = {
+                "attempt_ref",
+                "external_effect_ref",
+                "host_resource_ref",
+                "provider_key",
+                "provider_target",
+            }
+            if not required_chain <= set(chain):
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION", "next Goal chain is incomplete"
+                )
+            attempt_ref = str(chain["attempt_ref"])
+            effect_ref = str(chain["external_effect_ref"])
+            if attempt_ref in snapshot["attempts"] or effect_ref in snapshot["external_effects"]:
+                raise ProtocolRejection(
+                    "ATTEMPT_ALREADY_CONSUMED", "next Goal Attempt already exists"
+                )
+            previous_attempt = snapshot["attempts"][result["attempt_ref"]]
+            provider_request = dict(previous_attempt["provider_request"])
+            provider_request.update(
+                {
+                    "goal": next_goal["objective"],
+                    "target_ref": chain["provider_target"],
+                }
+            )
+            provider_digest = domain_digest(
+                "loopskill-provider-request-v1\n", provider_request
+            )
+            baseline_names = {
+                "artifact_baseline_blob_digest",
+                "artifact_profile",
+                "workspace_identity_digest",
+            }
+            resolved = command.machine_bindings["resolved_refs"]
+            if not baseline_names <= set(resolved) or resolved["artifact_profile"] not in {
+                "existing_git",
+                "non_git",
+                "new_git",
+            }:
+                raise ProtocolRejection(
+                    "INVALID_COMMAND", "next Goal artifact baseline is incomplete"
+                )
+            snapshot["external_effects"][effect_ref] = {
+                "action": previous_attempt["action"],
+                "artifact_baseline_blob_digest": resolved[
+                    "artifact_baseline_blob_digest"
+                ],
+                "artifact_profile": resolved["artifact_profile"],
+                "attempt_ref": attempt_ref,
+                "goal_ref": candidate,
+                "host_resource_ref": chain["host_resource_ref"],
+                "revision": 1,
+                "state": "ATTEMPT_COMMITTED",
+                "target_ref": chain["provider_target"],
+                "workspace_identity_digest": resolved["workspace_identity_digest"],
+            }
+            snapshot["attempts"][attempt_ref] = {
+                "action": previous_attempt["action"],
+                "automatic_budget_consumed": True,
+                "executor_actor_ref": command.actor_ref,
+                "executor_grant_ref": command.authority_grant_ref,
+                "external_effect_ref": effect_ref,
+                "ordinal": position + 2,
+                "provider_idempotency_key": chain["provider_key"],
+                "provider_request": provider_request,
+                "provider_request_digest": provider_digest,
+                "revision": 1,
+                "state": "COMMITTED",
+                "subject_kind": "ExternalEffectRef",
+                "subject_ref": effect_ref,
+                "target_ref": chain["provider_target"],
+            }
             plan["active_goal_ref"] = candidate
             next_goal_ref = candidate
             events.append(_event("GoalActivated", goal_ref=candidate))
+            events.append(_event("ExternalEffectPrepared", external_effect_ref=effect_ref))
     return snapshot, events, {
         "goal_state": disposition,
         "next_goal_ref": next_goal_ref,

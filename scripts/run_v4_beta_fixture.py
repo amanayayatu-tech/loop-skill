@@ -82,6 +82,8 @@ def _rebuild_first(command, semantic: dict[str, Any]):
             "budget": semantic["budget"],
             "execution_mode": "STANDARD",
             "external_actions": tuple(semantic["external_actions"]),
+            "goal_plan": (semantic["goal"],),
+            "max_roadmap_revisions": 1,
             "objective": semantic["goal"],
             "stop_conditions": tuple(semantic["stop_conditions"]),
             "write_scope": tuple(semantic["write_scope"]),

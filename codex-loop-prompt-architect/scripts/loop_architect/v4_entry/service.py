@@ -142,7 +142,37 @@ def _machine_bootstrap(
             "A valid prepared confirmation is required before starting.",
             "Review the current boundary summary and confirm it explicitly.",
         )
-    goal_ref = f"goal-{identity('goal')}"
+    objectives = tuple(prepared.manifest.goal_plan)
+    if not objectives or objectives[0] != prepared.manifest.goal:
+        raise EntryError(
+            "USER_PREPARATION_INVALID",
+            "The prepared Goal plan no longer matches its primary Goal.",
+            "Prepare and confirm the loop again.",
+        )
+
+    def chain_identity(kind: str, index: int) -> str:
+        label = kind if index == 0 else f"{kind}-{index:03d}"
+        return identity(label)
+
+    goal_chains = []
+    for index, objective in enumerate(objectives):
+        goal_chains.append(
+            {
+                "artifact_ref": f"artifact-{chain_identity('startup-artifact', index)}",
+                "attempt_ref": f"attempt-{chain_identity('startup-attempt', index)}",
+                "external_effect_ref": f"external-effect-{chain_identity('startup-effect', index)}",
+                "goal_ref": f"goal-{chain_identity('goal', index)}",
+                "host_resource_ref": f"host-target-{chain_identity('primary-host-resource', index)}",
+                "objective": objective,
+                "provider_key": f"effect-{chain_identity('provider-idempotency', index)}",
+                "provider_target": f"codex-bootstrap-{chain_identity('provider-target', index)}",
+                "report_ref": f"report-{chain_identity('startup-report', index)}",
+                "result_ref": f"result-{chain_identity('startup-result', index)}",
+                "review_ref": f"review-{chain_identity('startup-review', index)}",
+            }
+        )
+    primary_chain = goal_chains[0]
+    goal_ref = primary_chain["goal_ref"]
     author_ref = f"actor-author-{identity('author')}"
     system_ref = f"actor-system-{identity('system')}"
     verifier_ref = f"actor-verifier-{identity('verifier')}"
@@ -153,15 +183,15 @@ def _machine_bootstrap(
     reviewer_grant_ref = f"grant-reviewer-{identity('reviewer-grant')}"
     lifecycle_grant_ref = f"grant-lifecycle-{identity('lifecycle-grant')}"
     operation_id = f"operation-create-{identity('create-operation')}"
-    external_effect_ref = f"external-effect-{identity('startup-effect')}"
-    attempt_ref = f"attempt-{identity('startup-attempt')}"
-    host_resource_ref = f"host-target-{identity('primary-host-resource')}"
-    provider_key = f"effect-{identity('provider-idempotency')}"
-    provider_target = f"codex-bootstrap-{identity('provider-target')}"
-    result_ref = f"result-{identity('startup-result')}"
-    report_ref = f"report-{identity('startup-report')}"
-    artifact_ref = f"artifact-{identity('startup-artifact')}"
-    review_ref = f"review-{identity('startup-review')}"
+    external_effect_ref = primary_chain["external_effect_ref"]
+    attempt_ref = primary_chain["attempt_ref"]
+    host_resource_ref = primary_chain["host_resource_ref"]
+    provider_key = primary_chain["provider_key"]
+    provider_target = primary_chain["provider_target"]
+    result_ref = primary_chain["result_ref"]
+    report_ref = primary_chain["report_ref"]
+    artifact_ref = primary_chain["artifact_ref"]
+    review_ref = primary_chain["review_ref"]
     finalization_ref = f"finalization-{identity('startup-finalization')}"
     actors = {
         author_ref: ActorRef(
@@ -235,7 +265,7 @@ def _machine_bootstrap(
             allowed_commands=("RecordExternalEffectObservation",),
             loop_scope=loop_ref,
             subject_kinds=("ExternalEffectRef",),
-            exact_subjects=(external_effect_ref,),
+            exact_subjects=tuple(chain["external_effect_ref"] for chain in goal_chains),
             not_before=issued_at,
             expires_at=_iso(now + timedelta(days=30)),
             nonce=f"nonce-{identity('observe-nonce')}",
@@ -251,7 +281,7 @@ def _machine_bootstrap(
             allowed_commands=("StageExternalResult",),
             loop_scope=loop_ref,
             subject_kinds=("ExternalEffectRef",),
-            exact_subjects=(external_effect_ref,),
+            exact_subjects=tuple(chain["external_effect_ref"] for chain in goal_chains),
             not_before=issued_at,
             expires_at=_iso(now + timedelta(days=30)),
             nonce=f"nonce-{identity('worker-nonce')}",
@@ -267,7 +297,7 @@ def _machine_bootstrap(
             allowed_commands=("RecordReview",),
             loop_scope=loop_ref,
             subject_kinds=("ResultRef",),
-            exact_subjects=(result_ref,),
+            exact_subjects=tuple(chain["result_ref"] for chain in goal_chains),
             not_before=issued_at,
             expires_at=_iso(now + timedelta(days=30)),
             nonce=f"nonce-{identity('reviewer-nonce')}",
@@ -284,7 +314,7 @@ def _machine_bootstrap(
             allowed_commands=("AcknowledgeResult",),
             loop_scope=loop_ref,
             subject_kinds=("ResultRef",),
-            exact_subjects=(result_ref,),
+            exact_subjects=tuple(chain["result_ref"] for chain in goal_chains),
             not_before=issued_at,
             expires_at=_iso(now + timedelta(days=30)),
             nonce=f"nonce-{identity('artifact-nonce')}",
@@ -309,14 +339,17 @@ def _machine_bootstrap(
             ),
             loop_scope=loop_ref,
             subject_kinds=("ResultRef", "GoalRef", "LoopRef"),
-            exact_subjects=(
-                result_ref,
-                report_ref,
-                artifact_ref,
-                review_ref,
-                goal_ref,
-                loop_ref,
-            ),
+            exact_subjects=tuple(
+                ref
+                for chain in goal_chains
+                for ref in (
+                    chain["result_ref"],
+                    chain["report_ref"],
+                    chain["artifact_ref"],
+                    chain["review_ref"],
+                    chain["goal_ref"],
+                )
+            ) + (loop_ref,),
             not_before=issued_at,
             expires_at=_iso(now + timedelta(days=30)),
             nonce=f"nonce-{identity('lifecycle-nonce')}",
@@ -393,6 +426,12 @@ def _machine_bootstrap(
                 "new_goal_ref": goal_ref,
                 "new_host_resource_ref": host_resource_ref,
                 "provider_idempotency_key": provider_key,
+                **{
+                    f"goal_chain_{index:03d}_{name}": value
+                    for index, chain in enumerate(goal_chains)
+                    for name, value in chain.items()
+                    if name != "objective"
+                },
             },
             "receipt_refs": {"receipt": prepared.confirmation.receipt_ref},
             "resolved_refs": {
@@ -419,6 +458,8 @@ def _machine_bootstrap(
             "authorization_boundaries": prepared.manifest.authorization_boundaries,
             "budget": prepared.manifest.budget,
             "execution_mode": prepared.manifest.execution_mode,
+            "goal_plan": prepared.manifest.goal_plan,
+            "max_roadmap_revisions": prepared.manifest.max_roadmap_revisions,
             "external_actions": prepared.manifest.external_actions,
             "objective": prepared.manifest.goal,
             "stop_conditions": prepared.manifest.stop_conditions,
@@ -621,40 +662,6 @@ def start_loop(
                 )
                 store.authority = authority
                 store.apply(command)
-                if len(prepared_context.manifest.goal_plan) > 1:
-                    snapshot = store.snapshot(loop_ref)
-                    assert snapshot is not None
-                    allocations = {
-                        f"new_goal_ref_{index:03d}": "goal-"
-                        + domain_digest(
-                            "loopskill-goal-plan-ref-v1\n",
-                            {"index": index, "loop_ref": loop_ref},
-                        )[:24]
-                        for index in range(
-                            1, len(prepared_context.manifest.goal_plan)
-                        )
-                    }
-                    store.apply(
-                        _machine_command(
-                            store,
-                            snapshot,
-                            command_type="RegisterGoalPlan",
-                            operation_label="register-goal-plan",
-                            subject_kind="LoopRef",
-                            subject_ref=loop_ref,
-                            expected_subject_revisions={},
-                            machine_bindings={
-                                "allocate_refs": allocations,
-                                "receipt_refs": {},
-                                "resolved_refs": {},
-                            },
-                            semantic_payload={
-                                "execution_mode": prepared_context.manifest.execution_mode,
-                                "objectives": list(prepared_context.manifest.goal_plan),
-                            },
-                            clock=clock,
-                        )
-                    )
                 store.verify_integrity()
         if host_provider is not None:
             return _run_startup_provider(
@@ -956,7 +963,14 @@ def policy_view(*, root: Path | str) -> Mapping[str, Any]:
             )
             for goal_ref in ordered_refs
         )
-        envelope = PolicyEnvelope(allowed_goal_ids=ordered_refs)
+        envelope = PolicyEnvelope(
+            allowed_goal_ids=ordered_refs,
+            max_roadmap_revisions=(
+                4
+                if not isinstance(plan, Mapping)
+                else int(plan.get("max_roadmap_revisions", 1))
+            ),
+        )
         attempt = next(iter(snapshot.get("attempts", {}).values()), None)
         mode = (
             str(plan["mode"])
@@ -1344,7 +1358,34 @@ def _result_semantics(observation: Mapping[str, Any]) -> tuple[str, str]:
     return "UNVERIFIABLE", "Codex output lacked one valid semantic result envelope."
 
 
-def _allocated_subjects(store: SQLiteStore) -> dict[str, str]:
+def _allocated_subjects(
+    store: SQLiteStore,
+    snapshot: Mapping[str, Any] | None = None,
+    goal_ref: str | None = None,
+) -> dict[str, str]:
+    if snapshot is not None and goal_ref is not None:
+        chain = snapshot["goals"].get(goal_ref, {}).get("chain_refs")
+        if isinstance(chain, Mapping):
+            required = {"artifact_ref", "report_ref", "result_ref", "review_ref"}
+            if required <= set(chain):
+                values = {
+                    kind: str(chain[f"{kind}_ref"])
+                    for kind in ("result", "report", "artifact", "review")
+                }
+                finalizations = {
+                    subject
+                    for grant in store.authority.grants.values()
+                    for subject in grant.exact_subjects
+                    if subject.startswith("finalization-")
+                }
+                if len(finalizations) != 1:
+                    raise EntryError(
+                        "USER_STORE_UNAVAILABLE",
+                        "The machine-owned finalization identity is unavailable.",
+                        "Preserve the store and inspect diagnostics.",
+                    )
+                values["finalization"] = finalizations.pop()
+                return values
     values: dict[str, str] = {}
     for kind in ("result", "report", "artifact", "review", "finalization"):
         matches = {
@@ -1506,6 +1547,42 @@ def sync_loop(
 ) -> UserFacingStatus:
     """Advance the exact Host-result chain; every local step is replay-safe."""
     path = _existing_store_path(root)
+    pending_receipt = None
+    with SQLiteStore(path) as store:
+        descriptors = store.loop_descriptors()
+        if len(descriptors) == 1:
+            pending_snapshot = store.snapshot(descriptors[0]["loop_ref"])
+            if pending_snapshot is not None:
+                committed = [
+                    effect
+                    for effect in pending_snapshot.get("external_effects", {}).values()
+                    if effect.get("state") == "ATTEMPT_COMMITTED"
+                ]
+                if len(committed) == 1:
+                    pending_effect = committed[0]
+                    attempt = store.effect_attempt(pending_effect["attempt_ref"])
+                    if attempt is None:
+                        raise EntryError(
+                            "USER_STORE_UNAVAILABLE",
+                            "The current Host Attempt is unavailable.",
+                            "Preserve the store and inspect diagnostics.",
+                        )
+                    pending_receipt = CodexHostAdapter(
+                        host_provider,
+                        store,
+                        executor_ref="loopskill-entry-executor-v1",
+                        issuer_ref=host_issuer_ref,
+                        issuer_trust=host_issuer_trust,
+                        clock=clock,
+                    ).execute(attempt)
+                elif len(committed) > 1:
+                    raise EntryError(
+                        "USER_STORE_UNAVAILABLE",
+                        "More than one Host Attempt is ready.",
+                        "Preserve the store and inspect diagnostics.",
+                    )
+    if pending_receipt is not None:
+        record_external_observation(pending_receipt, root=path.parent)
     try:
         with SQLiteStore(path) as store:
             descriptors = store.loop_descriptors()
@@ -1525,13 +1602,45 @@ def sync_loop(
                 )
             if snapshot["execution"]["state"] == "TERMINAL":
                 return _status_from_store(store, loop_ref)
-            if len(snapshot["external_effects"]) != 1:
+            active_goals = [
+                goal_ref
+                for goal_ref, goal in snapshot["goals"].items()
+                if goal.get("state") == "ACTIVE"
+            ]
+            if len(active_goals) == 1:
+                goal_ref = active_goals[0]
+                chain = snapshot["goals"][goal_ref].get("chain_refs")
+                effect_ref = (
+                    str(chain["external_effect_ref"])
+                    if isinstance(chain, Mapping)
+                    else next(iter(snapshot["external_effects"]))
+                )
+            elif len(active_goals) == 0 and isinstance(
+                snapshot.get("current_result_ref"), str
+            ):
+                current_result = snapshot["results"][snapshot["current_result_ref"]]
+                goal_ref = str(current_result["goal_ref"])
+                effect_ref = str(current_result["external_effect_ref"])
+            elif (
+                len(active_goals) == 0
+                and len(snapshot["goals"]) == 1
+                and len(snapshot["external_effects"]) == 1
+            ):
+                goal_ref = next(iter(snapshot["goals"]))
+                effect_ref = next(iter(snapshot["external_effects"]))
+            else:
                 raise EntryError(
                     "USER_STORE_UNAVAILABLE",
-                    "The startup Host subject is unavailable.",
+                    "The current Goal chain is unavailable.",
                     "Preserve the store and inspect diagnostics.",
                 )
-            effect_ref, effect = next(iter(snapshot["external_effects"].items()))
+            effect = snapshot["external_effects"].get(effect_ref)
+            if effect is None:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The current Host subject is unavailable.",
+                    "Preserve the store and inspect diagnostics.",
+                )
             if effect["state"] != "OBSERVED":
                 return _status_from_store(store, loop_ref)
             host_resource = snapshot["host_resources"].get(effect["host_resource_ref"])
@@ -1552,21 +1661,21 @@ def sync_loop(
                 issuer_trust=host_issuer_trust,
                 clock=clock,
             )
-            allocated = _allocated_subjects(store)
+            allocated = _allocated_subjects(store, snapshot, goal_ref)
             result_ref = allocated["result"]
             artifact_ref = allocated["artifact"]
             report_ref = allocated["report"]
             review_ref = allocated["review"]
             finalization_ref = allocated["finalization"]
             observation = None
-            if not snapshot["results"] or snapshot["results"][result_ref]["state"] == "STAGED":
+            if result_ref not in snapshot["results"] or snapshot["results"][result_ref]["state"] == "STAGED":
                 observation = adapter.read_task_result(provider_id)
                 if observation["status"] == "PENDING":
-                    if snapshot["results"]:
+                    if result_ref in snapshot["results"]:
                         raise HostUnavailable("Codex task result regressed after staging")
                     return _status_from_store(store, loop_ref)
                 outcome, summary = _result_semantics(observation)
-                if snapshot["results"]:
+                if result_ref in snapshot["results"]:
                     if (
                         snapshot["results"][result_ref].get("source_observation_digest")
                         != observation["result_digest"]
@@ -1644,7 +1753,7 @@ def sync_loop(
                 snapshot = store.snapshot(loop_ref)
                 assert snapshot is not None
 
-            if not snapshot["reviews"]:
+            if review_ref not in snapshot["reviews"]:
                 artifact = snapshot["artifacts"][artifact_ref]
                 verdict = (
                     "PASS"
@@ -1681,7 +1790,6 @@ def sync_loop(
                 if verdict == "REPAIR":
                     return _status_from_store(store, loop_ref)
 
-            goal_ref = next(iter(snapshot["goals"]))
             if snapshot["goals"][goal_ref]["state"] == "ACTIVE":
                 review_state = snapshot["reviews"][review_ref]["state"]
                 goal_disposition = (
@@ -1691,6 +1799,31 @@ def sync_loop(
                     if outcome == "FAILED"
                     else "LIMITATION"
                 )
+                next_baseline_bindings = {}
+                plan = snapshot.get("goal_plan")
+                if isinstance(plan, Mapping):
+                    ordered = list(plan["ordered_goal_refs"])
+                    if ordered.index(goal_ref) + 1 < len(ordered):
+                        if workspace_root is None:
+                            raise EntryError(
+                                "USER_STORE_UNAVAILABLE",
+                                "The next Goal artifact workspace is unavailable.",
+                                "Preserve the loop and restore its confirmed workspace.",
+                            )
+                        next_baseline = prepare_artifact_baseline(
+                            workspace_root,
+                            expected_profile=str(effect["artifact_profile"]),
+                            expected_workspace_identity_digest=str(
+                                effect["workspace_identity_digest"]
+                            ),
+                        )
+                        next_baseline_bindings = {
+                            "artifact_baseline_blob_digest": persist_baseline_blobs(
+                                store, next_baseline
+                            ),
+                            "artifact_profile": next_baseline.profile,
+                            "workspace_identity_digest": next_baseline.workspace_identity_digest,
+                        }
                 store.apply(
                     _machine_command(
                         store,
@@ -1706,7 +1839,10 @@ def sync_loop(
                         machine_bindings={
                             "allocate_refs": {},
                             "receipt_refs": {},
-                            "resolved_refs": {"review_ref": review_ref},
+                            "resolved_refs": {
+                                "review_ref": review_ref,
+                                **next_baseline_bindings,
+                            },
                         },
                         semantic_payload={"disposition": goal_disposition},
                         clock=clock,

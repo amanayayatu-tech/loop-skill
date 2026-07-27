@@ -76,6 +76,15 @@
           },
           "type": "array"
         },
+        "goal_plan": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_roadmap_revisions": {
+          "type": "integer"
+        },
         "objective": {
           "type": "string"
         },
@@ -310,7 +319,7 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "manifest_sha256": "e09551c3c61868caf58dd95b1d4bfcf0a741b713a84b132b71d426f3219bd9b1",
+  "manifest_sha256": "fbb6d37d7247ffac97b5652b39a8f1cde73848c9dfc02c11532d19b6895e1023",
   "protocol_version": "4.0.0",
   "reference_kinds": [
     "LoopRef",
@@ -430,6 +439,7 @@
       "goal_plan",
       "task_horizon",
       "execution_mode",
+      "max_roadmap_revisions",
       "selection_reason",
       "write_scope",
       "budget",
