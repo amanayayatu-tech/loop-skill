@@ -15,6 +15,15 @@ Chats end. Windows refresh. The work rarely ends at the same moment. The hardest
 
 It **designs the Loop and generates the Pack**. It does not implement the target project for you, and one invocation does not silently launch an unattended run.
 
+> **Local 4.0 candidate notice:** this branch contains the unreleased LoopSkill
+> 4 compatibility refactor. It keeps one goal file or one main command as the
+> default entry, while preserving the explicit
+> `INTAKE → PREPARE → CONFIRM → START` authorization boundary. The public stable
+> line remains v3.3.8; do not overwrite an existing installation or migrate a
+> real v3 loop with this candidate. See the
+> [English 4.0 quickstart](docs/v4/quickstart.en.md) and
+> [migration and rollback boundary](docs/v4/migration-and-rollback.md).
+
 ## Loop, state-machine, and graph semantics
 
 LoopSkill is a **governed, evidence-bound execution and completion control plane**. Consecutive Controller turns drive the outer loop; persistent canonical state, typed operations, guards, ledgers, leases, outboxes, evidence binding, and deterministic recovery constrain the work inside it. It therefore has explicit state-machine and graph semantics, but deliberately does not offer arbitrary DAG orchestration and is not a general-purpose graph workflow runtime.

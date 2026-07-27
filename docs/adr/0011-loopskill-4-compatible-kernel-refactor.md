@@ -1,6 +1,7 @@
 # ADR 0011: LoopSkill 4.0 compatible kernel refactor
 
-- Status: Architecture accepted; local implementation authorized through an RC candidate; public release remains unauthorized
+- Status: Accepted
+- Implementation boundary: local implementation authorized through an RC candidate; public release remains unauthorized
 - Date: 2026-07-27
 - Decision scope: LoopSkill 4.0 architecture, authority boundary, recovery semantics, compatibility, and gates
 - Conformance design: `docs/conformance/loopskill-4-conformance-corpus-design.md`
@@ -28,7 +29,7 @@ isolated worktree. Only the exact two design documents are carried from the
 review carrier. Treatment assets are selected by full SHA/path/symbol
 provenance; the treatment commit is not promoted or merged wholesale.
 
-## Context and evidence strength
+## Context
 
 ### Confirmed by repository code or history
 
@@ -73,7 +74,7 @@ The exploratory observation that 0 of 19 scored B3 workflows reached
 post-interim truncation makes it exploratory/nonconfirmatory; it is not a causal
 or superiority conclusion.
 
-## Decision and rejected routes
+## Decision
 
 LoopSkill 4.0 uses a typed protocol manifest, deterministic reducer,
 transactional store contract, explicit authority grants, orthogonal subject
@@ -901,6 +902,22 @@ automatic migration of real v3 loops, and any stable claim require a separate
 author decision. Stable retains all UX gates and the one-entry plus explicit
 confirmation contract.
 
+The P8 distribution path reuses the existing conflict-safe whole-Skill staging,
+absolute Python/MCP registration and source/install verifier. The registered v3
+MCP bridge remains a one-major-cycle anti-corruption facade for old loops; it is
+not imported by v4 Kernel and never becomes the v4 protocol truth. A receipt-
+bound uninstaller restores the install-time backup rather than reverse-editing
+TOML. Its supported atomicity claim is bounded process-failure recovery with
+exact macOS readback, not one transaction spanning arbitrary filesystem power
+loss. `loopskill4 doctor` lazy-loads the optional operability projection, and
+`compile` validates prepared bytes without Host or execution effect.
+
+The candidate static gate records exact commit/tree, Python runtime, generated
+protocol counts, dependency/SBOM and license inventory, secret scan, tracked
+large-artifact scan and zero public effect. The App receipt stores only a digest
+of the machine-returned Host observation, never raw thread/task identity or
+content. These receipts are build evidence, not runtime authority.
+
 ## Non-goals and safeguards
 
 4.0 local development does not promise patch success, long-horizon superiority,
@@ -918,6 +935,15 @@ migration safety, installed-product effectiveness, or release readiness.
 | safety recreates non-closure | terminal disposition independent from assurance strength |
 | corpus becomes governance | immutable fixtures only; no writer, heartbeat, retry, or Supervisor |
 | phase PASS is overclaimed | bind each claim to its checkpoint SHA and exact gate; never infer effectiveness or release readiness |
+
+## Evolution
+
+Evolution is allowed only through the frozen conformance and capability
+preservation gates. It may simplify internal implementation, replace a port
+implementation, or remove a compatibility facade after its one-major-cycle
+sunset, but cannot introduce a second writer, dual write, model-carried control
+authority, blind retry, implicit real-v3 migration, or a public-release claim
+without a separate author decision.
 
 ## Consequences
 

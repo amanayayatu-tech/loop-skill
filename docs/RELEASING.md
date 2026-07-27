@@ -1,5 +1,11 @@
 # Release process
 
+> LoopSkill 4 uses the local-only RC gate in
+> [`docs/v4/rc-acceptance.md`](v4/rc-acceptance.md). RC-ready is an author
+> approval state, not permission to update `VERSION`, tag, push, publish,
+> replace the current installation, or migrate a real v3 loop. The v3 release
+> procedure below remains the public maintenance procedure for v3.3.8.
+
 `VERSION` is the package version source of truth. The current main Mac is the
 only release authority. GitHub Actions is a
 compatibility mirror only: a green GitHub check is never release acceptance.

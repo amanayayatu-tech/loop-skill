@@ -15,6 +15,13 @@
 
 它负责**设计 Loop 和生成 Pack**，不会替你直接实现目标项目，也不会仅凭一句调用就自动启动无人值守任务。
 
+> **4.0 本地候选说明：** 本分支包含尚未发布的 LoopSkill 4 兼容性重构。
+> 它保留“一个目标文件或一次主命令”的默认入口，但不会静默跳过
+> `INTAKE → PREPARE → CONFIRM → START` 授权边界。公开稳定版本仍是 v3.3.8；
+> 不要用本候选覆盖现有安装或迁移真实 v3 loop。参见
+> [4.0 中文快速开始](docs/v4/quickstart.zh-CN.md)与
+> [迁移和回滚边界](docs/v4/migration-and-rollback.md)。
+
 ## Loop、状态机与 Graph：LoopSkill 到底是什么
 
 LoopSkill 是一个**受治理、证据绑定的执行与完成控制面**：外层由连续的 Controller turn 驱动，内部用持久化 canonical state、受类型约束的操作、guard、ledger、lease、outbox、证据绑定和确定性恢复来约束长程工作。它因此具有明确的状态机与 Graph 语义，但刻意不提供任意 DAG 编排能力，也不是通用 Graph workflow runtime。

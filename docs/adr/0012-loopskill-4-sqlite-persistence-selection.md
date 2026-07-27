@@ -1,6 +1,7 @@
 # ADR 0012: Select SQLite for the LoopSkill 4 local canonical store
 
-- Status: Accepted for LoopSkill 4 local development
+- Status: Accepted
+- Implementation boundary: selected for LoopSkill 4 local development only
 - Date: 2026-07-27
 - Amends: ADR 0011 OD-1 candidate decision
 - Scope: local operation acceptance, reducer snapshot, events, outbox, and immutable blob index
@@ -77,3 +78,18 @@ This is local persistence conformance, not Host Adapter conformance, migration
 readiness, effectiveness evidence, or release approval. Schema migration policy
 and long-running production performance remain later gates; incompatible schema
 changes require an explicit store-version migration, never silent reinterpretation.
+
+## Consequences
+
+SQLite is the sole concrete local canonical store selected for the v4
+candidate. The in-memory store remains a test oracle only. Operational tooling
+must retain deterministic canonical export, explicit corruption errors, bounded
+contention and backup readback; no projection or compatibility layer may become
+a second ledger.
+
+## Evolution
+
+Schema changes require an explicit store-version migration and conformance
+evidence. Replacing SQLite would require a new ADR and the same crash, backup,
+concurrency, inspection, export, corruption and macOS gates; it cannot be
+introduced as an additional reconciler or dual writer.

@@ -323,3 +323,20 @@ invariants:
     evidence_surfaces: [docs/RELEASING.md]
     adr: [docs/adr/0010-mcp-state-gateway.md]
     introduced_version: 3.3.0
+
+  - id: INV-V4-COMPATIBLE-REFACTOR-001
+    title: LoopSkill 4 compatible refactor remains isolated and evidence gated
+    level: PROVISIONAL
+    status: ACTIVE
+    scope: [unreleased v4 protocol kernel store ports adapters entry compatibility and local RC acceptance]
+    rationale: The v4 candidate must be indexable and testable without silently replacing the v3.3.8 public maintenance contract or becoming a second writer for v3 loops.
+    normative_statement: LoopSkill 4 uses one typed protocol authority one canonical transactional writer and port-isolated Store Artifact and Codex Adapter implementations. Its entry preserves INTAKE PREPARE CONFIRM START with zero user-supplied control identity. Compatibility is read shadow preview import and human-readable export only for one major cycle with no dual write or real-loop implicit migration. RC-ready is local exact-SHA evidence and never a stable or public-release claim.
+    non_goals: [changing the v3.3.8 public maintenance baseline, promoting paper-treatment v3.3.12, authorizing push tag release or real-loop migration]
+    allowed_evolution: [replace provisional implementation details after conformance and author approval while retaining v3 data safety one writer machine authority and explicit confirmation]
+    authoritative_sources: [docs/adr/0011-loopskill-4-compatible-kernel-refactor.md, docs/conformance/loopskill-4-conformance-corpus-design.md, docs/architecture/v3-to-v4-capability-preservation-register.md]
+    implementation_surfaces: [codex-loop-prompt-architect/scripts/loop_architect/v4_alpha, codex-loop-prompt-architect/scripts/loop_architect/v4_entry, codex-loop-prompt-architect/scripts/loop_architect/v4_persistence, codex-loop-prompt-architect/scripts/loop_architect/v4_adapters, codex-loop-prompt-architect/scripts/loop_architect/v4_artifacts, codex-loop-prompt-architect/scripts/loop_architect/v4_policy, codex-loop-prompt-architect/scripts/loop_architect/v4_operability, codex-loop-prompt-architect/scripts/loop_architect/v4_compat]
+    schema_surfaces: [protocol/v4/loopskill-v4.protocol.json, docs/architecture/v3-to-v4-capability-preservation-register.json]
+    test_surfaces: [tests/test_v4_alpha_pure_kernel.py, tests/test_v4_persistence_spike.py, tests/test_v4_protocol_authority.py, tests/test_v4_artifact_capabilities.py, tests/test_v4_codex_adapter.py, tests/test_v4_single_entry_ux.py, tests/test_v4_compatibility_import.py, tests/test_v4_product_policy_operability.py, tests/test_v4_rc_acceptance.py, tests/test_v4_rc_distribution.py]
+    evidence_surfaces: [evidence/v4-development]
+    adr: [docs/adr/0011-loopskill-4-compatible-kernel-refactor.md, docs/adr/0012-loopskill-4-sqlite-persistence-selection.md]
+    introduced_version: 4.0.0-rc-candidate

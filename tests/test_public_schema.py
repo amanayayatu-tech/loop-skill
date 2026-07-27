@@ -74,7 +74,7 @@ class PublicDraft202012SchemaTests(unittest.TestCase):
 
     def test_all_committed_example_inputs_validate(self) -> None:
         validator = Draft202012Validator(INPUT_SCHEMA)
-        paths = sorted((ROOT / "examples").glob("*-input.json"))
+        paths = sorted((ROOT / "examples").glob("0[1-3]-*-input.json"))
         self.assertEqual(len(paths), 3)
         for path in paths:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -84,6 +84,32 @@ class PublicDraft202012SchemaTests(unittest.TestCase):
                 [],
                 f"{path.name}: " + "; ".join(error.message for error in errors),
             )
+
+    def test_v4_semantic_intake_examples_validate_on_the_v4_entry(self) -> None:
+        import importlib.util
+
+        entry_path = ROOT / "codex-loop-prompt-architect" / "scripts" / "loopskill4"
+        spec = importlib.util.spec_from_file_location(
+            "loopskill4_public_examples", entry_path
+        )
+        if spec is None:
+            from importlib.machinery import SourceFileLoader
+
+            spec = importlib.util.spec_from_loader(
+                "loopskill4_public_examples",
+                SourceFileLoader("loopskill4_public_examples", str(entry_path)),
+            )
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        paths = sorted((ROOT / "examples").glob("v4-*-input.json"))
+        self.assertEqual(len(paths), 2)
+        for path in paths:
+            value = module.read_intake_input(str(path))
+            self.assertTrue(value.goal)
+            self.assertIn(value.task_horizon, {"long", "adaptive"})
+            self.assertTrue(value.write_scope)
+            self.assertTrue(value.acceptance_criteria)
 
     def test_empty_dependency_arrays_are_schema_valid(self) -> None:
         payload = json.loads(

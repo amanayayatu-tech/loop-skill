@@ -2256,7 +2256,7 @@
       "rollback": "Checks are read-only; failed checks create no loop or Host resource.",
       "user_visible_change": "Default output is concise; exact identity evidence is diagnostics-only.",
       "rc_blocking": true,
-      "acceptance_evidence": "Normal, dependency failure, source/install drift, and zero-side-effect command cases; P7 Doctor projection binding tests/test_v4_product_policy_operability.py, distribution remains P8.",
+      "acceptance_evidence": "Normal, dependency failure, source/install drift, and zero-side-effect command cases; P7 projection binding plus P8 lazy-loaded installed Doctor and read-only compile coverage in tests/test_v4_rc_distribution.py.",
       "acceptance_case_ids": ["CAP-OPERABILITY-DOCTOR-PASS","CAP-OPERABILITY-DOCTOR-DRIFT","CAP-OPERABILITY-COMPILE-PASS","CAP-OPERABILITY-COMPILE-REJECT","CAP-OPERABILITY-CANARY-PASS","CAP-OPERABILITY-CANARY-REJECT","CAP-OPERABILITY-LIFECYCLE-BOUNDARY","CAP-OPERABILITY-ZERO"],
       "covers": ["command:(?:doctor|compile|canary)", "module:codex-loop-prompt-architect/scripts/loop_architect/manifest_compiler[.]py", "test_file:tests/test_loopctl_p0[.]py", "error_owner:PRES-OPERABILITY:.*"]
     },
@@ -2376,9 +2376,9 @@
       "rollback": "Restore byte-exact prior config/skill state or leave the isolated v4 install absent.",
       "user_visible_change": "v3 stays installed and readable until separately authorized removal after the compatibility cycle.",
       "rc_blocking": true,
-      "acceptance_evidence": "Clean install, conflict reject, interruption boundary, atomic rollback/uninstall and zero-drift cases.",
+      "acceptance_evidence": "Clean isolated install, conflict reject, three injected uninstall process-failure boundaries, exact prior-byte restore, drift rejection, absolute runtime/MCP readback and zero source/install drift in tests/test_v4_rc_distribution.py; no cross-filesystem power-loss transaction is claimed.",
       "acceptance_case_ids": ["CAP-DISTRIBUTION-INSTALL","CAP-DISTRIBUTION-CONFLICT","CAP-DISTRIBUTION-ROLLBACK","CAP-DISTRIBUTION-RUNTIME-ID","CAP-DISTRIBUTION-MCP","CAP-DISTRIBUTION-UNINSTALL","CAP-DISTRIBUTION-DRIFT","CAP-DISTRIBUTION-ZERO"],
-      "covers": ["release:INSTALL-.*", "schema:INSTALL-MANIFEST-SCHEMA", "schema_symbol:codex-loop-prompt-architect/references/install-manifest[.]schema[.]json/.*", "reference:codex-loop-prompt-architect/references/install-manifest[.]schema[.]json", "test_file:tests/test_(?:install_manifest|installer_contract|mcp_registration|runtime_python_binding)[.]py", "error_owner:PRES-DISTRIBUTION:.*"]
+      "covers": ["release:INSTALL-.*", "schema:INSTALL-MANIFEST-SCHEMA", "schema_symbol:codex-loop-prompt-architect/references/install-manifest[.]schema[.]json/.*", "reference:codex-loop-prompt-architect/references/install-manifest[.]schema[.]json", "test_file:tests/test_(?:install_manifest|installer_contract|mcp_registration|runtime_python_binding|v4_rc_distribution)[.]py", "error_owner:PRES-DISTRIBUTION:.*"]
     },
     {
       "capability_id": "PRES-DOCS",
@@ -2396,7 +2396,7 @@
       "rollback": "Documentation never mutates user data or installation.",
       "user_visible_change": "The default path is shorter in control details but retains intake, preparation, confirmation, and start.",
       "rc_blocking": true,
-      "acceptance_evidence": "Chinese/English normal flow, invalid example reject, version-boundary, and zero-side-effect documentation checks.",
+      "acceptance_evidence": "Root README candidate boundary, Chinese/English v4 quickstarts, Standard/Adaptive semantic fixtures, migration/rollback guide, stale-example rejection and zero-side-effect documentation checks.",
       "acceptance_case_ids": ["CAP-DOCS-ZH-QUICKSTART","CAP-DOCS-EN-QUICKSTART","CAP-DOCS-MINIMAL","CAP-DOCS-STANDARD","CAP-DOCS-ADAPTIVE","CAP-DOCS-MIGRATION","CAP-DOCS-STALE-REJECT","CAP-DOCS-ZERO"],
       "covers": ["flow:FLOW-INSTALL-QUICKSTART", "schema:README-WORKFLOW-SPEC"]
     },
@@ -2416,9 +2416,9 @@
       "rollback": "A failed candidate remains local and never changes public release or installation channels.",
       "user_visible_change": "RC-ready remains an approval state, never an automatic stable release.",
       "rc_blocking": true,
-      "acceptance_evidence": "Exact SHA, drift reject, canary boundary, zero-publication, SBOM/license/secret and install evidence.",
+      "acceptance_evidence": "scripts/validate_v4_rc.py binds exact clean SHA/tree, protocol counts, runtime, SBOM/license inventory, secret/large-artifact scans, zero publication and a strict privacy-minimized App canary receipt; tests/test_v4_rc_acceptance.py mutates critical canary fields and candidate cleanliness.",
       "acceptance_case_ids": ["CAP-RELEASE-SHA","CAP-RELEASE-MANIFEST","CAP-RELEASE-COMPAT-CI","CAP-RELEASE-CANARY","CAP-RELEASE-SBOM","CAP-RELEASE-LICENSE","CAP-RELEASE-SECRET","CAP-RELEASE-ARTIFACT","CAP-RELEASE-FAILURE","CAP-RELEASE-CANDIDATE-DRIFT","CAP-RELEASE-NO-PUBLIC-EFFECT","CAP-RELEASE-AUTHOR-PACKET","UX-009-a","F-001-a"],
-      "covers": ["release:RELEASE-.*", "schema:APP-CANARY-RECEIPT-SCHEMA", "schema_symbol:codex-loop-prompt-architect/references/app-canary-receipt[.]schema[.]json/.*", "reference:codex-loop-prompt-architect/references/app-canary-receipt[.]schema[.]json", "test_file:tests/test_(?:app_canary_receipt|release_contract|release_identity|whitespace_range)[.]py", "error_owner:PRES-RELEASE:.*"]
+      "covers": ["release:RELEASE-.*", "schema:APP-CANARY-RECEIPT-SCHEMA", "schema_symbol:codex-loop-prompt-architect/references/app-canary-receipt[.]schema[.]json/.*", "reference:codex-loop-prompt-architect/references/app-canary-receipt[.]schema[.]json", "test_file:tests/test_(?:app_canary_receipt|release_contract|release_identity|whitespace_range|v4_rc_acceptance)[.]py", "error_owner:PRES-RELEASE:.*"]
     },
     {
       "capability_id": "PRES-DEPRECATIONS",

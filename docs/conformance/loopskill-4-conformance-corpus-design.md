@@ -1039,6 +1039,25 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
 - stable/public release: always requires separate author approval and is not
   implied by an RC-ready result.
 
+The RC distribution implementation binds `CAP-DISTRIBUTION-*` to the existing
+staged installer plus `scripts/uninstall_v4.py` and
+`tests/test_v4_rc_distribution.py`. The uninstall fault parameter expands the
+rollback instance across `after_skill_withdrawn`, `after_config_restored`, and
+`after_prior_skill_restored`; each is an independent subcase and must restore
+the exact installed pre-state. Config or installed-file drift rejects before
+mutation. The test root is disposable and never the current user `CODEX_HOME`.
+
+`CAP-RELEASE-*` binds `scripts/validate_v4_rc.py` and
+`tests/test_v4_rc_acceptance.py`. The static receipt must be generated at the
+exact clean candidate HEAD and includes tree digest, generated protocol counts,
+absolute Python, dependency/license inventory, secret and large-artifact
+results, and zero public effects. The App canary receipt rejects extra raw Host
+identity/content fields and independently requires: intake effects `0`, prepare
+Host effects `0`, confirmation `1`, create `1`, readback `1`, manual control
+identity `0`, resend `0`, acknowledged Result, PASS Review, acknowledged
+Finalization, and preserved UNKNOWN semantics. A synthetic fixture can validate
+this shape but cannot satisfy `CAP-RELEASE-CANARY` or `UX-009-a`.
+
 32 KiB Pack and at least 50% control-interaction reduction were candidate beta
 targets, not alpha correctness gates. The P7 pre-comparison freeze makes them
 blocking for beta and RC: the exact v3.3.8 compact Pack is 70,805 bytes and the
