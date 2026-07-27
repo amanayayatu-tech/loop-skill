@@ -39,6 +39,9 @@ P6_EVIDENCE_RELATIVE = Path(
 P7_BASELINE_RELATIVE = Path(
     "evidence/v4-development/p7-v3-baseline-freeze.json"
 )
+P7_EVIDENCE_RELATIVE = Path(
+    "evidence/v4-development/p7-policy-operability-and-comparison-evidence.json"
+)
 
 ALLOWED_DISPOSITIONS = {
     "RETAIN_CORE",
@@ -1042,6 +1045,149 @@ def _validate_p7_baseline(root: Path) -> None:
     _validate_p7_baseline_value(root, _strict_json(root / P7_BASELINE_RELATIVE))
 
 
+def _canonical_sha256(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _validate_p7_evidence_value(root: Path, evidence: dict[str, Any]) -> None:
+    if evidence.get("artifact") != "loopskill-v4-p7-policy-operability-and-comparison-evidence-v1":
+        raise ValidationFailure("P7 evidence artifact drift")
+    if (
+        evidence.get("status") != "PASS"
+        or evidence.get("runtime_authority") is not False
+        or evidence.get("real_external_effects") != 0
+    ):
+        raise ValidationFailure("P7 evidence status/authority drift")
+    checkpoint = evidence.get("checkpoint_commit")
+    parent = evidence.get("checkpoint_parent")
+    if not isinstance(checkpoint, str) or not isinstance(parent, str):
+        raise ValidationFailure("P7 evidence checkpoint missing")
+    if (
+        _run(root, "git", "rev-parse", f"{checkpoint}^{{commit}}")
+        .decode("ascii")
+        .strip()
+        != checkpoint
+        or _run(root, "git", "rev-parse", f"{checkpoint}^")
+        .decode("ascii")
+        .strip()
+        != parent
+    ):
+        raise ValidationFailure("P7 evidence checkpoint provenance drift")
+    architecture = evidence.get("architecture_gates", {})
+    expected_architecture = {
+        "typed_protocol_generation": "PASS",
+        "typed_protocol_manifest_sha256": "2c89e5ed3598c783cd114f49ad5ede31e8ab6e5c2b7d0daf6afe32a1aa8c618f",
+        "manifest_commands": 16,
+        "manifest_events": 33,
+        "manifest_errors": 44,
+        "full_v4_modules": 26,
+        "full_v4_dependency_edges": 39,
+        "import_graph_acyclic": True,
+        "canonical_writer_count": 1,
+        "policy_writer_count": 0,
+        "projection_writer_count": 0,
+        "supervisor_count": 0,
+    }
+    if architecture != expected_architecture:
+        raise ValidationFailure("P7 architecture evidence drift")
+    capabilities = evidence.get("capability_gates", {})
+    required_pass = {
+        "standard_fixed_dependency_queue",
+        "adaptive_one_active_goal_bounded_revision",
+        "author_envelope",
+        "jit_worker_reviewer_local_verifier",
+        "decision_card_context_freshness",
+        "bounded_repair_and_same_failure",
+        "pause_resume_cas",
+        "late_strict_assurance_without_disposition_rewrite",
+        "audit_archive_status_rebuildable",
+        "privacy_aggregate_no_raw_identity",
+        "risk_scan_category_digest_only",
+        "metrics_unmetered_explicit",
+        "doctor_diagnostics_opt_in",
+    }
+    if any(capabilities.get(key) != "PASS" for key in required_pass):
+        raise ValidationFailure("P7 capability evidence drift")
+    if capabilities.get("unique_next_action_normal_trace") != 11 or set(
+        capabilities.get("unique_next_action_edge_classes", [])
+    ) != {"UNKNOWN", "UNVERIFIABLE", "PAUSED", "REPAIR", "COOPERATIVE_TERMINAL"}:
+        raise ValidationFailure("P7 liveness evidence drift")
+    receipt = evidence.get("v4_receipt", {})
+    metrics = receipt.get("metrics", {})
+    expected_metrics = {
+        "authorization_confirmations": 1,
+        "host_interactions": 3,
+        "human_interventions": 1,
+        "internal_control_interactions": 3,
+        "local_writes": 17,
+        "pack_bytes": 1122,
+        "protocol_calls": 11,
+        "unknown_count": 0,
+        "user_start_actions": 1,
+    }
+    if any(metrics.get(key) != value for key, value in expected_metrics.items()):
+        raise ValidationFailure("P7 comparison metric drift")
+    if (
+        isinstance(metrics.get("latency_ns"), bool)
+        or not isinstance(metrics.get("latency_ns"), int)
+        or metrics["latency_ns"] <= 0
+        or receipt.get("real_external_effects") != 0
+        or receipt.get("canonical_commits") != 11
+        or receipt.get("event_count") != 18
+        or receipt.get("execution_disposition") != "SUCCEEDED"
+        or receipt.get("closure_assurance") != "STRICT"
+    ):
+        raise ValidationFailure("P7 comparison receipt drift")
+    result = evidence.get("comparison_result", {})
+    baseline = _strict_json(root / P7_BASELINE_RELATIVE)
+    thresholds = baseline["blocking_thresholds"]
+    if (
+        result.get("status") != "PASS"
+        or result.get("pack_gate") != "PASS"
+        or result.get("internal_control_interaction_gate") != "PASS"
+        or result.get("metrics") != metrics
+        or result.get("thresholds") != thresholds
+        or result.get("baseline_sha256") != _canonical_sha256(baseline)
+        or result.get("v4_receipt_sha256") != _canonical_sha256(receipt)
+        or metrics["pack_bytes"] > thresholds["v4_pack_bytes_max"]
+        or metrics["internal_control_interactions"]
+        > thresholds["v4_internal_control_interactions_max"]
+    ):
+        raise ValidationFailure("P7 comparison gate drift")
+    tests = evidence.get("tests", {})
+    if tests != {
+        "total_at_checkpoint": 129,
+        "passed_at_checkpoint": 129,
+        "failed": 0,
+        "errors": 0,
+        "policy_operability_methods": 14,
+        "beta_measurement_methods": 3,
+    }:
+        raise ValidationFailure("P7 test evidence drift")
+    digests = evidence.get("file_sha256")
+    if not isinstance(digests, dict) or not digests:
+        raise ValidationFailure("P7 file digest evidence missing")
+    for relative, expected in digests.items():
+        try:
+            checkpoint_bytes = _run(root, "git", "show", f"{checkpoint}:{relative}")
+        except subprocess.CalledProcessError as exc:
+            raise ValidationFailure(f"P7 checkpoint file missing: {relative}") from exc
+        if hashlib.sha256(checkpoint_bytes).hexdigest() != expected:
+            raise ValidationFailure(f"P7 file digest drift: {relative}")
+
+
+def _validate_p7_evidence(root: Path) -> None:
+    _validate_p7_evidence_value(root, _strict_json(root / P7_EVIDENCE_RELATIVE))
+
+
 def _validate_case_bindings(root: Path, registry: dict[str, Any]) -> tuple[int, int]:
     bindings = registry.get("capability_case_bindings")
     requirements = registry.get("capability_acceptance_requirements")
@@ -1339,6 +1485,7 @@ def validate(root: Path) -> dict[str, Any]:
     _validate_anti_bloat_evidence(root)
     _validate_p6_evidence(root)
     _validate_p7_baseline(root)
+    _validate_p7_evidence(root)
     _scan_stale(root)
     return {
         "status": "PASS",

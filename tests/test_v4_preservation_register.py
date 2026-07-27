@@ -349,6 +349,16 @@ class V4PreservationRegisterTests(unittest.TestCase):
         ):
             validator._validate_p7_baseline_value(ROOT, evidence)
 
+    def test_p7_comparison_metric_mutation_fails_closed(self) -> None:
+        evidence = json.loads(
+            (ROOT / validator.P7_EVIDENCE_RELATIVE).read_text(encoding="utf-8")
+        )
+        evidence["v4_receipt"]["metrics"]["pack_bytes"] = 32769
+        with self.assertRaisesRegex(
+            validator.ValidationFailure, "P7 comparison metric drift"
+        ):
+            validator._validate_p7_evidence_value(ROOT, evidence)
+
 
 if __name__ == "__main__":
     unittest.main()
