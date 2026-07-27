@@ -566,9 +566,12 @@ vertical bytes because that fixture does not request a startup ExternalEffect.
 
 ### Result
 
-State: `STAGED`, `ACKNOWLEDGED`, `STALE`. Result binds route, Delivery,
-Attempt, producing Actor, semantic outcome digest, `ReportRef`, and after
-acknowledgement the current `ArtifactRef`.
+State: `STAGED`, `ACKNOWLEDGED`, `STALE`. Result binds either the Route /
+Delivery subject chain or the startup `ExternalEffectRef`, plus the exact
+Attempt, producing Actor, semantic outcome, normalized `ReportRef`, source
+observation digest, and after acknowledgement the current `ArtifactRef`.
+Delivery observation and startup-effect observation remain independent from
+Result acceptance.
 
 ### Report
 
@@ -589,10 +592,10 @@ finalization.
 
 ### Finalization
 
-State: `PREPARED`, `EXECUTION_CLOSED`. Finalization binds exact Goal, Route,
-Delivery, Attempt, Result, Report, Artifact, Review, all current revisions,
-requested terminal disposition, closure-assurance basis, and subject-chain
-digest.
+State: `PREPARED`, `EXECUTION_CLOSED`. Finalization binds exact Goal, Attempt,
+Result, Report, Artifact, Review and either Route/Delivery or ExternalEffect,
+all current revisions, requested terminal disposition, closure-assurance
+basis, and subject-chain digest.
 
 Closing execution appends `ExecutionFinalized`. If exact strict readback is
 also present, the same command may append `StrictFinalizationAcknowledged` and
@@ -624,7 +627,8 @@ from delivery observation.
 ### Mutation commands
 
 `CreateLoop`, `BindHostResource`, `PrepareRoute`, `BeginEffectDelivery`,
-`RecordEffectObservation`, `RecordExternalEffectObservation`, `StageResult`, `AcknowledgeResult`, `RecordReview`,
+`RecordEffectObservation`, `RecordExternalEffectObservation`, `StageResult`,
+`StageExternalResult`, `AcknowledgeResult`, `RecordReview`,
 `AdvanceGoal`, `PauseLoop`, `ResumeLoop`, `StopLoop`, `PrepareFinalization`,
 `CloseExecution`, and `StrengthenClosureAssurance`.
 
@@ -633,7 +637,7 @@ are read-only and have no operation/CAS side effects.
 
 ### Events
 
-`LoopCreated`, `GoalRegistered`, `GoalActivated`, `HostResourceBound`,
+`LoopCreated`, `GoalRegistered`, `GoalActivated`, `StartAuthorized`, `HostResourceBound`,
 `ExternalEffectPrepared`, `ExternalEffectObserved`, `ExternalEffectUnknown`,
 `ExternalEffectUnverifiable`, `LateExternalEffectObserved`,
 `RoutePrepared`, `DeliveryAttemptCommitted`, `DeliveryObserved`,
@@ -718,6 +722,18 @@ before calling the provider. Recovery uses only exact Attempt readback.
 | after commit, before provider invocation | Attempt `COMMITTED`; budget consumed | authoritative readback by exact Attempt/idempotency identity; never resend automatically |
 | provider accepted, response lost | Attempt `COMMITTED`; budget consumed | authoritative readback; then OBSERVED or UNKNOWN |
 | provider returned, crash before local observation | Attempt `COMMITTED`; budget consumed | same authoritative readback; never use model memory as receipt |
+
+Once the startup ExternalEffect is OBSERVED, Entry may read the exact Host
+result and submit the machine-owned sequence `StageExternalResult` →
+`AcknowledgeResult` → `RecordReview` → `AdvanceGoal` →
+`PrepareFinalization` → `CloseExecution`. Each accepted command is one
+operation-idempotent/CAS transaction and each intermediate snapshot has one
+deterministic successor command. A crash at any durable boundary resumes from
+the committed stage; it never creates or resends the Host task. The staged
+Result stores the authoritative Host-result digest, so a changed or regressed
+readback fails closed. Final lifecycle acknowledgement is a separate
+authoritative readback after `FinalizationPrepared` and may yield honest
+cooperative/limited closure instead of a strict success claim.
 | readback inconclusive/unavailable | typed subject/Attempt `UNKNOWN` | close with limitation/block, or await a late exact readback; no resend |
 | cooperative response only | typed subject/Attempt `UNVERIFIABLE` | limited closure or later strict readback |
 | late authoritative readback | exact UNKNOWN/UNVERIFIABLE Attempt becomes `OBSERVED` | optionally strengthen assurance; no new Attempt/result/reexecution |
@@ -961,7 +977,12 @@ protocol counts, the complete installed-distribution SBOM and license inventory
 for that exact Python runtime, secret scan, tracked
 large-artifact scan and zero public effect. The App receipt stores only a digest
 of the machine-returned Host observation, never raw thread/task identity or
-content. These receipts are build evidence, not runtime authority.
+content. The JSON receipt alone is insufficient: the final local validator must
+open the disposable canonical store and perform a fresh authoritative Host
+result/lifecycle readback, then bind its minimized live attestation to the
+candidate goal, hashed Host identity, result, snapshot, Review, and
+Finalization digests. The raw store and Host identity are not published. These
+receipts are build evidence, not runtime authority.
 
 `scripts/validate_v4_rc.py` defaults to the final fail-closed mode: canary,
 349-instance conformance, and privacy-minimized publication-packet receipts are

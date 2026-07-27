@@ -93,10 +93,11 @@ The number of user-supplied control identities must be zero. Users do not copy t
 
 ```bash
 "$LOOPSKILL4" status --root ./loopskill4-data
+"$LOOPSKILL4" status --refresh --root ./loopskill4-data
 "$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
 ```
 
-Default status shows only the goal, progress, result, limitations, and actionable next step. Internal identity and receipts appear only in explicit diagnostics. `UNKNOWN` means an external action may have happened but cannot be authoritatively confirmed; `UNVERIFIABLE` means the Host cannot provide the required assurance. Neither is success, and neither triggers blind resend.
+Plain status reads only local state. `status --refresh` reads the exact existing Host task and advances its replay-safe local Result/Review/Finalization chain; it never creates or resends work. Default status shows only the goal, progress, result, limitations, and actionable next step. Internal identity and receipts appear only in explicit diagnostics. `UNKNOWN` means an external action may have happened but cannot be authoritatively confirmed; `UNVERIFIABLE` means the Host cannot provide the required assurance. Neither is success, and neither triggers blind resend.
 
 <!-- parity: policy -->
 ## Optional policies

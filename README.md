@@ -93,10 +93,11 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 
 ```bash
 "$LOOPSKILL4" status --root ./loopskill4-data
+"$LOOPSKILL4" status --refresh --root ./loopskill4-data
 "$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
 ```
 
-默认状态只展示目标、进度、结果、限制和可行动的下一步。内部 identity 与 receipt 只在显式 diagnostics 中出现。`UNKNOWN` 表示外部动作可能已经发生但无法权威确认；`UNVERIFIABLE` 表示 Host 不能提供所需证明。两者都不是成功，也不会触发盲重发。
+普通 `status` 只读本地状态；`status --refresh` 回读唯一既有 Host task，并通过可重放的本地 Result/Review/Finalization 链继续推进，绝不创建或重发任务。默认状态只展示目标、进度、结果、限制和可行动的下一步。内部 identity 与 receipt 只在显式 diagnostics 中出现。`UNKNOWN` 表示外部动作可能已经发生但无法权威确认；`UNVERIFIABLE` 表示 Host 不能提供所需证明。两者都不是成功，也不会触发盲重发。
 
 <!-- parity: policy -->
 ## 可选策略

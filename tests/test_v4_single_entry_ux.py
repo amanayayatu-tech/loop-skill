@@ -28,6 +28,7 @@ from loop_architect.v4_alpha.protocol import (  # noqa: E402
     InjectedCrash,
     LoopIntakeInput,
     Receipt,
+    domain_digest,
 )
 from loop_architect.v4_adapters.codex.adapter import HOST_SCHEMA_VERSION  # noqa: E402
 from loop_architect.v4_alpha.vertical import (  # noqa: E402
@@ -44,6 +45,7 @@ from loop_architect.v4_entry import (  # noqa: E402
     record_external_observation,
     start_loop,
     status,
+    sync_loop,
 )
 from loop_architect.v4_entry.preparation import (  # noqa: E402
     CONFIRMATION_FILENAME,
@@ -60,12 +62,24 @@ NOW = datetime(2026, 7, 27, 1, 0, 0, tzinfo=timezone.utc)
 
 
 class EntryProviderFixture:
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        now=None,
+        result_status="COMPLETED",
+        result_text=None,
+        lifecycle_state="TERMINAL",
+    ):
         self.invoke_count = 0
+        self.result_read_count = 0
         self.records = {}
+        self.now = now
+        self.result_status = result_status
+        self.result_text = result_text
+        self.lifecycle_state = lifecycle_state
 
     def capability_snapshot(self):
-        now = datetime.now(timezone.utc)
+        now = self.now or datetime.now(timezone.utc)
         rows = []
         for name in CAPABILITY_NAMES:
             rows.append(
@@ -107,7 +121,24 @@ class EntryProviderFixture:
             "provider_id": provider_id,
             "resource_kind": resource_kind,
             "schema_version": HOST_SCHEMA_VERSION,
-            "state": "ACTIVE",
+            "state": self.lifecycle_state,
+            "trust": "authoritative",
+        }
+
+    def read_task_result(self, provider_id):
+        self.result_read_count += 1
+        text = self.result_text
+        if text is None:
+            text = (
+                'LOOPSKILL4_RESULT={"outcome":"PASS",'
+                '"summary":"synthetic task completed"}'
+            )
+        return {
+            "provider_id": provider_id,
+            "result_digest": domain_digest("loopskill-host-result-v1\n", text),
+            "result_text": text,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "status": self.result_status,
             "trust": "authoritative",
         }
 
@@ -476,7 +507,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 self.assertEqual(store.snapshot(loop_ref)["execution"]["state"], "ACTIVE")
                 self.assertEqual(store.commit_count, 1)
                 self.assertEqual(len(store.authority.actors), 2)
-                self.assertEqual(len(store.authority.grants), 2)
+                self.assertEqual(len(store.authority.grants), 6)
                 self.assertEqual(len(store.ready_effect_attempts()), 1)
                 self.assertEqual(store.ready_effect_attempts()[0].action, "create_task")
                 self.assertNotIn("Ship a bounded public change", store.authority.actors)
@@ -526,6 +557,190 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertEqual(provider.invoke_count, 1)
             self.assertTrue((data / STORE_FILENAME).is_file())
             self.assertTrue((prepared / CONFIRMATION_FILENAME).is_file())
+
+    def test_public_host_result_refresh_closes_exact_external_subject_chain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared = prepare_confirm(
+                root,
+                "Complete one synthetic Host task",
+                token="888888888888888888888888",
+            )
+            provider = EntryProviderFixture(now=NOW)
+            data = root / "data"
+            started = start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+            )
+            self.assertEqual(started.progress, "Active")
+            closed = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+            )
+            self.assertEqual(closed.progress, "Finished")
+            self.assertEqual(closed.result, "SUCCEEDED")
+            self.assertEqual(provider.invoke_count, 1)
+            self.assertEqual(provider.result_read_count, 1)
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                result = next(iter(snapshot["results"].values()))
+                finalization = next(iter(snapshot["finalizations"].values()))
+                self.assertIn("external_effect_ref", result)
+                self.assertNotIn("delivery_ref", result)
+                self.assertEqual(result["outcome"], "PASS")
+                self.assertEqual(finalization["disposition"], "SUCCEEDED")
+                self.assertEqual(snapshot["closure_assurance"]["strength"], "STRICT")
+            replay = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+            )
+            self.assertEqual(replay.result, "SUCCEEDED")
+            self.assertEqual(provider.result_read_count, 1)
+
+    def test_host_result_refresh_recovers_every_local_durable_boundary(self):
+        operation_types = (
+            "StageExternalResult",
+            "AcknowledgeResult",
+            "RecordReview",
+            "AdvanceGoal",
+            "PrepareFinalization",
+            "CloseExecution",
+        )
+        original_apply = SQLiteStore.apply
+        for operation_type in operation_types:
+            for boundary in DURABLE_FAULT_BOUNDARIES:
+                with self.subTest(operation_type=operation_type, boundary=boundary):
+                    with tempfile.TemporaryDirectory() as temporary:
+                        root = Path(temporary)
+                        prepared = prepare_confirm(
+                            root,
+                            "Recover one synthetic Host result",
+                            token="999999999999999999999999",
+                        )
+                        provider = EntryProviderFixture(now=NOW)
+                        data = root / "data"
+                        start_loop(
+                            prepared,
+                            root=data,
+                            host_provider=provider,
+                            clock=lambda: NOW,
+                        )
+                        injected = {"value": False}
+
+                        def fault_once(subject, command, *, fault_at=None):
+                            if (
+                                command.command_type == operation_type
+                                and not injected["value"]
+                            ):
+                                injected["value"] = True
+                                return original_apply(
+                                    subject,
+                                    command,
+                                    fault_at=boundary,
+                                )
+                            return original_apply(subject, command, fault_at=fault_at)
+
+                        with mock.patch.object(SQLiteStore, "apply", new=fault_once):
+                            with self.assertRaises(InjectedCrash):
+                                sync_loop(
+                                    root=data,
+                                    host_provider=provider,
+                                    clock=lambda: NOW,
+                                )
+                        self.assertTrue(injected["value"])
+                        closed = sync_loop(
+                            root=data,
+                            host_provider=provider,
+                            clock=lambda: NOW,
+                        )
+                        self.assertEqual(closed.result, "SUCCEEDED")
+                        self.assertEqual(provider.invoke_count, 1)
+                        with SQLiteStore(data / STORE_FILENAME) as store:
+                            store.verify_integrity()
+                            snapshot = store.snapshot(
+                                store.loop_descriptors()[0]["loop_ref"]
+                            )
+                            self.assertEqual(
+                                snapshot["execution"]["state"], "TERMINAL"
+                            )
+                            self.assertEqual(len(snapshot["results"]), 1)
+                            self.assertEqual(len(snapshot["finalizations"]), 1)
+
+    def assert_host_result_closure(
+        self,
+        *,
+        result_status,
+        result_text,
+        expected_outcome,
+        expected_disposition,
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared = prepare_confirm(
+                root,
+                "Preserve one non-success Host result",
+                token="aaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            provider = EntryProviderFixture(
+                now=NOW,
+                result_status=result_status,
+                result_text=result_text,
+            )
+            data = root / "data"
+            start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+            )
+            closed = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+            )
+            self.assertEqual(closed.result, expected_disposition)
+            self.assertTrue(closed.limitations)
+            self.assertEqual(provider.invoke_count, 1)
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                result = next(iter(snapshot["results"].values()))
+                finalization = next(iter(snapshot["finalizations"].values()))
+                self.assertEqual(result["outcome"], expected_outcome)
+                self.assertEqual(
+                    finalization["disposition"], expected_disposition
+                )
+                self.assertEqual(snapshot["execution"]["state"], "TERMINAL")
+
+    def test_host_failed_result_closes_failed(self):
+        self.assert_host_result_closure(
+            result_status="FAILED",
+            result_text="",
+            expected_outcome="FAILED",
+            expected_disposition="FAILED",
+        )
+
+    def test_host_unverifiable_result_closes_limitation(self):
+        self.assert_host_result_closure(
+            result_status="COMPLETED",
+            result_text="Host returned prose without the result envelope.",
+            expected_outcome="UNVERIFIABLE",
+            expected_disposition="LIMITATION",
+        )
+
+    def test_host_limitation_result_closes_limitation(self):
+        self.assert_host_result_closure(
+            result_status="COMPLETED",
+            result_text=(
+                'LOOPSKILL4_RESULT={"outcome":"LIMITATION",'
+                '"summary":"bounded evidence only"}'
+            ),
+            expected_outcome="LIMITATION",
+            expected_disposition="LIMITATION",
+        )
 
     def test_default_path_has_zero_control_fields_and_no_policy_pack(self):
         help_result = self.run_entry("start", "--help")

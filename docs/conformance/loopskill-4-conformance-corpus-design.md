@@ -225,7 +225,7 @@ is normative and expands before execution.
 | `H-008` | final readback `a` strict; `b` missing/inconclusive | alpha.2 | 2 |
 | `H-009` | `a` trust; `b` sandbox; `c` model/turn identity absent or mismatched | alpha.2 | 3 |
 | `H-010` | effectively-once `a` both prerequisites; `b` one prerequisite missing | alpha.2 | 2 |
-| `H-011` | startup ExternalEffect `a` atomically committed with Attempt/outbox; `b` exact strict observation binds reserved HostResource and provider resource identity; `c` missing readback is UNKNOWN with no bind/resend; `d` cooperative UNVERIFIABLE later becomes OBSERVED only on the same exact Attempt; production app-server `e` executes the public Entry bridge, `f` crash recovery performs marker-bound readback without create, `g` ambiguous/foreign Host identity fails closed | alpha.2/rc | 7 |
+| `H-011` | startup ExternalEffect `a` atomically committed with Attempt/outbox; `b` exact strict observation binds reserved HostResource and provider resource identity; `c` missing readback is UNKNOWN with no bind/resend; `d` cooperative UNVERIFIABLE later becomes OBSERVED only on the same exact Attempt; production bridge `e` reads the Host result and closes the exact external-effect subject chain; `f` all six local closure commands recover across every durable boundary without another create; `g` marker-bound provider readback preserves one-create and rejects ambiguous/foreign Host identity | alpha.2/rc | 7 |
 
 ### Artifact libraries
 
@@ -1064,6 +1064,12 @@ readback; manual control identity, MCP registration, App restart, config-byte
 change, v3-byte change, and resend all `0`; acknowledged Result; PASS Review;
 acknowledged Finalization; and preserved UNKNOWN semantics. A synthetic fixture
 can validate this shape but cannot satisfy `CAP-RELEASE-CANARY` or `UX-009-a`.
+The final validator must additionally open the disposable canonical store and
+perform fresh authoritative task-result and lifecycle readback. It binds the
+candidate goal digest, hashed Host identity, Host result, snapshot,
+Result/Artifact/Review/Finalization and STRICT assurance into a
+domain-separated live attestation; caller-supplied JSON alone must fail. Raw
+store bytes, Host identity, and transcripts remain local and unpublished.
 
 `scripts/run_v4_conformance.py` reads the canonical exact-case catalog rather
 than retyping IDs. It maps every case to the responsible Kernel, Store,

@@ -381,6 +381,50 @@ class CodexAppServerProvider:
         }[status["type"]]
         return self._resource(resource_kind, provider_id, state, "authoritative")
 
+    def read_task_result(self, provider_id: str) -> Mapping[str, Any]:
+        with self._session() as session:
+            thread = session.request(
+                "thread/read", {"includeTurns": True, "threadId": provider_id}
+            ).get("thread")
+        if not isinstance(thread, Mapping) or thread.get("id") != provider_id:
+            raise HostUnavailable("Codex task result identity mismatch")
+        turns = thread.get("turns")
+        if not isinstance(turns, list) or not turns:
+            status, text = "PENDING", ""
+        else:
+            turn = turns[-1]
+            if not isinstance(turn, Mapping) or turn.get("status") not in {
+                "completed",
+                "failed",
+                "inProgress",
+                "interrupted",
+            }:
+                raise HostUnavailable("Codex task result status drift")
+            texts = [
+                item["text"]
+                for item in turn.get("items", [])
+                if isinstance(item, Mapping)
+                and item.get("type") == "agentMessage"
+                and isinstance(item.get("text"), str)
+            ]
+            text = "\n".join(texts).strip()
+            status = {
+                "completed": "COMPLETED",
+                "failed": "FAILED",
+                "interrupted": "FAILED",
+                "inProgress": "PENDING",
+            }[turn["status"]]
+        from loop_architect.v4_alpha.protocol import domain_digest
+
+        return {
+            "provider_id": provider_id,
+            "result_digest": domain_digest("loopskill-host-result-v1\n", text),
+            "result_text": text,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "status": status,
+            "trust": "authoritative",
+        }
+
     @staticmethod
     def _prompt(payload: Mapping[str, Any], marker: str) -> str:
         document = {
@@ -400,6 +444,9 @@ class CodexAppServerProvider:
             + marker
             + "\n"
             + canonical_bytes(document).decode("utf-8")
+            + "\nWhen finished, end with exactly one semantic line: "
+            'LOOPSKILL4_RESULT={"outcome":"PASS|FAILED|LIMITATION|UNVERIFIABLE",'
+            '"summary":"concise UTF-8 summary"}. Do not include control identities.'
         )
         if len(prompt.encode("utf-8")) > MAX_HOST_PROMPT_BYTES:
             raise HostUnavailable("Confirmed Host request exceeds 32 KiB")

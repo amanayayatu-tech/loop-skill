@@ -130,6 +130,15 @@
         "reason": {"type": "string"}
       }
     },
+    "StageExternalResult": {
+      "semantic_payload": {
+        "outcome": {
+          "enum": ["PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"],
+          "type": "string"
+        },
+        "summary": {"type": "string"}
+      }
+    },
     "StageResult": {
       "semantic_payload": {
         "outcome": {

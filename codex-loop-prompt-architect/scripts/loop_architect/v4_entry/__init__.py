@@ -11,6 +11,7 @@ from .service import (
     review_prepared,
     start_loop,
     status,
+    sync_loop,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "review_prepared",
     "start_loop",
     "status",
+    "sync_loop",
 ]

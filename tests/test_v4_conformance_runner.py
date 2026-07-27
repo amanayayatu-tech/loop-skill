@@ -22,6 +22,7 @@ def canary(candidate: str) -> dict:
     value = {
         "artifact": "loopskill-v4-disposable-app-canary-v1",
         "candidate_sha": candidate,
+        "candidate_goal_digest": "e" * 64,
         "canary_output_sha256": "b" * 64,
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
@@ -61,7 +62,7 @@ def canary(candidate: str) -> dict:
     value["provenance_digest"] = runner.rc._domain_digest(
         runner.rc.CANARY_PROVENANCE_DOMAIN, value
     )
-    value["host_receipt_digest"] = value["provenance_digest"]
+    value["host_receipt_digest"] = "d" * 64
     return value
 
 

@@ -49,10 +49,13 @@ UTF-8 JSON。用户提供的 control identity 数量必须为 0。
 "$LOOPSKILL4" confirm ./prepared-loop
 "$LOOPSKILL4" start ./prepared-loop --root ./loopskill4-data
 "$LOOPSKILL4" status --root ./loopskill4-data
+"$LOOPSKILL4" status --refresh --root ./loopskill4-data
 ```
 
-`confirm` 需要交互式精确确认。普通状态隐藏内部 identity；添加 `--diagnostics` 才显示
-诊断证据。`UNKNOWN`/`UNVERIFIABLE` 是有意的可见限制，不是成功，也不触发盲重发。
+`confirm` 需要交互式精确确认。普通 `status` 只读本地状态；`status --refresh`
+对唯一既有 Host task 做权威 readback，并通过可重放的本地结果/Finalization 链继续推进，
+不会创建或重发任务。普通状态隐藏内部 identity；添加 `--diagnostics` 才显示诊断证据。
+`UNKNOWN`/`UNVERIFIABLE` 是有意的可见限制，不是成功，也不触发盲重发。
 
 ## v3
 

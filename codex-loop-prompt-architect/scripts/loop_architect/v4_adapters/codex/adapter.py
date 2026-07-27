@@ -300,6 +300,37 @@ class CodexHostAdapter:
         self._validate_resource(response, resource_kind, provider_id)
         return dict(response)
 
+    def read_task_result(self, provider_id: str) -> Mapping[str, Any]:
+        if not provider_id:
+            raise ProtocolRejection("INVALID_COMMAND", "missing Host task identity")
+        response = self.provider.read_task_result(provider_id)
+        if not isinstance(response, Mapping) or set(response) != {
+            "provider_id",
+            "result_digest",
+            "result_text",
+            "schema_version",
+            "status",
+            "trust",
+        }:
+            self._schema_drift("task result fields")
+        if response["schema_version"] != HOST_SCHEMA_VERSION:
+            self._schema_drift("task result schema version")
+        if response["provider_id"] != provider_id:
+            raise ProtocolRejection(
+                "RECEIPT_IDENTITY_MISMATCH", "task result Host identity"
+            )
+        if response["status"] not in {"PENDING", "COMPLETED", "FAILED"}:
+            self._schema_drift("task result status")
+        if response["trust"] != "authoritative":
+            raise ProtocolRejection("RECEIPT_ISSUER_UNTRUSTED", "task result trust")
+        text = response["result_text"]
+        digest = response["result_digest"]
+        if not isinstance(text, str) or not isinstance(digest, str) or digest != domain_digest(
+            "loopskill-host-result-v1\n", text
+        ):
+            raise ProtocolRejection("RECEIPT_IDENTITY_MISMATCH", "task result digest")
+        return dict(response)
+
     def observe_finalization(
         self,
         *,

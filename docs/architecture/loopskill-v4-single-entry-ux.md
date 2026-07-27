@@ -73,8 +73,11 @@ and testing. The default is the platform LoopSkill 4 data root. The root and
 SQLite file must be owner-only, regular, and non-symlinked. One P5.1 root
 contains one loop; exact replay of the same prepared start returns the prior
 accepted result without a second commit/event/Attempt/Host call, while a
-different prepared loop fails. Status
-and diagnostics are read-only and never create an absent store.
+different prepared loop fails. Plain `status` and diagnostics are read-only
+and never create an absent store. `status --refresh` is the explicit
+machine-owned Host readback action: it reads the exact existing task result,
+advances the Result/Report/Artifact/Review/Finalization chain through
+replay-safe local commands, and never creates or resends a task.
 
 SQLite schema v4 stores the user-visible goal descriptor plus immutable Actor,
 Grant, receipt, and trust-root registries in the same canonical database as the

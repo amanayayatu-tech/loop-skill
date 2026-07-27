@@ -21,6 +21,7 @@ from loop_architect.v4_entry import (
     review_prepared,
     start_loop,
     status,
+    sync_loop,
 )
 from loop_architect.v4_entry.preparation import boundary_display
 from loop_architect.v4_entry.legacy_boundary import (
@@ -63,6 +64,7 @@ def parser() -> PublicParser:
     show = subcommands.add_parser("status")
     show.add_argument("--root", type=Path, default=default_root())
     show.add_argument("--diagnostics", action="store_true")
+    show.add_argument("--refresh", action="store_true")
     doctor = subcommands.add_parser("doctor")
     doctor.add_argument("--diagnostics", action="store_true")
     compile_prepared = subcommands.add_parser("compile")
@@ -392,7 +394,14 @@ def main(argv=None) -> int:
         if args.action == "start":
             value = _interactive_start(args)
         else:
-            value = status(root=args.root)
+            value = (
+                sync_loop(
+                    root=args.root,
+                    host_provider=CodexAppServerProvider(Path.cwd()),
+                )
+                if args.refresh
+                else status(root=args.root)
+            )
         print_status(value)
         if args.diagnostics:
             print(

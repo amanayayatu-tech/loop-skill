@@ -51,6 +51,14 @@ user/model control identity. The Host provider exposes no create idempotency
 key; after a crash it may perform only exact machine-marker readback. Missing or
 ambiguous readback becomes `UNKNOWN`, never another create.
 
+After exact task readback, Entry submits the generated
+`StageExternalResult` command and the existing Result/Artifact/Review/
+Finalization commands. Each local operation is independently transactional and
+replay-safe; every committed intermediate state has one deterministic successor.
+`status --refresh` may continue that chain after a crash, but it cannot create
+or resend the Host task. The Host-result digest remains in the canonical Result
+binding so changed readback fails closed.
+
 ## State and evidence
 
 Local operation acceptance is exactly-once for the same operation ID and

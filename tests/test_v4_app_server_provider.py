@@ -18,6 +18,7 @@ from loop_architect.v4_adapters.codex.app_server_provider import (  # noqa: E402
     HostUnavailable,
     _request_marker,
 )
+from loop_architect.v4_alpha.protocol import domain_digest  # noqa: E402
 
 
 NOW = datetime(2026, 7, 27, tzinfo=timezone.utc)
@@ -136,6 +137,69 @@ class AppServerProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(HostUnavailable, "ambiguous"):
                 provider.readback("create_task", KEY)
         self.assertEqual([call[0] for call in unique.calls], ["thread/list"])
+
+    def test_task_result_readback_binds_exact_thread_status_and_digest(self):
+        text = (
+            'LOOPSKILL4_RESULT={"outcome":"PASS",'
+            '"summary":"synthetic result"}'
+        )
+        completed = FakeSession(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": "host-thread-result",
+                        "turns": [
+                            {
+                                "items": [
+                                    {"type": "agentMessage", "text": text}
+                                ],
+                                "status": "completed",
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(Path(temporary), [completed])
+            result = provider.read_task_result("host-thread-result")
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(result["trust"], "authoritative")
+        self.assertEqual(result["result_text"], text)
+        self.assertEqual(
+            result["result_digest"],
+            domain_digest("loopskill-host-result-v1\n", text),
+        )
+        self.assertEqual(
+            completed.calls,
+            [
+                (
+                    "thread/read",
+                    {"includeTurns": True, "threadId": "host-thread-result"},
+                )
+            ],
+        )
+
+    def test_task_result_readback_rejects_foreign_identity_and_status_drift(self):
+        foreign = FakeSession(
+            {"thread/read": {"thread": {"id": "foreign", "turns": []}}}
+        )
+        drift = FakeSession(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": "host-thread-result",
+                        "turns": [{"items": [], "status": "queued"}],
+                    }
+                }
+            }
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(Path(temporary), [foreign, drift])
+            with self.assertRaisesRegex(HostUnavailable, "identity mismatch"):
+                provider.read_task_result("host-thread-result")
+            with self.assertRaisesRegex(HostUnavailable, "status drift"):
+                provider.read_task_result("host-thread-result")
 
     def test_public_cli_constructs_provider_only_after_explicit_confirmation(self):
         import importlib.machinery

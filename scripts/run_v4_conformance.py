@@ -176,14 +176,14 @@ CASE_TEST_OVERRIDES = {
         "test_verified_vertical_evidence_is_identity_free_and_exact",
     ),
     "F-003-c": _test(
-        A,
-        "V4AlphaPureKernelTests",
-        "test_failed_limitation_and_stopped_are_honest_terminal_paths",
+        UX,
+        "V4SingleEntryUXTests",
+        "test_host_failed_result_closes_failed",
     ),
     "F-003-d": _test(
-        A,
-        "V4AlphaPureKernelTests",
-        "test_failed_limitation_and_stopped_are_honest_terminal_paths",
+        UX,
+        "V4SingleEntryUXTests",
+        "test_host_unverifiable_result_closes_limitation",
     ),
     "F-003-e": _test(
         A,
@@ -191,14 +191,14 @@ CASE_TEST_OVERRIDES = {
         "test_stop_loop_cas_authority_and_unresolved_effect_are_honest",
     ),
     "H-011-e": _test(
-        APP,
-        "AppServerProviderTests",
-        "test_public_cli_constructs_provider_only_after_explicit_confirmation",
+        UX,
+        "V4SingleEntryUXTests",
+        "test_public_host_result_refresh_closes_exact_external_subject_chain",
     ),
     "H-011-f": _test(
-        APP,
-        "AppServerProviderTests",
-        "test_crash_recovery_is_readback_only_and_ambiguous_identity_fails",
+        UX,
+        "V4SingleEntryUXTests",
+        "test_host_result_refresh_recovers_every_local_durable_boundary",
     ),
     "H-011-g": _test(
         APP,

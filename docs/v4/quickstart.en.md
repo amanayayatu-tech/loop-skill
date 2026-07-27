@@ -57,10 +57,14 @@ fail closed.
 "$LOOPSKILL4" confirm ./prepared-loop
 "$LOOPSKILL4" start ./prepared-loop --root ./loopskill4-data
 "$LOOPSKILL4" status --root ./loopskill4-data
+"$LOOPSKILL4" status --refresh --root ./loopskill4-data
 ```
 
-`confirm` requires an exact interactive confirmation. Normal status hides
-internal identity; add `--diagnostics` for diagnostic evidence.
+`confirm` requires an exact interactive confirmation. Plain status is local
+and read-only; `status --refresh` performs authoritative readback of the one
+existing Host task and advances its replay-safe local result/finalization
+chain without creating or resending work. Normal status hides internal
+identity; add `--diagnostics` for diagnostic evidence.
 `UNKNOWN`/`UNVERIFIABLE` are intentional visible limitations, not success, and
 never trigger blind resend.
 

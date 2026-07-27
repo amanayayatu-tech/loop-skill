@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import importlib.util
 import importlib.metadata
 import json
@@ -12,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -49,6 +51,8 @@ REQUIRED_DISTRIBUTIONS = ("jsonschema", "coverage", "PyYAML")
 CANARY_ISSUER = "codex-app-task-readback-v1"
 CANARY_TRUST = "host-tool-observed"
 CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.app-canary.provenance.v1\0"
+CANARY_LIVE_DOMAIN = b"loopskill.v4.app-canary.live-readback.v1\0"
+CANARY_HOST_ID_DOMAIN = b"loopskill.v4.app-canary.host-identity.v1\0"
 RETIRED_PRODUCTION_PATHS = (
     "codex-loop-prompt-architect/scripts/adaptive_state_mcp.py",
     "codex-loop-prompt-architect/scripts/adaptive_state_runtime.py",
@@ -153,6 +157,88 @@ def _tree_entries(root: Path, candidate: str) -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+def _distribution_archive_receipt(root: Path, candidate: str) -> dict[str, Any]:
+    payload = _run(root, "git", "archive", "--format=tar", candidate)
+    findings: list[dict[str, str]] = []
+    files = []
+    total_bytes = 0
+    try:
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+            for member in archive.getmembers():
+                name = member.name
+                path = Path(name)
+                if (
+                    path.is_absolute()
+                    or ".." in path.parts
+                    or member.issym()
+                    or member.islnk()
+                    or member.isdev()
+                    or member.isfifo()
+                ):
+                    findings.append(
+                        {
+                            "path_digest": hashlib.sha256(name.encode()).hexdigest(),
+                            "rule": "unsafe_archive_member",
+                        }
+                    )
+                    continue
+                if member.isdir():
+                    continue
+                if not member.isfile() or member.size > MAX_TRACKED_ARTIFACT_BYTES:
+                    findings.append(
+                        {
+                            "path_digest": hashlib.sha256(name.encode()).hexdigest(),
+                            "rule": "invalid_archive_file",
+                        }
+                    )
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    findings.append(
+                        {
+                            "path_digest": hashlib.sha256(name.encode()).hexdigest(),
+                            "rule": "archive_file_unreadable",
+                        }
+                    )
+                    continue
+                content = extracted.read(MAX_TRACKED_ARTIFACT_BYTES + 1)
+                if len(content) != member.size:
+                    findings.append(
+                        {
+                            "path_digest": hashlib.sha256(name.encode()).hexdigest(),
+                            "rule": "archive_size_mismatch",
+                        }
+                    )
+                    continue
+                for rule, pattern in (*SECRET_PATTERNS, *PRIVATE_TEXT_PATTERNS):
+                    if pattern.search(content):
+                        findings.append(
+                            {
+                                "path_digest": hashlib.sha256(name.encode()).hexdigest(),
+                                "rule": rule,
+                            }
+                        )
+                total_bytes += len(content)
+                files.append(
+                    {
+                        "path_digest": hashlib.sha256(name.encode()).hexdigest(),
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "size": len(content),
+                    }
+                )
+    except (tarfile.TarError, OSError) as exc:
+        raise RcValidationError("RC_DISTRIBUTION_ARCHIVE_INVALID") from exc
+    if findings:
+        raise RcValidationError("RC_DISTRIBUTION_ARCHIVE_SCAN_FAILED")
+    return {
+        "archive_sha256": hashlib.sha256(payload).hexdigest(),
+        "file_count": len(files),
+        "file_manifest_digest": hashlib.sha256(_canonical(files)).hexdigest(),
+        "findings": findings,
+        "total_file_bytes": total_bytes,
+    }
 
 
 def _dependency_inventory() -> list[dict[str, Any]]:
@@ -451,6 +537,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
     stale_production = _stale_production_findings(entries, root, candidate)
     if stale_production:
         raise RcValidationError("RC_STALE_V3_PRODUCTION_SCAN_FAILED")
+    archive_receipt = _distribution_archive_receipt(root, candidate)
     license_payload = _run(root, "git", "show", f"{candidate}:LICENSE")
     if b"MIT License" not in license_payload:
         raise RcValidationError("RC_PROJECT_LICENSE_INVALID")
@@ -472,6 +559,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
         "candidate_sha": candidate,
         "dependency_inventory": dependencies,
         "dependency_inventory_scope": "all distributions installed in the exact bound Python runtime",
+        "distribution_archive": archive_receipt,
         "evidence_privacy_findings": evidence_privacy,
         "large_artifact_findings": oversized,
         "max_tracked_artifact_bytes": MAX_TRACKED_ARTIFACT_BYTES,
@@ -500,6 +588,7 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
     expected_keys = {
         "artifact",
         "candidate_sha",
+        "candidate_goal_digest",
         "confirmation_count",
         "confirmation_digest_bound",
         "config_bytes_changed",
@@ -598,12 +687,126 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         or (fresh_until - issued).total_seconds() > 600
     ):
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: freshness")
+    if not isinstance(value.get("candidate_goal_digest"), str) or not re.fullmatch(
+        r"[0-9a-f]{64}", value["candidate_goal_digest"]
+    ):
+        raise RcValidationError("RC_CANARY_RECEIPT_INVALID: candidate_goal_digest")
     provenance = dict(value)
     claimed_provenance = provenance.pop("provenance_digest", None)
     claimed_host = provenance.pop("host_receipt_digest", None)
     expected_provenance = _domain_digest(CANARY_PROVENANCE_DOMAIN, provenance)
-    if claimed_provenance != expected_provenance or claimed_host != expected_provenance:
+    if claimed_provenance != expected_provenance:
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: provenance_digest")
+
+
+def _live_canary_observation(
+    root: Path,
+    candidate: str,
+    store_root: Path,
+) -> dict[str, Any]:
+    scripts = root / "codex-loop-prompt-architect" / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    try:
+        from loop_architect.v4_adapters.codex import CodexHostAdapter
+        from loop_architect.v4_adapters.codex.app_server_provider import (
+            CodexAppServerProvider,
+        )
+        from loop_architect.v4_alpha.protocol import snapshot_digest
+        from loop_architect.v4_persistence.sqlite_store import SQLiteStore
+    except ImportError as exc:
+        raise RcValidationError("RC_CANARY_LIVE_RUNTIME_UNAVAILABLE") from exc
+
+    store_path = store_root / "loopskill4.sqlite3"
+    if not store_path.is_file() or store_path.is_symlink():
+        raise RcValidationError("RC_CANARY_LIVE_STORE_INVALID")
+    with SQLiteStore(store_path) as store:
+        store.verify_integrity()
+        descriptors = store.loop_descriptors()
+        if len(descriptors) != 1 or candidate not in descriptors[0]["goal"]:
+            raise RcValidationError("RC_CANARY_LIVE_CANDIDATE_BINDING_INVALID")
+        loop_ref = descriptors[0]["loop_ref"]
+        snapshot = store.snapshot(loop_ref)
+        if snapshot is None or len(snapshot["external_effects"]) != 1:
+            raise RcValidationError("RC_CANARY_LIVE_STATE_INVALID")
+        effect = next(iter(snapshot["external_effects"].values()))
+        host_resource = snapshot["host_resources"].get(effect["host_resource_ref"])
+        provider_id = None if host_resource is None else host_resource.get(
+            "provider_resource_ref"
+        )
+        if not isinstance(provider_id, str) or not provider_id:
+            raise RcValidationError("RC_CANARY_LIVE_HOST_IDENTITY_INVALID")
+        provider = CodexAppServerProvider(root)
+        adapter = CodexHostAdapter(
+            provider,
+            store,
+            executor_ref="loopskill-release-validator-v1",
+            issuer_ref=CANARY_ISSUER,
+            issuer_trust=CANARY_TRUST,
+        )
+        task = adapter.read_task_result(provider_id)
+        lifecycle = adapter.read_resource("lifecycle", provider_id)
+        results = list(snapshot["results"].values())
+        reviews = list(snapshot["reviews"].values())
+        finalizations = list(snapshot["finalizations"].values())
+        artifacts = list(snapshot["artifacts"].values())
+        if (
+            task["status"] != "COMPLETED"
+            or lifecycle["state"] != "TERMINAL"
+            or len(results) != 1
+            or results[0].get("state") != "ACKNOWLEDGED"
+            or results[0].get("outcome") != "PASS"
+            or len(artifacts) != 1
+            or artifacts[0].get("state") != "VERIFIED"
+            or len(reviews) != 1
+            or reviews[0].get("state") != "PASS"
+            or len(finalizations) != 1
+            or finalizations[0].get("state") != "EXECUTION_CLOSED"
+            or snapshot["execution"].get("state") != "TERMINAL"
+            or snapshot["execution"].get("disposition") != "SUCCEEDED"
+            or snapshot["closure_assurance"].get("strength") != "STRICT"
+        ):
+            raise RcValidationError("RC_CANARY_LIVE_CLOSURE_INVALID")
+        return {
+            "artifact_state": artifacts[0]["state"],
+            "assurance": snapshot["closure_assurance"]["strength"],
+            "candidate_goal_digest": descriptors[0]["goal_digest"],
+            "candidate_sha": candidate,
+            "execution_disposition": snapshot["execution"]["disposition"],
+            "execution_state": snapshot["execution"]["state"],
+            "finalization_state": finalizations[0]["state"],
+            "host_task_identity_digest": _domain_digest(
+                CANARY_HOST_ID_DOMAIN, provider_id
+            ),
+            "lifecycle_state": lifecycle["state"],
+            "result_digest": task["result_digest"],
+            "result_outcome": results[0]["outcome"],
+            "result_state": results[0]["state"],
+            "review_state": reviews[0]["state"],
+            "snapshot_digest": snapshot_digest(snapshot),
+        }
+
+
+def validate_live_canary(
+    value: dict[str, Any],
+    candidate: str,
+    root: Path,
+    store_root: Path,
+) -> str:
+    """Require current trusted Host readback; a receipt JSON alone is insufficient."""
+    validate_canary_receipt(value, candidate)
+    observation = _live_canary_observation(root, candidate, store_root)
+    digest = _domain_digest(CANARY_LIVE_DOMAIN, observation)
+    if (
+        value["host_receipt_digest"] != digest
+        or value["host_task_identity_digest"]
+        != observation["host_task_identity_digest"]
+        or value["canary_output_sha256"] != observation["result_digest"]
+        or value["candidate_goal_digest"]
+        != observation["candidate_goal_digest"]
+    ):
+        raise RcValidationError("RC_CANARY_LIVE_BINDING_INVALID")
+    return digest
 
 
 def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Path) -> None:
@@ -739,6 +942,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--canary-receipt", type=Path)
+    parser.add_argument("--canary-store", type=Path)
     parser.add_argument("--conformance-receipt", type=Path)
     parser.add_argument("--author-packet", type=Path)
     parser.add_argument("--static-only", action="store_true")
@@ -753,17 +957,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.root, args.candidate, require_clean_head=not args.allow_non_head
         )
         if args.static_only:
-            if args.canary_receipt or args.conformance_receipt or args.author_packet:
+            if (
+                args.canary_receipt
+                or args.canary_store
+                or args.conformance_receipt
+                or args.author_packet
+            ):
                 raise RcValidationError("RC_STATIC_ONLY_WITH_FINAL_RECEIPT")
             receipt["gate_status"] = "PRE_CANARY_STATIC_ONLY"
         else:
-            if not args.canary_receipt or not args.conformance_receipt or not args.author_packet:
+            if (
+                not args.canary_receipt
+                or not args.canary_store
+                or not args.conformance_receipt
+                or not args.author_packet
+            ):
                 raise RcValidationError("RC_FINAL_RECEIPTS_REQUIRED")
             canary = json.loads(args.canary_receipt.read_text(encoding="utf-8"))
-            validate_canary_receipt(canary, args.candidate)
+            live_digest = validate_live_canary(
+                canary,
+                args.candidate,
+                args.root,
+                args.canary_store,
+            )
             receipt["canary_receipt_digest"] = hashlib.sha256(
                 _canonical(canary)
             ).hexdigest()
+            receipt["live_canary_attestation_digest"] = live_digest
             conformance = json.loads(args.conformance_receipt.read_text(encoding="utf-8"))
             validate_conformance_receipt(conformance, args.candidate, args.root)
             receipt["conformance_receipt_digest"] = hashlib.sha256(

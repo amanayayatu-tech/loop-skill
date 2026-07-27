@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from loop_architect.v4_alpha.kernel import AuthorityContext
-from loop_architect.v4_adapters.codex import CodexHostAdapter
+from loop_architect.v4_adapters.codex import CodexHostAdapter, HostUnavailable
 from loop_architect.v4_adapters.codex.contract import CodexProviderPort
 from loop_architect.v4_alpha.protocol import (
     ActorRef,
@@ -26,6 +26,7 @@ from loop_architect.v4_alpha.protocol import (
     authority_grant_digest,
     build_command,
     domain_digest,
+    parse_json_bytes,
     snapshot_digest,
 )
 from loop_architect.v4_entry.preparation import (
@@ -131,12 +132,20 @@ def _machine_bootstrap(
     system_ref = f"actor-system-{identity('system')}"
     create_grant_ref = f"grant-create-{identity('create-grant')}"
     observe_grant_ref = f"grant-observe-{identity('observe-grant')}"
+    worker_grant_ref = f"grant-worker-{identity('worker-grant')}"
+    reviewer_grant_ref = f"grant-reviewer-{identity('reviewer-grant')}"
+    lifecycle_grant_ref = f"grant-lifecycle-{identity('lifecycle-grant')}"
     operation_id = f"operation-create-{identity('create-operation')}"
     external_effect_ref = f"external-effect-{identity('startup-effect')}"
     attempt_ref = f"attempt-{identity('startup-attempt')}"
     host_resource_ref = f"host-target-{identity('primary-host-resource')}"
     provider_key = f"effect-{identity('provider-idempotency')}"
     provider_target = f"codex-bootstrap-{identity('provider-target')}"
+    result_ref = f"result-{identity('startup-result')}"
+    report_ref = f"report-{identity('startup-report')}"
+    artifact_ref = f"artifact-{identity('startup-artifact')}"
+    review_ref = f"review-{identity('startup-review')}"
+    finalization_ref = f"finalization-{identity('startup-finalization')}"
     actors = {
         author_ref: ActorRef(
             actor_ref=author_ref,
@@ -194,6 +203,83 @@ def _machine_bootstrap(
             canonical_digest="",
         )
     )
+    worker_grant = _with_digest(
+        AuthorityGrant(
+            grant_ref=worker_grant_ref,
+            actor_ref=system_ref,
+            issuer_actor_ref=system_ref,
+            issuer_trust=LOCAL_AUTHORITY_TRUST,
+            allowed_commands=("StageExternalResult",),
+            loop_scope=loop_ref,
+            subject_kinds=("ExternalEffectRef",),
+            exact_subjects=(external_effect_ref,),
+            not_before=issued_at,
+            expires_at=_iso(now + timedelta(days=30)),
+            nonce=f"nonce-{identity('worker-nonce')}",
+            canonical_digest="",
+        )
+    )
+    reviewer_grant = _with_digest(
+        AuthorityGrant(
+            grant_ref=reviewer_grant_ref,
+            actor_ref=system_ref,
+            issuer_actor_ref=system_ref,
+            issuer_trust=LOCAL_AUTHORITY_TRUST,
+            allowed_commands=("RecordReview",),
+            loop_scope=loop_ref,
+            subject_kinds=("ResultRef",),
+            exact_subjects=(result_ref,),
+            not_before=issued_at,
+            expires_at=_iso(now + timedelta(days=30)),
+            nonce=f"nonce-{identity('reviewer-nonce')}",
+            canonical_digest="",
+        )
+    )
+    lifecycle_grant = _with_digest(
+        AuthorityGrant(
+            grant_ref=lifecycle_grant_ref,
+            actor_ref=author_ref,
+            issuer_actor_ref=system_ref,
+            issuer_trust=LOCAL_AUTHORITY_TRUST,
+            allowed_commands=(
+                "AcknowledgeResult",
+                "AdvanceGoal",
+                "PrepareFinalization",
+                "StopLoop",
+            ),
+            loop_scope=loop_ref,
+            subject_kinds=("ResultRef", "GoalRef", "LoopRef"),
+            exact_subjects=(
+                result_ref,
+                report_ref,
+                artifact_ref,
+                review_ref,
+                goal_ref,
+                loop_ref,
+            ),
+            not_before=issued_at,
+            expires_at=_iso(now + timedelta(days=30)),
+            nonce=f"nonce-{identity('lifecycle-nonce')}",
+            canonical_digest="",
+        )
+    )
+    close_grant_ref = f"grant-close-{identity('close-grant')}"
+    close_grant = _with_digest(
+        AuthorityGrant(
+            grant_ref=close_grant_ref,
+            actor_ref=system_ref,
+            issuer_actor_ref=system_ref,
+            issuer_trust=LOCAL_AUTHORITY_TRUST,
+            allowed_commands=("CloseExecution", "StrengthenClosureAssurance"),
+            loop_scope=loop_ref,
+            subject_kinds=("FinalizationRef",),
+            exact_subjects=(finalization_ref,),
+            not_before=issued_at,
+            expires_at=_iso(now + timedelta(days=30)),
+            nonce=f"nonce-{identity('close-nonce')}",
+            canonical_digest="",
+        )
+    )
     trusted_receipts = dict(receipt_trust_roots)
     existing_confirmation_trust = trusted_receipts.get(CONFIRMATION_ISSUER)
     if existing_confirmation_trust not in (None, CONFIRMATION_TRUST):
@@ -208,6 +294,10 @@ def _machine_bootstrap(
         grants={
             create_grant_ref: create_grant,
             observe_grant_ref: observe_grant,
+            worker_grant_ref: worker_grant,
+            reviewer_grant_ref: reviewer_grant,
+            lifecycle_grant_ref: lifecycle_grant,
+            close_grant_ref: close_grant,
         },
         receipts={prepared.confirmation.receipt_ref: prepared.confirmation},
         trusted_actor_issuers={LOCAL_AUTHORITY_ISSUER: LOCAL_AUTHORITY_TRUST},
@@ -540,6 +630,12 @@ def _status_from_store(store: SQLiteStore, loop_ref: str) -> UserFacingStatus:
         progress = "Finished"
         result = snapshot["execution"]["disposition"] or "Unknown"
         next_actions = ()
+        if result == "LIMITATION":
+            limitations = (
+                "The work closed honestly without strict task-success evidence.",
+            )
+        elif result == "FAILED":
+            limitations = ("The Host task reported a failed result.",)
     return UserFacingStatus(
         goal=descriptor["goal"],
         progress=progress,
@@ -657,6 +753,396 @@ def record_external_observation(
             "USER_STORE_UNAVAILABLE",
             "LoopSkill could not safely record the external observation.",
             "Inspect diagnostics and preserve the Adapter receipt.",
+        ) from exc
+
+
+def _grant_for(store: SQLiteStore, command_type: str, subject_ref: str) -> AuthorityGrant:
+    matches = [
+        grant
+        for grant in store.authority.grants.values()
+        if command_type in grant.allowed_commands
+        and (not grant.exact_subjects or subject_ref in grant.exact_subjects)
+    ]
+    if len(matches) != 1:
+        raise EntryError(
+            "USER_STORE_UNAVAILABLE",
+            "The machine authority for this transition is unavailable.",
+            "Preserve the store and inspect diagnostics.",
+        )
+    return matches[0]
+
+
+def _result_semantics(observation: Mapping[str, Any]) -> tuple[str, str]:
+    text = observation["result_text"]
+    marker = "LOOPSKILL4_RESULT="
+    candidates = [line[len(marker) :] for line in text.splitlines() if line.startswith(marker)]
+    if observation["status"] == "PENDING":
+        raise ValueError("pending")
+    if len(candidates) == 1:
+        try:
+            value = parse_json_bytes(candidates[0].encode("utf-8"))
+        except ProtocolRejection:
+            value = None
+        if (
+            isinstance(value, Mapping)
+            and set(value) == {"outcome", "summary"}
+            and value["outcome"] in {"PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"}
+            and isinstance(value["summary"], str)
+            and value["summary"].strip()
+            and len(value["summary"]) <= 4096
+        ):
+            return str(value["outcome"]), value["summary"].strip()
+    if observation["status"] == "FAILED":
+        return "FAILED", "Codex task ended without a valid semantic result."
+    return "UNVERIFIABLE", "Codex output lacked one valid semantic result envelope."
+
+
+def _allocated_subjects(store: SQLiteStore) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for kind in ("result", "report", "artifact", "review", "finalization"):
+        matches = {
+            subject
+            for grant in store.authority.grants.values()
+            for subject in grant.exact_subjects
+            if subject.startswith(kind + "-")
+        }
+        if len(matches) != 1:
+            raise EntryError(
+                "USER_STORE_UNAVAILABLE",
+                "The machine-owned result identity is unavailable.",
+                "Preserve the store and inspect diagnostics.",
+            )
+        values[kind] = matches.pop()
+    return values
+
+
+def _machine_command(
+    store: SQLiteStore,
+    snapshot: Mapping[str, Any],
+    *,
+    command_type: str,
+    operation_label: str,
+    subject_kind: str,
+    subject_ref: str,
+    expected_subject_revisions: Mapping[str, int],
+    machine_bindings: Mapping[str, Mapping[str, str]],
+    semantic_payload: Mapping[str, Any],
+    clock: Callable[[], datetime],
+) -> CommandEnvelope:
+    grant = _grant_for(store, command_type, subject_ref)
+    return build_command(
+        operation_id=f"operation-{operation_label}-{subject_ref.split('-', 1)[-1]}",
+        command_type=command_type,
+        actor_ref=grant.actor_ref,
+        authority_grant_ref=grant.grant_ref,
+        subject={
+            "loop_ref": snapshot["loop_ref"],
+            "subject_kind": subject_kind,
+            "subject_ref": subject_ref,
+        },
+        expected_loop_revision=snapshot["loop_revision"],
+        expected_subject_revisions=expected_subject_revisions,
+        issued_at=_iso(clock()),
+        machine_bindings=machine_bindings,
+        semantic_payload=semantic_payload,
+    )
+
+
+def _with_receipt(store: SQLiteStore, receipt: Receipt) -> None:
+    store.authority = AuthorityContext(
+        actors=store.authority.actors,
+        grants=store.authority.grants,
+        receipts={**store.authority.receipts, receipt.receipt_ref: receipt},
+        trusted_actor_issuers=store.authority.trusted_actor_issuers,
+        trusted_grant_issuers=store.authority.trusted_grant_issuers,
+        trusted_receipt_issuers=store.authority.trusted_receipt_issuers,
+    )
+
+
+def sync_loop(
+    *,
+    root: Path | str,
+    host_provider: CodexProviderPort,
+    host_issuer_ref: str = DEFAULT_CODEX_RECEIPT_ISSUER,
+    host_issuer_trust: str = DEFAULT_CODEX_RECEIPT_TRUST,
+    clock: Callable[[], datetime] = _now,
+) -> UserFacingStatus:
+    """Advance the exact Host-result chain; every local step is replay-safe."""
+    path = _existing_store_path(root)
+    try:
+        with SQLiteStore(path) as store:
+            descriptors = store.loop_descriptors()
+            if len(descriptors) != 1:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The LoopSkill data location is not a single-loop store.",
+                    "Preserve the store and inspect diagnostics.",
+                )
+            loop_ref = descriptors[0]["loop_ref"]
+            snapshot = store.snapshot(loop_ref)
+            if snapshot is None:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The loop state is unavailable.",
+                    "Preserve the store and inspect diagnostics.",
+                )
+            if snapshot["execution"]["state"] == "TERMINAL":
+                return _status_from_store(store, loop_ref)
+            if len(snapshot["external_effects"]) != 1:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The startup Host subject is unavailable.",
+                    "Preserve the store and inspect diagnostics.",
+                )
+            effect_ref, effect = next(iter(snapshot["external_effects"].items()))
+            if effect["state"] != "OBSERVED":
+                return _status_from_store(store, loop_ref)
+            host_resource = snapshot["host_resources"].get(effect["host_resource_ref"])
+            provider_id = None if host_resource is None else host_resource.get(
+                "provider_resource_ref"
+            )
+            if not provider_id:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The Host resource identity is unavailable.",
+                    "Preserve the store and inspect diagnostics.",
+                )
+            adapter = CodexHostAdapter(
+                host_provider,
+                store,
+                executor_ref="loopskill-entry-executor-v1",
+                issuer_ref=host_issuer_ref,
+                issuer_trust=host_issuer_trust,
+                clock=clock,
+            )
+            allocated = _allocated_subjects(store)
+            result_ref = allocated["result"]
+            artifact_ref = allocated["artifact"]
+            report_ref = allocated["report"]
+            review_ref = allocated["review"]
+            finalization_ref = allocated["finalization"]
+            observation = None
+            if not snapshot["results"] or snapshot["results"][result_ref]["state"] == "STAGED":
+                observation = adapter.read_task_result(provider_id)
+                if observation["status"] == "PENDING":
+                    if snapshot["results"]:
+                        raise HostUnavailable("Codex task result regressed after staging")
+                    return _status_from_store(store, loop_ref)
+                outcome, summary = _result_semantics(observation)
+                if snapshot["results"]:
+                    if (
+                        snapshot["results"][result_ref].get("source_observation_digest")
+                        != observation["result_digest"]
+                    ):
+                        raise ProtocolRejection(
+                            "RECEIPT_IDENTITY_MISMATCH",
+                            "Host result changed after local staging",
+                        )
+                else:
+                    store.apply(
+                        _machine_command(
+                            store,
+                            snapshot,
+                            command_type="StageExternalResult",
+                            operation_label="stage",
+                            subject_kind="ExternalEffectRef",
+                            subject_ref=effect_ref,
+                            expected_subject_revisions={effect_ref: effect["revision"]},
+                            machine_bindings={
+                                "allocate_refs": {
+                                    "new_report_ref": report_ref,
+                                    "new_result_ref": result_ref,
+                                },
+                                "receipt_refs": {},
+                                "resolved_refs": {
+                                    "source_observation_digest": observation[
+                                        "result_digest"
+                                    ]
+                                },
+                            },
+                            semantic_payload={"outcome": outcome, "summary": summary},
+                            clock=clock,
+                        )
+                    )
+                    snapshot = store.snapshot(loop_ref)
+                    assert snapshot is not None
+
+            result = snapshot["results"][result_ref]
+            outcome = result["outcome"]
+            if result["state"] == "STAGED":
+                assert observation is not None
+                now = clock()
+                artifact_receipt = Receipt(
+                    receipt_ref="receipt-artifact-" + observation["result_digest"][:24],
+                    issuer_ref=host_issuer_ref,
+                    issuer_trust=host_issuer_trust,
+                    trust_class="strict",
+                    action="verify-artifact",
+                    loop_ref=loop_ref,
+                    subject_ref=artifact_ref,
+                    attempt_ref=effect["attempt_ref"],
+                    target_ref=effect["target_ref"],
+                    request_digest=observation["result_digest"],
+                    provider_idempotency_key=None,
+                    provider_resource_ref=provider_id,
+                    outcome="observed",
+                    issued_at=_iso(now),
+                    expires_at=_iso(now + timedelta(minutes=5)),
+                    evidence_digest=observation["result_digest"],
+                )
+                _with_receipt(store, artifact_receipt)
+                store.apply(
+                    _machine_command(
+                        store,
+                        snapshot,
+                        command_type="AcknowledgeResult",
+                        operation_label="ack",
+                        subject_kind="ResultRef",
+                        subject_ref=result_ref,
+                        expected_subject_revisions={
+                            result_ref: result["revision"],
+                            report_ref: snapshot["reports"][report_ref]["revision"],
+                        },
+                        machine_bindings={
+                            "allocate_refs": {"new_artifact_ref": artifact_ref},
+                            "receipt_refs": {"receipt": artifact_receipt.receipt_ref},
+                            "resolved_refs": {},
+                        },
+                        semantic_payload={},
+                        clock=clock,
+                    )
+                )
+                snapshot = store.snapshot(loop_ref)
+                assert snapshot is not None
+
+            if not snapshot["reviews"]:
+                verdict = "PASS" if outcome == "PASS" else "LIMITATION"
+                store.apply(
+                    _machine_command(
+                        store,
+                        snapshot,
+                        command_type="RecordReview",
+                        operation_label="review",
+                        subject_kind="ResultRef",
+                        subject_ref=result_ref,
+                        expected_subject_revisions={
+                            artifact_ref: snapshot["artifacts"][artifact_ref]["revision"],
+                            result_ref: snapshot["results"][result_ref]["revision"],
+                            report_ref: snapshot["reports"][report_ref]["revision"],
+                        },
+                        machine_bindings={
+                            "allocate_refs": {"new_review_ref": review_ref},
+                            "receipt_refs": {},
+                            "resolved_refs": {},
+                        },
+                        semantic_payload={"verdict": verdict},
+                        clock=clock,
+                    )
+                )
+                snapshot = store.snapshot(loop_ref)
+                assert snapshot is not None
+
+            goal_ref = next(iter(snapshot["goals"]))
+            if snapshot["goals"][goal_ref]["state"] == "ACTIVE":
+                goal_disposition = {
+                    "PASS": "DONE",
+                    "FAILED": "FAILED",
+                    "LIMITATION": "LIMITATION",
+                    "UNVERIFIABLE": "LIMITATION",
+                }[outcome]
+                store.apply(
+                    _machine_command(
+                        store,
+                        snapshot,
+                        command_type="AdvanceGoal",
+                        operation_label="advance",
+                        subject_kind="GoalRef",
+                        subject_ref=goal_ref,
+                        expected_subject_revisions={
+                            goal_ref: snapshot["goals"][goal_ref]["revision"],
+                            review_ref: snapshot["reviews"][review_ref]["revision"],
+                        },
+                        machine_bindings={
+                            "allocate_refs": {},
+                            "receipt_refs": {},
+                            "resolved_refs": {"review_ref": review_ref},
+                        },
+                        semantic_payload={"disposition": goal_disposition},
+                        clock=clock,
+                    )
+                )
+                snapshot = store.snapshot(loop_ref)
+                assert snapshot is not None
+
+            final_disposition = {"PASS": "SUCCEEDED", "FAILED": "FAILED"}.get(
+                outcome, "LIMITATION"
+            )
+            if not snapshot["finalizations"]:
+                store.apply(
+                    _machine_command(
+                        store,
+                        snapshot,
+                        command_type="PrepareFinalization",
+                        operation_label="finalize",
+                        subject_kind="LoopRef",
+                        subject_ref=loop_ref,
+                        expected_subject_revisions={},
+                        machine_bindings={
+                            "allocate_refs": {"new_finalization_ref": finalization_ref},
+                            "receipt_refs": {},
+                            "resolved_refs": {},
+                        },
+                        semantic_payload={"disposition": final_disposition},
+                        clock=clock,
+                    )
+                )
+                snapshot = store.snapshot(loop_ref)
+                assert snapshot is not None
+
+            finalization = snapshot["finalizations"][finalization_ref]
+            lifecycle_receipt = adapter.observe_finalization(
+                loop_ref=loop_ref,
+                finalization_ref=finalization_ref,
+                provider_id=provider_id,
+                subject_chain_digest=finalization["subject_chain_digest"],
+            )
+            _with_receipt(store, lifecycle_receipt)
+            store.apply(
+                _machine_command(
+                    store,
+                    snapshot,
+                    command_type="CloseExecution",
+                    operation_label="close",
+                    subject_kind="FinalizationRef",
+                    subject_ref=finalization_ref,
+                    expected_subject_revisions={
+                        finalization_ref: finalization["revision"]
+                    },
+                    machine_bindings={
+                        "allocate_refs": {},
+                        "receipt_refs": {"receipt": lifecycle_receipt.receipt_ref},
+                        "resolved_refs": {},
+                    },
+                    semantic_payload={},
+                    clock=clock,
+                )
+            )
+            store.verify_integrity()
+            return _status_from_store(store, loop_ref)
+    except EntryError:
+        raise
+    except (
+        OSError,
+        PersistenceError,
+        ProtocolRejection,
+        HostUnavailable,
+        StopIteration,
+        ValueError,
+    ) as exc:
+        raise EntryError(
+            "USER_STORE_UNAVAILABLE",
+            "LoopSkill could not safely synchronize the Host result.",
+            "Wait for readback or inspect diagnostics; do not restart the task.",
         ) from exc
 
 

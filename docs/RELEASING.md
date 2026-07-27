@@ -73,6 +73,11 @@ If the outcome is `UNKNOWN`/`UNVERIFIABLE`, retain it honestly. Do not retry the
 provider action or reconstruct identity. The minimized receipt contains only
 candidate SHA, safe categories, counts, statuses, and digests—never task/thread/
 turn IDs, absolute private paths, App transcripts, prompts, secrets, or raw logs.
+The final local validator also receives the disposable v4 store path and must
+perform one fresh authoritative readback itself; a locally constructed receipt
+JSON cannot substitute for that live gate. Only the domain-separated minimized
+attestation is retained. The disposable store and its raw Host identity remain
+outside the repository and release packet.
 
 ## Gate 3: independent review
 

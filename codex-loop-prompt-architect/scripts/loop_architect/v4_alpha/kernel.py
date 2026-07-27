@@ -234,25 +234,44 @@ def _result_chain(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     report_ref = result["report_ref"]
     artifact_ref = result["artifact_ref"]
     attempt_ref = result["attempt_ref"]
-    delivery_ref = result["delivery_ref"]
-    route_ref = result["route_ref"]
-    goal_ref = snapshot["routes"][route_ref]["goal_ref"]
-    return {
+    chain = {
         "artifact_ref": artifact_ref,
         "artifact_revision": snapshot["artifacts"][artifact_ref]["revision"],
         "attempt_ref": attempt_ref,
         "attempt_revision": snapshot["attempts"][attempt_ref]["revision"],
-        "delivery_ref": delivery_ref,
-        "delivery_revision": snapshot["deliveries"][delivery_ref]["revision"],
-        "goal_ref": goal_ref,
-        "goal_revision": snapshot["goals"][goal_ref]["revision"],
         "report_ref": report_ref,
         "report_revision": snapshot["reports"][report_ref]["revision"],
         "result_ref": result_ref,
         "result_revision": result["revision"],
-        "route_ref": route_ref,
-        "route_revision": snapshot["routes"][route_ref]["revision"],
     }
+    if "delivery_ref" in result:
+        delivery_ref = result["delivery_ref"]
+        route_ref = result["route_ref"]
+        goal_ref = snapshot["routes"][route_ref]["goal_ref"]
+        chain.update(
+            {
+                "delivery_ref": delivery_ref,
+                "delivery_revision": snapshot["deliveries"][delivery_ref]["revision"],
+                "route_ref": route_ref,
+                "route_revision": snapshot["routes"][route_ref]["revision"],
+            }
+        )
+    else:
+        external_effect_ref = result["external_effect_ref"]
+        effect = snapshot["external_effects"][external_effect_ref]
+        goal_ref, _ = _only_record(snapshot, "goals")
+        chain.update(
+            {
+                "external_effect_ref": external_effect_ref,
+                "external_effect_revision": effect["revision"],
+                "host_resource_ref": effect["host_resource_ref"],
+                "host_resource_revision": snapshot["host_resources"]
+                [effect["host_resource_ref"]]["revision"],
+            }
+        )
+    chain["goal_ref"] = goal_ref
+    chain["goal_revision"] = snapshot["goals"][goal_ref]["revision"]
+    return chain
 
 
 def _final_chain(snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -753,6 +772,59 @@ def _stage_result(
     ], {"report_ref": report_ref, "result_ref": result_ref}
 
 
+def _stage_external_result(
+    snapshot: dict[str, Any] | None,
+    command: CommandEnvelope,
+    _: AuthorityContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    assert snapshot is not None
+    external_effect_ref = str(command.subject["subject_ref"])
+    effect = snapshot["external_effects"][external_effect_ref]
+    if effect["state"] not in {"OBSERVED", "UNKNOWN", "UNVERIFIABLE"}:
+        raise ProtocolRejection("INVALID_TRANSITION", "External effect is unresolved")
+    result_ref = _binding(command, "allocate_refs", "new_result_ref")
+    report_ref = _binding(command, "allocate_refs", "new_report_ref")
+    source_observation_digest = _binding(
+        command, "resolved_refs", "source_observation_digest"
+    )
+    if len(source_observation_digest) != 64 or any(
+        character not in "0123456789abcdef"
+        for character in source_observation_digest
+    ):
+        raise ProtocolRejection(
+            "RECEIPT_IDENTITY_MISMATCH", "invalid Host result observation digest"
+        )
+    outcome = command.semantic_payload.get("outcome")
+    summary = command.semantic_payload.get("summary")
+    if outcome not in {"PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"}:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid result outcome")
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 4096:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid result summary")
+    report_digest = domain_digest(
+        "loopskill-report-v1\n", {"outcome": outcome, "summary": summary}
+    )
+    snapshot["results"][result_ref] = {
+        "attempt_ref": effect["attempt_ref"],
+        "external_effect_ref": external_effect_ref,
+        "outcome": outcome,
+        "report_ref": report_ref,
+        "revision": 1,
+        "source_observation_digest": source_observation_digest,
+        "state": "STAGED",
+    }
+    snapshot["reports"][report_ref] = {
+        "author_actor_ref": command.actor_ref,
+        "content_digest": report_digest,
+        "result_ref": result_ref,
+        "revision": 1,
+        "state": "STAGED",
+    }
+    return snapshot, [
+        _event("ResultStaged", result_ref=result_ref),
+        _event("ReportStaged", report_ref=report_ref),
+    ], {"report_ref": report_ref, "result_ref": result_ref}
+
+
 def _acknowledge_result(
     snapshot: dict[str, Any] | None,
     command: CommandEnvelope,
@@ -944,13 +1016,17 @@ def _prepare_finalization(
         raise ProtocolRejection(
             "FINALIZATION_PRECONDITION_FAILED", "current chain incomplete"
         )
-    delivery_state = snapshot["deliveries"][chain["delivery_ref"]]["state"]
+    subject_state = (
+        snapshot["deliveries"][chain["delivery_ref"]]["state"]
+        if "delivery_ref" in chain
+        else snapshot["external_effects"][chain["external_effect_ref"]]["state"]
+    )
     if disposition == "SUCCEEDED":
         if (
             goal_state != "DONE"
             or result_outcome != "PASS"
             or review["state"] != "PASS"
-            or delivery_state != "OBSERVED"
+            or subject_state != "OBSERVED"
         ):
             raise ProtocolRejection(
                 "FINALIZATION_PRECONDITION_FAILED", "strict success unavailable"
@@ -972,21 +1048,29 @@ def _prepare_finalization(
     )
     chain_digest = domain_digest("loopskill-subject-chain-v1\n", chain)
     result = snapshot["results"][chain["result_ref"]]
-    snapshot["finalizations"][finalization_ref] = {
+    finalization = {
         "artifact_ref": result["artifact_ref"],
         "assurance_strength": "NONE",
         "attempt_ref": result["attempt_ref"],
-        "delivery_ref": result["delivery_ref"],
         "disposition": disposition,
         "goal_ref": chain["goal_ref"],
         "report_ref": result["report_ref"],
         "result_ref": chain["result_ref"],
         "review_ref": chain["review_ref"],
         "revision": 1,
-        "route_ref": result["route_ref"],
         "state": "PREPARED",
         "subject_chain_digest": chain_digest,
     }
+    if "delivery_ref" in result:
+        finalization.update(
+            {
+                "delivery_ref": result["delivery_ref"],
+                "route_ref": result["route_ref"],
+            }
+        )
+    else:
+        finalization["external_effect_ref"] = result["external_effect_ref"]
+    snapshot["finalizations"][finalization_ref] = finalization
     execution = snapshot["execution"]
     execution.update({"revision": execution["revision"] + 1, "state": "FINALIZING"})
     return snapshot, [
@@ -1128,6 +1212,7 @@ _REDUCERS = {
     "BeginEffectDelivery": _begin_delivery,
     "RecordEffectObservation": _observe_delivery,
     "StageResult": _stage_result,
+    "StageExternalResult": _stage_external_result,
     "AcknowledgeResult": _acknowledge_result,
     "RecordReview": _record_review,
     "AdvanceGoal": _advance_goal,

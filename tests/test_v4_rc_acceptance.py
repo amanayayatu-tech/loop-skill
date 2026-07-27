@@ -26,11 +26,32 @@ runner = importlib.util.module_from_spec(RUNNER_SPEC)
 RUNNER_SPEC.loader.exec_module(runner)
 
 
+def live_observation(candidate: str) -> dict:
+    return {
+        "artifact_state": "VERIFIED",
+        "assurance": "STRICT",
+        "candidate_goal_digest": "e" * 64,
+        "candidate_sha": candidate,
+        "execution_disposition": "SUCCEEDED",
+        "execution_state": "TERMINAL",
+        "finalization_state": "EXECUTION_CLOSED",
+        "host_task_identity_digest": "c" * 64,
+        "lifecycle_state": "TERMINAL",
+        "result_digest": "b" * 64,
+        "result_outcome": "PASS",
+        "result_state": "ACKNOWLEDGED",
+        "review_state": "PASS",
+        "snapshot_digest": "d" * 64,
+    }
+
+
 def canary(candidate: str) -> dict:
+    live = live_observation(candidate)
     value = {
         "artifact": "loopskill-v4-disposable-app-canary-v1",
         "candidate_sha": candidate,
-        "canary_output_sha256": "b" * 64,
+        "candidate_goal_digest": live["candidate_goal_digest"],
+        "canary_output_sha256": live["result_digest"],
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
         "config_bytes_changed": 0,
@@ -40,7 +61,7 @@ def canary(candidate: str) -> dict:
         "host_receipt_issuer": validator.CANARY_ISSUER,
         "host_receipt_trust": validator.CANARY_TRUST,
         "host_task_create_count": 1,
-        "host_task_identity_digest": "c" * 64,
+        "host_task_identity_digest": live["host_task_identity_digest"],
         "host_task_readback_count": 1,
         "intake_external_effects": 0,
         "intake_heartbeat_count": 0,
@@ -69,7 +90,9 @@ def canary(candidate: str) -> dict:
     value["provenance_digest"] = validator._domain_digest(
         validator.CANARY_PROVENANCE_DOMAIN, value
     )
-    value["host_receipt_digest"] = value["provenance_digest"]
+    value["host_receipt_digest"] = validator._domain_digest(
+        validator.CANARY_LIVE_DOMAIN, live
+    )
     return value
 
 
@@ -86,6 +109,45 @@ class V4RcAcceptanceTests(unittest.TestCase):
             )
         self.assertEqual(result, 1)
         self.assertIn("RC_FINAL_RECEIPTS_REQUIRED", stream.getvalue())
+
+    def test_self_asserted_canary_json_cannot_replace_live_store_readback(self) -> None:
+        candidate = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = []
+            for name, payload in (
+                ("canary.json", canary(candidate)),
+                ("conformance.json", {}),
+                ("packet.json", {}),
+            ):
+                path = root / name
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                paths.append(path)
+            stream = StringIO()
+            with mock.patch.object(
+                validator,
+                "static_receipt",
+                return_value={
+                    "artifact": "loopskill-v4-publication-static-receipt-v1"
+                },
+            ), redirect_stderr(stream):
+                result = validator.main(
+                    [
+                        "--root",
+                        str(ROOT),
+                        "--candidate",
+                        candidate,
+                        "--allow-non-head",
+                        "--canary-receipt",
+                        str(paths[0]),
+                        "--conformance-receipt",
+                        str(paths[1]),
+                        "--author-packet",
+                        str(paths[2]),
+                    ]
+                )
+            self.assertEqual(result, 1)
+            self.assertIn("RC_FINAL_RECEIPTS_REQUIRED", stream.getvalue())
 
     def test_bilingual_v4_docs_examples_and_release_boundary_are_present(self) -> None:
         chinese = (ROOT / "docs/v4/quickstart.zh-CN.md").read_text(encoding="utf-8")
@@ -139,6 +201,58 @@ class V4RcAcceptanceTests(unittest.TestCase):
             validator.RcValidationError, "RC_CANARY_RECEIPT_SHAPE_INVALID"
         ):
             validator.validate_canary_receipt(value, candidate)
+
+    def test_live_canary_requires_current_host_readback_and_exact_bindings(self) -> None:
+        candidate = "a" * 40
+        value = canary(candidate)
+        with mock.patch.object(
+            validator,
+            "_live_canary_observation",
+            return_value=live_observation(candidate),
+        ) as readback:
+            digest = validator.validate_live_canary(
+                value,
+                candidate,
+                ROOT,
+                Path("synthetic-live-store"),
+            )
+        self.assertEqual(
+            digest,
+            validator._domain_digest(
+                validator.CANARY_LIVE_DOMAIN, live_observation(candidate)
+            ),
+        )
+        readback.assert_called_once()
+        for field in (
+            "host_receipt_digest",
+            "host_task_identity_digest",
+            "canary_output_sha256",
+            "candidate_goal_digest",
+        ):
+            with self.subTest(field=field), mock.patch.object(
+                validator,
+                "_live_canary_observation",
+                return_value=live_observation(candidate),
+            ):
+                changed = canary(candidate)
+                changed[field] = "f" * 64
+                if field != "host_receipt_digest":
+                    provenance = dict(changed)
+                    provenance.pop("provenance_digest")
+                    provenance.pop("host_receipt_digest")
+                    changed["provenance_digest"] = validator._domain_digest(
+                        validator.CANARY_PROVENANCE_DOMAIN, provenance
+                    )
+                with self.assertRaisesRegex(
+                    validator.RcValidationError,
+                    "RC_CANARY_LIVE_BINDING_INVALID",
+                ):
+                    validator.validate_live_canary(
+                        changed,
+                        candidate,
+                        ROOT,
+                        Path("synthetic-live-store"),
+                    )
 
     def test_publication_packet_requires_exact_files_and_zero_prior_release_effects(self) -> None:
         candidate = "a" * 40
@@ -237,6 +351,8 @@ class V4RcAcceptanceTests(unittest.TestCase):
             self.assertEqual(receipt["dependency_inventory"], dependencies)
             self.assertEqual(receipt["secret_findings"], [])
             self.assertEqual(receipt["stale_production_findings"], [])
+            self.assertEqual(receipt["distribution_archive"]["findings"], [])
+            self.assertEqual(receipt["distribution_archive"]["file_count"], 3)
             self.assertEqual(receipt["sbom"]["spdxVersion"], "SPDX-2.3")
             self.assertEqual(receipt["sbom"]["packages"][0]["versionInfo"], "4.0.0")
             self.assertEqual(
@@ -269,6 +385,33 @@ class V4RcAcceptanceTests(unittest.TestCase):
                 validator.RcValidationError, "STALE_V3_PRODUCTION_SCAN_FAILED"
             ):
                 validator.static_receipt(repo, stale_sha)
+
+    def test_distribution_archive_rejects_unsafe_members(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "fixture@example.invalid"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Fixture"],
+                cwd=repo,
+                check=True,
+            )
+            (repo / "safe.txt").write_text("safe\n", encoding="utf-8")
+            (repo / "unsafe-link").symlink_to("safe.txt")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True)
+            sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+            with self.assertRaisesRegex(
+                validator.RcValidationError,
+                "RC_DISTRIBUTION_ARCHIVE_SCAN_FAILED",
+            ):
+                validator._distribution_archive_receipt(repo, sha)
 
 
 if __name__ == "__main__":
