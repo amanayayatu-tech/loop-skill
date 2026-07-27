@@ -244,7 +244,10 @@
           "type": "string"
         },
         "delivery_ref": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "loop_ref": {
           "type": "string"
@@ -258,6 +261,12 @@
         "provider_request_digest": {
           "type": "string"
         },
+        "subject_kind": {
+          "type": "string"
+        },
+        "subject_ref": {
+          "type": "string"
+        },
         "target_ref": {
           "type": "string"
         }
@@ -265,12 +274,26 @@
       "required": [
         "attempt_ref",
         "loop_ref",
+        "subject_kind",
+        "subject_ref",
         "delivery_ref",
         "target_ref",
         "provider_idempotency_key",
         "provider_request_digest",
         "action",
         "payload"
+      ],
+      "type": "object"
+    },
+    "LoopStartInput": {
+      "additionalProperties": false,
+      "properties": {
+        "goal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal"
       ],
       "type": "object"
     },
@@ -373,10 +396,64 @@
         "loop_ref"
       ],
       "type": "object"
+    },
+    "UserFacingError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "next_action": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "next_action"
+      ],
+      "type": "object"
+    },
+    "UserFacingStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "next_actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "progress": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal",
+        "progress",
+        "result",
+        "limitations",
+        "next_actions"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "8a0e977b86a79847e023f5802551ca57aadc69c05a5f0c9827b005c996999289",
+  "manifest_sha256": "c479bdf758cb2f3258c90f7d56a2f4a0e8646f86cd73e6df96fa9c43247dec56",
   "title": "LoopSkill 4 protocol wire shapes"
 }

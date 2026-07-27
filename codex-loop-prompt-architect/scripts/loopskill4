@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""One-action LoopSkill 4 public entry; no Host control identity is accepted."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+from loop_architect.v4_alpha.protocol import LoopStartInput
+from loop_architect.v4_entry import EntryError, diagnostics, start_loop, status
+
+
+class PublicParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The command input is invalid.",
+            "Run loopskill4 --help and provide one supported public action.",
+        )
+
+
+def default_root() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "LoopSkill" / "4"
+    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "loopskill" / "4"
+
+
+def parser() -> PublicParser:
+    result = PublicParser(prog="loopskill4")
+    subcommands = result.add_subparsers(dest="action", required=True)
+    start = subcommands.add_parser("start")
+    start.add_argument("goal_or_file")
+    start.add_argument("--root", type=Path, default=default_root())
+    start.add_argument("--diagnostics", action="store_true")
+    show = subcommands.add_parser("status")
+    show.add_argument("--root", type=Path, default=default_root())
+    show.add_argument("--diagnostics", action="store_true")
+    return result
+
+
+def read_goal(value: str) -> LoopStartInput:
+    path = Path(value)
+    if value == "-":
+        raw = sys.stdin.buffer.read(4097)
+        return LoopStartInput(goal=_decode_text(raw))
+    if path.is_file():
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The goal file could not be read.",
+                "Provide one readable UTF-8 goal file.",
+            ) from exc
+        if len(raw) > 4096:
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The goal file is too large.",
+                "Reduce the goal to at most 4096 UTF-8 bytes.",
+            )
+        if path.suffix.lower() == ".json":
+            try:
+                document = json.loads(raw.decode("utf-8", "strict"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise EntryError(
+                    "USER_INPUT_INVALID",
+                    "The goal file is not valid UTF-8 JSON.",
+                    "Use an object containing only a non-empty goal field.",
+                ) from exc
+            if not isinstance(document, dict) or set(document) != {"goal"}:
+                raise EntryError(
+                    "USER_INPUT_INVALID",
+                    "The goal file has unsupported fields.",
+                    "Use an object containing only a non-empty goal field.",
+                )
+            return LoopStartInput(goal=document["goal"])
+        return LoopStartInput(goal=_decode_text(raw))
+    if path.suffix.lower() in {".json", ".txt"} or "/" in value:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The goal file was not found.",
+            "Provide one readable goal file or literal goal text.",
+        )
+    return LoopStartInput(goal=value)
+
+
+def _decode_text(raw: bytes) -> str:
+    try:
+        return raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The goal file is not valid UTF-8.",
+            "Save the file as UTF-8 and try again.",
+        ) from exc
+
+
+def print_status(value) -> None:
+    print("LoopSkill 4")
+    print("Goal: " + json.dumps(value.goal, ensure_ascii=False))
+    print(f"Progress: {value.progress}")
+    print(f"Result: {value.result}")
+    if value.limitations:
+        print("Limitations: " + " ".join(value.limitations))
+    else:
+        print("Limitations: None")
+    if value.next_actions:
+        print("Next action: " + " ".join(value.next_actions))
+    else:
+        print("Next action: None")
+
+
+def main(argv=None) -> int:
+    try:
+        args = parser().parse_args(argv)
+        if args.action == "start":
+            value = start_loop(read_goal(args.goal_or_file), root=args.root)
+        else:
+            value = status(root=args.root)
+        print_status(value)
+        if args.diagnostics:
+            print(
+                "Diagnostics: "
+                + json.dumps(
+                    diagnostics(root=args.root),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        return 0
+    except EntryError as exc:
+        print(f"LoopSkill 4 error [{exc.code}]: {exc.message}", file=sys.stderr)
+        print(f"Next action: {exc.next_action}", file=sys.stderr)
+        return 2
+    except Exception:
+        print(
+            "LoopSkill 4 error [USER_INTERNAL_ERROR]: LoopSkill could not safely complete the action.",
+            file=sys.stderr,
+        )
+        print(
+            "Next action: Retry once, then use diagnostics or restore a verified backup.",
+            file=sys.stderr,
+        )
+        return 70
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

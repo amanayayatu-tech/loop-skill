@@ -1,5 +1,6 @@
 {
   "artifact": "loopskill-v4-p4-codex-host-adapter-evidence-v1",
+  "checkpoint_commit": "74158f417a9d06ed6a083c100e59ec649ffcc5f7",
   "canary": {
     "classification": "disposable non-research non-scored App conformance smoke",
     "completion_error": null,

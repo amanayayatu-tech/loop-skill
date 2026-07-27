@@ -17,7 +17,9 @@ Codex resource identifier or App enum.
 ## Execution ownership and recovery
 
 An effect becomes executable only after the canonical store atomically commits
-the Attempt, Delivery state, event, snapshot, operation result, and outbox row.
+the Attempt, its typed subject state, event, snapshot, operation result, and
+outbox row. P4 exercised Delivery subjects; P5 adds the same contract for the
+startup `ExternalEffect` subject without changing execution ownership.
 The outbox then has one invocation state:
 
 | Invocation state | Meaning | Automatic provider call allowed |
@@ -75,10 +77,13 @@ evidence digests. An unavailable action capability causes no provider call.
 
 `EffectAttempt` is an additive generated wire type in the sole typed protocol
 manifest. The handwritten Adapter consumes that generated record; it does not
-declare a parallel protocol shape. SQLite schema v2 adds exact target identity,
-invocation ownership, and observation receipt fields to the outbox. The v1-to-v2
-migration is transactional and derives target identity only from the canonical
-snapshot; an incomplete derivation fails closed.
+declare a parallel protocol shape. At the P4 checkpoint SQLite schema v2 added
+exact target identity, invocation ownership, and observation receipt fields to
+the outbox. P5 evolves that schema transactionally to v4 so the same outbox row
+also binds `subject_kind`, `subject_ref`, action, and canonical provider payload;
+receipt identity is persisted with the observation transaction. Every migration
+derives projections only from canonical snapshots and fails closed when the
+derivation is incomplete.
 
 ## Disposable App canary
 

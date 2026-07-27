@@ -1,6 +1,6 @@
 # ADR 0011: LoopSkill 4.0 compatible kernel refactor
 
-- Status: Accepted for the bounded alpha pure-kernel slice; all other implementation remains unauthorized
+- Status: Architecture accepted; local implementation authorized through an RC candidate; public release remains unauthorized
 - Date: 2026-07-27
 - Decision scope: LoopSkill 4.0 architecture, authority boundary, recovery semantics, compatibility, and gates
 - Conformance design: `docs/conformance/loopskill-4-conformance-corpus-design.md`
@@ -8,14 +8,12 @@
 ## Authorization and source identities
 
 The author selects route B: replace the protocol kernel, persistence model, and
-Host boundary while reusing provenance-bound v3 safety assets. This ADR now
-authorizes only the disposable alpha pure-kernel slice described below, and
-only after the conformance design passes its implementation-readiness checks.
-
-This authorization excludes SQLite implementation or selection, a Codex Host
-Adapter, provider or network calls, Git/filesystem artifact capture, v3 import,
-Pack/MCP/CLI work, installation, release, tag, push, PR, real-loop migration,
-and real App canaries.
+Host boundary while reusing provenance-bound v3 safety assets. The initial
+authorization covered only the disposable alpha pure-kernel slice. A later
+author authorization now permits continuous local implementation through an
+exact-SHA RC candidate and approval packet. Push, tag, PR, public release,
+installation-channel changes, real v3-loop migration, private research data,
+and a stable-release claim remain forbidden.
 
 The identities below are separate products/evidence sources:
 
@@ -311,7 +309,7 @@ semantic intent digest, and DeliveryRef. The reducer stores the intent digest so
 provider request identity is derived from canonical state rather than event
 history, model memory, or a hidden fixture map.
 
-### Delivery and Attempt
+### Delivery, ExternalEffect, and Attempt
 
 Delivery state: `PREPARED`, `ATTEMPT_COMMITTED`, `OBSERVED`, `UNKNOWN`,
 `UNVERIFIABLE`.
@@ -323,6 +321,15 @@ and observation receipt. Attempt state is `COMMITTED`, `OBSERVED`, `UNKNOWN`,
 or `UNVERIFIABLE`.
 
 Delivery observation never represents Result acceptance.
+
+Host bootstrap is a generic `ExternalEffect`, not an implicit Adapter side
+effect. The one-action CreateLoop path may atomically add one startup
+ExternalEffect and its Attempt/outbox descriptor in the same local transaction.
+The canonical subject is `ExternalEffectRef`; the Adapter never invents it.
+`RecordExternalEffectObservation` maps strict/cooperative/missing readback to
+OBSERVED/UNVERIFIABLE/UNKNOWN, and only OBSERVED may bind the reserved
+HostResourceRef. This additive path preserves the original 11-operation alpha
+vertical bytes because that fixture does not request a startup ExternalEffect.
 
 ### Result
 
@@ -359,8 +366,9 @@ also present, the same command may append `StrictFinalizationAcknowledged` and
 set assurance `STRICT`. Otherwise execution can still terminate honestly with
 `LIMITATION` and `LOCAL`/`COOPERATIVE` assurance.
 
-Later authoritative evidence may change Delivery/Attempt from `UNKNOWN` or
-`UNVERIFIABLE` to `OBSERVED` only under the exact original Attempt identity. A
+Later authoritative evidence may change a Delivery or ExternalEffect and its
+Attempt from `UNKNOWN` or `UNVERIFIABLE` to `OBSERVED` only under the exact
+original typed subject and Attempt identity. For a finalized Delivery chain, a
 separate authorized `StrengthenClosureAssurance` may then raise assurance for
 the unchanged finalization chain. It never reopens execution, changes the
 terminal disposition, replaces evidence, or creates a new attempt.
@@ -383,7 +391,7 @@ from delivery observation.
 ### Mutation commands
 
 `CreateLoop`, `BindHostResource`, `PrepareRoute`, `BeginEffectDelivery`,
-`RecordEffectObservation`, `StageResult`, `AcknowledgeResult`, `RecordReview`,
+`RecordEffectObservation`, `RecordExternalEffectObservation`, `StageResult`, `AcknowledgeResult`, `RecordReview`,
 `AdvanceGoal`, `PauseLoop`, `ResumeLoop`, `PrepareFinalization`,
 `CloseExecution`, `StrengthenClosureAssurance`, and later
 `ImportV3Snapshot`.
@@ -394,6 +402,8 @@ are read-only and have no operation/CAS side effects.
 ### Events
 
 `LoopCreated`, `GoalRegistered`, `GoalActivated`, `HostResourceBound`,
+`ExternalEffectPrepared`, `ExternalEffectObserved`, `ExternalEffectUnknown`,
+`ExternalEffectUnverifiable`, `LateExternalEffectObserved`,
 `RoutePrepared`, `DeliveryAttemptCommitted`, `DeliveryObserved`,
 `DeliveryUnknown`, `DeliveryUnverifiable`, `LateDeliveryObserved`,
 `ResultStaged`, `ReportStaged`, `ArtifactCaptured`, `ArtifactVerified`,
@@ -405,11 +415,11 @@ are read-only and have no operation/CAS side effects.
 
 ### References
 
-`LoopRef`, `ActorRef`, `AuthorityGrantRef`, `GoalRef`, `HostResourceRef`,
+`LoopRef`, `ActorRef`, `AuthorityGrantRef`, `GoalRef`, `HostResourceRef`, `ExternalEffectRef`,
 `RouteRef`, `DeliveryRef`, `AttemptRef`, `ResultRef`, `ReportRef`,
 `ArtifactRef`, `ReviewRef`, `FinalizationRef`, and `ReceiptRef`.
 
-### Stable alpha errors
+### Stable protocol and public-entry errors
 
 `INVALID_COMMAND`, `UNSUPPORTED_PROTOCOL_VERSION`, `RESOURCE_LIMIT_EXCEEDED`,
 `INVALID_UTF8`, `CONTROL_FIELD_INJECTION`, `INVALID_AUTHORITY`,
@@ -425,13 +435,24 @@ are read-only and have no operation/CAS side effects.
 `DUAL_WRITE_FORBIDDEN`, `STORE_RECOVERY_REQUIRED`, and
 `INTERNAL_INVARIANT_VIOLATION`.
 
-`UNKNOWN` and `UNVERIFIABLE` are Delivery/Attempt states, never acceptance or
-error values.
+The manifest also owns the bounded public-entry errors `USER_INPUT_INVALID`,
+`USER_LOOP_EXISTS`, `USER_STORE_UNAVAILABLE`, and `USER_INTERNAL_ERROR`.
+Their normal text must not expose internal handles, receipts, schema, or a
+traceback.
+
+`UNKNOWN` and `UNVERIFIABLE` are Delivery or ExternalEffect/Attempt states,
+never acceptance or error values.
 
 ## External-effect executor contract
 
 `PrepareRoute` creates Delivery `PREPARED` with automatic-attempt budget `1`.
 `BeginEffectDelivery` is the only command that obtains execution authority:
+
+The startup exception is not an untracked side effect: when requested by the
+single-entry machine envelope, `CreateLoop` itself atomically commits one
+ExternalEffect, Attempt, provider request digest, and outbox row. It does not
+call the provider. Both Delivery and startup ExternalEffect then use the same
+claim/readback/UNKNOWN rules below.
 
 1. validate executor Actor/grant, current target, route/delivery revisions, and
    remaining budget;
@@ -451,14 +472,14 @@ before calling the provider. Recovery uses only exact Attempt readback.
 | after commit, before provider invocation | Attempt `COMMITTED`; budget consumed | authoritative readback by exact Attempt/idempotency identity; never resend automatically |
 | provider accepted, response lost | Attempt `COMMITTED`; budget consumed | authoritative readback; then OBSERVED or UNKNOWN |
 | provider returned, crash before local observation | Attempt `COMMITTED`; budget consumed | same authoritative readback; never use model memory as receipt |
-| readback inconclusive/unavailable | Delivery/Attempt `UNKNOWN` | close with limitation/block, or await a late exact readback; no resend |
-| cooperative response only | Delivery/Attempt `UNVERIFIABLE` | limited closure or later strict readback |
+| readback inconclusive/unavailable | typed subject/Attempt `UNKNOWN` | close with limitation/block, or await a late exact readback; no resend |
+| cooperative response only | typed subject/Attempt `UNVERIFIABLE` | limited closure or later strict readback |
 | late authoritative readback | exact UNKNOWN/UNVERIFIABLE Attempt becomes `OBSERVED` | optionally strengthen assurance; no new Attempt/result/reexecution |
 
-A late observation is accepted only when issuer trust, action, loop, Delivery,
-Attempt, target, provider request digest/idempotency key, and freshness all
-match. A conflicting observation is rejected and preserved; it never rewrites
-the first accepted observation.
+A late observation is accepted only when issuer trust, action, loop, typed
+subject kind/ref, Attempt, target, provider request digest/idempotency key, and
+freshness all match. A conflicting observation is rejected and preserved; it
+never rewrites the first accepted observation.
 
 No Supervisor, second writer, replacement route, timeout inference, or natural
 language recollection may reconstruct the first response or restore the budget.
@@ -511,10 +532,12 @@ Forbidden guarantees:
 The technology-neutral store atomically commits operation result, loop revision,
 touched aggregate revisions, ordered events, and Attempt/outbox changes.
 
-The alpha reference store is in-memory and disposable. SQLite is authorized
-only as a later persistence **candidate spike**. It is not preferred or selected
-in advance. Selection requires crash, backup/restore, concurrent-reader/writer,
-manual-inspection/export, corruption, and supported-filesystem evidence.
+The alpha reference store remains an in-memory semantic oracle and fault
+fixture. The authorized SQLite candidate spike passed crash, backup/restore,
+concurrent-reader/writer, manual-inspection/export, corruption, and macOS
+filesystem gates. ADR 0012 therefore selects SQLite as the sole local canonical
+store for continued v4 development. This does not make external Host/provider
+effects transactional with SQLite and does not authorize a second writer.
 
 Compatibility decisions:
 
@@ -536,17 +559,17 @@ Compatibility decisions:
 
 | ID | Resolved decision |
 | --- | --- |
-| `OD-1` | Only a later SQLite persistence spike is authorized as candidate evaluation; no final store is preselected |
+| `OD-1` | Candidate evaluation was authorized without preselection; ADR 0012 subsequently selected SQLite for the v4 local canonical store after all frozen spike gates passed |
 | `OD-2` | Execution terminality and assurance are orthogonal; strict Host claim remains strict-only; cooperative work may terminate with limitation |
 | `OD-3` | v3 read/shadow/import lasts one major cycle; no dual write or in-place conversion |
 | `OD-4` | Measurement definitions are approved; 32 KiB Pack and at least 50% interaction reduction remain candidate beta targets. Same-scenario v3 baseline and final thresholds must be frozen before observing v4 performance; they are not alpha correctness gates |
 | `OD-5` | First release supports only a Codex Adapter; kernel remains Host-neutral; no multi-host claim before a second real Adapter passes conformance |
 
-No unresolved product semantic blocks the bounded alpha pure-kernel slice.
+No unresolved product semantic blocks the current local P5 single-entry slice.
 
 ## Phases and gates
 
-### Alpha: authorized bounded slice
+### Alpha: completed bounded slice
 
 Allowed only:
 
@@ -561,51 +584,59 @@ authority/reference/CAS rejection, declared in-memory fault boundaries,
 cooperative non-strict behavior, canonical encoder vectors, and exact final
 snapshot digest.
 
-### Alpha.2: not authorized
+The exact 11-operation/18-event/2,715-byte vertical and its bounded fault set
+passed and were locked at the P0 checkpoint.
 
-Codex Adapter and existing-Git/non-Git/new-Git capability profiles, artifact
-filesystem implementation, and disposable App canaries require a later
-authorization.
+### Alpha.2: completed local capability slices
 
-### Beta: not authorized
+SQLite persistence, manifest authority, existing-Git/non-Git/new-Git artifact
+profiles, and the Codex Adapter passed their frozen local synthetic gates. One
+separate projectless disposable App readback was retained as limited P4
+evidence; it is not the exact-RC installed usability canary.
 
-Safe-point importer/shadow read and liveness/cost measurements require a later
-authorization. Measurement definitions are accepted, while 32 KiB and 50%
-remain candidate targets until the v3 baseline and final thresholds are frozen
-before any v4 performance observation. Beta additionally blocks on the UX
-corpus: one-action startup, zero user-supplied control identities, no required
-policy pack, stable non-leaking errors/status, import preview/cancel safety,
-diagnostics opt-in, and frozen same-scenario action/entry-byte budgets.
+### Beta: local implementation authorized; gates remain blocking
 
-### RC/stable: not authorized
+The P5 public facade must create and start one loop from one goal/file action,
+with zero user-supplied control identities and no required policy pack. Its
+CreateLoop transaction also creates one typed startup ExternalEffect, Attempt,
+and outbox record; only the Adapter may execute that machine-owned request. The
+facade is not a Supervisor or retry layer. Safe-point fixture-only import/shadow
+read and liveness/cost work follow in P6/P7. Measurement definitions are
+accepted, while 32 KiB and 50% remain candidate targets until the same-scenario
+v3 baseline and final thresholds are frozen before observing corresponding v4
+performance. Beta blocks on all `UX-001..008` cases and the full frozen corpus
+subset assigned to beta.
 
-Install/uninstall/rollback, full Host/artifact fault matrix, real App canary,
-independent release review, fixed-SHA `StrictFinalizationAcknowledged`, tag,
-release, and migration remain outside this authorization. Every failure and
-UNKNOWN must remain preserved; release requires a separate author decision.
-RC requires one real, non-research, private-data-free new-user usability canary
-from installation instructions or an existing installation through starting a
-minimal disposable loop, with no manual transcription of control identity.
-Stable retains all UX gates and the one-action default contract.
+### RC: local candidate and approval packet authorized; stable remains unauthorized
+
+Local isolated install/uninstall/rollback, the full Host/artifact fault matrix,
+one exact-candidate disposable App canary, independent read-only review, fixed
+candidate SHA, and an author approval packet are authorized. Every failure and
+UNKNOWN must remain preserved. RC requires one real, non-research,
+private-data-free new-user usability canary from the isolated installation
+through starting a minimal disposable loop, with no manual transcription of
+control identity. Push, tag, public release, installation-channel changes,
+automatic migration of real v3 loops, and any stable claim require a separate
+author decision. Stable retains all UX gates and the one-action default
+contract.
 
 ## Non-goals and safeguards
 
-4.0 alpha does not promise patch success, long-horizon superiority, multi-host
-support, Byzantine resistance, Host memory isolation, SQLite suitability,
-Codex conformance, artifact correctness, migration readiness, or release
-readiness.
+4.0 local development does not promise patch success, long-horizon superiority,
+multi-host support, Byzantine resistance, Host memory isolation, real-user
+migration safety, installed-product effectiveness, or release readiness.
 
 | Failure mode | Safeguard |
 | --- | --- |
 | v3 semantics leak through compatibility | exact anti-corruption mapping; no v3 state shape in kernel |
 | dual stack becomes permanent | no dual writes; one-major-cycle compatibility sunset |
-| store becomes opaque | later inspection/export/backup gates before selection |
+| store becomes opaque | selected SQLite retains canonical export, integrity, backup, and corruption gates |
 | Adapter invents transactions | explicit Attempt/UNKNOWN/UNVERIFIABLE and receipt trust |
 | state is over-minimized | separate Delivery, Attempt, Result, Report, Artifact, Review, Finalization, Assurance |
 | LLM regains control authority | machine envelope and fail-closed actor/grant/reference tests |
 | safety recreates non-closure | terminal disposition independent from assurance strength |
 | corpus becomes governance | immutable fixtures only; no writer, heartbeat, retry, or Supervisor |
-| alpha PASS is overclaimed | report only pure reducer/store conformance, never Host/product/release evidence |
+| phase PASS is overclaimed | bind each claim to its checkpoint SHA and exact gate; never infer effectiveness or release readiness |
 
 ## Consequences
 
@@ -616,5 +647,5 @@ trace remains 11 operations but emits more events and a larger snapshot because
 Result/Report acceptance and strict assurance are now separately observable.
 
 The compatible-refactor route remains reversible: v3 sources stay immutable,
-the alpha store is disposable, and no persistence or Host choice is locked by
-the slice.
+v4 uses a separate root, no dual write exists, and local SQLite/Host choices do
+not authorize migration or public replacement of v3.

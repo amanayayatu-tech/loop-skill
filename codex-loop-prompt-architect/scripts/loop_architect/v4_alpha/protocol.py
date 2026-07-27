@@ -25,8 +25,11 @@ from .generated_protocol import (
     CapabilityRecord,
     CommandEnvelope,
     EffectAttempt,
+    LoopStartInput,
     Receipt,
     Reference,
+    UserFacingError,
+    UserFacingStatus,
 )
 
 INT64_MIN = -(2**63)

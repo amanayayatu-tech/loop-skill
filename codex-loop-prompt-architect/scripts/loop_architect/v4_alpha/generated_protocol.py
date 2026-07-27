@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-MANIFEST_SHA256 = '8a0e977b86a79847e023f5802551ca57aadc69c05a5f0c9827b005c996999289'
+MANIFEST_SHA256 = 'c479bdf758cb2f3258c90f7d56a2f4a0e8646f86cd73e6df96fa9c43247dec56'
 PROTOCOL_VERSION = '4.0-draft.2'
 COMMAND_TYPES = (
     'AcknowledgeResult',
@@ -19,6 +19,7 @@ COMMAND_TYPES = (
     'PrepareFinalization',
     'PrepareRoute',
     'RecordEffectObservation',
+    'RecordExternalEffectObservation',
     'RecordReview',
     'ResumeLoop',
     'StageResult',
@@ -29,6 +30,11 @@ EVENT_TYPES = (
     'GoalRegistered',
     'GoalActivated',
     'HostResourceBound',
+    'ExternalEffectPrepared',
+    'ExternalEffectObserved',
+    'ExternalEffectUnknown',
+    'ExternalEffectUnverifiable',
+    'LateExternalEffectObserved',
     'RoutePrepared',
     'DeliveryAttemptCommitted',
     'DeliveryObserved',
@@ -85,6 +91,10 @@ ERROR_CODES = (
     'DUAL_WRITE_FORBIDDEN',
     'STORE_RECOVERY_REQUIRED',
     'INTERNAL_INVARIANT_VIOLATION',
+    'USER_INPUT_INVALID',
+    'USER_LOOP_EXISTS',
+    'USER_STORE_UNAVAILABLE',
+    'USER_INTERNAL_ERROR',
 )
 REFERENCE_KINDS = (
     'LoopRef',
@@ -92,6 +102,7 @@ REFERENCE_KINDS = (
     'AuthorityGrantRef',
     'GoalRef',
     'HostResourceRef',
+    'ExternalEffectRef',
     'RouteRef',
     'DeliveryRef',
     'AttemptRef',
@@ -139,7 +150,7 @@ ASSURANCE_STRENGTHS = (
     'STRICT',
 )
 WRITE_CAS = 'per_loop_revision'
-SEMANTIC_PAYLOAD_SPECS = {'AcknowledgeResult': {'semantic_payload': {}}, 'AdvanceGoal': {'semantic_payload': {'disposition': {'enum': ['DONE'], 'type': 'string'}}}, 'BeginEffectDelivery': {'semantic_payload': {}}, 'BindHostResource': {'semantic_payload': {'role': {'type': 'string'}}}, 'CloseExecution': {'semantic_payload': {}}, 'CreateLoop': {'semantic_payload': {'objective': {'type': 'string'}}}, 'ImportV3Snapshot': {'reserved_until': 'P6', 'semantic_payload': {}}, 'PauseLoop': {'reserved_until': 'full-alpha', 'semantic_payload': {'reason': {'type': 'string'}}}, 'PrepareFinalization': {'semantic_payload': {'disposition': {'enum': ['SUCCEEDED', 'LIMITATION'], 'type': 'string'}}}, 'PrepareRoute': {'semantic_payload': {'intent': {'type': 'string'}}}, 'RecordEffectObservation': {'semantic_payload': {}}, 'RecordReview': {'semantic_payload': {'verdict': {'enum': ['PASS', 'REPAIR', 'LIMITATION'], 'type': 'string'}}}, 'ResumeLoop': {'reserved_until': 'full-alpha', 'semantic_payload': {}}, 'StageResult': {'semantic_payload': {'outcome': {'enum': ['PASS'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StrengthenClosureAssurance': {'reserved_until': 'P4', 'semantic_payload': {}}}
+SEMANTIC_PAYLOAD_SPECS = {'AcknowledgeResult': {'semantic_payload': {}}, 'AdvanceGoal': {'semantic_payload': {'disposition': {'enum': ['DONE'], 'type': 'string'}}}, 'BeginEffectDelivery': {'semantic_payload': {}}, 'BindHostResource': {'semantic_payload': {'role': {'type': 'string'}}}, 'CloseExecution': {'semantic_payload': {}}, 'CreateLoop': {'semantic_payload': {'objective': {'type': 'string'}}}, 'ImportV3Snapshot': {'reserved_until': 'P6', 'semantic_payload': {}}, 'PauseLoop': {'reserved_until': 'full-alpha', 'semantic_payload': {'reason': {'type': 'string'}}}, 'PrepareFinalization': {'semantic_payload': {'disposition': {'enum': ['SUCCEEDED', 'LIMITATION'], 'type': 'string'}}}, 'PrepareRoute': {'semantic_payload': {'intent': {'type': 'string'}}}, 'RecordEffectObservation': {'semantic_payload': {}}, 'RecordExternalEffectObservation': {'semantic_payload': {}}, 'RecordReview': {'semantic_payload': {'verdict': {'enum': ['PASS', 'REPAIR', 'LIMITATION'], 'type': 'string'}}}, 'ResumeLoop': {'reserved_until': 'full-alpha', 'semantic_payload': {}}, 'StageResult': {'semantic_payload': {'outcome': {'enum': ['PASS'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StrengthenClosureAssurance': {'reserved_until': 'P4', 'semantic_payload': {}}}
 
 @dataclass(frozen=True)
 class ActorRef:
@@ -202,12 +213,32 @@ class CommandEnvelope:
 class EffectAttempt:
     attempt_ref: str
     loop_ref: str
-    delivery_ref: str
+    subject_kind: str
+    subject_ref: str
+    delivery_ref: str | None
     target_ref: str
     provider_idempotency_key: str
     provider_request_digest: str
     action: str
     payload: Mapping[str, Any]
+
+@dataclass(frozen=True)
+class LoopStartInput:
+    goal: str
+
+@dataclass(frozen=True)
+class UserFacingStatus:
+    goal: str
+    progress: str
+    result: str
+    limitations: tuple[str, ...]
+    next_actions: tuple[str, ...]
+
+@dataclass(frozen=True)
+class UserFacingError:
+    code: str
+    message: str
+    next_action: str
 
 @dataclass(frozen=True)
 class Reference:

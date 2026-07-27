@@ -37,6 +37,12 @@ from loop_architect.v4_alpha.vertical import (  # noqa: E402
     vertical_commands,
 )
 from loop_architect.v4_persistence.sqlite_store import SQLiteStore  # noqa: E402
+from loop_architect.v4_entry import (  # noqa: E402
+    record_external_observation,
+    start_loop,
+)
+from loop_architect.v4_entry.service import STORE_FILENAME  # noqa: E402
+from loop_architect.v4_alpha.protocol import LoopStartInput  # noqa: E402
 
 
 NOW = datetime(2026, 7, 27, 0, 0, 4, tzinfo=timezone.utc)
@@ -65,6 +71,8 @@ def effect_attempt(
     return EffectAttempt(
         attempt_ref=attempt_ref,
         loop_ref=LOOP_REF,
+        subject_kind="DeliveryRef",
+        subject_ref=delivery_ref,
         delivery_ref=delivery_ref,
         target_ref=target_ref,
         provider_idempotency_key=provider_key,
@@ -88,6 +96,8 @@ class ClaimFixture:
                 "loop_ref": item.loop_ref,
                 "provider_idempotency_key": item.provider_idempotency_key,
                 "provider_request_digest": item.provider_request_digest,
+                "subject_kind": item.subject_kind,
+                "subject_ref": item.subject_ref,
                 "target_ref": item.target_ref,
             }
             for item in attempts
@@ -230,6 +240,8 @@ def authority_with_receipt(receipt, *, trusted=True):
         actors=base.actors,
         grants=base.grants,
         receipts={**base.receipts, receipt.receipt_ref: receipt},
+        trusted_actor_issuers=base.trusted_actor_issuers,
+        trusted_grant_issuers=base.trusted_grant_issuers,
         trusted_receipt_issuers=trusted_issuers,
     )
 
@@ -479,7 +491,18 @@ class V4CodexAdapterTests(unittest.TestCase):
         commands = vertical_commands()
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "adapter.sqlite3"
-            base = fixture_authority()
+            fixture = fixture_authority()
+            base = AuthorityContext(
+                actors=fixture.actors,
+                grants=fixture.grants,
+                receipts=fixture.receipts,
+                trusted_actor_issuers=fixture.trusted_actor_issuers,
+                trusted_grant_issuers=fixture.trusted_grant_issuers,
+                trusted_receipt_issuers={
+                    **fixture.trusted_receipt_issuers,
+                    ISSUER_REF: ISSUER_TRUST,
+                },
+            )
             with SQLiteStore(path, base) as store:
                 for command in commands[:4]:
                     store.apply(command)
@@ -540,7 +563,7 @@ class V4CodexAdapterTests(unittest.TestCase):
                 store.authority = authority_with_receipt(expired)
                 self.assert_code("RECEIPT_EXPIRED", lambda: store.apply(command))
 
-    def test_store_v1_schema_migrates_transactionally_to_claim_contract(self):
+    def test_store_v1_schema_migrates_transactionally_to_current_contract(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "v1.sqlite3"
             connection = sqlite3.connect(path)
@@ -574,8 +597,93 @@ class V4CodexAdapterTests(unittest.TestCase):
                     store._connection.execute(
                         "SELECT value FROM metadata WHERE key = 'schema_version'"
                     ).fetchone()[0],
-                    "2",
+                    "4",
                 )
+
+    def test_single_entry_startup_effect_runs_through_real_store_and_adapter_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = CodexProviderFixture(invoke_mode="response_lost")
+            view = start_loop(
+                LoopStartInput(goal="Create one disposable Host task"),
+                root=temporary,
+                clock=lambda: NOW,
+                token_factory=lambda: "aaaaaaaaaaaaaaaaaaaaaaaa",
+                host_provider=provider,
+                host_issuer_ref=ISSUER_REF,
+                host_issuer_trust=ISSUER_TRUST,
+            )
+            self.assertEqual(view.progress, "Active")
+            path = Path(temporary) / STORE_FILENAME
+            with SQLiteStore(path) as store:
+                descriptor = store.loop_descriptors()[0]
+                snapshot = store.snapshot(descriptor["loop_ref"])
+                effect_ref, effect = next(iter(snapshot["external_effects"].items()))
+                self.assertEqual(
+                    effect["state"],
+                    "OBSERVED",
+                )
+                self.assertEqual(len(snapshot["host_resources"]), 1)
+                self.assertEqual(store.commit_count, 2)
+                attempt = store.effect_attempt(effect["attempt_ref"])
+                self.assertEqual(attempt.subject_kind, "ExternalEffectRef")
+                self.assertEqual(attempt.action, "create_task")
+                self.assertEqual(provider.invoke_counts[attempt.provider_idempotency_key], 1)
+                self.assertIn(effect["observation_receipt_ref"], store.authority.receipts)
+                store.verify_integrity()
+
+    def test_single_entry_startup_unknown_and_cooperative_do_not_bind_host(self):
+        instances = (
+            (
+                "UNKNOWN",
+                {
+                    "invoke_mode": "response_lost",
+                    "readback_mode": "missing",
+                },
+            ),
+            ("UNVERIFIABLE", {"readback_mode": "missing"}),
+        )
+        for expected, provider_options in instances:
+            with self.subTest(expected=expected):
+                with tempfile.TemporaryDirectory() as temporary:
+                    start_loop(
+                        LoopStartInput(goal="Bounded uncertain startup"),
+                        root=temporary,
+                        clock=lambda: NOW,
+                        token_factory=lambda: "bbbbbbbbbbbbbbbbbbbbbbbb",
+                        receipt_trust_roots={ISSUER_REF: ISSUER_TRUST},
+                    )
+                    path = Path(temporary) / STORE_FILENAME
+                    provider = CodexProviderFixture(**provider_options)
+                    with SQLiteStore(path) as store:
+                        attempt = store.ready_effect_attempts()[0]
+                        receipt = adapter(provider, store).execute(attempt)
+                    view = record_external_observation(receipt, root=temporary)
+                    self.assertEqual(view.progress, "Needs attention")
+                    with SQLiteStore(path) as reopened:
+                        snapshot = reopened.snapshot(receipt.loop_ref)
+                        self.assertEqual(
+                            snapshot["external_effects"][receipt.subject_ref]["state"],
+                            expected,
+                        )
+                        self.assertEqual(snapshot["host_resources"], {})
+                        self.assertEqual(
+                            provider.invoke_counts[receipt.provider_idempotency_key], 1
+                        )
+                    if expected == "UNKNOWN":
+                        provider.readback_mode = "authoritative"
+                        with SQLiteStore(path) as reopened:
+                            late = adapter(provider, reopened).execute(attempt)
+                        record_external_observation(late, root=temporary)
+                        with SQLiteStore(path) as reopened:
+                            snapshot = reopened.snapshot(late.loop_ref)
+                            self.assertEqual(
+                                snapshot["external_effects"][late.subject_ref]["state"],
+                                "OBSERVED",
+                            )
+                            self.assertEqual(len(snapshot["host_resources"]), 1)
+                            self.assertEqual(
+                                provider.invoke_counts[late.provider_idempotency_key], 1
+                            )
 
     def test_adapter_and_kernel_import_graph_are_one_way(self):
         package = SCRIPTS / "loop_architect"

@@ -212,6 +212,8 @@ def fixture_authority() -> AuthorityContext:
         actors=actors,
         grants=grants,
         receipts=receipts,
+        trusted_actor_issuers={"conformance-fixture": "trusted-fixture"},
+        trusted_grant_issuers={"actor-system-0001": "trusted-fixture"},
         trusted_receipt_issuers={"actor-system-0001": "trusted-fixture"},
     )
 

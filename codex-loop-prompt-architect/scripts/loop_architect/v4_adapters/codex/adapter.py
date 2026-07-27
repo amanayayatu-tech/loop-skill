@@ -211,10 +211,12 @@ class CodexHostAdapter:
         if row is None:
             raise ProtocolRejection("FOREIGN_REFERENCE", attempt.attempt_ref)
         expected = {
-            "delivery_ref": attempt.delivery_ref,
+            "delivery_ref": attempt.delivery_ref or "",
             "loop_ref": attempt.loop_ref,
             "provider_idempotency_key": attempt.provider_idempotency_key,
             "provider_request_digest": attempt.provider_request_digest,
+            "subject_kind": attempt.subject_kind,
+            "subject_ref": attempt.subject_ref,
             "target_ref": attempt.target_ref,
         }
         if any(row.get(key) != value for key, value in expected.items()):
@@ -402,12 +404,22 @@ class CodexHostAdapter:
             (
                 attempt.attempt_ref,
                 attempt.loop_ref,
-                attempt.delivery_ref,
+                attempt.subject_kind,
+                attempt.subject_ref,
                 attempt.target_ref,
                 attempt.provider_idempotency_key,
             )
         ):
             raise ProtocolRejection("INVALID_COMMAND", "incomplete effect attempt")
+        if attempt.subject_kind not in {"DeliveryRef", "ExternalEffectRef"}:
+            raise ProtocolRejection("WRONG_REFERENCE_KIND", attempt.subject_kind)
+        if (
+            attempt.subject_kind == "DeliveryRef"
+            and attempt.delivery_ref != attempt.subject_ref
+        ):
+            raise ProtocolRejection(
+                "RECEIPT_IDENTITY_MISMATCH", "Delivery subject identity mismatch"
+            )
 
     def _validate_observation(
         self, response: Mapping[str, Any], attempt: EffectAttempt
@@ -497,7 +509,7 @@ class CodexHostAdapter:
             trust_class=trust_class,
             action=attempt.action,
             loop_ref=attempt.loop_ref,
-            subject_ref=attempt.delivery_ref,
+            subject_ref=attempt.subject_ref,
             attempt_ref=attempt.attempt_ref,
             target_ref=attempt.target_ref,
             request_digest=attempt.provider_request_digest,

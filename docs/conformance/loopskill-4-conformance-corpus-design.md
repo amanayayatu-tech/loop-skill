@@ -1,6 +1,6 @@
 # LoopSkill 4.0 conformance corpus design
 
-- Status: Implementation-ready for the bounded alpha pure-kernel slice; other phases are not authorized
+- Status: Governing local implementation through an RC candidate; public release remains unauthorized
 - Date: 2026-07-27
 - Governing decision: `docs/adr/0011-loopskill-4-compatible-kernel-refactor.md`
 - Corpus draft version: `1.0.0-alpha-design.2`
@@ -17,9 +17,10 @@ paper effectiveness data. It is not a product-success benchmark, recovery
 service, Supervisor, second writer, workflow engine, release authorization, or
 evidence that a real Host/provider/artifact/migration path exists.
 
-The bounded alpha slice may implement only synthetic public fixtures in memory.
-It performs zero Codex/App calls, provider/network calls, Git calls, artifact
-filesystem capture, SQLite access, v3 import, installation, or release work.
+Each phase may implement only its authorized gate set. The bounded alpha slice
+was synthetic and in-memory; later local phases add SQLite, artifact libraries,
+the Codex Adapter, the public facade, fixture-only v3 compatibility, and isolated
+RC validation without authorizing public release or real-loop migration.
 
 ## Decision owners
 
@@ -221,6 +222,7 @@ is normative and expands before execution.
 | `H-008` | final readback `a` strict; `b` missing/inconclusive | alpha.2 | 2 |
 | `H-009` | `a` trust; `b` sandbox; `c` model/turn identity absent or mismatched | alpha.2 | 3 |
 | `H-010` | effectively-once `a` both prerequisites; `b` one prerequisite missing | alpha.2 | 2 |
+| `H-011` | startup ExternalEffect `a` atomically committed with Attempt/outbox; `b` exact strict observation binds reserved HostResource; `c` missing readback is UNKNOWN with no bind/resend; `d` cooperative UNVERIFIABLE later becomes OBSERVED only on the same exact Attempt | alpha.2 | 4 |
 
 ### Artifact libraries
 
@@ -283,7 +285,7 @@ internal protocol calls do not count as additional user actions.
 
 <!-- INSTANCE-CATALOG-END -->
 
-The catalog contains exactly **77 families and 216 independently reportable
+The catalog contains exactly **78 families and 220 independently reportable
 instances**. Counts are machine-recomputed during readiness review; they are
 not inferred from prose.
 
@@ -291,7 +293,7 @@ not inferred from prose.
 
 The instance expectations for the executor windows are fixed:
 
-| Window | Acceptance | Delivery/Attempt | Provider calls | Automatic budget |
+| Window | Acceptance | Subject/Attempt | Provider calls | Automatic budget |
 | --- | --- | --- | ---: | --- |
 | before local Attempt commit | crash/no acceptance | PREPARED / absent | 0 | available |
 | after commit, before invocation | accepted commit then crash | ATTEMPT_COMMITTED / COMMITTED | 0 | consumed |
@@ -301,8 +303,9 @@ The instance expectations for the executor windows are fixed:
 | cooperative response | ACCEPT | UNVERIFIABLE / UNVERIFIABLE | no new call | consumed |
 | exact late authoritative readback | ACCEPT | OBSERVED / OBSERVED | no new call | consumed |
 
-Late observation requires exact original loop, DeliveryRef, AttemptRef, target,
-action, provider request digest/idempotency key, trusted issuer, and freshness.
+Late observation requires exact original loop, typed subject kind/ref
+(`DeliveryRef` or `ExternalEffectRef`), AttemptRef, target, action, provider
+request digest/idempotency key, trusted issuer, and freshness.
 It never creates an Attempt, resends, restages Result, reopens execution, or
 changes terminal disposition. A separate exact-chain command may strengthen
 assurance.
@@ -502,16 +505,18 @@ vertical snapshot/digest.
 The implementation report must distinguish the instances actually executed.
 Passing this set means only bounded pure-kernel alpha-slice conformance.
 
-### Later unauthorized gates
+### Authorized local phase gates
 
 - full alpha: all remaining alpha instances;
-- alpha.2: all Host/artifact instances and real disposable integration only
-  after separate authorization;
+- alpha.2: all Host/artifact instances including `H-011`; any real integration
+  remains disposable, isolated, non-research, and claim-limited;
 - beta: all migration/policy/liveness/cost instances, same-scenario v3 baseline,
   all `UX-001..008`, and thresholds frozen before observing v4 performance;
-- rc/stable: full fault matrix, install/rollback, real App evidence, independent
-  review, `UX-009` real new-user usability canary, fixed candidate SHA,
-  preserved failures/UNKNOWN, and separate author release approval.
+- rc: full fault matrix, isolated install/rollback, exact-candidate real App
+  evidence, independent review, `UX-009` real new-user usability canary, fixed
+  candidate SHA, and preserved failures/UNKNOWN;
+- stable/public release: always requires separate author approval and is not
+  implied by an RC-ready result.
 
 32 KiB Pack and at least 50% control-interaction reduction are candidate beta
 targets, not alpha correctness gates.
@@ -525,7 +530,7 @@ targets, not alpha correctness gates.
 | A3 effect executor | commit-before-call contract, AttemptRef/budget/executor ownership, all crash windows, no resend, exact late readback |
 | A4 liveness/assurance | TERMINAL disposition is independent from assurance; cooperative limited closure is legal; strict claim still requires authoritative readback |
 | A5 CAS unit | per-loop revision is sole write CAS; subject revisions are guards; no store version in snapshot |
-| A6 executable corpus | acceptance and Delivery state separated; 77 families expand to 216 instances; bounds/rejection/authority/encoder/UX windows explicit |
+| A6 executable corpus | acceptance and subject state separated; 78 families expand to 220 instances; bounds/rejection/authority/encoder/UX windows explicit |
 | A7 vertical trace | 11 operations, 18 events, full subject bindings, loop/aggregate revisions, 2715 bytes, exact domain digest |
 
 There is no unresolved semantic decision that blocks the bounded pure-kernel
@@ -542,6 +547,7 @@ failure and must stop implementation.
 | local exactly-once acceptance | `K-003`, `K-004`, `S-002`, `S-003` |
 | crash-deterministic atomic store | all `S-001`, `S-004..006` |
 | external Attempt and no resend | `XFX-001..008` |
+| machine-owned startup effect | `H-011`, `UX-001..003`, `UX-005` |
 | UNKNOWN/UNVERIFIABLE independent from Result | `XFX-005..008`, `F-003` |
 | terminality independent from assurance | `F-001`, `F-003`, `F-004`, cooperative substitution |
 | Result/Report/Artifact/Review chain | `R-001..004`, `F-001`, corrected snapshot |

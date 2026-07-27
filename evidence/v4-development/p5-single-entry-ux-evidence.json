@@ -1,0 +1,90 @@
+{
+  "artifact": "loopskill-v4-p5-single-entry-ux-evidence-v1",
+  "checks": {
+    "all_v4_test_methods": 67,
+    "all_v4_tests": "PASS",
+    "control_identity_fields_required": 0,
+    "default_output_fields": [
+      "goal",
+      "progress",
+      "result",
+      "limitations",
+      "next_action"
+    ],
+    "diagnostics_opt_in": "PASS",
+    "duplicate_start": "ONE_LOOP_ONE_COMMIT_ONE_STARTUP_ATTEMPT",
+    "entry_test_methods": 12,
+    "goal_actor_registry_corruption": "FAIL_CLOSED",
+    "host_resource_binding": "STRICT_OBSERVATION_ONLY",
+    "input_file_public_actions": 1,
+    "literal_goal_public_actions": 1,
+    "no_policy_pack_required": true,
+    "real_host_provider_calls": 0,
+    "receipt_identity_persisted_with_observation": "PASS",
+    "startup_effect_commit": "ATOMIC_WITH_CREATE_LOOP",
+    "startup_effect_subject": "ExternalEffectRef",
+    "status_read_creates_store": false,
+    "store_schema": 4,
+    "transaction_fault_instances": 108,
+    "unknown_unverifiable_visible": "PASS_NO_AUTOMATIC_RESEND",
+    "user_error_internal_identity_leaks": 0
+  },
+  "conformance_instances_passed": [
+    "H-011-a",
+    "H-011-b",
+    "H-011-c",
+    "H-011-d",
+    "UX-001-a",
+    "UX-001-b",
+    "UX-002-a",
+    "UX-003-a",
+    "UX-004-a",
+    "UX-004-b",
+    "UX-004-c",
+    "UX-005-a",
+    "UX-005-b",
+    "UX-007-a",
+    "UX-007-b"
+  ],
+  "implementation_sha256": {
+    "adapter": "0a60182e862d21fab4e9f2004398b374e580152ac30e3347811d3052420f8aad",
+    "architecture": "ee6a6a526399fd767c76a7b5865f84ecf7b9386bbb05399fb345e0c2eeb101c4",
+    "entry": "f230687fd3f64f20df21411b3753177975a6764114c466e369119a152816b4a7",
+    "entry_package_init": "2f476bf63c0ad95d3d877dc3ad50ffeb1316e5492da9767f0f2a83e6a01c5813",
+    "entry_service": "f7f3b7f5420cda6c9c4cde73579e7b2d39de56cf6a8f02bf350dbb0f7838ce8c",
+    "kernel": "60aa01e8966db0af1cdc8da5800bb44681b1994bfccc86f24a19d7abbbeed729",
+    "protocol_manifest_file": "73eb3036b8f5e1f5f8d757aa5391257df5d48a0455dc8dd5d9ddd6558f0d5b4a",
+    "sqlite_store": "292a44e088da0d9550d6abffca4f6f14675ce4d2aeac3dce90c92004f0783b87",
+    "tests": "186d238176723dc882f201417f8c3f45b001f57619bd22b23a5a1a0cde6597a3"
+  },
+  "manifest": {
+    "canonical_sha256": "c479bdf758cb2f3258c90f7d56a2f4a0e8646f86cd73e6df96fa9c43247dec56",
+    "commands": 16,
+    "error_codes": 35,
+    "events": 32,
+    "generation_check": "PASS",
+    "public_error_shape": "UserFacingError",
+    "public_input_shape": "LoopStartInput",
+    "public_status_shape": "UserFacingStatus",
+    "reference_kinds": 15,
+    "wire_types": 11
+  },
+  "measurements": {
+    "entry_bytes": 5275,
+    "entry_package_python_bytes": 23009,
+    "measurement_status": "observed for evidence only; P7 budget not yet frozen"
+  },
+  "remaining_ux_gates": {
+    "P6": [
+      "UX-006"
+    ],
+    "P7": [
+      "UX-008"
+    ],
+    "P8": [
+      "UX-009"
+    ]
+  },
+  "scope": "source-tree entry plus synthetic Host fixtures in temporary roots only",
+  "status": "PASS"
+}

@@ -28,12 +28,15 @@ class AuthorityContext:
     actors: Mapping[str, ActorRef]
     grants: Mapping[str, AuthorityGrant]
     receipts: Mapping[str, Receipt]
+    trusted_actor_issuers: Mapping[str, str] = field(default_factory=dict)
+    trusted_grant_issuers: Mapping[str, str] = field(default_factory=dict)
     trusted_receipt_issuers: Mapping[str, str] = field(default_factory=dict)
 
 
 _COLLECTIONS = {
     "GoalRef": "goals",
     "HostResourceRef": "host_resources",
+    "ExternalEffectRef": "external_effects",
     "RouteRef": "routes",
     "DeliveryRef": "deliveries",
     "AttemptRef": "attempts",
@@ -48,6 +51,7 @@ _PREFIX_KIND = {
     "loop-": "LoopRef",
     "goal-": "GoalRef",
     "host-target-": "HostResourceRef",
+    "external-effect-": "ExternalEffectRef",
     "route-": "RouteRef",
     "delivery-": "DeliveryRef",
     "attempt-": "AttemptRef",
@@ -89,7 +93,9 @@ def _subject_record(snapshot: Mapping[str, Any], reference: str) -> Mapping[str,
 
 def validate_authority(command: CommandEnvelope, context: AuthorityContext) -> None:
     actor = context.actors.get(command.actor_ref)
-    if actor is None or actor.issuer_trust != "trusted-fixture":
+    if actor is None or (
+        context.trusted_actor_issuers.get(actor.issuer_ref) != actor.issuer_trust
+    ):
         raise ProtocolRejection("INVALID_AUTHORITY", "unknown or untrusted Actor")
     if actor.actor_ref != command.actor_ref:
         raise ProtocolRejection("INVALID_AUTHORITY", "Actor registry key mismatch")
@@ -98,7 +104,10 @@ def validate_authority(command: CommandEnvelope, context: AuthorityContext) -> N
     grant = context.grants.get(command.authority_grant_ref)
     if grant is None or grant.actor_ref != command.actor_ref:
         raise ProtocolRejection("INVALID_AUTHORITY", "Grant does not bind Actor")
-    if grant.issuer_trust != "trusted-fixture":
+    if (
+        context.trusted_grant_issuers.get(grant.issuer_actor_ref)
+        != grant.issuer_trust
+    ):
         raise ProtocolRejection("INVALID_AUTHORITY", "Grant issuer is untrusted")
     if grant.issuer_actor_ref not in context.actors:
         raise ProtocolRejection("INVALID_AUTHORITY", "Grant issuer is unknown")
@@ -296,8 +305,8 @@ def _create_loop(
     loop_ref = str(command.subject["loop_ref"])
     goal_ref = _binding(command, "allocate_refs", "new_goal_ref")
     objective = command.semantic_payload.get("objective")
-    if objective != "conformance bounded change":
-        raise ProtocolRejection("INVALID_COMMAND", "unexpected objective")
+    if not isinstance(objective, str) or not objective.strip():
+        raise ProtocolRejection("INVALID_COMMAND", "objective must not be empty")
     objective_digest = domain_digest("loopskill-goal-objective-v1\n", objective)
     state = {
         "artifacts": {},
@@ -326,7 +335,76 @@ def _create_loop(
         _event("GoalRegistered", goal_ref=goal_ref),
         _event("GoalActivated", goal_ref=goal_ref),
     ]
-    return state, events, {"goal_ref": goal_ref, "loop_ref": loop_ref}
+    response = {"goal_ref": goal_ref, "loop_ref": loop_ref}
+    startup_allocate = {
+        "new_attempt_ref",
+        "new_external_effect_ref",
+        "new_host_resource_ref",
+        "provider_idempotency_key",
+    }
+    startup_resolved = {"provider_action", "target_ref"}
+    allocate = command.machine_bindings["allocate_refs"]
+    resolved = command.machine_bindings["resolved_refs"]
+    startup_present = bool(startup_allocate & set(allocate)) or bool(
+        startup_resolved & set(resolved)
+    )
+    if startup_present:
+        if not startup_allocate <= set(allocate) or not startup_resolved <= set(resolved):
+            raise ProtocolRejection(
+                "INVALID_COMMAND", "incomplete startup external effect bindings"
+            )
+        external_effect_ref = allocate["new_external_effect_ref"]
+        attempt_ref = allocate["new_attempt_ref"]
+        host_resource_ref = allocate["new_host_resource_ref"]
+        provider_key = allocate["provider_idempotency_key"]
+        action = resolved["provider_action"]
+        target_ref = resolved["target_ref"]
+        if not all(
+            (
+                external_effect_ref,
+                attempt_ref,
+                host_resource_ref,
+                provider_key,
+                action,
+                target_ref,
+            )
+        ):
+            raise ProtocolRejection("INVALID_COMMAND", "empty startup effect identity")
+        provider_request = {"goal": objective, "target_ref": target_ref}
+        provider_digest = domain_digest(
+            "loopskill-provider-request-v1\n", provider_request
+        )
+        state["external_effects"] = {
+            external_effect_ref: {
+                "action": action,
+                "attempt_ref": attempt_ref,
+                "host_resource_ref": host_resource_ref,
+                "revision": 1,
+                "state": "ATTEMPT_COMMITTED",
+                "target_ref": target_ref,
+            }
+        }
+        state["attempts"][attempt_ref] = {
+            "action": action,
+            "automatic_budget_consumed": True,
+            "executor_actor_ref": command.actor_ref,
+            "executor_grant_ref": command.authority_grant_ref,
+            "external_effect_ref": external_effect_ref,
+            "ordinal": 1,
+            "provider_idempotency_key": provider_key,
+            "provider_request": provider_request,
+            "provider_request_digest": provider_digest,
+            "revision": 1,
+            "state": "COMMITTED",
+            "subject_kind": "ExternalEffectRef",
+            "subject_ref": external_effect_ref,
+            "target_ref": target_ref,
+        }
+        events.append(
+            _event("ExternalEffectPrepared", external_effect_ref=external_effect_ref)
+        )
+        response["external_effect_ref"] = external_effect_ref
+    return state, events, response
 
 
 def _bind_host_resource(
@@ -349,6 +427,93 @@ def _bind_host_resource(
     }
 
 
+def _observe_external_effect(
+    snapshot: dict[str, Any] | None,
+    command: CommandEnvelope,
+    context: AuthorityContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    assert snapshot is not None
+    external_effect_ref = str(command.subject["subject_ref"])
+    effect = snapshot["external_effects"][external_effect_ref]
+    attempt_ref = effect["attempt_ref"]
+    attempt = snapshot["attempts"][attempt_ref]
+    prior_state = attempt["state"]
+    receipt = _receipt(
+        command,
+        context,
+        action=attempt["action"],
+        subject_ref=external_effect_ref,
+        attempt_ref=attempt_ref,
+        target_ref=attempt["target_ref"],
+        request_digest=attempt["provider_request_digest"],
+    )
+    if receipt.provider_idempotency_key != attempt["provider_idempotency_key"]:
+        raise ProtocolRejection("RECEIPT_IDENTITY_MISMATCH", receipt.receipt_ref)
+    events = []
+    if receipt.outcome == "observed" and receipt.trust_class == "strict":
+        new_state = "OBSERVED"
+        events.append(
+            _event(
+                "LateExternalEffectObserved"
+                if prior_state in {"UNKNOWN", "UNVERIFIABLE"}
+                else "ExternalEffectObserved",
+                external_effect_ref=external_effect_ref,
+            )
+        )
+        host_resource_ref = effect["host_resource_ref"]
+        existing = snapshot["host_resources"].get(host_resource_ref)
+        if existing is None:
+            snapshot["host_resources"][host_resource_ref] = {
+                "receipt_ref": receipt.receipt_ref,
+                "revision": 1,
+                "state": "BOUND",
+            }
+            events.append(
+                _event("HostResourceBound", target_ref=host_resource_ref)
+            )
+        elif existing["receipt_ref"] != receipt.receipt_ref:
+            raise ProtocolRejection(
+                "RECEIPT_IDENTITY_MISMATCH", "Host resource already bound"
+            )
+    elif receipt.outcome == "unknown":
+        if prior_state != "COMMITTED":
+            raise ProtocolRejection("INVALID_TRANSITION", "late unknown")
+        new_state = "UNKNOWN"
+        events.append(
+            _event("ExternalEffectUnknown", external_effect_ref=external_effect_ref)
+        )
+    elif receipt.trust_class == "cooperative":
+        if prior_state != "COMMITTED":
+            raise ProtocolRejection("INVALID_TRANSITION", "late cooperative")
+        new_state = "UNVERIFIABLE"
+        events.append(
+            _event(
+                "ExternalEffectUnverifiable",
+                external_effect_ref=external_effect_ref,
+            )
+        )
+    else:
+        raise ProtocolRejection("RECEIPT_ISSUER_UNTRUSTED", receipt.receipt_ref)
+    attempt.update(
+        {
+            "observation_receipt_ref": receipt.receipt_ref,
+            "revision": attempt["revision"] + 1,
+            "state": new_state,
+        }
+    )
+    effect.update(
+        {
+            "observation_receipt_ref": receipt.receipt_ref,
+            "revision": effect["revision"] + 1,
+            "state": new_state,
+        }
+    )
+    return snapshot, events, {
+        "external_effect_state": new_state,
+        "host_resource_ref": effect["host_resource_ref"] if new_state == "OBSERVED" else None,
+    }
+
+
 def _prepare_route(
     snapshot: dict[str, Any] | None,
     command: CommandEnvelope,
@@ -362,8 +527,8 @@ def _prepare_route(
     if snapshot["goals"][goal_ref]["state"] != "ACTIVE":
         raise ProtocolRejection("INVALID_TRANSITION", "Goal is not active")
     intent = command.semantic_payload.get("intent")
-    if intent != "produce bounded result":
-        raise ProtocolRejection("INVALID_COMMAND", "unexpected route intent")
+    if not isinstance(intent, str) or not intent.strip():
+        raise ProtocolRejection("INVALID_COMMAND", "route intent must not be empty")
     intent_digest = domain_digest("loopskill-route-intent-v1\n", intent)
     snapshot["routes"][route_ref] = {
         "delivery_ref": delivery_ref,
@@ -747,6 +912,7 @@ def _close_execution(
 _REDUCERS = {
     "CreateLoop": _create_loop,
     "BindHostResource": _bind_host_resource,
+    "RecordExternalEffectObservation": _observe_external_effect,
     "PrepareRoute": _prepare_route,
     "BeginEffectDelivery": _begin_delivery,
     "RecordEffectObservation": _observe_delivery,

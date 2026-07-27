@@ -12,18 +12,24 @@ from typing import Any
 from loop_architect.v4_alpha.kernel import AuthorityContext, reduce_command
 from loop_architect.v4_alpha.protocol import (
     ApplyResult,
+    ActorRef,
+    AuthorityGrant,
     CommandEnvelope,
+    EffectAttempt,
+    Receipt,
     InjectedCrash,
     ProtocolRejection,
     canonical_bytes,
+    authority_grant_digest,
     command_digest,
+    domain_digest,
     raw_domain_digest,
     snapshot_digest,
     validate_command,
 )
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 DURABLE_FAULT_BOUNDARIES = (
     "before_begin",
     "after_begin",
@@ -88,7 +94,7 @@ class SQLiteStore:
     def __init__(
         self,
         path: Path | str,
-        authority: AuthorityContext,
+        authority: AuthorityContext | None = None,
         *,
         busy_timeout_ms: int = 1_000,
     ) -> None:
@@ -106,6 +112,8 @@ class SQLiteStore:
             self._connection.row_factory = sqlite3.Row
             self._configure()
             self._initialize_schema()
+            if self.authority is None:
+                self.authority = self._load_authority()
         except sqlite3.DatabaseError as exc:
             if hasattr(self, "_connection"):
                 self._connection.close()
@@ -179,7 +187,11 @@ class SQLiteStore:
                 attempt_ref TEXT PRIMARY KEY,
                 loop_ref TEXT NOT NULL,
                 delivery_ref TEXT NOT NULL,
+                subject_kind TEXT NOT NULL,
+                subject_ref TEXT NOT NULL,
                 target_ref TEXT NOT NULL,
+                action TEXT NOT NULL,
+                payload_json BLOB NOT NULL,
                 provider_idempotency_key TEXT NOT NULL UNIQUE,
                 provider_request_digest TEXT NOT NULL,
                 automatic_budget_consumed INTEGER NOT NULL CHECK (
@@ -197,8 +209,43 @@ class SQLiteStore:
                 content BLOB NOT NULL,
                 content_bytes INTEGER NOT NULL
             ) STRICT;
+            CREATE TABLE IF NOT EXISTS loop_descriptors (
+                loop_ref TEXT PRIMARY KEY,
+                goal_text BLOB NOT NULL,
+                goal_digest TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (loop_ref) REFERENCES loops(loop_ref)
+            ) STRICT;
+            CREATE TABLE IF NOT EXISTS authority_actors (
+                actor_ref TEXT PRIMARY KEY,
+                loop_ref TEXT NOT NULL,
+                actor_json BLOB NOT NULL,
+                FOREIGN KEY (loop_ref) REFERENCES loops(loop_ref)
+            ) STRICT;
+            CREATE TABLE IF NOT EXISTS authority_grants (
+                grant_ref TEXT PRIMARY KEY,
+                loop_ref TEXT NOT NULL,
+                grant_json BLOB NOT NULL,
+                FOREIGN KEY (loop_ref) REFERENCES loops(loop_ref)
+            ) STRICT;
+            CREATE TABLE IF NOT EXISTS authority_receipts (
+                receipt_ref TEXT PRIMARY KEY,
+                loop_ref TEXT NOT NULL,
+                receipt_json BLOB NOT NULL,
+                FOREIGN KEY (loop_ref) REFERENCES loops(loop_ref)
+            ) STRICT;
+            CREATE TABLE IF NOT EXISTS authority_trust_roots (
+                loop_ref TEXT NOT NULL,
+                trust_kind TEXT NOT NULL CHECK (
+                    trust_kind IN ('actor', 'grant', 'receipt')
+                ),
+                issuer_ref TEXT NOT NULL,
+                issuer_trust TEXT NOT NULL,
+                PRIMARY KEY (loop_ref, trust_kind, issuer_ref),
+                FOREIGN KEY (loop_ref) REFERENCES loops(loop_ref)
+            ) STRICT;
             INSERT OR IGNORE INTO metadata(key, value)
-                VALUES ('schema_version', '2');
+                VALUES ('schema_version', '4');
             COMMIT;
             """
         )
@@ -207,6 +254,16 @@ class SQLiteStore:
         ).fetchone()
         if row is not None and int(row[0]) == 1:
             self._migrate_v1_to_v2()
+            row = self._connection.execute(
+                "SELECT value FROM metadata WHERE key = 'schema_version'"
+            ).fetchone()
+        if row is not None and int(row[0]) == 2:
+            self._migrate_v2_to_v3()
+            row = self._connection.execute(
+                "SELECT value FROM metadata WHERE key = 'schema_version'"
+            ).fetchone()
+        if row is not None and int(row[0]) == 3:
+            self._migrate_v3_to_v4()
             row = self._connection.execute(
                 "SELECT value FROM metadata WHERE key = 'schema_version'"
             ).fetchone()
@@ -245,6 +302,144 @@ class SQLiteStore:
         except Exception:
             self._connection.rollback()
             raise
+
+    def _migrate_v2_to_v3(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute(
+                "UPDATE metadata SET value = '3' WHERE key = 'schema_version'"
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    def _migrate_v3_to_v4(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute("ALTER TABLE outbox ADD COLUMN subject_kind TEXT")
+            self._connection.execute("ALTER TABLE outbox ADD COLUMN subject_ref TEXT")
+            self._connection.execute("ALTER TABLE outbox ADD COLUMN action TEXT")
+            self._connection.execute("ALTER TABLE outbox ADD COLUMN payload_json BLOB")
+            for row in self._connection.execute("SELECT loop_ref, snapshot_json FROM loops"):
+                snapshot = _decode_canonical(
+                    bytes(row["snapshot_json"]), f"v3-migration:{row['loop_ref']}"
+                )
+                for attempt_ref, attempt in snapshot["attempts"].items():
+                    wire = self._attempt_wire(snapshot, attempt_ref, attempt)
+                    self._connection.execute(
+                        """
+                        UPDATE outbox
+                           SET subject_kind = ?, subject_ref = ?, action = ?, payload_json = ?
+                         WHERE attempt_ref = ?
+                        """,
+                        (
+                            wire.subject_kind,
+                            wire.subject_ref,
+                            wire.action,
+                            canonical_bytes(wire.payload),
+                            attempt_ref,
+                        ),
+                    )
+            missing = self._connection.execute(
+                """
+                SELECT COUNT(*) FROM outbox
+                 WHERE subject_kind IS NULL OR subject_ref IS NULL
+                    OR action IS NULL OR payload_json IS NULL
+                """
+            ).fetchone()[0]
+            if missing:
+                raise PersistenceCorruption("v3 outbox subject migration incomplete")
+            self._connection.execute(
+                "UPDATE metadata SET value = '4' WHERE key = 'schema_version'"
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    def _load_authority(self) -> AuthorityContext:
+        actors: dict[str, ActorRef] = {}
+        grants: dict[str, AuthorityGrant] = {}
+        receipts: dict[str, Receipt] = {}
+        for row in self._connection.execute(
+            "SELECT actor_ref, loop_ref, actor_json FROM authority_actors ORDER BY actor_ref"
+        ):
+            value = _decode_canonical(
+                bytes(row["actor_json"]), f"actor:{row['actor_ref']}"
+            )
+            actor = ActorRef(**value)
+            if actor.actor_ref != row["actor_ref"] or actor.loop_namespace != row["loop_ref"]:
+                raise PersistenceCorruption("authority Actor identity mismatch")
+            actors[row["actor_ref"]] = actor
+        for row in self._connection.execute(
+            "SELECT grant_ref, loop_ref, grant_json FROM authority_grants ORDER BY grant_ref"
+        ):
+            value = _decode_canonical(
+                bytes(row["grant_json"]), f"grant:{row['grant_ref']}"
+            )
+            value["allowed_commands"] = tuple(value["allowed_commands"])
+            value["subject_kinds"] = tuple(value["subject_kinds"])
+            value["exact_subjects"] = tuple(value["exact_subjects"])
+            grant = AuthorityGrant(**value)
+            if (
+                grant.grant_ref != row["grant_ref"]
+                or grant.loop_scope != row["loop_ref"]
+                or grant.canonical_digest != authority_grant_digest(grant)
+            ):
+                raise PersistenceCorruption("authority Grant identity mismatch")
+            grants[row["grant_ref"]] = grant
+        for row in self._connection.execute(
+            """
+            SELECT receipt_ref, loop_ref, receipt_json
+              FROM authority_receipts ORDER BY receipt_ref
+            """
+        ):
+            value = _decode_canonical(
+                bytes(row["receipt_json"]), f"receipt:{row['receipt_ref']}"
+            )
+            receipt = Receipt(**value)
+            if (
+                receipt.receipt_ref != row["receipt_ref"]
+                or receipt.loop_ref != row["loop_ref"]
+            ):
+                raise PersistenceCorruption("authority Receipt identity mismatch")
+            receipts[row["receipt_ref"]] = receipt
+        trust = {"actor": {}, "grant": {}, "receipt": {}}
+        for row in self._connection.execute(
+            """
+            SELECT trust_kind, issuer_ref, issuer_trust
+              FROM authority_trust_roots
+             ORDER BY trust_kind, issuer_ref
+            """
+        ):
+            trust[row["trust_kind"]][row["issuer_ref"]] = row["issuer_trust"]
+        context = AuthorityContext(
+            actors=actors,
+            grants=grants,
+            receipts=receipts,
+            trusted_actor_issuers=trust["actor"],
+            trusted_grant_issuers=trust["grant"],
+            trusted_receipt_issuers=trust["receipt"],
+        )
+        for actor in actors.values():
+            if context.trusted_actor_issuers.get(actor.issuer_ref) != actor.issuer_trust:
+                raise PersistenceCorruption("authority Actor trust mismatch")
+        for grant in grants.values():
+            if grant.actor_ref not in actors or grant.issuer_actor_ref not in actors:
+                raise PersistenceCorruption("authority Grant actor is absent")
+            if (
+                context.trusted_grant_issuers.get(grant.issuer_actor_ref)
+                != grant.issuer_trust
+            ):
+                raise PersistenceCorruption("authority Grant trust mismatch")
+        for receipt in receipts.values():
+            if (
+                context.trusted_receipt_issuers.get(receipt.issuer_ref)
+                != receipt.issuer_trust
+            ):
+                raise PersistenceCorruption("authority Receipt trust mismatch")
+        return context
 
     def close(self) -> None:
         if not self._closed:
@@ -466,6 +661,9 @@ class SQLiteStore:
                 raise InjectedCrash(fault_at)
 
             self._sync_outbox(loop_ref, candidate)
+            if command.command_type == "CreateLoop":
+                self._sync_loop_identity(command)
+            self._sync_receipts(command)
             if fault_at == "after_outbox_write":
                 raise InjectedCrash(fault_at)
             if fault_at == "before_commit":
@@ -494,20 +692,179 @@ class SQLiteStore:
                 self._connection.rollback()
             raise PersistenceCorruption("SQLite operation failed") from exc
 
+    def _sync_loop_identity(self, command: CommandEnvelope) -> None:
+        if self.authority is None:
+            raise PersistenceCorruption("CreateLoop authority is absent")
+        loop_ref = str(command.subject["loop_ref"])
+        objective = str(command.semantic_payload["objective"])
+        self._connection.execute(
+            """
+            INSERT INTO loop_descriptors(
+                loop_ref, goal_text, goal_digest, created_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                loop_ref,
+                objective.encode("utf-8", "strict"),
+                domain_digest("loopskill-goal-objective-v1\n", objective),
+                command.issued_at,
+            ),
+        )
+        actors = {
+            ref: actor
+            for ref, actor in self.authority.actors.items()
+            if actor.loop_namespace == loop_ref
+        }
+        grants = {
+            ref: grant
+            for ref, grant in self.authority.grants.items()
+            if grant.loop_scope == loop_ref
+        }
+        if command.actor_ref not in actors or command.authority_grant_ref not in grants:
+            raise PersistenceCorruption("CreateLoop authority binding is incomplete")
+        for actor_ref, actor in sorted(actors.items()):
+            self._connection.execute(
+                """
+                INSERT INTO authority_actors(actor_ref, loop_ref, actor_json)
+                VALUES (?, ?, ?)
+                """,
+                (actor_ref, loop_ref, canonical_bytes(actor.__dict__)),
+            )
+        for grant_ref, grant in sorted(grants.items()):
+            self._connection.execute(
+                """
+                INSERT INTO authority_grants(grant_ref, loop_ref, grant_json)
+                VALUES (?, ?, ?)
+                """,
+                (grant_ref, loop_ref, canonical_bytes(grant.__dict__)),
+            )
+        roots = (
+            ("actor", self.authority.trusted_actor_issuers),
+            ("grant", self.authority.trusted_grant_issuers),
+            ("receipt", self.authority.trusted_receipt_issuers),
+        )
+        for trust_kind, values in roots:
+            for issuer_ref, issuer_trust in sorted(values.items()):
+                self._connection.execute(
+                    """
+                    INSERT INTO authority_trust_roots(
+                        loop_ref, trust_kind, issuer_ref, issuer_trust
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (loop_ref, trust_kind, issuer_ref, issuer_trust),
+                )
+
+    def _sync_receipts(self, command: CommandEnvelope) -> None:
+        if self.authority is None:
+            raise PersistenceCorruption("receipt authority is absent")
+        loop_ref = str(command.subject["loop_ref"])
+        for receipt_ref in sorted(command.machine_bindings["receipt_refs"].values()):
+            receipt = self.authority.receipts.get(receipt_ref)
+            if receipt is None or receipt.loop_ref != loop_ref:
+                raise PersistenceCorruption("command receipt is absent from authority")
+            raw = canonical_bytes(receipt.__dict__)
+            existing = self._connection.execute(
+                "SELECT receipt_json FROM authority_receipts WHERE receipt_ref = ?",
+                (receipt_ref,),
+            ).fetchone()
+            if existing is None:
+                self._connection.execute(
+                    """
+                    INSERT INTO authority_receipts(receipt_ref, loop_ref, receipt_json)
+                    VALUES (?, ?, ?)
+                    """,
+                    (receipt_ref, loop_ref, raw),
+                )
+            elif bytes(existing["receipt_json"]) != raw:
+                raise PersistenceCorruption("immutable receipt identity conflict")
+
+    def loop_descriptor(self, loop_ref: str) -> dict[str, Any] | None:
+        row = self._connection.execute(
+            "SELECT * FROM loop_descriptors WHERE loop_ref = ?", (loop_ref,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            goal = bytes(row["goal_text"]).decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise PersistenceCorruption("loop goal is not strict UTF-8") from exc
+        if domain_digest("loopskill-goal-objective-v1\n", goal) != row["goal_digest"]:
+            raise PersistenceCorruption("loop goal digest mismatch")
+        return {
+            "created_at": row["created_at"],
+            "goal": goal,
+            "goal_digest": row["goal_digest"],
+            "loop_ref": row["loop_ref"],
+        }
+
+    def loop_descriptors(self) -> list[dict[str, Any]]:
+        refs = [
+            str(row[0])
+            for row in self._connection.execute(
+                "SELECT loop_ref FROM loop_descriptors ORDER BY loop_ref"
+            )
+        ]
+        descriptors = []
+        for loop_ref in refs:
+            descriptor = self.loop_descriptor(loop_ref)
+            if descriptor is None:
+                raise PersistenceCorruption("loop descriptor index mismatch")
+            descriptors.append(descriptor)
+        return descriptors
+
+    @staticmethod
+    def _attempt_wire(
+        snapshot: dict[str, Any], attempt_ref: str, attempt: dict[str, Any]
+    ) -> EffectAttempt:
+        delivery_ref = attempt.get("delivery_ref")
+        if "external_effect_ref" in attempt:
+            subject_kind = "ExternalEffectRef"
+            subject_ref = attempt["external_effect_ref"]
+            action = attempt["action"]
+            payload = attempt["provider_request"]
+        else:
+            subject_kind = "DeliveryRef"
+            subject_ref = delivery_ref
+            delivery = snapshot["deliveries"][delivery_ref]
+            route = snapshot["routes"][delivery["route_ref"]]
+            action = "send"
+            payload = {
+                "intent_digest": route["intent_digest"],
+                "target_ref": attempt["target_ref"],
+            }
+        return EffectAttempt(
+            attempt_ref=attempt_ref,
+            loop_ref=snapshot["loop_ref"],
+            subject_kind=subject_kind,
+            subject_ref=subject_ref,
+            delivery_ref=delivery_ref,
+            target_ref=attempt["target_ref"],
+            provider_idempotency_key=attempt["provider_idempotency_key"],
+            provider_request_digest=attempt["provider_request_digest"],
+            action=action,
+            payload=payload,
+        )
+
     def _sync_outbox(self, loop_ref: str, snapshot: dict[str, Any]) -> None:
         expected_attempts = set(snapshot["attempts"])
         for attempt_ref, attempt in sorted(snapshot["attempts"].items()):
+            wire = self._attempt_wire(snapshot, attempt_ref, attempt)
             self._connection.execute(
                 """
                 INSERT INTO outbox(
-                    attempt_ref, loop_ref, delivery_ref,
-                    target_ref, provider_idempotency_key, provider_request_digest,
+                    attempt_ref, loop_ref, delivery_ref, subject_kind, subject_ref,
+                    target_ref, action, payload_json,
+                    provider_idempotency_key, provider_request_digest,
                     automatic_budget_consumed, attempt_revision, attempt_state,
                     invocation_state, observation_receipt_ref
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(attempt_ref) DO UPDATE SET
                     delivery_ref = excluded.delivery_ref,
+                    subject_kind = excluded.subject_kind,
+                    subject_ref = excluded.subject_ref,
                     target_ref = excluded.target_ref,
+                    action = excluded.action,
+                    payload_json = excluded.payload_json,
                     provider_idempotency_key = excluded.provider_idempotency_key,
                     provider_request_digest = excluded.provider_request_digest,
                     automatic_budget_consumed = excluded.automatic_budget_consumed,
@@ -528,10 +885,14 @@ class SQLiteStore:
                 (
                     attempt_ref,
                     loop_ref,
-                    attempt["delivery_ref"],
-                    attempt["target_ref"],
-                    attempt["provider_idempotency_key"],
-                    attempt["provider_request_digest"],
+                    wire.delivery_ref or "",
+                    wire.subject_kind,
+                    wire.subject_ref,
+                    wire.target_ref,
+                    wire.action,
+                    canonical_bytes(wire.payload),
+                    wire.provider_idempotency_key,
+                    wire.provider_request_digest,
                     int(attempt["automatic_budget_consumed"]),
                     attempt["revision"],
                     attempt["state"],
@@ -549,6 +910,49 @@ class SQLiteStore:
         unexpected = {str(row[0]) for row in rows} - expected_attempts
         if unexpected:
             raise PersistenceCorruption("outbox contains an attempt absent from snapshot")
+
+    def effect_attempt(self, attempt_ref: str) -> EffectAttempt | None:
+        row = self._connection.execute(
+            "SELECT * FROM outbox WHERE attempt_ref = ?", (attempt_ref,)
+        ).fetchone()
+        if row is None:
+            return None
+        payload = _decode_canonical(
+            bytes(row["payload_json"]), f"attempt-payload:{attempt_ref}"
+        )
+        if not isinstance(payload, dict):
+            raise PersistenceCorruption("Attempt provider payload is not an object")
+        return EffectAttempt(
+            attempt_ref=row["attempt_ref"],
+            loop_ref=row["loop_ref"],
+            subject_kind=row["subject_kind"],
+            subject_ref=row["subject_ref"],
+            delivery_ref=row["delivery_ref"] or None,
+            target_ref=row["target_ref"],
+            provider_idempotency_key=row["provider_idempotency_key"],
+            provider_request_digest=row["provider_request_digest"],
+            action=row["action"],
+            payload=payload,
+        )
+
+    def ready_effect_attempts(self) -> tuple[EffectAttempt, ...]:
+        refs = [
+            str(row[0])
+            for row in self._connection.execute(
+                """
+                SELECT attempt_ref FROM outbox
+                 WHERE attempt_state = 'COMMITTED' AND invocation_state = 'READY'
+                 ORDER BY attempt_ref
+                """
+            )
+        ]
+        attempts = []
+        for attempt_ref in refs:
+            attempt = self.effect_attempt(attempt_ref)
+            if attempt is None:
+                raise PersistenceCorruption("ready Attempt index mismatch")
+            attempts.append(attempt)
+        return tuple(attempts)
 
     def claim_attempt(self, attempt_ref: str, executor_ref: str) -> bool:
         """Atomically consume execution ownership without invoking a provider."""
@@ -657,21 +1061,68 @@ class SQLiteStore:
                 "SELECT * FROM operations ORDER BY loop_ref, operation_id"
             )
         ]
-        outbox = [
-            dict(row)
-            for row in self._connection.execute(
-                "SELECT * FROM outbox ORDER BY attempt_ref"
+        outbox = []
+        for row in self._connection.execute(
+            "SELECT * FROM outbox ORDER BY attempt_ref"
+        ):
+            value = dict(row)
+            value["payload"] = _decode_canonical(
+                bytes(value.pop("payload_json")),
+                f"attempt-payload:{row['attempt_ref']}",
             )
-        ]
+            outbox.append(value)
         blobs = [
             {"blob_digest": row["blob_digest"], "content_bytes": row["content_bytes"]}
             for row in self._connection.execute(
                 "SELECT blob_digest, content_bytes FROM immutable_blobs ORDER BY blob_digest"
             )
         ]
+        descriptors = self.loop_descriptors()
+        authority = {
+            "actors": [
+                _decode_canonical(
+                    bytes(row["actor_json"]), f"actor:{row['actor_ref']}"
+                )
+                for row in self._connection.execute(
+                    "SELECT * FROM authority_actors ORDER BY actor_ref"
+                )
+            ],
+            "grants": [
+                _decode_canonical(
+                    bytes(row["grant_json"]), f"grant:{row['grant_ref']}"
+                )
+                for row in self._connection.execute(
+                    "SELECT * FROM authority_grants ORDER BY grant_ref"
+                )
+            ],
+            "receipts": [
+                _decode_canonical(
+                    bytes(row["receipt_json"]), f"receipt:{row['receipt_ref']}"
+                )
+                for row in self._connection.execute(
+                    "SELECT * FROM authority_receipts ORDER BY receipt_ref"
+                )
+            ],
+            "trust_roots": [
+                {
+                    "issuer_ref": row["issuer_ref"],
+                    "issuer_trust": row["issuer_trust"],
+                    "loop_ref": row["loop_ref"],
+                    "trust_kind": row["trust_kind"],
+                }
+                for row in self._connection.execute(
+                    """
+                    SELECT * FROM authority_trust_roots
+                     ORDER BY loop_ref, trust_kind, issuer_ref
+                    """
+                )
+            ],
+        }
         return canonical_bytes(
             {
+                "authority": authority,
                 "blobs": blobs,
+                "descriptors": descriptors,
                 "events": events,
                 "loops": loops,
                 "operations": operations,
@@ -710,6 +1161,13 @@ class SQLiteStore:
                     raise PersistenceCorruption("snapshot digest mismatch")
                 if snapshot["loop_revision"] != row["loop_revision"]:
                     raise PersistenceCorruption("snapshot revision mismatch")
+                descriptor = self.loop_descriptor(str(row["loop_ref"]))
+                if descriptor is None:
+                    raise PersistenceCorruption("loop descriptor is absent")
+                if descriptor["goal_digest"] not in {
+                    goal["objective_digest"] for goal in snapshot["goals"].values()
+                }:
+                    raise PersistenceCorruption("loop descriptor goal mismatch")
                 accepted = self._connection.execute(
                     """
                     SELECT COUNT(*) FROM operations
@@ -724,24 +1182,34 @@ class SQLiteStore:
                     range(1, len(events) + 1)
                 ):
                     raise PersistenceCorruption("event sequence gap")
-                expected_outbox = {
-                    (
-                        attempt_ref,
-                        attempt["delivery_ref"],
-                        attempt["target_ref"],
-                        attempt["provider_idempotency_key"],
-                        attempt["provider_request_digest"],
-                        int(attempt["automatic_budget_consumed"]),
-                        attempt["revision"],
-                        attempt["state"],
+                expected_outbox = set()
+                for attempt_ref, attempt in snapshot["attempts"].items():
+                    wire = self._attempt_wire(snapshot, attempt_ref, attempt)
+                    expected_outbox.add(
+                        (
+                            attempt_ref,
+                            wire.delivery_ref or "",
+                            wire.subject_kind,
+                            wire.subject_ref,
+                            wire.target_ref,
+                            wire.action,
+                            canonical_bytes(wire.payload),
+                            wire.provider_idempotency_key,
+                            wire.provider_request_digest,
+                            int(attempt["automatic_budget_consumed"]),
+                            attempt["revision"],
+                            attempt["state"],
+                        )
                     )
-                    for attempt_ref, attempt in snapshot["attempts"].items()
-                }
                 actual_outbox = {
                     (
                         outbox["attempt_ref"],
                         outbox["delivery_ref"],
+                        outbox["subject_kind"],
+                        outbox["subject_ref"],
                         outbox["target_ref"],
+                        outbox["action"],
+                        bytes(outbox["payload_json"]),
                         outbox["provider_idempotency_key"],
                         outbox["provider_request_digest"],
                         outbox["automatic_budget_consumed"],
@@ -777,6 +1245,7 @@ class SQLiteStore:
                     bytes(row["outcome_json"]),
                     f"operation:{row['loop_ref']}:{row['operation_id']}",
                 )
+            self._load_authority()
             for row in self._connection.execute("SELECT * FROM immutable_blobs"):
                 content = bytes(row["content"])
                 if len(content) != row["content_bytes"]:

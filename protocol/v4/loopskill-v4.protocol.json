@@ -84,6 +84,9 @@
     "RecordEffectObservation": {
       "semantic_payload": {}
     },
+    "RecordExternalEffectObservation": {
+      "semantic_payload": {}
+    },
     "RecordReview": {
       "semantic_payload": {
         "verdict": {
@@ -156,13 +159,22 @@
     "MIGRATION_NOT_QUIESCENT",
     "DUAL_WRITE_FORBIDDEN",
     "STORE_RECOVERY_REQUIRED",
-    "INTERNAL_INVARIANT_VIOLATION"
+    "INTERNAL_INVARIANT_VIOLATION",
+    "USER_INPUT_INVALID",
+    "USER_LOOP_EXISTS",
+    "USER_STORE_UNAVAILABLE",
+    "USER_INTERNAL_ERROR"
   ],
   "events": [
     "LoopCreated",
     "GoalRegistered",
     "GoalActivated",
     "HostResourceBound",
+    "ExternalEffectPrepared",
+    "ExternalEffectObserved",
+    "ExternalEffectUnknown",
+    "ExternalEffectUnverifiable",
+    "LateExternalEffectObserved",
     "RoutePrepared",
     "DeliveryAttemptCommitted",
     "DeliveryObserved",
@@ -194,6 +206,7 @@
     "AuthorityGrantRef",
     "GoalRef",
     "HostResourceRef",
+    "ExternalEffectRef",
     "RouteRef",
     "DeliveryRef",
     "AttemptRef",
@@ -272,12 +285,29 @@
     "EffectAttempt": [
       ["attempt_ref", "str", {"type": "string"}],
       ["loop_ref", "str", {"type": "string"}],
-      ["delivery_ref", "str", {"type": "string"}],
+      ["subject_kind", "str", {"type": "string"}],
+      ["subject_ref", "str", {"type": "string"}],
+      ["delivery_ref", "str | None", {"type": ["string", "null"]}],
       ["target_ref", "str", {"type": "string"}],
       ["provider_idempotency_key", "str", {"type": "string"}],
       ["provider_request_digest", "str", {"type": "string"}],
       ["action", "str", {"type": "string"}],
       ["payload", "Mapping[str, Any]", {"type": "object"}]
+    ],
+    "LoopStartInput": [
+      ["goal", "str", {"type": "string"}]
+    ],
+    "UserFacingStatus": [
+      ["goal", "str", {"type": "string"}],
+      ["progress", "str", {"type": "string"}],
+      ["result", "str", {"type": "string"}],
+      ["limitations", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["next_actions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}]
+    ],
+    "UserFacingError": [
+      ["code", "str", {"type": "string"}],
+      ["message", "str", {"type": "string"}],
+      ["next_action", "str", {"type": "string"}]
     ],
     "Reference": [
       ["kind", "str", {"type": "string"}],

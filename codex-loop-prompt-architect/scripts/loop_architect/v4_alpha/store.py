@@ -26,6 +26,34 @@ FAULT_BOUNDARIES = (
 )
 
 
+def _outbox_entry(loop_ref, attempt_ref, attempt):
+    if "external_effect_ref" in attempt:
+        return {
+            "action": attempt["action"],
+            "attempt_ref": attempt_ref,
+            "automatic_budget_consumed": attempt["automatic_budget_consumed"],
+            "loop_ref": loop_ref,
+            "provider_idempotency_key": attempt["provider_idempotency_key"],
+            "provider_request": copy.deepcopy(attempt["provider_request"]),
+            "provider_request_digest": attempt["provider_request_digest"],
+            "revision": attempt["revision"],
+            "state": attempt["state"],
+            "subject_kind": attempt["subject_kind"],
+            "subject_ref": attempt["subject_ref"],
+            "target_ref": attempt["target_ref"],
+        }
+    return {
+        "attempt_ref": attempt_ref,
+        "automatic_budget_consumed": attempt["automatic_budget_consumed"],
+        "delivery_ref": attempt["delivery_ref"],
+        "loop_ref": loop_ref,
+        "provider_idempotency_key": attempt["provider_idempotency_key"],
+        "provider_request_digest": attempt["provider_request_digest"],
+        "revision": attempt["revision"],
+        "state": attempt["state"],
+    }
+
+
 class InMemoryStore:
     """Single-process reference store with one atomic commit object per loop."""
 
@@ -77,22 +105,7 @@ class InMemoryStore:
                     for loop_ref, events in sorted(self._events.items())
                 },
                 "outbox": [
-                    {
-                        "attempt_ref": attempt_ref,
-                        "automatic_budget_consumed": attempt[
-                            "automatic_budget_consumed"
-                        ],
-                        "delivery_ref": attempt["delivery_ref"],
-                        "loop_ref": loop_ref,
-                        "provider_idempotency_key": attempt[
-                            "provider_idempotency_key"
-                        ],
-                        "provider_request_digest": attempt[
-                            "provider_request_digest"
-                        ],
-                        "revision": attempt["revision"],
-                        "state": attempt["state"],
-                    }
+                    _outbox_entry(loop_ref, attempt_ref, attempt)
                     for loop_ref, snapshot in sorted(self._snapshots.items())
                     for attempt_ref, attempt in sorted(snapshot["attempts"].items())
                 ],
