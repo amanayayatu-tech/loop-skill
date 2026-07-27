@@ -48,6 +48,7 @@ PA = "test_v4_protocol_authority"
 RC = "test_v4_rc_acceptance"
 RD = "test_v4_rc_distribution"
 UX = "test_v4_single_entry_ux"
+DOC = "test_v4_docs"
 
 
 # Every exact catalog family binds to one concrete unittest method whose
@@ -71,8 +72,8 @@ FAMILY_TEST_BINDINGS = {
     "CAP-ARCHITECTURE": _test(PR, "V4PreservationRegisterTests", "test_architecture_fitness_passes_current_graph"),
     "CAP-AUDIT": _test(PP, "V4OperabilityProjectionTests", "test_audit_archive_and_status_are_deterministic_read_only_views"),
     "CAP-COMPAT": _test(M, "V4LegacyBoundaryTests", "test_cli_rejects_legacy_pack_with_stable_error_and_zero_writes"),
-    "CAP-DISTRIBUTION": _test(RD, "V4RcDistributionTests", "test_isolated_install_contains_v4_entry_and_zero_drift"),
-    "CAP-DOCS": _test(RC, "V4RcAcceptanceTests", "test_bilingual_v4_docs_examples_and_release_boundary_are_present"),
+    "CAP-DISTRIBUTION": _test(RD, "V4RcDistributionTests", "test_isolated_install_is_v4_only_and_config_byte_identical"),
+    "CAP-DOCS": _test(DOC, "V4DocsTests", "test_public_docs_pass_parity_commands_links_and_claims"),
     "CAP-INTAKE": _test(UX, "V4SingleEntryUXTests", "test_intake_four_outcomes_seven_sections_and_zero_side_effects"),
     "CAP-MODES": _test(PP, "V4ProductPolicyTests", "test_standard_is_fixed_dependency_order_and_adaptive_is_bounded"),
     "CAP-OPERABILITY": _test(PP, "V4OperabilityProjectionTests", "test_doctor_hides_identity_unless_diagnostics_are_requested"),

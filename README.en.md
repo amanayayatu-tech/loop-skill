@@ -1,445 +1,183 @@
-# Codex Loop Prompt Architect
+# LoopSkill 4.0
 
-[简体中文](README.md) | English
-
-[![Compatibility CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/compatibility.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/compatibility.yml)
+[![v4 Release CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Turn a complex task that could drift across long chats into a Codex App workflow that can be handed off, reviewed, verified, and decisively closed.**
+[中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
-![Xiaohei carries a durable case of task records, checkpoints, and evidence through temporary chat rooms that close behind him](docs/readme-assets/durable-handoff.png)
+<!-- parity: identity -->
+> Release status: the 4.0.0 candidate is passing release gates. It is not described as a published stable release until the tag and GitHub Release exist.
 
-Chats end. Windows refresh. The work rarely ends at the same moment. The hardest part of a long-running job is often not whether a model can write code, but whether scope drifts, evidence scatters across tasks, failures trigger duplicate work, and “done” becomes nothing more than a confident sentence.
+LoopSkill turns long-running work into a recoverable loop with explicit authority, evidence, and stop conditions. An ordinary user supplies only a goal or goal file; machines own protocol identities, versions, receipts, and Host readback. The necessary human boundary remains:
 
-`codex-loop-prompt-architect` designs Controller Packs for that kind of work in the **Codex macOS App**. It first checks whether the request deserves a Loop, then turns objectives, roles, permissions, evidence, repair limits, and completion rules into a validated operating contract.
+`INTAKE → PREPARE → CONFIRM → START`
 
-It **designs the Loop and generates the Pack**. It does not implement the target project for you, and one invocation does not silently launch an unattended run.
+<!-- parity: break -->
+## Breaking-release notice
 
-> **Local 4.0 candidate notice:** this branch contains the unreleased LoopSkill
-> 4 compatibility refactor. It keeps one goal file or one main command as the
-> default entry, while preserving the explicit
-> `INTAKE → PREPARE → CONFIRM → START` authorization boundary. The public stable
-> line remains v3.3.8; do not overwrite an existing installation or migrate a
-> real v3 loop with this candidate. See the
-> [English 4.0 quickstart](docs/v4/quickstart.en.md) and
-> [migration and rollback boundary](docs/v4/migration-and-rollback.md).
+LoopSkill 4 is a **v4-only hard break**. It preserves validated v3 safety principles, but it does not open, import, repair, or run v3 loops, Controller Packs, MCP state, or CLI data. There is no automatic migration and no dual write.
 
-## Loop, state-machine, and graph semantics
+To keep using old data, independently install or retain [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8). The v4 installer does not modify it.
 
-LoopSkill is a **governed, evidence-bound execution and completion control plane**. Consecutive Controller turns drive the outer loop; persistent canonical state, typed operations, guards, ledgers, leases, outboxes, evidence binding, and deterministic recovery constrain the work inside it. It therefore has explicit state-machine and graph semantics, but deliberately does not offer arbitrary DAG orchestration and is not a general-purpose graph workflow runtime.
+<!-- parity: changes -->
+## What changed in 4.0
 
-There is no standalone node/edge DSL or unified Graph definition file. The legal nodes, transitions, and recovery edges are jointly defined by schemas, runtime validators, Goal dependencies, and the recovery registry:
+- One typed protocol manifest defines command, event, reference, receipt, capability, and error wire shapes.
+- The deterministic Kernel depends only on the typed protocol and ports; SQLite Store is the sole canonical writer.
+- Artifact, review, finalization, and the Codex Host Adapter remain outside the Kernel boundary.
+- Operation IDs, handles, Actor/Grant references, revisions, receipts, digests, and Host identities are machine-generated, parsed, or verified.
+- Standard, Adaptive, Reviewer, Local Verifier, Decision Card, and repair are optional policy; the minimal path loads no policy pack.
+- An external effect receives at most one automatic attempt; without authoritative readback it honestly becomes `UNKNOWN` or `UNVERIFIABLE`.
 
-| LoopSkill entity | State-machine / graph meaning | What it does today |
-| --- | --- | --- |
-| Goal registry / Goal queue | Node set and dependencies | Defines the allowed business Goals, dependencies, and order |
-| canonical state version | Graph state and version | Uses CAS/freshness to prevent stale results from advancing current state |
-| typed runtime operation | Typed edge / transition | Restricts the Controller to operations accepted by the runtime |
-| guard / validation / evidence freshness | Edge guard | Rejects a transition when evidence, authority, version, or identity is insufficient |
-| Controller lease / routing turn | One scheduling right | Prevents duplicate routing in one Controller turn |
-| outbox | Durable intent for a pending edge | Supports send-crash, lost-output, and idempotent recovery |
-| Worker / Reviewer report | Node output and verification result | Binds the current dispatch, artifact, diff, and evidence |
-| recovery registry | Failure edge and legal recovery edge | Maps each recoverable code to one legal next operation |
-| finalization | Explicit terminal transition | Closes the loop only at canonical `FINALIZATION_ACKED` |
-| heartbeat / human decision | Timed wake-up and human interrupt | Supports observation, pause, resume, and human gates |
+<!-- parity: install -->
+## 30-second install
 
-The diagram below describes the current **Adaptive schema-v3** execution path:
+Requirements: macOS or Linux, Git, and Python 3.11–3.14. The LoopSkill 4 runtime uses only the Python standard library.
+
+```bash
+git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+cd loop-skill
+bash scripts/install.sh
+LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
+"$LOOPSKILL4" --help
+```
+
+The distinct installation target is `$CODEX_HOME/skills/loopskill4`. LoopSkill 4 itself does not register MCP, edit `config.toml`, or require a Codex App restart for LoopSkill installation or use. Codex or another product may still require a restart for unrelated reasons.
+
+<!-- parity: usage -->
+## Simplest usage
+
+Create `goal.json`:
+
+```json
+{
+  "goal": "Complete and verify one small change in a disposable example directory",
+  "task_horizon": "long",
+  "write_scope": ["disposable-example"],
+  "budget": "20 minutes; no network or publish",
+  "external_actions": [],
+  "acceptance_criteria": ["focused tests pass", "result is reviewed"],
+  "stop_conditions": ["stop on unknown external state"],
+  "authorization_boundaries": ["no commit, push, publish, deploy, or real-user data"]
+}
+```
+
+Then use one main entry:
+
+```bash
+LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
+"$LOOPSKILL4" start goal.json
+```
+
+The same interaction performs read-only intake, writes local preparation artifacts, and shows the Goal, write scope, budget, external actions, acceptance criteria, stop conditions, and publication boundary. Only exact explicit confirmation can start. A non-interactive session stops at PREPARE; `DIRECT_TASK_RECOMMENDED` creates no loop.
+
+The four phases may also be invoked explicitly:
+
+```bash
+"$LOOPSKILL4" intake goal.json
+"$LOOPSKILL4" prepare goal.json --output ./prepared-loop
+"$LOOPSKILL4" confirm ./prepared-loop
+"$LOOPSKILL4" start ./prepared-loop --root ./loopskill4-data
+```
+
+<!-- parity: no-control -->
+## What ordinary users never provide manually
+
+The number of user-supplied control identities must be zero. Users do not copy task/thread/turn/route/effect/artifact/review/finalization IDs or paste SHA values, receipts, Pack identity, Gateway schemas, MCP/App enums, heartbeat, readback, or retry parameters. Even if model text contains such a value, it receives no authority.
+
+<!-- parity: status -->
+## Status, result, and limitations
+
+```bash
+"$LOOPSKILL4" status --root ./loopskill4-data
+"$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
+```
+
+Default status shows only the goal, progress, result, limitations, and actionable next step. Internal identity and receipts appear only in explicit diagnostics. `UNKNOWN` means an external action may have happened but cannot be authoritatively confirmed; `UNVERIFIABLE` means the Host cannot provide the required assurance. Neither is success, and neither triggers blind resend.
+
+<!-- parity: policy -->
+## Optional policies
+
+Standard provides a fixed dependency-ordered Goal Queue. Adaptive provides one active goal and bounded, versioned roadmap revision. Reviewer, Local Verifier, Decision Card, human steering, and bounded repair are optional capabilities. They may submit authorized semantic commands, but cannot write the Store, sign Host receipts, or become a Supervisor.
+
+<!-- parity: architecture -->
+## Architecture
 
 ```mermaid
-flowchart TD
-    C[Controller request / one routing turn] --> O[Typed operation + guard]
-    W[Worker / Reviewer<br/>bound report + evidence] --> O
-    O --> G[MCP State Gateway<br/>sole canonical writer]
-    G --> S[LOOP_STATE.md<br/>canonical JSON envelope]
-    G --> E[LOOP_EVENTS.jsonl<br/>accepted mutations]
-    G --> R[LOOP_REJECTIONS.jsonl<br/>rejected operations]
-    S --> P[Derived STATUS / GOALS / dashboard<br/>metrics / audit index / business timeline]
-    S --> F[Explicit finalization<br/>FINALIZATION_ACKED]
-    P -. observation only; cannot authorize routes .-> C
+flowchart LR
+    E["Entry / composition root"] --> K["Deterministic Kernel"]
+    K --> P["Typed protocol + ports"]
+    E --> S["SQLite Store / one writer"]
+    E --> A["Artifact, review, finalization libraries"]
+    E --> H["Codex Host Adapter"]
+    E -. optional .-> O["Standard / Adaptive policy"]
 ```
 
-Despite its Markdown extension, `.codex-loop/LOOP_STATE.md` contains a strict JSON envelope, not free-form natural-language notes. It is the sole canonical state. Adaptive schema v3 permits only the MCP State Gateway to write it; Standard and legacy Adaptive Packs retain their constrained single-State-Writer path, and the two writer types never share canonical authority. The Controller, Worker, and Reviewer must not edit canonical state directly in either path. `.codex-loop/LOOP_EVENTS.jsonl` appends accepted canonical mutations. The separate, hash-chained `.codex-loop/LOOP_REJECTIONS.jsonl` appends rejected operations while excluding raw prompts, chat, credentials, and complete requests.
+Store does not control Host; Artifact and Host do not write canonical state. One state authority may maintain orthogonal aggregate/event streams—it does not imply one giant enum or one physical event stream. See the [architecture map](docs/v4/architecture-map.md), [ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md), and [typed protocol](protocol/v4/README.md).
 
-`STATUS.md`, `GOALS.md`, the dashboard, metrics, `audit-index.json`, per-Goal summaries, and `business-timeline.json` are deterministic projections of canonical state. They support human reading, Git diffs, observation, and recovery, but cannot authorize a route in reverse or become a second canonical source. If they disagree, canonical state and the transaction journal prevail. New projection, report, and staging writes use SHA-256 content addressing and deduplication while legacy facades remain readable. This does not treat Markdown as an unconstrained concurrent database: concurrency correctness comes from one canonical writer, state versions, CAS, leases, outboxes, PREPARED/APPLIED journals, digests, and schema validators. The Markdown envelope remains useful because it is readable, reviewable, Git-diffable, archivable, and recoverable after a chat, task, or App restart.
+<!-- parity: safety -->
+## Safety and recovery
 
-**Standard and Adaptive.** A Standard Loop uses a fixed, dependency-ordered Goal Queue, with a topology closer to a predefined linear or finitely branching state machine; it fits stable Goals and ordering. An Adaptive Loop keeps one Active milestone and permits audited roadmap revision as new evidence arrives. The model cannot arbitrarily rewrite the objective: the Goal registry, repair budget, capabilities, and completion criteria remain canonical constraints. Both modes retain one canonical writer, one formal route per Controller turn, bounded repair, explicit review/audit/finalization, lost-output recovery, and invalidation of old reviews when evidence identity changes.
+- Local operation acceptance, per-loop CAS, outbox, and snapshot commit in one SQLite transaction.
+- Replaying the same operation ID and request creates no second event, handle, or effect; a changed request returns an idempotency conflict.
+- With provider idempotency keys and authoritative readback, the product says only effectively-once.
+- Otherwise it promises only at-most-one automatic attempt; a crash or lost response may leave `UNKNOWN`.
+- Path traversal, symlinks, case-fold aliases, special files, and open/read races fail closed.
+- Artifact correctness, workflow closure, assurance, and external-effect finalization are separate facts and cannot substitute for one another.
 
-**Boundaries.** LoopSkill does not currently promise arbitrary dynamic DAG authoring, unlimited parallel fan-out/fan-in, concurrent writes by multiple Workers to one canonical state, per-node time travel or independent checkpoint replay, a general deterministic merge engine for branches, or cross-machine distributed scheduling. It does not replace LangGraph, Temporal, Airflow, or CI systems. This is a reliability tradeoff: LoopSkill prioritizes scope drift, duplicate dispatch, stale evidence, repair loops, crash recovery, human pauses, and false completion claims in long-running Codex work.
+<!-- parity: evidence -->
+## Evidence boundary
 
-## OpenAI Build Week 2026
+Repository unit, fault-injection, conformance, isolated-install, and disposable Codex App canary evidence proves only contract behavior for its bound version and scenario. It does not prove patch-success superiority, arbitrary long-horizon efficacy, a fault-free Host, or cross-system exactly-once.
 
-LoopSkill had a foundation before the event and was meaningfully extended with **Codex and GPT-5.6** from July 13–17, 2026. Codex was the primary engineering environment for this work, with GPT-5.6 used across implementation, incident analysis, test design, documentation, review, and release hardening.
+<!-- parity: v3 -->
+## v3 hard boundary
 
-The Build Week work added or strengthened bilingual onboarding, an evolvable project specification and validator, sharded compatibility CI, typed MCP runtime payloads, historical-state repair protections, and the fail-closed retirement of an unavailable native Goal recovery path. The public history records **75 commits across 102 changed files** during the period, culminating in [`v3.2.8`](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.2.8).
+When v4 encounters a v3 root, state, or Controller Pack, it performs zero writes and returns stable `USER_UNSUPPORTED_LEGACY_VERSION` with a link to the [v3.3.8 Release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8). v4 ships no importer, repair path, legacy CLI alias, Pack runtime, or v3 MCP State Gateway.
 
-## 30-second quickstart
+<!-- parity: uninstall -->
+## Uninstall and fallback
 
-Requirements: macOS, Codex App, Git, and Python 3.9+.
+The installer prints the receipt path. Uninstall with that exact receipt:
 
 ```bash
-git clone https://github.com/amanayayatu-tech/loop-skill.git
-cd loop-skill
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-test.txt
-./scripts/install.sh
+python3 scripts/uninstall_v4.py --codex-home "${CODEX_HOME:-$HOME/.codex}" --receipt "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/<receipt>.json"
 ```
 
-If an existing `codex-loop-state` entry points to the same installed skill
-bridge, the installer retains that registered absolute Python runtime and
-atomically replaces the skill. A different bridge, extra execution fields, or
-an invalid runtime remains a conflict and rolls back; do not hand-edit config
-to bypass it.
+Uninstall removes only the receipt-bound v4 installation and leaves `config.toml` and an independent v3 installation byte-identical. Fallback means uninstalling v4 and continuing to use separately installed v3.3.8; v4 does not restore, convert, or migrate v3 data.
 
-Open a new task in Codex App after installation. Start with a read-only intake:
+<!-- parity: limitations -->
+## Known limitations
 
-```text
-Use $codex-loop-prompt-architect in intake-only mode.
-Decide whether the requirement below is ready for a Loop, ask only the
-highest-priority blockers, and do not generate a Controller Pack yet:
-...
-```
+- The first release supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
+- There is no cross-system exactly-once promise across SQLite, Codex, Git, and network boundaries.
+- There is no claim of empirically improved patch success or long-horizon superiority.
+- Memory isolation is reported only to the strength the Host can actually attest, which may be unavailable or unverifiable.
+- Git/non-Git/new-Git capture runs only inside an authorized root and verified capability.
 
-When the requirement is ready, generate the Pack:
+See [known limitations](docs/v4/known-limitations.md) for the complete list.
 
-```text
-Use $codex-loop-prompt-architect to design a Loop for the long-running task
-below. Run the Intake Gate first; ask me about missing information, and only
-generate the Controller Pack after READY_FOR_LOOP:
-...
-```
-
-Starting the work is an explicit three-step handoff:
-
-1. **The skill generates the Pack**: one self-contained Controller Pack Markdown file and a separate Simplified Chinese usage guide.
-2. **You confirm the boundary**: review the objective, write scope, budget, external actions, acceptance criteria, and stop conditions.
-3. **You start the real Loop**: create a real Controller task in Codex App and use the Pack as its launch input. Actual orchestration begins only here.
-
-If Intake returns `DIRECT_TASK_RECOMMENDED`, asking Codex to do the task directly is usually faster. A Loop is not a ceremony every task must endure.
-
-## Startup gate for a formal long-running Loop
-
-On the first intake or generate invocation in each new session, the skill runs a read-only doctor. The same checks are available directly:
+<!-- parity: contributor -->
+## Development and validation
 
 ```bash
-scripts/loopctl doctor --check --json
-scripts/loopctl compile --input loop-source.json --check --json
-scripts/loopctl canary --input compiled-manifest.json --json
-scripts/loopctl audit --root /absolute/loop/root --json
-scripts/loopctl metrics-export --root /absolute/loop/root --json
-scripts/loopctl archive --root /absolute/loop/root --reason "closeout" --check --json
-scripts/loopctl risk-scan --root /absolute/project/root --check --json
+python3 scripts/generate_v4_protocol.py --check
+python3 scripts/validate_v4_preservation.py --root . --json
+PYTHONDONTWRITEBYTECODE=1 python3 -B -W error -m unittest discover -s tests -p 'test_v4*.py' -v
+coverage run -m unittest discover -s tests -p 'test_v4*.py'
+coverage report
+python3 scripts/check_v4_docs.py
 ```
 
-`doctor` verifies the actual Python interpreter and dependencies, Git/worktree identity, source/install manifests, MCP configuration and schemas, and observable App/host capabilities. Its receipt cache is content-addressed by those identities and invalidates on any drift. Failure returns an exact error and remediation without creating canonical state, roles, or a heartbeat. `compile` defaults CP0 to disposable. Formal initialization additionally requires a complete registry, task/thread and heartbeat readback, five MCP lifecycle receipts, and a real disposable canary covering initialization through `FINALIZATION_ACKED`. A host model receipt is mandatory only when `required_model` or `required_reasoning` is explicit. Every canary lane and lifecycle receipt is manifest-bound and self-digest-checked; the MCP Gateway materializes the formal startup receipt from a root-confined source path instead of trusting inline request bytes.
-
-After an App restart, the read-only MCP `host_lifecycle_readback` derives all five lifecycle receipts from the validated install receipt, exact current server registration, OpenAI-signed App parent, and current server/client/schema identities. Active-call counts come from the serial stdio dispatcher itself and exclude the readback call; the model cannot submit or self-attest zero. Install drift, an unobserved restart, concurrent calls, or an unavailable App build fails closed.
-
-Every recoverable runtime code is mapped by one recovery registry entry to one legal next operation; `WAIT` alone is never recovery. Rejected requests are separately appended to the hash-chained, fsynced `.codex-loop/LOOP_REJECTIONS.jsonl`. It stores a request digest and minimum audit fields, never prompts, chat, credentials, or the full request. “Zero side effects” means zero canonical, product, and external effects; the declared rejection-journal append is an allowed audit effect.
-
-A formal Goal can require a Git closeout saga. `PREPARE_GOAL_CLOSEOUT` locks the reviewed artifact, HEAD, branch, paths, and a one-use capability; `ACK_GOAL_CLOSEOUT` relies on Git readback after commit/push. `NO_COMMIT` is legal only when HEAD is unchanged and the index/worktree is completely clean. Crash recovery reuses the original closeout record, while HEAD drift, out-of-scope paths, or a remote-ref mismatch fail closed. Policy migrations use a generic descriptor and retained history while legacy repair-budget effects remain readable. Starting with `status-v5`, STATUS and the dashboard show workflow state separately from evidence completion: `COMPLETE_ARTIFACT`, `COMPLETE_WITH_LIMITATION`, `EMPIRICAL_RESULT_OBSERVED`, `FORMAL_ACCEPTED`, or `PUBLIC_RELEASED`.
-
-## P1 efficiency and governance runtime
-
-New Loops may explicitly enable `p1.enabled=true` in compiler input. An enabled disposable registry may contain only `D0-control-plane-self-test`; a formal manifest declares the complete Goal registry at initialization and supplies representative model-canary receipts for Controller, Worker, and Reviewer. Concrete model identity remains unspecified by default. Host identity receipts are required only by strict `required_model` / `required_reasoning` configurations.
-
-The P1 canonical subdocument records defect families, same-round sibling and unchecked-surface disclosure, heartbeat identity, route orchestration, latency, and intervention counts. A third Reviewer return for the same family can no longer request another point repair; it must select `REFACTOR`, `GOAL_SPLIT`, `CLAIM_NARROWING`, or `LIMITATION`. Repair routes must also satisfy the structured Supervisor capability envelope; prose cannot widen authority.
-
-The `PREPARE → send → RECORD` orchestration merges deterministic sequencing, not network atomicity. Every external send retains its own receipt, and crash replay resumes after the last acknowledged step without repeating the external action. The heartbeat registry is the sole source for automation ID, target, RRULE, prompt digest, and status; readback drift fails closed.
-
-`metrics-export` emits only aggregate counts, latency, `UNMETERED` values, and runtime/config/model digests. It excludes prompts, chat, task/thread IDs, paths, PII, secrets, and raw logs. CI recovery coverage uses AST enumeration across runtime, MCP, CLI, and codec boundaries; every reachable code must have exactly one non-`WAIT` next operation.
-
-## P2 operability and historical governance
-
-New projections, reports, and report-staging files are SHA-256 content addressed. Historical facade paths remain readable, identical bytes within the same permission class share one object, and legacy layouts are never bulk-rewritten or deleted. The runtime also emits a lightweight audit index, per-Goal summaries, and a business timeline. The dashboard presents business routes/Goals separately from control-plane mutations.
-
-Runtime, MCP, and `loopctl` error envelopes derive a copyable `next_operation_template` from the recovery registry. `loopctl` commands consistently accept `--check`, `--emit`, and `--json` with stable exit codes; legacy `compile --emit PATH` remains for one compatibility cycle. `risk-scan` distinguishes SHA-256 identifiers, placeholders, fixtures, and credentials. Each allow rule binds a rule ID, file scope, kind, and reason, while output retains only a digest of the matched value.
-
-New archives use `archive-manifest-v2` and record reason, root, Git, state, events, outboxes, roles, heartbeat, file digests, and privacy classification; both older manifest shapes remain read-only compatible. Active prompts consume only active policy, while historical model/heartbeat prose remains evidence and cannot re-enter an active prompt. CI retains the existing required final gate and adds structured path classes, four-shard P50/P95/slowest telemetry, tiered fuzz profiles, and an observation-only replay over the latest five main merge commits.
-
-## Intake before Loop generation
-
-### Correct invocations
-
-- `intake-only` performs read-only requirement review and returns the stable seven-part report. When status is `READY_FOR_LOOP`, section 7 includes a validated `LOOP_INPUT_JSON`, but no Controller Pack is generated.
-- `generate` runs the same Intake Gate and creates a Pack only after both `READY_FOR_LOOP` and a real `--check-only` pass.
-- Confirmed facts can carry forward within the same task; they should not be mechanically re-asked.
-- A new task does not silently inherit the previous task. Bring the complete `LOOP_INPUT_JSON`, or the original requirement plus confirmed boundaries.
-
-### Invocations to avoid
-
-- Do not call `$loop-readiness-gate`; that skill does not exist, and this repository maintains no second readiness skill.
-- Do not turn `NEEDS_CLARIFICATION`, `BLOCKED`, or `DIRECT_TASK_RECOMMENDED` into “ready with assumptions.”
-- Do not ask intake-only mode to generate a Pack, start a Loop, create role tasks, or create a heartbeat.
-
-The sole public Intake contract is [references/loop-intake-gate.md](codex-loop-prompt-architect/references/loop-intake-gate.md), with regression coverage in [test_loop_intake_gate.py](tests/test_loop_intake_gate.py).
-
-## What it does
-
-![A simplified path from request and Intake through a human-confirmed Controller Pack to execution, review, verification, and final acknowledgement](docs/readme-assets/loop-workflow.png)
-
-A prepared Loop follows a path like this:
-
-1. **Request**: capture the objective, scope, sources, constraints, and definition of done.
-2. **Intake Gate**: separate answerable gaps, hard blockers, and small tasks that should be executed directly.
-3. **Controller Pack**: define roles, Goals, permissions, evidence, retries, repair, and finalization.
-4. **Human Confirm**: the user confirms the control-plane and product side effects that are actually allowed.
-5. **Execute / Review / Verify**: real Workers execute, Reviewers inspect the exact artifact, and a Local Verifier checks machine-local facts when needed.
-6. **Bounded Repair**: repair has a hard limit; exhaustion pauses or stops instead of spinning mechanically.
-7. **Finalization**: only canonical `FINALIZATION_ACKED` closes the Loop.
-
-The result is more than a longer prompt. It is an operating package for a Controller:
-
-- one self-contained `<project>-codex-loop-controller-pack.md`;
-- a separate guide explaining how to launch, observe, pause, and recognize abnormal behavior;
-- either a fixed Standard Goal Queue or an Adaptive milestone roadmap with canonical state rules;
-- explicit roles, permissions, evidence, budgets, retries, repair, STOP, and completion boundaries.
-
-## Where it fits—and where it does not
-
-Use it when:
-
-- the work spans many turns, several real Codex App tasks, or more than half a day;
-- Workers, a Reviewer, the MCP State Gateway, and a Local Verifier need distinct responsibilities;
-- file writes, pushes, external calls, paid resources, or local verification need precise boundaries;
-- results must bind a specific artifact, test run, identity, and review record;
-- later evidence may change the roadmap without erasing history.
-
-Do not use it when:
-
-- one task, one small edit, or one direct query is enough;
-- there is no testable definition of done, only a wish for the system to “keep trying”;
-- the work depends on bypassing approval, secret boundaries, or third-party permissions;
-- you expect absolute reliability, zero failures, or fully unattended operation.
-
-## Standard and Adaptive
-
-| | Standard | Adaptive |
-| --- | --- | --- |
-| Best for | Stable objectives and known ordering | Multiple milestones whose plan may change with evidence |
-| Route | Fixed dependency-ordered Goal Queue | One Active milestone plus audited Roadmap Revision |
-| State | Versioned state and events | Deterministic runtime, leases, outboxes, projections, and a full audit chain |
-| Selection | Default for ready inputs | Explicitly requested or selected when Adaptive conditions apply |
-| Shared boundary | Real task identity, read-only Controller, serial canonical writes, bounded repair, per-Goal review, final audit | Same |
-
-Output detail—`compact`, `full`, or `minimal_patch`—and coordination mode—`standard` or `adaptive`—are independent axes.
-
-## Adaptive v3.3.8: who writes state and who advances a route
-
-New Adaptive Packs default to schema v3. They do not create a session State-Writer task. The installed MCP `state_gateway({root, request})` is the sole canonical writer. The Controller remains read-only, Workers perform product work, Reviewer/Local Verifier tasks submit evidence, and an outer Supervisor is not a product role.
-
-Starting with v3.3.8, a Gateway Pack carries one extractable, digest-addressed heartbeat body. Generation, `--check-only`, and release validation share the same invariant and reject a missing or digest-mismatched body instead of leaving runtime automation prompt bytes to inference.
-
-**Current platform boundary:** schema v3 uses **host-cooperative evidence**. It does not claim Byzantine resistance to a malicious Controller that can forge every App call. The Gateway binds one real App task/thread, automation, send-return target, or PAUSED readback to the current host-attested turn, one PREPARED outbox, and the registered heartbeat; it derives the canonical payload digest itself, and a send observation never produces PASS. This protects against crashes, duplicate sends, stale/mismatched/replayed reports, wrong artifact/dispatch, and premature terminal projection. A normal Loop does not pin a model: it records `model_identity_requirement=NOT_REQUIRED`, `model_identity_status=NOT_APPLICABLE`, and `UNSPECIFIED` model/reasoning values without implying verification. The strict identity gate is enabled only when a manifest or Goal declares `required_model` or `required_reasoning`. In that mode the App must inject a `THREAD_CREATE_OR_READ` receipt through the non-argument `_meta.x-codex-app-action-receipt-v1` carrier; an unsupported host yields `HOST_BLOCKED`. The v1 contract accepts accurately labelled `HOST_COOPERATIVE` injected evidence only; an ordinary digest must never claim `APP_SIGNED`.
-
-```text
-Controller (read-only)
-  -> State Gateway: PREPARE_ROUTE
-  -> runtime_codec: MATERIALIZE_DISPATCH
-  -> App send once -> RECORD_ROUTE_SENT
-  -> role-owned STAGE_REPORT -> ACK_ROUTE_RESULT
-```
-
-When a formal Worker PASS cites validation files from the current run, the
-target-owned `STAGE_REPORT` supplies their exact source path, SHA-256, and media
-type. Runtime reads bytes only from the registered Worker's worktree and first
-places them in immutable staging; the Gateway then archives those same bytes
-atomically with the formal report on the original outbox. Missing, wrong-digest,
-wrong-thread, unreferenced, or stale-artifact evidence rejects with zero
-canonical side effects. The Controller neither copies test output nor reuses a
-send receipt as validation evidence. One report may introduce at most 15
-validation files, and every case-insensitive `.codex-loop/**` control-source
-alias is rejected.
-
-The Gateway derives the lease, repository snapshot, freshness, validation matrix, review handoff, current artifact, and outbox from canonical state. The Controller does not copy those objects. A PASS projection requires all three current identities for one Goal: **current artifact + current Worker dispatch + PASS formal report**. A `BLOCKED` report, stale artifact, or stale dispatch cannot become PASS.
-
-Real user Decision Cards also go only through the Gateway. `REGISTER_DECISION`
-derives the source version and context digest from current canonical state;
-`RECORD_DECISION_RESPONSE` binds the selection to the current host-attested
-Controller turn and stores only the supplied summary and normalized response digest. A required
-browser review surface may move ports because of a local collision only when
-the explicit loopback host, scheme, and path are unchanged and neither URL has
-credentials, query, or fragment. Goal, Worker dispatch, artifact, configured
-URL, and observed URL remain in the decision context. Wrong options, stale
-artifacts, wrong paths, and replayed response identities reject with zero side
-effect.
-
-After a Worker PASS, the route is Code Review, required Local Verification, then Roadmap Audit. A nonfinal audit PASS can only use `ADVANCE_ROADMAP` over the unchanged canonical registry. A final candidate needs Final Audit, `PREPARE_FINALIZATION`, one real `automation_update` pause and matching PAUSED readback, and `ACK_FINALIZATION` before `FINALIZATION_ACKED`. Schema v3 disables the native Goal adapter and records the local `GATEWAY_NO_NATIVE_GOAL` sentinel; it is not an external Goal-tool receipt. The Gateway never manufactures `PAUSED` heartbeat evidence or accepts Controller JSON that does not exactly match the registered heartbeat. After every target Worker/Reviewer/Verifier MCP-attested stage, the runtime writes a read-only target-stage sidecar derived from the SENT outbox and report digest; the Controller can only derive and validate that proof, never forward or forge it in parameters. When stdout or task indexing is lost, `REPORT_RECOVERY` ACKs the original outbox; it never creates a second product dispatch, and the same target role can re-stage to recover cross-bridge proof.
-
-Schema v1/v2 and `route_state_mutation` / State-Writer remain compatibility-only, with explicit `MIGRATE_V2_TO_V3`. Migration requires a PAUSED, lease-free, outbox-quiescent safe point. A terminal predecessor is immutable; continuation uses `INITIALIZE_SUCCESSOR` in a fresh root.
-
-## Reading normal slowness, transport degradation, and terminal state
-
-- **Normal slowness**: the same SENT outbox still has an active role or fresh evidence. Observe that route; do not dispatch again.
-- **Transport degradation**: a real registered-heartbeat observation of the matching outbox/fingerprint failure is bound to the current host turn before entering canonical state. The first failure preserves the original outbox. Two natural heartbeats or fifteen minutes enter `WAITING_TRANSPORT_RECOVERY`. Canonical routing stops immediately; `ACK_TRANSPORT_PAUSE` needs a real pause followed by PAUSED readback for that exact heartbeat. After the original outbox completes or recovers, only a real ACTIVE update/readback for that same heartbeat lets `ACK_TRANSPORT_RECOVERY` atomically restore `RUNNING`; it cannot add a dispatch or repair attempt or create PASS by itself. On rejection, re-pause only if post-call canonical is still WAITING/PAUSED; an already HEALTHY/RUNNING recovery must stay ACTIVE, while unreadable state is reconciled before any route.
-- **True terminal state**: only canonical `FINALIZATION_ACKED`, or evidence-backed `LOOP_BLOCKED`. A stale derived `RUNNING` field cannot revive a terminal loop.
-
-`LOOP_METRICS.json` is derived observation only: per-Goal elapsed time, separately observed Worker, Reviewer, and Local Verifier windows, control-plane wait, dispatch/review/rejection counts, message faults, Steering, and available token usage. It is not a second canonical source and cannot authorize a route.
-
-## A short, complete example
-
-Suppose an existing web project needs Passkey login, and the code, migration, browser behavior, and security review must all remain traceable.
-
-You could ask:
-
-```text
-Use $codex-loop-prompt-architect to design a Standard Loop for Passkey login.
-Allow code writes only under app/auth/** and tests/auth/**. Forbid push, merge,
-deploy, and production writes. Completion requires unit tests, browser
-verification, code review, and a final integrated audit. If facts are missing,
-return NEEDS_CLARIFICATION instead of inventing permissions.
-```
-
-Intake first checks the project location, repository mode, existing implementation, acceptance criteria, permissions, and local verification needs. It generates a dispatchable Pack only after `READY_FOR_LOOP` and a real scaffold `--check-only` pass.
-
-During the real run, “the code is written” does not unlock the next step. The exact Worker artifact enters canonical records, the Reviewer examines the corresponding diff, and machine-local facts go to a Local Verifier when required. If a repair changes the artifact, the old review cannot be reused. The Loop still needs a final audit and finalization.
-
-## Why completion is more trustworthy
-
-![Xiaohei adds artifact, test, identity, and review evidence to a mechanical balance before the closing door can latch](docs/readme-assets/evidence-before-closure.png)
-
-Trust does not come from a green UI or a role saying “done.” It comes from constraints users can feel:
-
-| User benefit | Mechanism underneath |
-| --- | --- |
-| Old results cannot prove a new change | Reviews and validations bind the exact artifact, command, environment, and configuration identity |
-| Lost tool output does not trigger a blind external retry | Durable receipts distinguish STARTED from COMPLETED and forbid automatic resend after lost stdout |
-| Two Controller turns cannot advance the same route | Canonical leases, real App-turn binding, and one route per turn |
-| State conflicts are not resolved by model guesswork | Deterministic runtime, CAS, journals, outboxes, and idempotent replay |
-| Repair cannot run forever | Repair beyond the initial execution has a hard cap; exhaustion pauses, asks, or stops |
-| “Done” has one auditable gate | v3 `PREPARE_FINALIZATION` is not closure; only `FINALIZATION_ACKED` is |
-
-Real identity cannot be established by model prose, a task title, environment variable, or random UUID. Adaptive routing accepts only validated host-provided App metadata and process identity. If it cannot prove that identity, it fails closed.
-
-## Safety and permission boundary
-
-Generating a Pack never silently authorizes:
-
-- push, merge, deploy, release, or production writes;
-- writes to external systems, paid providers, secrets, or credentials;
-- destructive operations, wider file scope, or extra infrastructure;
-- promoting local tests, a green GitHub check, or historical smoke evidence into a release PASS for a new candidate.
-
-Sending a reviewed Pack authorizes only the bounded control-plane actions it explicitly declares, such as creating the agreed real role tasks, sending specified messages, and maintaining one heartbeat. It does not expand product write access or replace explicit approval for push, merge, deploy, paid calls, or external writes.
-
-Read-only Intake does not mutate the product repository, canonical state, tasks, Goals, or heartbeat. It may create one disposable generator input under a temporary directory only for `--check-only`.
-
-Old evidence cannot unlock a new artifact. When the artifact, code, configuration, App build, Pack, or installation identity changes, identity-bound review and compatibility evidence must be renewed.
-
-## Current limitations
-
-### Native Goal generation recovery: `DEFERRED_UNAVAILABLE`
-
-v3.2.8 does not recover a lost native Goal identity. The current Codex App has no public create-paused, resume, restore, or rebind interface that can preserve the same identity, so generated Packs do not include this recovery path. New schema-v3 Packs go further and disable the native Goal adapter; the required-mode wording below applies only to readable v1/v2 compatibility state. v3.2.7 reached repository `main` but never received a tag or GitHub Release; v3.2.8 formally closes that deferred work without rewriting history.
-
-Legacy CLI and MCP recovery surfaces reject with `NATIVE_GOAL_GENERATION_RECOVERY_UNAVAILABLE` and `side_effects=NONE`. If required mode observes `NATIVE_CONTROLLER_GOAL_IDENTITY_LOST`, canonical state stays unchanged, the same heartbeat stays paused, and no substitute Goal, Controller, thread, session, or heartbeat is created. Historical BLOCKED receipts remain BLOCKED evidence; they cannot become PASS.
-
-### App messaging and process transport
-
-New Adaptive Packs pass structured parameters through the installed MCP `runtime_codec` for dispatch materialization and verification, formal-report and external-receipt staging, fingerprint normalization, and `CAPTURE_COMPLETE_DIFF`. They no longer assume that a `tty:false` process exposes a session stdin that remains available for a later `write_stdin` call. The runtime captures binary Git patches as raw bytes, reverse-validates them, and records a manifest. A Worker PASS may cite only digest-only `CAPTURED_GIT_DIFF_V1`; the runtime derives and rechecks the capture path, and models carry neither patch bytes nor a `.codex-loop` path.
-
-CLI stdin remains only for legacy State-Writer and compatibility calls. EOF before the first frame returns `INPUT_TRANSPORT_EOF_BEFORE_FRAME`; an unavailable codec returns `RUNTIME_CODEC_TOOL_UNAVAILABLE`. Both stop with zero side effects and must not be bypassed with a PTY, heredoc, pipeline, or hand-built digest.
-
-### App and protocol identity
-
-This skill targets the Codex macOS App. It does not claim support for every platform, and it does not claim to fix Codex app-server process reaping or Goal persistence.
-
-A real App receipt records observable client and server protocol information separately. When the host does not expose the negotiated MCP protocol version, it must record:
-
-```text
-negotiated_protocol_version_status = UNAVAILABLE_BY_HOST
-negotiated_protocol_version = null
-```
-
-That means “the host did not expose it,” not “the version was verified.” The unknown field alone does not block release when the independent connection, identity, route, zero-side-effect, receipt, and finalization gates all pass.
-
-## Intake outcomes
-
-- `READY_FOR_LOOP`: every applicable gate passes and a real scaffold `--check-only` succeeds.
-- `NEEDS_CLARIFICATION`: the user can supply missing facts, constraints, or permissions.
-- `BLOCKED`: a hard feasibility, safety, resource, or authorization conflict remains.
-- `DIRECT_TASK_RECOMMENDED`: the request is clear but does not justify Loop overhead.
-
-There is no `READY_WITH_ASSUMPTIONS`. Unknown facts remain `UNKNOWN`, and proposed defaults require confirmation.
-
-## Scripted generation
-
-Validate an input without writing outputs:
-
-```bash
-python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
-  --input examples/01-passkey-login-input.json \
-  --check-only
-```
-
-Generate a Pack and usage guide:
-
-```bash
-python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
-  --input examples/01-passkey-login-input.json \
-  --controller-pack-output /tmp/controller-pack.md \
-  --user-guide-output /tmp/usage.md
-```
-
-Generate Full Mode:
-
-```bash
-python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
-  --input examples/03-adaptive-passkey-input.json \
-  --mode full \
-  --controller-pack-output /tmp/adaptive-controller-pack.md
-```
-
-Print the input schema:
-
-```bash
-python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py \
-  --print-schema
-```
-
-The generator rejects incomplete input and duplicate JSON keys by default. Use `--allow-draft` only when you explicitly need a non-dispatchable draft; it is marked `NON_DISPATCHABLE_DRAFT`.
-
-Repository modes:
-
-- `existing_git`: verify root, branch, base SHA, dirty state, remotes, and worktrees first.
-- `new_git`: let the first authorized Worker initialize Git; Git init and branch creation are separate permissions.
-- `non_git`: use before/after manifests, content digests, and a diff digest instead of invented Git identity.
-
-## Three examples
-
-- [Passkey login (Standard)](examples/01-passkey-login-input.json)
-- [Daily CI Triage (Standard)](examples/02-daily-ci-triage-input.json)
-- [Adaptive Passkey](examples/03-adaptive-passkey-input.json)
-
-<details>
-<summary><strong>Validation and evidence boundary</strong></summary>
-
-Fast local regression:
-
-```bash
-.venv/bin/python -m pip install -r requirements-test.txt
-.venv/bin/python -W error -m unittest discover -s tests -v
-.venv/bin/python codex-loop-prompt-architect/scripts/validate_skill.py
-bash -n scripts/install.sh
-```
-
-The complete release process also covers branch coverage across every shipped Python entrypoint, two independent 5000-case fuzz lanes, isolated install/rollback, zero source/install drift, security checks, and a real same-SHA App canary. A v3 canary must also prove no State-Writer task, Gateway one-route-per-turn, original-outbox recovery after lost stdout, transport pausing, successor handoff, and `FINALIZATION_ACKED`. The current main Mac's structured receipt uses `evidence_layer=local-main-mac`.
-
-GitHub Actions is a compatibility mirror, not release acceptance. Historical E2E records are bounded smoke evidence for their recorded machine, App build, and artifact; they do not prove cross-version, production, long-run, or public acceptance. See the [release process](docs/RELEASING.md) and [evidence index](evidence/README.md) for exact boundaries.
-
-</details>
-
-## Learn more
-
-- [Project specification and safe-evolution rules](SPEC.md)
-- [Skill instructions](codex-loop-prompt-architect/SKILL.md)
-- [Intake Gate contract](codex-loop-prompt-architect/references/loop-intake-gate.md)
-- [Standard Loop contract](codex-loop-prompt-architect/references/loop-contract.md)
-- [Adaptive Loop contract](codex-loop-prompt-architect/references/adaptive-loop-contract.md)
-- [Human steering and convergence](codex-loop-prompt-architect/references/human-steering-and-convergence.md)
-- [Release process](docs/RELEASING.md)
-- [Changelog](CHANGELOG.md)
-- [Historical evidence index](evidence/README.md)
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+CI also runs Linux/macOS isolated installation, dependency/import-graph, stale legacy runtime, privacy/secret/large-artifact, SBOM/license, and release-identity gates. The real Codex App canary is an exact-SHA local release gate; GitHub-hosted runners do not fake it.
+
+<!-- parity: release -->
+## Release, security, and historical versions
+
+- [v4 release process](docs/RELEASING.md)
+- [4.0 release notes](docs/v4/release-notes.md)
+- [Security policy](SECURITY.md)
+- [MIT License](LICENSE)
+- [v3.3.8 historical release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)
+- [All GitHub Releases](https://github.com/amanayayatu-tech/loop-skill/releases)

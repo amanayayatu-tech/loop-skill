@@ -2,8 +2,8 @@
 
 ## Public contract
 
-The first v4 command name is `loopskill4`. It is currently a source-tree entry
-and is not installed or published. Its native flow is
+The v4 command name is `loopskill4`. The installer publishes this one entry
+under the distinct v4 Skill root. Its native flow is
 `INTAKE → PREPARE → CONFIRM → START`. A complete semantic input can enter the
 whole flow with one invocation:
 
@@ -103,7 +103,7 @@ Public errors use the manifest-generated `UserFacingError` shape and stable
 `USER_*` codes. Normal error text never echoes supplied control-like options,
 handles, receipts, schemas, or tracebacks.
 
-## Compatibility promise and intentional changes
+## v4-only promise and intentional changes
 
 Yes: an ordinary user can still start with one file or one command, and the
 number of user-supplied control identities is exactly zero. v4 promises no
@@ -112,23 +112,19 @@ and no implicit v3 migration.
 
 Intentional major-version improvements are visible UNKNOWN/UNVERIFIABLE,
 machine-bound identity, an owner-only new v4 store/root, stable recovery text,
-and diagnostics that are opt-in. v4 does not promise byte-identical Controller
-Packs, old Pack identity, every v3 CLI flag, or identical wording. The P6 v3
-compatibility facade preserves intake/generate, Standard/Adaptive selection,
-compact/full export, and existing-Pack `minimal_patch` as optional human views.
-Its state importer requires explicit preview then confirm/cancel, writes only a
-new disjoint v4 root, and never starts or resumes the imported paused loop.
-Entry-byte and action-count budgets remain P7 gates; installation and a real
-new-user canary remain P8 gates.
+and diagnostics that are opt-in. v4 does not preserve byte-identical Controller
+Packs, old Pack identity, v3 CLI flags, MCP state, or identical wording. It has
+no v3 importer, repair/open operation, existing-Pack mode, compact/full legacy
+export, compatibility facade, or automatic migration.
 
-The compatibility facade does not ask for a v3 loop ID, thread/task ID, SHA,
-receipt, schema, or Host enum. It extracts legacy identity from source bytes and
-keeps it machine-held. A ready durable input defaults to Standard; only an
-explicit adaptive horizon selects Adaptive. The typed manifest and confirmation
-show that mode and the reason. Optional policy execution is now a pure P7
-capability and is not loaded by the minimal startup path.
-Terminal v3 loops are shown as non-importable rather than silently revived;
-the original v3 runtime and bytes remain the rollback path.
+A recognized v3 root/state/Pack receives stable
+`USER_UNSUPPORTED_LEGACY_VERSION`, a direct v3.3.8 release reference, and zero
+writes. The independent v3 runtime and bytes remain the only path for old data.
+A ready durable v4 input defaults to Standard; only an explicit adaptive
+horizon selects Adaptive. Optional policy execution is not loaded by the
+minimal startup path. Entry-byte, action-count, and internal-interaction budgets
+remain release gates; installation and a real new-user canary bind the final
+exact SHA.
 
 ## P5.1 evidence boundary
 
@@ -136,10 +132,10 @@ P5.1 tests cover `UX-001`, `UX-010..016`, `CAP-INTAKE`, `CAP-ENTRY`, and
 `CAP-ARCHITECTURE` at the local source-entry level: four intake outcomes, seven
 report sections, zero-effect intake, five-file preparation, digest-bound
 confirmation, stale/expired/forged rejection, one canonical start, exact
-replay, non-interactive no-bypass, and policy/compat-unavailable minimal-profile
+replay, non-interactive no-bypass, and policy-unavailable minimal-profile
 isolation. They retain P5 coverage of `UX-002..005`, `UX-007`, and
 `H-011-a..d`: atomic startup-subject creation, exact strict Host binding,
 UNKNOWN without resend/binding, and cooperative-to-late-strict observation on
 the same Attempt. All provider behavior in these tests is synthetic. P5.1 does
 not claim `UX-006`, `UX-008`, or `UX-009`, installed usability, real Host
-completion, v3 migration safety, or release readiness.
+completion, public release, or support for v3 data.

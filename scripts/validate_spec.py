@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
 from typing import Any
-
-import yaml
-
 
 LEVELS = {"CORE_INVARIANT", "PUBLIC_CONTRACT", "PROVISIONAL", "IMPLEMENTATION_NOTE", "DEFERRED"}
 STATUSES = {"ACTIVE", "DEFERRED", "SUPERSEDED"}
@@ -28,33 +26,13 @@ PATH_FIELDS = {
 }
 
 
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """Safe YAML loader that rejects duplicate mapping keys."""
-
-
-def _construct_unique_mapping(
-    loader: _UniqueKeyLoader,
-    node: yaml.nodes.MappingNode,
-    deep: bool = False,
-) -> dict[Any, Any]:
-    mapping: dict[Any, Any] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in mapping:
-            raise yaml.constructor.ConstructorError(
-                "while constructing a mapping",
-                node.start_mark,
-                f"found duplicate key {key!r}",
-                key_node.start_mark,
-            )
-        mapping[key] = loader.construct_object(value_node, deep=deep)
-    return mapping
-
-
-_UniqueKeyLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-    _construct_unique_mapping,
-)
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -126,11 +104,11 @@ def validate(root: Path, index_path: Path | None = None) -> list[str]:
     index_path = index_path or root / "docs/spec/invariants.yaml"
     errors: list[str] = []
     try:
-        document = yaml.load(
+        document = json.loads(
             index_path.read_text(encoding="utf-8"),
-            Loader=_UniqueKeyLoader,
+            object_pairs_hook=_unique_object,
         )
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         return [f"index:unreadable:{exc}"]
     if not isinstance(document, dict) or document.get("schema_version") != 1:
         errors.append("index:schema_version_must_be_1")

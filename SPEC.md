@@ -1,306 +1,183 @@
-# loop-skill Specification
+# LoopSkill 4 specification
 
-This file is the short, normative entry point for loop-skill. It defines how
-the project preserves safety while its implementation, schemas, tests, and App
-integration evolve. Detailed protocol shapes remain in the linked public
-schemas and contracts; this file does not duplicate the state machine.
-
-## What this specification does not freeze
-
-The specification protects observable safety properties, not today's function
-names, modules, algorithms, file layout, prose, or tests. Current behavior is
-evidence, not proof that the behavior is correct. Current tests are executable
-checks, not an automatic source of truth. A bug fix may correct code, a stale
-test, and a mistaken specification statement in the same reviewed change.
-
-README files, examples, generated Packs, and marketing copy explain the
-project. They are not normative unless a normative source explicitly adopts a
-particular value or shape.
+This file is the short normative product entry for LoopSkill 4. Exact wire
+shapes come only from `protocol/v4/loopskill-v4.protocol.json`; reducer
+invariants, filesystem race defenses, and Host effect contracts remain
+separate implementation authorities for their own domains. No JSON Schema can
+express all state transitions, provenance, filesystem races, or external
+transactions.
 
 ## Normative levels
 
-- `CORE_INVARIANT`: a safety property whose violation can corrupt identity,
-  state, routing, evidence, or completion.
-- `PUBLIC_CONTRACT`: a stable externally observable schema, status, error, or
-  interface commitment.
-- `PROVISIONAL`: an intended direction that may change with evidence and is not
-  a release hard gate.
-- `IMPLEMENTATION_NOTE`: a current mechanism or design aid; equivalent safe
-  implementations are allowed.
-- `DEFERRED`: an intentionally unavailable capability or unresolved design;
-  it must fail closed where a public surface exists.
-
-Only active `CORE_INVARIANT` and stable `PUBLIC_CONTRACT` entries may be used as
-release hard gates. A provisional, implementation-note, or deferred entry may
-inform review, but cannot independently block an urgent repair or release.
+- `CORE_INVARIANT`: violation can corrupt authority, state, evidence, or
+  finalization.
+- `PUBLIC_CONTRACT`: stable user-visible behavior or supported interface.
+- `PROVISIONAL`: direction that is not independently a release claim.
+- `IMPLEMENTATION_NOTE`: replaceable mechanism.
+- `DEFERRED`: deliberately unavailable and fail-closed where surfaced.
 
 The machine-readable index is
-[`docs/spec/invariants.yaml`](docs/spec/invariants.yaml). It maps each property
-to its rationale, allowed evolution, sources, implementation surfaces, schemas,
-tests, evidence, and ADRs.
+[`docs/spec/invariants.yaml`](docs/spec/invariants.yaml). It indexes safety
+properties; it is not a wire schema, runtime writer, recovery registry, or
+second governance system.
 
-## Authority and conflict resolution
+## Authority
 
-For the question each source is designed to answer, use this order:
+For each question, use the source designed to answer it:
 
-1. Active core semantics in this SPEC and the invariant index.
-2. Public schemas and explicitly stable public errors/statuses for wire and
-   persisted shape.
-3. The Standard, Adaptive, and human-steering contracts for detailed protocol
-   semantics.
-4. Accepted ADRs for the reason and evolution boundary of a decision.
-5. Runtime implementation.
-6. Executable tests.
-7. README files, examples, generated output, and marketing material.
+1. typed protocol manifest for command/event/reference/receipt/capability/error
+   wire literals and fields;
+2. Kernel reducer for legal transitions and aggregate invariants;
+3. Store port/implementation for transaction, CAS, idempotency, outbox, backup,
+   and canonical export semantics;
+4. Artifact libraries for capture, path confinement, immutable blob identity,
+   and filesystem races;
+5. Codex Host Adapter contract for Host capability, receipt provenance,
+   create/read/send/readback, and external-effect execution;
+6. Entry and optional policy contracts for user interaction, planning, roles,
+   bounded repair, and human decisions;
+7. accepted ADRs for durable decisions and this SPEC for active safety
+   properties.
 
-This is not a rule that higher text is infallible. When evidence shows a higher
-source is unsafe, incomplete, or stale, fix that source and all affected lower
-surfaces together. Do not make code conform to a known specification bug.
-Public schemas remain authoritative for the exact data shape they publish;
-this SPEC remains authoritative for the semantic safety property. A conflict
-must be resolved explicitly in the change that discovers it.
+Generated schemas, API summaries, CLI types, and conformance fixtures consume
+the manifest; they cannot define parallel wire literals. README and examples
+explain the product but cannot grant authority.
 
-## Core contract families
+## Product boundary
 
-The active contract is organized by invariant family rather than by current
-module:
+The default composition is:
 
-- bounded single-frame structured transport and strict UTF-8 framing;
-- one business route per real host turn with host attestation;
-- schema-v3 MCP State Gateway as the sole canonical writer for new Adaptive
-  Packs, with explicit-only v1/v2 migration;
-- durable outboxes, receipts, replay, and lost-output recovery;
-- a read-only first-invocation dependency/identity doctor, compiled startup
-  manifest, manifest-bound lane/lifecycle receipts, and disposable
-  full-lifecycle canary before formal initialization; the MCP Gateway
-  materializes the formal startup receipt from a root-confined source;
-- a complete recovery registry and privacy-minimized, hash-chained append-only
-  rejection journal; recoverable states may not expose `WAIT` as their only
-  operation;
-- host-bound task/thread receipts, opt-in host model/reasoning receipts when an
-  exact identity is required, and explicit MCP install, restart, reconnect,
-  schema-refresh, and App-refresh capability receipts;
-- read-only `host_lifecycle_readback` derivation of those identities and
-  zero-active-call observations inside the host-attested serial dispatcher;
-  callers cannot supply counts, process identities, App build, or schema digest;
-- reviewed-artifact Git closeout with locked base identity, a clean index and
-  worktree for `NO_COMMIT`, and idempotent commit/push readback recovery;
-- schema-driven policy migration with retained history, safe points, bounded
-  values, approval, and rollback-or-stop semantics;
-- workflow state kept distinct from the achieved evidence completion class;
-- opt-in P1 canonical governance: Goal-bound defect families, mandatory
-  same-round Reviewer sibling and unchecked-surface disclosure, and
-  escalation-only handling from the third same-family return;
-- recoverable route sequencing that binds each external receipt and resumes
-  after the last acknowledged step without claiming network atomicity;
-- one canonical heartbeat identity registry and structured Supervisor repair
-  capabilities; identity drift or unauthorized repair fails closed;
-- privacy-safe aggregate measurement with explicit `UNMETERED` values and no
-  prompt, chat, task/thread ID, path, PII, secret, or raw-log export;
-- complete AST-derived recovery coverage across runtime, MCP, CLI, and codec
-  error boundaries; recoverable entries have one non-`WAIT` operation;
-- SHA-256 content-addressed writes for new projections, reports, and staging,
-  with readable legacy facades and no historical deletion;
-- derived audit index, per-Goal summaries, and business timeline that never
-  become a second canonical source, plus explicit dashboard separation of
-  business progress from control-plane activity;
-- recovery-derived copyable next-operation templates and consistent CLI
-  check/emit/JSON modes with stable exit envelopes;
-- privacy-safe risky-artifact classification, active-policy-only prompt
-  generation, and unified `archive-manifest-v2` with two legacy readers;
-- observation-only CI shadow replay, path classification, and structured
-  shard P50/P95/slowest telemetry without replacing the required final gate;
-- current-artifact, current-dispatch, PASS-report evidence binding;
-- bounded transport degradation and immutable successor handoff;
-- fenced leases and identity-preserving Pack migration;
-- bounded repair and fail-closed rejection with zero canonical, product, and
-  external side effects; the rejection-journal append is a declared audit
-  effect;
-- evidence claims bound to the exact artifact and environment;
-- real-Loop isolation;
-- completion only at canonical `FINALIZATION_ACKED`.
+`Entry → Kernel + one SQLite Store + Artifact libraries + one Codex Host Adapter`
 
-Schema-v3 additions are additive. v1/v2/v3 state remains readable and accepted
-historical events are never rewritten. A historical completed Goal without an
-evidence class projects as `COMPLETE_ARTIFACT`; an existing limitation terminal
-projects as `COMPLETE_WITH_LIMITATION`. The projection becomes explicit only
-on a later accepted state version. Evidence classes are categories, not an
-ordinal ladder: empirical, formal, and public claims each require their own
-bound authority receipt.
+Entry is the composition root. Kernel depends only on the typed protocol and
+ports. Store never controls Host; Host and Artifact implementations never write
+canonical state. One transactional authority may maintain orthogonal aggregate
+and event streams without collapsing them into one giant enum.
 
-The index gives the exact normative statements and source mappings. It is an
-index, not a second state schema.
+Kernel must not import Codex/App, Host enums, policy, compatibility/importer,
+UI/CLI, Git/subprocess, filesystem mutation, SQLite concrete code, Pack
+rendering, installer, or paper/Oracle apparatus. The v4 import graph is
+acyclic. Standard/Adaptive and advanced roles/repair/decision surfaces are
+optional policy and are removable from the minimal profile.
 
-## P2 operability contract
+## Entry and authority boundary
 
-Content addressing applies only to derived projection, report, and report
-staging writes. Canonical state, accepted events, rejection history, and
-transaction authority remain independently persisted. A facade points to an
-object whose SHA-256, size, owner, regular-file type, and permission class are
-verified; corruption or a symlink fails closed. A legacy ordinary file remains
-readable and is converted only when a later accepted write replaces it.
+The ordinary flow is `INTAKE → PREPARE → CONFIRM → START`.
 
-`audit-index.json`, `goal-summaries.json`, and `business-timeline.json` are
-reproducible projections of canonical state. Their business route counts are
-reported separately from canonical mutation counts. They cannot authorize a
-route, repair, closeout, or finalization.
+- Intake is read-only and creates no loop, Host task, heartbeat, or effect. It
+  returns exactly `READY_FOR_LOOP`, `NEEDS_CLARIFICATION`, `BLOCKED`, or
+  `DIRECT_TASK_RECOMMENDED` with the stable seven-section report.
+- Prepare writes only local typed manifest and human review artifacts. It has
+  zero Host/execution effects.
+- Confirm displays Goal, write scope, budget, external actions, acceptance,
+  stop, and publication boundaries. Authority binds every prepared digest;
+  content or boundary change invalidates it.
+- Start requires a valid unchanged confirmation before one canonical startup
+  Attempt. Noninteractive fallback cannot bypass confirmation.
 
-An active Controller prompt is generated from active policy only. Historical
-model and heartbeat policy text remains retained audit evidence but is removed
-before rendering, so stale prose cannot regain authority. The generated
-Controller bootstrap contains the machine-checkable singleton statement
-`当前 task 即唯一 Controller，禁止创建第二 Controller。`.
+Operation ID, protocol version, Actor/Grant, subject references, expected
+revision, receipt, digest, timestamp, and Host identity are machine-constructed,
+parsed, or verified. User/model input supplies semantic payload only. A control
+identity copied from model text receives no authority.
 
-Every new archive manifest has schema identity `archive-manifest-v2`, a
-self-excluding manifest digest, explicit privacy class, and inventories for
-Git, state, events, outboxes, roles, heartbeat, and files. Legacy flat and
-context-wrapped archives are read-only compatibility inputs. No archive or
-privacy-safe export makes raw prompts, chat, credentials, or private payload
-bytes public.
+## State and concurrency
+
+Concurrency uses per-loop revision CAS. Each accepted operation atomically
+commits operation receipt, snapshot, ordered events, and any outbox/Attempt
+record. Identical replay produces no second commit/event/handle/effect; the
+same operation ID with changed request bytes is an idempotency conflict.
+
+Lifecycle, Delivery/ExternalEffect, Goal, Result/Report, Artifact, Review,
+Finalization, and Assurance are orthogonal subjects. Canonical snapshots retain
+current Result, Report, and finalization subject bindings. `UNKNOWN` or
+`UNVERIFIABLE` assurance may coexist with a staged or acknowledged local Result;
+it cannot be relabeled strict completion.
+
+Terminal evidence is immutable. A successor may reference but never rewrite
+its predecessor. Pause/resume/stop and bounded repair are explicit CAS
+transitions; repair exhaustion leads to an external wait, human decision,
+honest limitation, or stop—never an unbounded Supervisor loop.
+
+## External effects and guarantees
+
+One durable `AttemptRef` owns one automatic attempt. Execution ownership and
+budget are committed before the provider call; after invocation starts, blind
+resend is forbidden. Crash windows distinguish local commit, provider invoke,
+lost response, local observation, and late authoritative readback.
+
+LoopSkill may claim:
+
+- exactly-once local acceptance for one operation ID and request;
+- deterministic local Store/outbox recovery after crash;
+- effectively-once external effect only when provider idempotency and
+  authoritative readback both apply;
+- otherwise at-most-one automatic attempt, with outcome possibly `UNKNOWN`.
+
+It does not claim an exactly-once transaction across SQLite, Codex, Git, or
+network boundaries. A late authoritative observation may strengthen the same
+Attempt/subject identity. It cannot authorize resend or fabricate history.
+
+Execution terminality and assurance are orthogonal. Cooperative work may
+honestly terminate with `LIMITATION`/`UNVERIFIABLE`; strict Host-attested claims
+still require authoritative readback.
+
+## Artifact, review, and finalization
+
+Canonical JSON/hash, content addressing, immutable blobs, report/evidence
+normalization, and Git/non-Git/new-Git capture are libraries behind ports.
+Capture rejects traversal, symlink, case-fold aliases, special files,
+unbounded input, and open/read races. Binary, untracked, empty-diff, add/modify/
+delete, and before/after identity remain explicit.
+
+Artifact correctness, workflow closure, Host assurance, external-effect
+finalization, empirical result, and public release are separate claims. Review
+PASS/REPAIR/LIMITATION binds the exact current artifact/dispatch/report chain.
+Finalization preparation, readback, and acknowledgement preserve that chain;
+duplicate finalization is idempotent.
+
+## Projections and privacy
+
+Status, Doctor, audit index, rejection view, summaries, business timeline,
+archive, risk scan, privacy export, and metrics are rebuildable read-only
+projections. They cannot become a second ledger, writer, retry authority, or
+recovery registry. Actionable recovery text derives from typed errors and
+capabilities.
+
+Privacy-safe export excludes prompts, chat, raw Host task/thread/turn identity,
+private paths, PII, secrets, and raw logs. Risk scan exports categories and
+digests, not credential bytes.
+
+## v3 hard break
+
+LoopSkill 4 preserves v3 safety semantics by redesign, not runtime
+compatibility. It ships no v3 importer, repair, read/shadow path, Pack runtime,
+legacy CLI alias, MCP State Gateway, State-Writer, 97-field write API, dual
+write, or automatic migration. A recognized v3 root/state/Pack receives stable
+`USER_UNSUPPORTED_LEGACY_VERSION`, a direct v3.3.8 link, and zero writes.
+
+The independent v3.3.8 tag/Release and historical evidence remain unchanged.
+Old P6 compatibility implementation/evidence is predecessor evidence and is
+excluded from v4 release acceptance.
+
+## Distribution and release
+
+v4 installs under a distinct receipt-bound identity. Install/uninstall never
+add, change, or remove `[mcp_servers.*]`, preserve existing Codex `config.toml`
+bytes, require no LoopSkill-specific App restart, and never overwrite an
+independent v3 install. Conflict and drift fail before mutation; bounded
+process-fault windows recover to exact pre-state or exact committed post-state.
+
+A public release requires deterministic tests, full corpus and fault gates,
+architecture/anti-bloat/preservation validators, Linux/macOS isolated install,
+documentation parity, privacy/security/dependency/SBOM checks, exact-SHA local
+Codex App canary, independent review, green PR/main/tag CI, annotated tag, and
+public GitHub Release readback. No single gate implies patch-success or
+long-horizon efficacy.
 
 ## Safe evolution
 
-An implementation may be replaced without an ADR when the active invariant and
-public contract remain true. Normal refactors may move functions, rename
-private symbols, reorganize modules, or replace tests. They update the index
-only when a referenced surface changes.
-
-Use an ADR when changing a durable design decision, its trade-off, or its
-replacement boundary. An ADR records why; it does not override an active core
-invariant by itself. Replace a decision with a new ADR, mark the old ADR
-`Superseded`, and update affected index entries in the same change. Do not edit
-accepted history to imply the new decision always existed.
-
-Changing a stable public shape or error requires the normal compatibility and
-release process. Adding a new capability starts as `PROVISIONAL` or `DEFERRED`
-until its safety boundary and evidence are established. Promotion to
-`CORE_INVARIANT` or `PUBLIC_CONTRACT` requires a normative statement, an
-authoritative source, an executable test, and review of migration and backward
-compatibility.
-
-## Bug classification and fast path
-
-Classify a discovered problem before deciding which artifacts to change:
-
-- **A — implementation bug:** behavior violates an active core invariant or
-  stable public contract. Fix implementation and tests; update docs only when
-  they are stale.
-- **B — specification bug:** the written rule would require unsafe or
-  demonstrably wrong behavior. Fix the specification, affected tests, and code
-  together; never preserve a bad rule merely because it is written here.
-- **C — compatible evolution:** core semantics and public contracts remain
-  true. Treat the work as a refactor or implementation change, not a protocol
-  migration.
-- **D — capability or contract change:** the proposal adds behavior or changes
-  an external commitment. Give it an explicit level, compatibility analysis,
-  and, when it changes a durable decision, an ADR.
-
-P0/P1 safety and correctness fixes use a fast path. They do not wait for a
-large SPEC rewrite, a new ADR number, or unrelated documentation cleanup. The
-same pull request may correct the smallest affected SPEC/index statement and
-stale tests. The fast path never waives identity, side-effect, exact-artifact,
-review, or evidence gates.
-
-## Validation boundary
-
-`scripts/validate_spec.py` performs structural checks only: required fields,
-legal enums, unique identifiers, valid repository references, core test/source
-coverage, ADR existence, duplicate mappings, and simple reference cycles. It
-does not judge runtime behavior, bind line numbers or function names, require
-ADRs for normal refactors, freeze current tests, or block P0/P1 work on
-noncritical documentation.
-
-Behavioral correctness remains the responsibility of focused tests, exact
-artifact review, and the evidence process in [`docs/RELEASING.md`](docs/RELEASING.md).
-
-## Schema-v3 State Gateway boundary
-
-For a new Adaptive Pack, the installed MCP `state_gateway` is the only writer
-of canonical control-plane state. Controller, Worker, Reviewer, Local Verifier,
-and any external Supervisor have no authority to patch `.codex-loop/**` or
-create a session State-Writer. The public route sequence is `INITIALIZE` or
-`INITIALIZE_SUCCESSOR`, narrow host-cooperative bootstrap `REGISTER_TASK` /
-`REGISTER_HEARTBEAT`,
-`PREPARE_ROUTE`, `RECORD_ROUTE_SENT`, and `ACK_ROUTE_RESULT`; `REPORT_RECOVERY`
-may ACK the same existing outbox after a lost task index or stdout, but cannot
-create another product dispatch. `ADVANCE_ROADMAP` derives a nonfinal next Goal
-from the unchanged canonical registry. `PREPARE_FINALIZATION` followed by an
-actual `automation_update` pause and readback, bound to the host-attested
-Controller turn, and `ACK_FINALIZATION` is the schema-v3 finalization path.
-`PREPARE_FINALIZATION` leaves `terminal_status` null and creates only a
-PREPARED finalization outbox; only the pause/readback-bound ACK creates the
-terminal projection. Schema v3 is host-cooperative rather than Byzantine: it
-binds real App return values and readback to the current host-attested
-Controller turn, but does not claim a provider-signed subtool result which the
-App does not expose. Model identity is an opt-in guarantee. When neither the
-manifest nor a Goal declares `required_model` or `required_reasoning`,
-registration records `model_identity_requirement=NOT_REQUIRED`,
-`model_identity_status=NOT_APPLICABLE`, and `UNSPECIFIED` model/reasoning
-values. It does not request or imply a model receipt, and this capability does
-not participate in readiness. When either constraint is explicit, registration
-uses `model_identity_requirement=REQUIRED`; missing host support is
-`model_identity_status=HOST_BLOCKED` and fails closed. Strict registration requires a non-argument
-`_meta.x-codex-app-action-receipt-v1` carrier with schema version 1, action
-`THREAD_CREATE_OR_READ`, the current source thread and turn, and an exact result
-binding task/thread, role/bootstrap role, bootstrap prompt digest, worktree,
-model, reasoning, App build, and evidence model. Missing, extra, cross-turn, or
-cross-task values fail before canonical mutation. This v1 contract is
-`HOST_COOPERATIVE`, not a cryptographic signature; `APP_SIGNED` remains reserved
-for a future signed envelope with independent signature verification.
-For `RECORD_ROUTE_SENT`, the Controller submits only the returned target thread
-id and observation time from one real send. Gateway compares that target to the
-single PREPARED outbox and supplies the canonical exact materialized
-`payload_digest`; a bare route id, wrong returned target, stale outbox, or a
-present-but-mismatched stronger receipt leaves the route unchanged. Send
-observation never itself creates PASS.
-`RECORD_TRANSPORT_OBSERVATION` likewise binds a real registered-heartbeat
-observation to the active heartbeat identity, fingerprint, outbox and observed
-time. It cannot fabricate a natural observation without that registered
-identity; the optional stronger receipt is validated when present.
-Once that threshold reaches `WAITING_TRANSPORT_RECOVERY`, every
-`PREPARE_ROUTE` rejects with zero side effects. Existing staged reports and the
-original failed outbox remain available only to their bounded recovery/ACK
-operations; no new product or report-only dispatch is created. After that
-retained outbox is completed/ACKed and its route is recovered/ACKed,
-`ACK_TRANSPORT_RECOVERY` requires an ACTIVE update/readback for the same
-registered heartbeat and atomically restores `RUNNING`. It preserves the
-historical failure count and cannot create PASS, a dispatch, or a repair
-attempt; an unresolved/foreign outbox or wrong heartbeat receipt is zero-effect.
-Its public `parameters` are exactly
-`{active_automation_receipt:{automation_id,status,automation_name,kind,target_thread_id,rrule,prompt_digest,prompt_normalization,observed_at}}`;
-`status` is `ACTIVE`, `kind` is `HEARTBEAT`, and every identity field must match
-the registered heartbeat. The Gateway derives the current source turn; Pack
-callers do not copy it.
-Because the App update necessarily precedes the Gateway ACK, a rejection is
-classified from the post-call canonical state with `routing_permitted=false`.
-If canonical is still WAITING/PAUSED, it returns
-`PAUSE_SAME_HEARTBEAT_AND_READBACK` and the host immediately performs that
-rollback. If a concurrent/idempotent recovery already left canonical
-HEALTHY/RUNNING, it returns `READ_STATE_ALREADY_RECOVERED` and the host must not
-pause. If canonical cannot be read, it returns
-`READ_STATE_AND_RECONCILE_HEARTBEAT`; no route is legal before reconciliation.
-Target role reports likewise require the target's MCP-attested `STAGE_REPORT`
-call before the Controller can ACK them. A Worker PASS may bind exact validation
-files through `evidence_sources`; runtime reads them only from the registered
-target worktree, stages immutable bytes, and the Gateway archives those bytes
-atomically with the report on the original outbox. An unarchived, unreferenced,
-wrong-digest, wrong-thread, or stale evidence file has no canonical side effect.
-One report may introduce at most 15 evidence files so the report plus evidence
-bundle remains within the canonical 16-artifact transaction bound; every file
-is size-checked before bounded reading, and any case-insensitive alias of a
-`.codex-loop/**` source is forbidden.
-v3 disables native Goal adapters and
-records `GATEWAY_NO_NATIVE_GOAL` as a local sentinel, never an external
-Goal-tool receipt.
-
-The Gateway, rather than Controller-assembled payloads, derives current
-freshness, validation, review handoff, artifact identity, route lease and
-outbox. A PASS projection is valid only for the same Goal's current artifact,
-current Worker dispatch and PASS formal report. `BLOCKED`, stale artifact, or
-stale dispatch evidence is non-PASS.
-
-Schema v1/v2 State-Writer state remains readable for audit and can move to v3
-only by an explicit paused/quiescent `MIGRATE_V2_TO_V3`. A terminal predecessor
-is immutable evidence; a continuation has a new root and uses
-`INITIALIZE_SUCCESSOR`. The exact additional invariants and their executable
-surfaces are in the index and ADR 0010.
+Fix implementation and tests when behavior violates an active contract. Fix
+the specification as well when evidence shows the written rule is unsafe.
+Changing stable wire shape, user authority, v3 data safety, or public claim
+boundary requires an explicit reviewed product decision. Never change metrics,
+fixtures, exclusions, or expected results to obtain a preferred PASS.

@@ -1,40 +1,34 @@
-# LoopSkill 4 migration and rollback boundary
+# LoopSkill 4 hard boundary and rollback
 
-This document is normative for the local 4.0 RC candidate.
+LoopSkill 4 uses semantic preservation with a runtime hard break.
 
-## Installation rollback
+## No v3 migration
 
-- RC acceptance installs only under an explicitly created disposable
-  `CODEX_HOME`; it never overwrites the current user installation.
-- The installer stages the complete Skill, validates it, backs up prior Skill
-  and config bytes outside the scan root, atomically publishes the staged
-  directory, registers one exact absolute Python/MCP bridge, and verifies
-  source/install byte identity.
-- A registration conflict or interrupted process restores the prior Skill and
-  config. The P8 uninstaller consumes the exact install receipt and backup;
-  drift fails before mutation. It does not edit TOML by heuristic reversal.
-- Filesystem power-loss atomicity across both directory and config publication
-  is not claimed. The supported claim is bounded process-failure rollback with
-  exact pre/post readback on the tested macOS filesystem.
+v4 does not ship v3 read/shadow/import, existing-Pack repair, legacy CLI aliases,
+the v3 97-field write API, Controller Pack execution, MCP State Gateway, or
+State-Writer. It does not probe a v3 root for partial activation. A recognized
+v3 root/state/Pack receives stable `USER_UNSUPPORTED_LEGACY_VERSION`, a direct
+[v3.3.8 release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)
+link, and zero writes.
 
-The registered v3 MCP bridge is a one-major-cycle compatibility facade for old
-loops. It is not the v4 machine protocol truth, a v4 Kernel dependency, or a
-second v4 writer.
+Historical P6 compatibility code and evidence are predecessor artifacts only.
+They are excluded from v4 release acceptance and are not installed.
 
-## v3 data migration
+## v4 installation identity
 
-Only copied public or synthetic fixtures may be used before author approval:
+The v4 installer owns `$CODEX_HOME/skills/loopskill4`,
+`$CODEX_HOME/install-receipts/loopskill4`, and bounded v4 staging paths. It
+never adds, changes, or removes `[mcp_servers.*]`; it preserves existing
+`config.toml` bytes; it never overwrites `$CODEX_HOME/skills/codex-loop-prompt-architect`.
+An occupied v4 target with different bytes fails before publication.
 
-1. dry-run and shadow-read old bytes;
-2. require paused, lease-free, outbox-quiescent safe point;
-3. present preview and obtain explicit digest-bound confirmation;
-4. write a new v4 store/root once;
-5. leave the v3 bytes unchanged and readable by the v3 runtime.
+## Rollback
 
-Cancel, a non-empty destination, active lease/outbox, dual-write request, or
-terminal revival fails closed. Rollback means using the untouched v3 bytes and
-runtime; v4 does not reverse-convert its state into the v3 97-field write API.
+Uninstall consumes one exact receipt and refuses drift. Before commit, any
+process fault restores the exact installed bytes; after commit, the exact
+committed state has no v4 target. Config bytes and any independent v3 install
+remain unchanged in both cases.
 
-Compatibility read/shadow/import and the legacy natural-language entry remain
-for one major cycle. Their sunset requires separate author approval and usage
-evidence. No real v3 loop is implicitly discovered, modified, or migrated.
+Rollback means uninstalling v4 and continuing to use an independently installed
+v3.3.8 when desired. v4 never reverse-converts, repairs, restores, or migrates
+v3 data.

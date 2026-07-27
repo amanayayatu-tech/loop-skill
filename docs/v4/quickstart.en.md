@@ -1,57 +1,72 @@
-# LoopSkill 4 local-candidate quickstart
+# LoopSkill 4 quickstart
 
-Status: isolated RC acceptance only. It is not released, not installed over the
-current user environment, and not authorized to migrate a real v3 loop.
+Status: 4.0.0 candidate. It is not a published stable release until the tag and
+GitHub Release exist.
 
-## Normal user path
+## Install
 
-Create one UTF-8 JSON file containing semantic requirements only. Do not enter
-thread, task, route, effect, artifact, review, finalization, receipt, SHA,
-schema, or Host-enum identities.
-
-```json
-{
-  "goal": "Complete and verify one small change in a disposable example directory",
-  "task_horizon": "long",
-  "write_scope": ["disposable-example"],
-  "budget": "20 minutes; no network or publish",
-  "external_actions": [],
-  "acceptance_criteria": ["focused tests pass", "result is independently reviewed"],
-  "stop_conditions": ["stop on unknown external state"],
-  "authorization_boundaries": ["no commit, push, publish, deploy, or real-user data"]
-}
-```
-
-Run one main entry from the isolated installation:
+Requirements: macOS or Linux, Git, and Python 3.11–3.14. Runtime dependencies
+are standard-library only.
 
 ```bash
-loopskill4 start goal.json
+git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+cd loop-skill
+bash scripts/install.sh
+LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
+"$LOOPSKILL4" --help
 ```
 
-The same interaction runs `INTAKE → PREPARE → CONFIRM → START`. Intake and
-prepare have zero Host/execution effects. Confirm displays the Goal, write
-scope, budget, external actions, acceptance criteria, stop conditions, and
-publication boundary. Start accepts only an explicit confirmation bound to the
-digest of every prepared artifact.
+The installer writes only `$CODEX_HOME/skills/loopskill4` and its v4-owned
+receipt/staging paths. It does not read or write `config.toml`, register MCP,
+overwrite an independent v3 installation, or require a Codex restart for
+LoopSkill 4.
 
-One main command means one entry, not silent authorization. A non-interactive
-run stops after preparation and requests explicit confirmation.
-`DIRECT_TASK_RECOMMENDED` creates no Loop.
+## One goal, one entry, four visible phases
 
-The four phases can also be invoked separately:
+The normative order is `INTAKE → PREPARE → CONFIRM → START`.
+
+Copy the [v4 Standard example](../../examples/v4-standard-input.json), or
+create UTF-8 JSON containing semantic requirements only. The count of
+user-supplied control identities must be zero.
 
 ```bash
-loopskill4 intake goal.json
-loopskill4 prepare goal.json --output /tmp/loopskill4-prepared
-loopskill4 confirm /tmp/loopskill4-prepared
-loopskill4 start /tmp/loopskill4-prepared --root /tmp/loopskill4-root
+"$LOOPSKILL4" start examples/v4-standard-input.json
 ```
 
-Normal status shows only Goal, progress, result, limitations, and next action.
-Internal machine identity appears only with explicit `--diagnostics`.
-`UNKNOWN` and `UNVERIFIABLE` are honest visible limitations and never trigger a
-blind automatic resend.
+The entry performs:
 
-Standard is the default bounded Goal Queue for a minimal long-running task.
-Adaptive policy is loaded only after Intake explicitly selects it; users do
-not need to install or understand a policy pack.
+1. `INTAKE`: strictly read-only; returns `READY_FOR_LOOP`,
+   `NEEDS_CLARIFICATION`, `BLOCKED`, or `DIRECT_TASK_RECOMMENDED`.
+2. `PREPARE`: writes a typed manifest, human plan, Chinese instructions, and
+   boundary summary with 0 Host tasks, 0 heartbeats, and 0 delivery.
+3. `CONFIRM`: displays Goal, write scope, budget, external actions, acceptance,
+   stop, and publication boundaries; confirmation binds every prepared digest.
+4. `START`: accepts only an unchanged valid confirmation and machine-creates
+   and reads back at most one Host resource.
+
+One entry does not mean silent authorization. A non-interactive session stops
+after PREPARE. Changed boundaries, expired confirmation, or vague “continue”
+fail closed.
+
+## Explicit phases
+
+```bash
+"$LOOPSKILL4" intake examples/v4-standard-input.json
+"$LOOPSKILL4" prepare examples/v4-standard-input.json --output ./prepared-loop
+"$LOOPSKILL4" confirm ./prepared-loop
+"$LOOPSKILL4" start ./prepared-loop --root ./loopskill4-data
+"$LOOPSKILL4" status --root ./loopskill4-data
+```
+
+`confirm` requires an exact interactive confirmation. Normal status hides
+internal identity; add `--diagnostics` for diagnostic evidence.
+`UNKNOWN`/`UNVERIFIABLE` are intentional visible limitations, not success, and
+never trigger blind resend.
+
+## v3
+
+v4 does not open, import, repair, or run v3 loop/Pack/state data. It performs
+zero writes on v3 input and links to
+[v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8).
+There is no automatic migration; continue using v3.3.8 independently when old
+data is required.

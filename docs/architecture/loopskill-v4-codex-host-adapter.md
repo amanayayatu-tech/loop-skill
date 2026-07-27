@@ -92,12 +92,11 @@ projectless App canary was created in a dedicated disposable root. It was not
 attached to this repository, a v3 loop, a user project, or paper data. It made
 no tool call and performed no file mutation.
 
-- task: `019fa28f-0351-7fa1-a10a-ec3836fe4f71`
-- host: `local`
-- root: `/Users/peachy/Documents/Codex/2026-07-27/loopskill-v4-p4-disposable-canary-20260727`
-- turn: `019fa28f-09a7-74d2-8fe7-ce9d914755e3`
+- task/turn identity: retained only in private local evidence; omitted here
+- host class: `local`
+- root class: dedicated disposable root; absolute path omitted
 - observed duration: 7,129 ms
-- exact readback: `CANARY_NONCE=loopskill-v4-p4-20260727-0001\nCANARY_STATUS=OBSERVED`
+- readback SHA-256: `210bf4cd5f27f8e12bb0c0d4245318980b0aead3189f633ef43b28ec8ff4199c`
 - completion error: absent
 - tool marker: absent
 

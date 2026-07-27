@@ -1,62 +1,56 @@
-# LoopSkill 4 RC acceptance boundary
+# LoopSkill 4 release acceptance boundary
 
-`LOOPSKILL_4_0_RC_READY_FOR_AUTHOR_APPROVAL` means a fixed local candidate SHA
-passed the frozen corpus. It does not mean stable, released, pushed, tagged,
-published, installed for the user, or effective for long-horizon tasks.
+LoopSkill 4.0.0 is publicly released only after the exact merged-main commit,
+annotated `v4.0.0` tag, tag CI, and public GitHub Release have all been read
+back. A local candidate, RC packet, App canary, pushed branch, merged PR, or tag
+alone is not a release.
 
-The exact candidate gate requires:
+## Candidate gates
 
-- all v4 protocol, store, artifact, Adapter, Entry, compatibility, policy,
-  projection, distribution, fault, liveness, cost, UX and preservation tests;
+- every v4 protocol, Store, Artifact, Adapter, Entry, policy, projection,
+  distribution, fault, liveness, cost, UX, preservation, and hard-break case;
 - acyclic import graph, one writer, generated wire literals, and minimal-profile
-  execution with policy/compat unavailable;
-- isolated install, source/install drift zero, exact Python and MCP registration
-  readback, install conflict rejection, bounded rollback and uninstall;
-- risk scan, privacy aggregate, secret and large-artifact scan, dependency and
-  license inventory, and a machine-readable SBOM;
-- one disposable, non-research App canary on the exact candidate:
-  intake has zero side effect, prepare has zero Host effect, explicit
-  digest-bound confirmation precedes one machine-owned task start/readback,
-  and a minimal artifact/review/finalization reaches acknowledged closure;
-- an independent read-only security, privacy, artifact, architecture and
-  preservation review bound to the same SHA;
-- an author packet containing every receipt, limitation, `UNKNOWN`, rollback
-  instruction, compatibility statement and draft release note.
+  execution with optional policy unavailable;
+- v4-only isolated install/uninstall on Linux and macOS, source/install drift
+  zero, `config.toml` byte-identical, zero MCP registration/process, no
+  LoopSkill-required App restart, conflict rejection, and fault rollback;
+- privacy-safe risk/audit/archive/metrics, secret/private-path/raw-identity/
+  large-artifact scan, dependency/license inventory, and SBOM;
+- bilingual README parity, real command syntax/smoke, local links, exact
+  4.0.0 version/changelog/release-note identity, and no stale v3 current-product
+  wording;
+- one disposable, non-research Codex App canary on the exact candidate:
+  zero-effect intake and prepare, explicit digest-bound confirmation, one
+  machine-owned task start/readback, minimal artifact/review/finalization, no
+  MCP, no restart, no provider resend, and no real v3/user/private data;
+- independent read-only architecture, UX, installer, CI, privacy, artifact,
+  preservation, and documentation review bound to the same SHA.
 
-Use `scripts/validate_v4_rc.py --static-only` only before the App canary; it
-always emits `rc_ready=false`. Final invocation omits that flag and must provide
-`--canary-receipt`, `--conformance-receipt`, and `--author-packet`; any missing
-receipt is a hard failure. `scripts/run_v4_conformance.py` emits one result for
-each of the 343 frozen case IDs after running each bound concrete unittest
-method exactly once and binding its frozen case parameter; zero-test loads,
-skips, foreign case IDs, changed catalog digests, and unbound results fail.
+## Conformance and receipts
 
-The disposable canary must import the canonical encoder from the typed
-protocol authority (`loop_architect.v4_alpha.protocol.canonical_bytes`). A
-canary instruction that names an unbound helper module is apparatus failure,
-not product PASS: preserve the failed receipt, do not retry that candidate, and
-fix the instruction contract before creating a new exact candidate.
-The harness must consume the frozen vertical event sequence from the typed
-fixture authority; it must not restate a generic finalization event alias. The
-authoritative strict terminal event is validated through that generated/frozen
-sequence, keeping canary apparatus from becoming another wire-literal source.
-After repeated App-authored fixture interpretation failures, the only allowed
-canary interface is
-`loop_architect.v4_alpha.vertical.verified_vertical_evidence()`. That existing
-typed fixture authority self-validates snapshot bytes/digest, exact event
-sequence and closure before returning an identity-free summary. The App must
-not rebuild a verifier, index event objects, or restate snapshot keys.
-Before task creation, the orchestrator creates and attests one empty disposable
-canary-work root. The task may create descendants only inside that existing
-root. A prompt that leaves parent creation ambiguous is apparatus failure and
-does not authorize retrying the same candidate.
-The canary validates the typed manifest's shape and digests without copying or
-reporting its machine-generated references. The non-disclosure gate applies to
-ordinary boundary/plan/instructions/status views; it does not forbid internal
-machine identity from existing in the typed manifest. A prompt requiring both
-full manifest inspection and zero observation of those fields is contradictory
-apparatus, not a product gate.
+`scripts/run_v4_conformance.py` emits one result for each frozen case ID after
+running its bound unittest. Zero-test loads, skipped required tests, foreign
+case IDs, changed catalog digests, and missing results fail. The real App
+canary consumes typed fixture authorities instead of reconstructing protocol
+literals, and its public receipt contains no absolute private path, task/thread/
+turn identity, prompt, transcript, secret, or raw log.
 
-Any code change creates a new candidate SHA and reruns affected gates. Failure
-and `UNKNOWN` evidence stays in the packet. The author alone decides whether a
-future candidate may be tagged or publicly released.
+Historical P6 compatibility and earlier P8 candidate evidence remain immutable
+predecessor evidence only. They are explicitly excluded from current v4
+acceptance. The active release gate requires the stable zero-write
+`USER_UNSUPPORTED_LEGACY_VERSION` boundary and absence of v3 importer/runtime/
+MCP/Pack/State-Writer/dual-write production surfaces.
+
+## Publication gates
+
+Before external Git writes, fetch origin/tags, integrate any main drift
+non-destructively, confirm intended clean diff and no v4.0.0 tag/Release, and
+rerun affected gates. The feature branch must pass v4 PR CI before a
+non-destructive merge. The merged-main SHA is separately verified and canaried,
+then annotated tag CI must pass before creating GitHub Release 4.0.0 as latest
+and non-prerelease.
+
+Final readback binds Release URL, tag object and peeled commit, verified main
+commit, tag CI, asset names/sizes/digests, default branch, and unchanged v3
+tags/Releases. Failures and `UNKNOWN` remain visible; none may be removed or
+retried merely to obtain PASS.

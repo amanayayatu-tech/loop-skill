@@ -1,21 +1,28 @@
-# LoopSkill 4 RC known limitations
+# LoopSkill 4 known limitations
 
-- The candidate does not prove improved patch success, long-horizon
-  superiority, or production effectiveness.
-- Codex is the only supported Host Adapter. The Kernel is host-neutral, but no
-  multi-host claim is allowed before a second real Adapter passes conformance.
-- Codex does not expose a transaction shared with local SQLite. Cross-system
-  exactly-once is not claimed; some outcomes remain `UNKNOWN` or
-  `UNVERIFIABLE`.
-- Host memory isolation is reported only as available, unavailable, or
-  unverifiable. The Adapter does not invent isolation the Host cannot attest.
-- SQLite conformance covers the tested local macOS filesystem, bounded writer
-  contention, backup/readback and corruption cases. It is not a distributed
-  database claim.
-- v3 compatibility is read/shadow/import/export only and sunsets after one
-  major cycle subject to a separate author decision. There is no canonical
-  dual write or reverse conversion.
-- The public stable line remains v3.3.8. This local candidate is neither tagged
-  nor released and must not replace the current user installation.
-- The one real App canary is a disposable conformance/usability observation,
-  not research evidence or a guarantee for arbitrary real projects.
+- Only the Codex Host Adapter is supported in 4.0. The Kernel is host-neutral,
+  but there is no multi-host support claim before a second real Adapter passes
+  conformance.
+- SQLite and Codex do not share one transaction. LoopSkill does not promise
+  cross-system exactly-once across SQLite, Codex, Git, or network boundaries.
+  External outcomes can remain `UNKNOWN`.
+- Cooperative Host evidence can close work with a visible limitation, but it
+  cannot become strict Host-attested assurance. Missing capability is reported
+  as unavailable or `UNVERIFIABLE`.
+- Host memory isolation is represented only to the strength the Host actually
+  exposes. LoopSkill cannot prove isolation the Host cannot attest.
+- The artifact libraries enforce tested path, symlink, case-fold, special-file,
+  size, and open/read-race boundaries. They are not a general filesystem
+  sandbox or a distributed content store.
+- Standard and Adaptive policy constrain sequencing and repair; they do not
+  prove the target task is achievable or that a model will produce a correct
+  patch.
+- Repository tests and a disposable App canary do not prove empirical
+  patch-success superiority, arbitrary long-horizon efficacy, or production
+  reliability for every project.
+- v4 cannot open, import, repair, run, or automatically migrate v3 roots,
+  state, Controller Packs, MCP state, or CLI data. Use the independent
+  [v3.3.8 release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)
+  for old data.
+- Uninstall removes only receipt-bound v4 files. It does not restore or convert
+  v3 data and does not alter unrelated Codex configuration.

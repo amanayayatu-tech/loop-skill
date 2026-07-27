@@ -1,32 +1,54 @@
-# LoopSkill 4 RC architecture map
+# LoopSkill 4 architecture map
+
+Release boundary: v4-only. There is no v3 importer, legacy Pack runtime, MCP
+State Gateway, State-Writer, Supervisor, or canonical dual write.
 
 ```text
-Public Entry / composition root
-  ├─ typed semantic Intake and digest-bound Prepare/Confirm
-  ├─ Kernel ──> typed protocol + Store/Artifact/Host ports only
-  ├─ SQLite Store ──> sole canonical transactional writer
-  ├─ Artifact libraries ──> existing-Git / non-Git / new-Git capability ports
-  ├─ Codex Host Adapter ──> task/thread/send/readback/capability receipts
-  ├─ optional Policy ──> Standard / Adaptive / role / repair / human decision
-  ├─ rebuildable projections ──> status/audit/archive/privacy/metrics/Doctor
-  └─ one-major-cycle compatibility ──> v3 read/shadow/import and human exports
+Entry / composition root
+  ├─ Intake → Prepare → Confirm → Start
+  ├─ deterministic Kernel
+  │    └─ typed protocol + Store/Artifact/Host ports only
+  ├─ SQLite Store
+  │    └─ one canonical transactional writer and outbox truth
+  ├─ Artifact / review / finalization libraries
+  │    └─ existing-Git, non-Git, new-Git capability implementations
+  ├─ Codex Host Adapter
+  │    └─ task/create/read/send/readback and capability receipts
+  ├─ optional Policy
+  │    └─ Standard, Adaptive, roles, decisions, bounded repair
+  └─ rebuildable projections
+       └─ status, Doctor, audit, archive, privacy, metrics
 ```
 
-The Store does not call Host. Artifact and Host implementations do not write
-canonical state. Policy submits authorized semantic commands only. Projection
-deletion loses no authority. Compatibility cannot import into Kernel and never
-dual-writes. The complete v4 import graph is acyclic and the minimal entry path
-loads neither optional policy nor v3 compatibility.
+## Dependency rules
 
-External effects follow one durable Attempt identity. The executor claims that
-Attempt once, consumes the one automatic-attempt budget immediately before the
-provider call, and never reconstructs identity from model text or memory.
-Provider idempotency plus authoritative readback permits “effectively-once”;
-otherwise the only claim is “at-most-one automatic attempt; outcome may be
-UNKNOWN.” A late authoritative observation may resolve the same UNKNOWN
-subject but cannot authorize resend or rewrite a terminal disposition.
+- Kernel imports only protocol and port abstractions. It cannot import Codex,
+  App enums, policy, UI/CLI, Git/subprocess, filesystem mutation, SQLite
+  concrete code, Pack rendering, installer, or research apparatus.
+- Store never calls Host. Host and Artifact implementations never write
+  canonical state. Entry composes them and submits typed semantic commands.
+- One canonical authority may keep orthogonal aggregate and event streams. It
+  does not collapse Lifecycle, Goal, Result/Report, Artifact, Review,
+  Finalization, Delivery, and Assurance into one giant enum.
+- Optional policy is removable: the minimal entry still performs the complete
+  four-phase path and honest `UNKNOWN`/`UNVERIFIABLE` handling without it.
+- Projections are rebuildable and read-only. They cannot authorize recovery or
+  become another ledger.
 
-The v4 canonical state keeps orthogonal Lifecycle, Delivery/ExternalEffect,
-Goal, Result/Report, Artifact, Review, Finalization and Assurance subjects under
-one transactional authority. One authority does not mean one giant enum or one
-physical event stream.
+## External effects
+
+The Store durably records one `AttemptRef` before execution ownership is
+claimed. The automatic attempt budget is consumed immediately before the Host
+call. Provider idempotency plus authoritative readback supports only an
+effectively-once statement. Without both, the contract is at-most-one automatic
+attempt and the outcome may be `UNKNOWN`; the system does not resend. A late
+authoritative observation can strengthen the same subject identity but cannot
+invent a new attempt or rewrite workflow history.
+
+## State and evidence
+
+Local operation acceptance is exactly-once for the same operation ID and
+request bytes. Per-loop CAS rejects stale revisions. Snapshot, events,
+operation receipt, outbox, and current Result/Report/finalization bindings
+commit atomically. Artifact correctness, workflow terminality, Host assurance,
+and public release are distinct claims with distinct evidence.

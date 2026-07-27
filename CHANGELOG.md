@@ -5,6 +5,54 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-07-27
+
+### Breaking changes
+
+- LoopSkill 4 is a v4-only runtime hard break. It cannot open, import, repair,
+  run, or automatically migrate v3 loops, Controller Packs, MCP state, or old
+  CLI data. Recognized v3 input receives a stable zero-write
+  `USER_UNSUPPORTED_LEGACY_VERSION` error with a direct v3.3.8 release link.
+- Removed the v3 MCP State Gateway/State-Writer runtime, Pack execution path,
+  v3 importer/repair, legacy CLI aliases, 97-field canonical write surface,
+  canonical dual write, and Supervisor-style recovery control.
+- The default install identity is now `$CODEX_HOME/skills/loopskill4`; it does
+  not replace an independent v3 installation.
+
+### Added
+
+- Added one typed protocol manifest and generated Python/JSON Schema/API
+  consumers, with deterministic reducer invariants and separated Host effect
+  contracts.
+- Added one SQLite canonical state authority with per-loop CAS, operation
+  idempotency, atomic snapshot/event/outbox commits, deterministic export,
+  backup/readback, corruption detection, and bounded contention tests.
+- Added capability-isolated existing-Git, non-Git, and new-Git artifact
+  capture; exact artifact/report/review/finalization binding; and path,
+  symlink, case-fold, special-file, size, and race rejection.
+- Added one Codex Host Adapter with machine-owned identity, at-most-one
+  automatic attempts, authoritative readback, honest `UNKNOWN`/
+  `UNVERIFIABLE`, and no blind resend.
+- Added the native `INTAKE → PREPARE → CONFIRM → START` entry. One goal or goal
+  file remains the ordinary entry, while explicit confirmation stays mandatory
+  before external effects and user-supplied control identity remains zero.
+- Added optional Standard/Adaptive, Reviewer/Local Verifier, Decision Card,
+  human-steering, bounded-repair, and read-only operability policy without a
+  Supervisor or second writer.
+- Added v4-only transactional install/uninstall with byte-identical Codex
+  config, no MCP registration, no LoopSkill-required App restart, exact
+  receipt binding, independent v3 preservation, and fault-window rollback.
+
+### Safety and evidence boundary
+
+- Local operation acceptance is idempotent, but LoopSkill does not claim
+  end-to-end exactly-once across SQLite, Codex, Git, or networks.
+- Artifact correctness, workflow closure, assurance, external-effect
+  finalization, and public release remain separate claims.
+- 4.0 supports the Codex Host Adapter only. It makes no multi-host,
+  patch-success superiority, or long-horizon efficacy claim.
+- LoopSkill v3.3.8 remains independently available and unchanged.
+
 ## [3.3.8] - 2026-07-23
 
 ### Fixed
@@ -547,7 +595,8 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v3.3.8...HEAD
+[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.0.0
 [3.3.8]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8
 [3.3.7]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.7
 [3.3.3]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.3
