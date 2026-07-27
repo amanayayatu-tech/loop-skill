@@ -4,11 +4,30 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from .generated_protocol import (
+    ASSURANCE_STRENGTHS,
+    CAPABILITY_NAMES,
+    COMMAND_TYPES,
+    DELIVERY_STATES,
+    ERROR_CODES,
+    EVENT_TYPES,
+    MANIFEST_SHA256,
+    PROTOCOL_VERSION,
+    REFERENCE_KINDS,
+    RESULT_STATES,
+    SEMANTIC_PAYLOAD_SPECS,
+    WRITE_CAS,
+    ActorRef,
+    ApplyResult,
+    AuthorityGrant,
+    CapabilityRecord,
+    CommandEnvelope,
+    Receipt,
+    Reference,
+)
 
-PROTOCOL_VERSION = "4.0-draft.2"
 INT64_MIN = -(2**63)
 INT64_MAX = 2**63 - 1
 MAX_COMMAND_BYTES = 16_384
@@ -17,103 +36,19 @@ MAX_COLLECTION_ITEMS = 128
 MAX_RECEIPT_BYTES = 8_192
 MAX_EVENTS_PER_COMMAND = 16
 
-COMMAND_TYPES = (
-    "CreateLoop",
-    "BindHostResource",
-    "PrepareRoute",
-    "BeginEffectDelivery",
-    "RecordEffectObservation",
-    "StageResult",
-    "AcknowledgeResult",
-    "RecordReview",
-    "AdvanceGoal",
-    "PrepareFinalization",
-    "CloseExecution",
-)
-
-EVENT_TYPES = (
-    "LoopCreated",
-    "GoalRegistered",
-    "GoalActivated",
-    "HostResourceBound",
-    "RoutePrepared",
-    "DeliveryAttemptCommitted",
-    "DeliveryObserved",
-    "DeliveryUnknown",
-    "DeliveryUnverifiable",
-    "LateDeliveryObserved",
-    "ResultStaged",
-    "ReportStaged",
-    "ArtifactCaptured",
-    "ArtifactVerified",
-    "ReportAccepted",
-    "ResultAcknowledged",
-    "ReviewRecorded",
-    "GoalAdvanced",
-    "FinalizationPrepared",
-    "ExecutionFinalized",
-    "StrictFinalizationAcknowledged",
-)
-
-REFERENCE_KINDS = (
-    "LoopRef",
-    "ActorRef",
-    "AuthorityGrantRef",
-    "GoalRef",
-    "HostResourceRef",
-    "RouteRef",
-    "DeliveryRef",
-    "AttemptRef",
-    "ResultRef",
-    "ReportRef",
-    "ArtifactRef",
-    "ReviewRef",
-    "FinalizationRef",
-    "ReceiptRef",
-)
-
-ERROR_CODES = (
-    "INVALID_COMMAND",
-    "UNSUPPORTED_PROTOCOL_VERSION",
-    "RESOURCE_LIMIT_EXCEEDED",
-    "INVALID_UTF8",
-    "CONTROL_FIELD_INJECTION",
-    "INVALID_AUTHORITY",
-    "AUTHORITY_EXPIRED",
-    "AUTHORITY_SCOPE_MISMATCH",
-    "STALE_LOOP_REVISION",
-    "STALE_SUBJECT_REVISION",
-    "IDEMPOTENCY_CONFLICT",
-    "FOREIGN_REFERENCE",
-    "WRONG_REFERENCE_KIND",
-    "INVALID_TRANSITION",
-    "CAPABILITY_UNAVAILABLE",
-    "CAPABILITY_UNVERIFIABLE",
-    "RECEIPT_REQUIRED",
-    "RECEIPT_ISSUER_UNTRUSTED",
-    "RECEIPT_EXPIRED",
-    "RECEIPT_IDENTITY_MISMATCH",
-    "ATTEMPT_ALREADY_CONSUMED",
-    "FINALIZATION_PRECONDITION_FAILED",
-    "INTERNAL_INVARIANT_VIOLATION",
-)
-
 PROTOCOL_MANIFEST = {
-    "protocol_version": PROTOCOL_VERSION,
+    "assurance_strengths": ASSURANCE_STRENGTHS,
+    "capabilities": CAPABILITY_NAMES,
     "commands": COMMAND_TYPES,
-    "events": EVENT_TYPES,
-    "reference_kinds": REFERENCE_KINDS,
+    "delivery_states": DELIVERY_STATES,
     "errors": ERROR_CODES,
-    "delivery_states": (
-        "PREPARED",
-        "ATTEMPT_COMMITTED",
-        "OBSERVED",
-        "UNKNOWN",
-        "UNVERIFIABLE",
-    ),
-    "result_states": ("STAGED", "ACKNOWLEDGED", "STALE"),
-    "assurance_strengths": ("NONE", "LOCAL", "COOPERATIVE", "STRICT"),
-    "write_cas": "per_loop_revision",
+    "events": EVENT_TYPES,
+    "manifest_sha256": MANIFEST_SHA256,
+    "protocol_version": PROTOCOL_VERSION,
+    "reference_kinds": REFERENCE_KINDS,
+    "result_states": RESULT_STATES,
+    "semantic_payload_specs": SEMANTIC_PAYLOAD_SPECS,
+    "write_cas": WRITE_CAS,
 }
 
 CONTROL_FIELDS = frozenset(
@@ -282,133 +217,109 @@ def _find_control_injection(value: Any, path: str = "semantic_payload") -> str |
     return None
 
 
-@dataclass(frozen=True)
-class CommandEnvelope:
-    operation_id: str
-    command_type: str
-    protocol_version: str
-    actor_ref: str
-    authority_grant_ref: str
-    subject: Mapping[str, Any]
-    expected_loop_revision: int
-    expected_subject_revisions: Mapping[str, int]
-    issued_at: str
-    machine_bindings: Mapping[str, Mapping[str, str]]
-    semantic_payload: Mapping[str, Any]
-    request_digest: str
-
-    def without_digest(self) -> dict[str, Any]:
-        return {
-            "actor_ref": self.actor_ref,
-            "authority_grant_ref": self.authority_grant_ref,
-            "command_type": self.command_type,
-            "expected_loop_revision": self.expected_loop_revision,
-            "expected_subject_revisions": dict(self.expected_subject_revisions),
-            "issued_at": self.issued_at,
-            "machine_bindings": {
-                key: dict(value) for key, value in self.machine_bindings.items()
-            },
-            "operation_id": self.operation_id,
-            "protocol_version": self.protocol_version,
-            "semantic_payload": dict(self.semantic_payload),
-            "subject": dict(self.subject),
-        }
-
-    def calculated_digest(self) -> str:
-        return domain_digest("loopskill-command-v1\n", self.without_digest())
-
-    def validate_shape(self) -> None:
-        if self.protocol_version != PROTOCOL_VERSION:
-            raise ProtocolRejection(
-                "UNSUPPORTED_PROTOCOL_VERSION", self.protocol_version
-            )
-        if self.command_type not in COMMAND_TYPES:
-            raise ProtocolRejection("INVALID_COMMAND", "unknown command_type")
-        if not self.operation_id or len(self.operation_id.encode("utf-8")) > 128:
-            raise ProtocolRejection("INVALID_COMMAND", "invalid operation_id")
-        if set(self.machine_bindings) != {
-            "resolved_refs",
-            "allocate_refs",
-            "receipt_refs",
-        }:
-            raise ProtocolRejection("INVALID_COMMAND", "machine_bindings is not closed")
-        injection = _find_control_injection(self.semantic_payload)
-        if injection:
-            raise ProtocolRejection("CONTROL_FIELD_INJECTION", injection)
-        raw = canonical_bytes(self.without_digest())
-        if len(raw) > MAX_COMMAND_BYTES:
-            raise ProtocolRejection(
-                "RESOURCE_LIMIT_EXCEEDED", "command exceeds byte limit"
-            )
-        if self.request_digest != self.calculated_digest():
-            raise ProtocolRejection("INVALID_COMMAND", "request digest mismatch")
+def command_without_digest(command: CommandEnvelope) -> dict[str, Any]:
+    return {
+        "actor_ref": command.actor_ref,
+        "authority_grant_ref": command.authority_grant_ref,
+        "command_type": command.command_type,
+        "expected_loop_revision": command.expected_loop_revision,
+        "expected_subject_revisions": dict(command.expected_subject_revisions),
+        "issued_at": command.issued_at,
+        "machine_bindings": {
+            key: dict(value) for key, value in command.machine_bindings.items()
+        },
+        "operation_id": command.operation_id,
+        "protocol_version": command.protocol_version,
+        "semantic_payload": dict(command.semantic_payload),
+        "subject": dict(command.subject),
+    }
 
 
-@dataclass(frozen=True)
-class ActorRef:
-    actor_ref: str
-    loop_namespace: str
-    actor_kind: str
-    identity_digest: str
-    issuer_ref: str
-    issuer_trust: str
+def command_digest(command: CommandEnvelope) -> str:
+    return domain_digest("loopskill-command-v1\n", command_without_digest(command))
 
 
-@dataclass(frozen=True)
-class AuthorityGrant:
-    grant_ref: str
-    actor_ref: str
-    issuer_actor_ref: str
-    issuer_trust: str
-    allowed_commands: tuple[str, ...]
-    loop_scope: str
-    subject_kinds: tuple[str, ...]
-    exact_subjects: tuple[str, ...]
-    not_before: str
-    expires_at: str
-    nonce: str
-    canonical_digest: str
-
-    def calculated_digest(self) -> str:
-        value = dict(self.__dict__)
-        value.pop("canonical_digest")
-        return domain_digest("loopskill-authority-grant-v1\n", value)
+def authority_grant_digest(grant: AuthorityGrant) -> str:
+    value = dict(grant.__dict__)
+    value.pop("canonical_digest")
+    return domain_digest("loopskill-authority-grant-v1\n", value)
 
 
-@dataclass(frozen=True)
-class Receipt:
-    receipt_ref: str
-    issuer_ref: str
-    issuer_trust: str
-    trust_class: str
-    action: str
-    loop_ref: str
-    subject_ref: str
-    attempt_ref: str | None
-    target_ref: str | None
-    request_digest: str | None
-    provider_idempotency_key: str | None
-    outcome: str
-    issued_at: str
-    expires_at: str
-    evidence_digest: str
-
-    def validate_size(self) -> None:
-        if len(canonical_bytes(self.__dict__)) > MAX_RECEIPT_BYTES:
-            raise ProtocolRejection(
-                "RESOURCE_LIMIT_EXCEEDED", "receipt exceeds byte limit"
-            )
+def validate_receipt_size(receipt: Receipt) -> None:
+    if len(canonical_bytes(receipt.__dict__)) > MAX_RECEIPT_BYTES:
+        raise ProtocolRejection("RESOURCE_LIMIT_EXCEEDED", "receipt exceeds byte limit")
 
 
-@dataclass(frozen=True)
-class ApplyResult:
-    operation_id: str
-    loop_ref: str
-    loop_revision: int
-    event_types: tuple[str, ...]
-    response: Mapping[str, Any]
-    snapshot_digest: str
-    replayed: bool = False
+def validate_event_type(event_type: str) -> None:
+    if event_type not in EVENT_TYPES:
+        raise ProtocolRejection("INVALID_COMMAND", "unknown event type")
+
+
+def validate_reference(reference: Reference) -> None:
+    if reference.kind not in REFERENCE_KINDS:
+        raise ProtocolRejection("WRONG_REFERENCE_KIND", reference.kind)
+    if not reference.value or not reference.loop_ref:
+        raise ProtocolRejection("FOREIGN_REFERENCE", "empty reference identity")
+
+
+def validate_capability_record(capability: CapabilityRecord) -> None:
+    if capability.capability not in CAPABILITY_NAMES:
+        raise ProtocolRejection("CAPABILITY_UNAVAILABLE", "unknown capability")
+    if capability.availability not in {"AVAILABLE", "UNAVAILABLE", "UNVERIFIABLE"}:
+        raise ProtocolRejection("CAPABILITY_UNVERIFIABLE", "invalid availability")
+    if capability.assurance not in ASSURANCE_STRENGTHS:
+        raise ProtocolRejection("CAPABILITY_UNVERIFIABLE", "invalid assurance")
+
+
+def validate_command(command: CommandEnvelope) -> None:
+    if command.protocol_version != PROTOCOL_VERSION:
+        raise ProtocolRejection(
+            "UNSUPPORTED_PROTOCOL_VERSION", command.protocol_version
+        )
+    if command.command_type not in COMMAND_TYPES:
+        raise ProtocolRejection("INVALID_COMMAND", "unknown command_type")
+    if not command.operation_id or len(command.operation_id.encode("utf-8")) > 128:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid operation_id")
+    if set(command.subject) != {"loop_ref", "subject_kind", "subject_ref"}:
+        raise ProtocolRejection("INVALID_COMMAND", "subject shape is not closed")
+    if command.subject["subject_kind"] not in REFERENCE_KINDS:
+        raise ProtocolRejection("WRONG_REFERENCE_KIND", "unknown subject kind")
+    if not isinstance(command.expected_loop_revision, int) or command.expected_loop_revision < 0:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid loop revision")
+    if any(
+        not isinstance(key, str) or not isinstance(value, int) or value < 0
+        for key, value in command.expected_subject_revisions.items()
+    ):
+        raise ProtocolRejection("INVALID_COMMAND", "invalid subject revision map")
+    if set(command.machine_bindings) != {
+        "resolved_refs",
+        "allocate_refs",
+        "receipt_refs",
+    }:
+        raise ProtocolRejection("INVALID_COMMAND", "machine_bindings is not closed")
+    if any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for group in command.machine_bindings.values()
+        for key, value in group.items()
+    ):
+        raise ProtocolRejection("INVALID_COMMAND", "invalid machine binding")
+    injection = _find_control_injection(command.semantic_payload)
+    if injection:
+        raise ProtocolRejection("CONTROL_FIELD_INJECTION", injection)
+    payload_spec = SEMANTIC_PAYLOAD_SPECS[command.command_type]["semantic_payload"]
+    if set(command.semantic_payload) != set(payload_spec):
+        raise ProtocolRejection("INVALID_COMMAND", "semantic payload shape drift")
+    for name, specification in payload_spec.items():
+        value = command.semantic_payload[name]
+        if specification["type"] == "string" and not isinstance(value, str):
+            raise ProtocolRejection("INVALID_COMMAND", f"{name} must be string")
+        if "enum" in specification and value not in specification["enum"]:
+            raise ProtocolRejection("INVALID_COMMAND", f"{name} enum drift")
+    raw = canonical_bytes(command_without_digest(command))
+    if len(raw) > MAX_COMMAND_BYTES:
+        raise ProtocolRejection("RESOURCE_LIMIT_EXCEEDED", "command exceeds byte limit")
+    if command.request_digest != command_digest(command):
+        raise ProtocolRejection("INVALID_COMMAND", "request digest mismatch")
 
 
 def build_command(
@@ -441,7 +352,7 @@ def build_command(
     return CommandEnvelope(
         **{
             **provisional.__dict__,
-            "request_digest": provisional.calculated_digest(),
+            "request_digest": command_digest(provisional),
         }
     )
 
@@ -454,5 +365,5 @@ def with_command_change(
     change(values)
     values["request_digest"] = ""
     provisional = CommandEnvelope(**values)
-    values["request_digest"] = provisional.calculated_digest()
+    values["request_digest"] = command_digest(provisional)
     return CommandEnvelope(**values)

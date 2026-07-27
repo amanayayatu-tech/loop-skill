@@ -12,8 +12,10 @@ from .protocol import (
     CommandEnvelope,
     InjectedCrash,
     ProtocolRejection,
+    command_digest,
     snapshot_digest,
     canonical_bytes,
+    validate_command,
 )
 
 
@@ -141,7 +143,7 @@ class InMemoryStore:
     ) -> ApplyResult:
         loop_ref = str(command.subject.get("loop_ref", ""))
         key = (loop_ref, command.operation_id)
-        calculated_digest = command.calculated_digest()
+        calculated_digest = command_digest(command)
         accepted = self._accepted.get(key)
         if accepted is not None:
             request_digest, result = accepted
@@ -166,7 +168,7 @@ class InMemoryStore:
             raise ProtocolRejection(error["code"], error["detail"])
 
         try:
-            command.validate_shape()
+            validate_command(command)
             current = self._snapshots.get(loop_ref)
             actual_revision = 0 if current is None else current["loop_revision"]
             if actual_revision != command.expected_loop_revision:

@@ -18,6 +18,7 @@ from loop_architect.v4_alpha.protocol import (  # noqa: E402
     InjectedCrash,
     ProtocolRejection,
     canonical_bytes,
+    command_digest,
 )
 from loop_architect.v4_alpha.store import InMemoryStore  # noqa: E402
 from loop_architect.v4_alpha.vertical import (  # noqa: E402
@@ -213,7 +214,7 @@ class V4PersistenceSpikeTests(unittest.TestCase):
                     **{**command.__dict__, "expected_loop_revision": 0, "request_digest": ""}
                 )
                 stale = stale.__class__(
-                    **{**stale.__dict__, "request_digest": stale.calculated_digest()}
+                    **{**stale.__dict__, "request_digest": command_digest(stale)}
                 )
                 with self.assertRaisesRegex(ProtocolRejection, "STALE_LOOP_REVISION"):
                     store.apply(stale)
@@ -226,7 +227,7 @@ class V4PersistenceSpikeTests(unittest.TestCase):
                     **{**stale.__dict__, "semantic_payload": {"role": "changed"}, "request_digest": ""}
                 )
                 changed = changed.__class__(
-                    **{**changed.__dict__, "request_digest": changed.calculated_digest()}
+                    **{**changed.__dict__, "request_digest": command_digest(changed)}
                 )
                 with self.assertRaisesRegex(ProtocolRejection, "IDEMPOTENCY_CONFLICT"):
                     reopened.apply(changed)

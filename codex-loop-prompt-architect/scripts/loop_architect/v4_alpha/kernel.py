@@ -14,8 +14,12 @@ from .protocol import (
     CommandEnvelope,
     ProtocolRejection,
     Receipt,
+    authority_grant_digest,
     domain_digest,
     raw_domain_digest,
+    validate_command,
+    validate_event_type,
+    validate_receipt_size,
 )
 
 
@@ -97,7 +101,7 @@ def validate_authority(command: CommandEnvelope, context: AuthorityContext) -> N
         raise ProtocolRejection("INVALID_AUTHORITY", "Grant issuer is untrusted")
     if grant.issuer_actor_ref not in context.actors:
         raise ProtocolRejection("INVALID_AUTHORITY", "Grant issuer is unknown")
-    if grant.canonical_digest != grant.calculated_digest():
+    if grant.canonical_digest != authority_grant_digest(grant):
         raise ProtocolRejection("INVALID_AUTHORITY", "Grant digest mismatch")
     now = _parse_time(command.issued_at)
     if now < _parse_time(grant.not_before) or now > _parse_time(grant.expires_at):
@@ -170,7 +174,7 @@ def _receipt(
     receipt = context.receipts.get(receipt_ref)
     if receipt is None:
         raise ProtocolRejection("RECEIPT_REQUIRED", receipt_ref)
-    receipt.validate_size()
+    validate_receipt_size(receipt)
     if receipt.issuer_trust != "trusted-fixture" or receipt.issuer_ref not in context.actors:
         raise ProtocolRejection("RECEIPT_ISSUER_UNTRUSTED", receipt_ref)
     now = _parse_time(command.issued_at)
@@ -199,6 +203,7 @@ def _binding(command: CommandEnvelope, group: str, name: str) -> str:
 
 
 def _event(event_type: str, **body: Any) -> dict[str, Any]:
+    validate_event_type(event_type)
     return {"body": body, "type": event_type}
 
 
@@ -261,7 +266,7 @@ def reduce_command(
     command: CommandEnvelope,
     context: AuthorityContext,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    command.validate_shape()
+    validate_command(command)
     validate_authority(command, context)
     if snapshot is None and command.command_type != "CreateLoop":
         raise ProtocolRejection("INVALID_TRANSITION", "loop does not exist")

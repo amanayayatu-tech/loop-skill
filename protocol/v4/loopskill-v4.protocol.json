@@ -1,0 +1,296 @@
+{
+  "capability_names": [
+    "project_registration",
+    "task_create",
+    "thread_create",
+    "resource_read",
+    "message_send",
+    "eventual_indexing",
+    "lifecycle_readback",
+    "heartbeat",
+    "sandbox_receipt",
+    "trust_receipt",
+    "model_receipt",
+    "memory",
+    "provider_idempotency",
+    "artifact_existing_git",
+    "artifact_non_git",
+    "artifact_new_git"
+  ],
+  "commands": {
+    "AcknowledgeResult": {
+      "semantic_payload": {}
+    },
+    "AdvanceGoal": {
+      "semantic_payload": {
+        "disposition": {
+          "enum": [
+            "DONE"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "BeginEffectDelivery": {
+      "semantic_payload": {}
+    },
+    "BindHostResource": {
+      "semantic_payload": {
+        "role": {
+          "type": "string"
+        }
+      }
+    },
+    "CloseExecution": {
+      "semantic_payload": {}
+    },
+    "CreateLoop": {
+      "semantic_payload": {
+        "objective": {
+          "type": "string"
+        }
+      }
+    },
+    "ImportV3Snapshot": {
+      "reserved_until": "P6",
+      "semantic_payload": {}
+    },
+    "PauseLoop": {
+      "reserved_until": "full-alpha",
+      "semantic_payload": {
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "PrepareFinalization": {
+      "semantic_payload": {
+        "disposition": {
+          "enum": [
+            "SUCCEEDED",
+            "LIMITATION"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "PrepareRoute": {
+      "semantic_payload": {
+        "intent": {
+          "type": "string"
+        }
+      }
+    },
+    "RecordEffectObservation": {
+      "semantic_payload": {}
+    },
+    "RecordReview": {
+      "semantic_payload": {
+        "verdict": {
+          "enum": [
+            "PASS",
+            "REPAIR",
+            "LIMITATION"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "ResumeLoop": {
+      "reserved_until": "full-alpha",
+      "semantic_payload": {}
+    },
+    "StageResult": {
+      "semantic_payload": {
+        "outcome": {
+          "enum": [
+            "PASS"
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "StrengthenClosureAssurance": {
+      "reserved_until": "P4",
+      "semantic_payload": {}
+    }
+  },
+  "delivery_states": [
+    "PREPARED",
+    "ATTEMPT_COMMITTED",
+    "OBSERVED",
+    "UNKNOWN",
+    "UNVERIFIABLE"
+  ],
+  "errors": [
+    "INVALID_COMMAND",
+    "UNSUPPORTED_PROTOCOL_VERSION",
+    "RESOURCE_LIMIT_EXCEEDED",
+    "INVALID_UTF8",
+    "CONTROL_FIELD_INJECTION",
+    "INVALID_AUTHORITY",
+    "AUTHORITY_EXPIRED",
+    "AUTHORITY_SCOPE_MISMATCH",
+    "STALE_LOOP_REVISION",
+    "STALE_SUBJECT_REVISION",
+    "IDEMPOTENCY_CONFLICT",
+    "FOREIGN_REFERENCE",
+    "WRONG_REFERENCE_KIND",
+    "INVALID_TRANSITION",
+    "CAPABILITY_UNAVAILABLE",
+    "CAPABILITY_UNVERIFIABLE",
+    "RECEIPT_REQUIRED",
+    "RECEIPT_ISSUER_UNTRUSTED",
+    "RECEIPT_EXPIRED",
+    "RECEIPT_IDENTITY_MISMATCH",
+    "ATTEMPT_ALREADY_CONSUMED",
+    "ADAPTER_SCHEMA_DRIFT",
+    "ARTIFACT_IDENTITY_MISMATCH",
+    "ARTIFACT_STALE",
+    "REPORT_IDENTITY_MISMATCH",
+    "PATH_CONFINEMENT_VIOLATION",
+    "FINALIZATION_PRECONDITION_FAILED",
+    "MIGRATION_NOT_QUIESCENT",
+    "DUAL_WRITE_FORBIDDEN",
+    "STORE_RECOVERY_REQUIRED",
+    "INTERNAL_INVARIANT_VIOLATION"
+  ],
+  "events": [
+    "LoopCreated",
+    "GoalRegistered",
+    "GoalActivated",
+    "HostResourceBound",
+    "RoutePrepared",
+    "DeliveryAttemptCommitted",
+    "DeliveryObserved",
+    "DeliveryUnknown",
+    "DeliveryUnverifiable",
+    "LateDeliveryObserved",
+    "ResultStaged",
+    "ReportStaged",
+    "ArtifactCaptured",
+    "ArtifactVerified",
+    "ArtifactStale",
+    "ReportAccepted",
+    "ResultAcknowledged",
+    "ReviewRecorded",
+    "GoalAdvanced",
+    "LoopPaused",
+    "LoopResumed",
+    "FinalizationPrepared",
+    "ExecutionFinalized",
+    "StrictFinalizationAcknowledged",
+    "ClosureAssuranceStrengthened",
+    "V3SnapshotImported",
+    "OperationRejected"
+  ],
+  "protocol_version": "4.0-draft.2",
+  "reference_kinds": [
+    "LoopRef",
+    "ActorRef",
+    "AuthorityGrantRef",
+    "GoalRef",
+    "HostResourceRef",
+    "RouteRef",
+    "DeliveryRef",
+    "AttemptRef",
+    "ResultRef",
+    "ReportRef",
+    "ArtifactRef",
+    "ReviewRef",
+    "FinalizationRef",
+    "ReceiptRef"
+  ],
+  "result_states": [
+    "STAGED",
+    "ACKNOWLEDGED",
+    "STALE"
+  ],
+  "assurance_strengths": [
+    "NONE",
+    "LOCAL",
+    "COOPERATIVE",
+    "STRICT"
+  ],
+  "wire_types": {
+    "ActorRef": [
+      ["actor_ref", "str", {"type": "string"}],
+      ["loop_namespace", "str", {"type": "string"}],
+      ["actor_kind", "str", {"type": "string"}],
+      ["identity_digest", "str", {"type": "string"}],
+      ["issuer_ref", "str", {"type": "string"}],
+      ["issuer_trust", "str", {"type": "string"}]
+    ],
+    "AuthorityGrant": [
+      ["grant_ref", "str", {"type": "string"}],
+      ["actor_ref", "str", {"type": "string"}],
+      ["issuer_actor_ref", "str", {"type": "string"}],
+      ["issuer_trust", "str", {"type": "string"}],
+      ["allowed_commands", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["loop_scope", "str", {"type": "string"}],
+      ["subject_kinds", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["exact_subjects", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["not_before", "str", {"type": "string"}],
+      ["expires_at", "str", {"type": "string"}],
+      ["nonce", "str", {"type": "string"}],
+      ["canonical_digest", "str", {"type": "string"}]
+    ],
+    "Receipt": [
+      ["receipt_ref", "str", {"type": "string"}],
+      ["issuer_ref", "str", {"type": "string"}],
+      ["issuer_trust", "str", {"type": "string"}],
+      ["trust_class", "str", {"type": "string"}],
+      ["action", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}],
+      ["subject_ref", "str", {"type": "string"}],
+      ["attempt_ref", "str | None", {"type": ["string", "null"]}],
+      ["target_ref", "str | None", {"type": ["string", "null"]}],
+      ["request_digest", "str | None", {"type": ["string", "null"]}],
+      ["provider_idempotency_key", "str | None", {"type": ["string", "null"]}],
+      ["outcome", "str", {"type": "string"}],
+      ["issued_at", "str", {"type": "string"}],
+      ["expires_at", "str", {"type": "string"}],
+      ["evidence_digest", "str", {"type": "string"}]
+    ],
+    "CommandEnvelope": [
+      ["operation_id", "str", {"type": "string"}],
+      ["command_type", "str", {"type": "string"}],
+      ["protocol_version", "str", {"type": "string"}],
+      ["actor_ref", "str", {"type": "string"}],
+      ["authority_grant_ref", "str", {"type": "string"}],
+      ["subject", "Mapping[str, Any]", {"type": "object"}],
+      ["expected_loop_revision", "int", {"type": "integer"}],
+      ["expected_subject_revisions", "Mapping[str, int]", {"additionalProperties": {"type": "integer"}, "type": "object"}],
+      ["issued_at", "str", {"type": "string"}],
+      ["machine_bindings", "Mapping[str, Mapping[str, str]]", {"type": "object"}],
+      ["semantic_payload", "Mapping[str, Any]", {"type": "object"}],
+      ["request_digest", "str", {"type": "string"}]
+    ],
+    "Reference": [
+      ["kind", "str", {"type": "string"}],
+      ["value", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}]
+    ],
+    "CapabilityRecord": [
+      ["capability", "str", {"type": "string"}],
+      ["availability", "str", {"enum": ["AVAILABLE", "UNAVAILABLE", "UNVERIFIABLE"], "type": "string"}],
+      ["assurance", "str", {"type": "string"}],
+      ["issuer_ref", "str", {"type": "string"}],
+      ["receipt_ref", "str | None", {"type": ["string", "null"]}],
+      ["details", "Mapping[str, Any]", {"type": "object"}]
+    ],
+    "ApplyResult": [
+      ["operation_id", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}],
+      ["loop_revision", "int", {"type": "integer"}],
+      ["event_types", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["response", "Mapping[str, Any]", {"type": "object"}],
+      ["snapshot_digest", "str", {"type": "string"}],
+      ["replayed", "bool", {"type": "boolean"}, false]
+    ]
+  },
+  "write_cas": "per_loop_revision"
+}

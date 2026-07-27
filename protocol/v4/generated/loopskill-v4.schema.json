@@ -1,0 +1,342 @@
+{
+  "$defs": {
+    "ActorRef": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_kind": {
+          "type": "string"
+        },
+        "actor_ref": {
+          "type": "string"
+        },
+        "identity_digest": {
+          "type": "string"
+        },
+        "issuer_ref": {
+          "type": "string"
+        },
+        "issuer_trust": {
+          "type": "string"
+        },
+        "loop_namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_ref",
+        "loop_namespace",
+        "actor_kind",
+        "identity_digest",
+        "issuer_ref",
+        "issuer_trust"
+      ],
+      "type": "object"
+    },
+    "ApplyResult": {
+      "additionalProperties": false,
+      "properties": {
+        "event_types": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "loop_ref": {
+          "type": "string"
+        },
+        "loop_revision": {
+          "type": "integer"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "replayed": {
+          "type": "boolean"
+        },
+        "response": {
+          "type": "object"
+        },
+        "snapshot_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "loop_ref",
+        "loop_revision",
+        "event_types",
+        "response",
+        "snapshot_digest"
+      ],
+      "type": "object"
+    },
+    "AuthorityGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_ref": {
+          "type": "string"
+        },
+        "allowed_commands": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "canonical_digest": {
+          "type": "string"
+        },
+        "exact_subjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "grant_ref": {
+          "type": "string"
+        },
+        "issuer_actor_ref": {
+          "type": "string"
+        },
+        "issuer_trust": {
+          "type": "string"
+        },
+        "loop_scope": {
+          "type": "string"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "not_before": {
+          "type": "string"
+        },
+        "subject_kinds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "grant_ref",
+        "actor_ref",
+        "issuer_actor_ref",
+        "issuer_trust",
+        "allowed_commands",
+        "loop_scope",
+        "subject_kinds",
+        "exact_subjects",
+        "not_before",
+        "expires_at",
+        "nonce",
+        "canonical_digest"
+      ],
+      "type": "object"
+    },
+    "CapabilityRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "assurance": {
+          "type": "string"
+        },
+        "availability": {
+          "enum": [
+            "AVAILABLE",
+            "UNAVAILABLE",
+            "UNVERIFIABLE"
+          ],
+          "type": "string"
+        },
+        "capability": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        },
+        "issuer_ref": {
+          "type": "string"
+        },
+        "receipt_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "capability",
+        "availability",
+        "assurance",
+        "issuer_ref",
+        "receipt_ref",
+        "details"
+      ],
+      "type": "object"
+    },
+    "CommandEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_ref": {
+          "type": "string"
+        },
+        "authority_grant_ref": {
+          "type": "string"
+        },
+        "command_type": {
+          "type": "string"
+        },
+        "expected_loop_revision": {
+          "type": "integer"
+        },
+        "expected_subject_revisions": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "issued_at": {
+          "type": "string"
+        },
+        "machine_bindings": {
+          "type": "object"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "type": "string"
+        },
+        "request_digest": {
+          "type": "string"
+        },
+        "semantic_payload": {
+          "type": "object"
+        },
+        "subject": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "operation_id",
+        "command_type",
+        "protocol_version",
+        "actor_ref",
+        "authority_grant_ref",
+        "subject",
+        "expected_loop_revision",
+        "expected_subject_revisions",
+        "issued_at",
+        "machine_bindings",
+        "semantic_payload",
+        "request_digest"
+      ],
+      "type": "object"
+    },
+    "Receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "attempt_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_digest": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "issued_at": {
+          "type": "string"
+        },
+        "issuer_ref": {
+          "type": "string"
+        },
+        "issuer_trust": {
+          "type": "string"
+        },
+        "loop_ref": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "provider_idempotency_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receipt_ref": {
+          "type": "string"
+        },
+        "request_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject_ref": {
+          "type": "string"
+        },
+        "target_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trust_class": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "receipt_ref",
+        "issuer_ref",
+        "issuer_trust",
+        "trust_class",
+        "action",
+        "loop_ref",
+        "subject_ref",
+        "attempt_ref",
+        "target_ref",
+        "request_digest",
+        "provider_idempotency_key",
+        "outcome",
+        "issued_at",
+        "expires_at",
+        "evidence_digest"
+      ],
+      "type": "object"
+    },
+    "Reference": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "loop_ref": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value",
+        "loop_ref"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "manifest_sha256": "1f303868e9c303bd96281e75445cf30f55815726326049b0160a67c8a1dd9ff2",
+  "title": "LoopSkill 4 protocol wire shapes"
+}

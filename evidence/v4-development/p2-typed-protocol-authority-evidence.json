@@ -1,0 +1,41 @@
+{
+  "artifact": "loopskill-v4-p2-typed-protocol-authority-evidence-v1",
+  "checks": {
+    "api_summary_drift": "PASS",
+    "generated_dataclass_field_drift": "PASS",
+    "generated_python_drift": "PASS",
+    "generated_schema_drift": "PASS",
+    "import_graph": "PASS",
+    "kernel_forbidden_dependencies": "PASS",
+    "manifest_duplicate_or_unknown": "FAIL_CLOSED",
+    "manual_enum_or_wire_shape": "FAIL_CLOSED",
+    "mutation_detection": "PASS",
+    "test_methods_p2": 8,
+    "test_methods_total": 32,
+    "unknown_command_event_error_handle_capability": "FAIL_CLOSED"
+  },
+  "generated_sha256": {
+    "api_summary": "f5f9b63a9966ff3df4f2405e60df2e821d54526ec5e43b83e7b51378a40fc212",
+    "json_schema": "300393d2bc42010a322a559f09424a0a58715038cc0868bbba1cb042a001f4c3",
+    "python": "175c92391f49e2503ad20d9fbef93742cd04d47ae9b0fdb2ee50a543da608e6a"
+  },
+  "manifest": {
+    "canonical_sha256": "1f303868e9c303bd96281e75445cf30f55815726326049b0160a67c8a1dd9ff2",
+    "capabilities": 16,
+    "commands": 15,
+    "errors": 31,
+    "events": 27,
+    "file_sha256": "8f77ea6accaa78bac77725a125f2e12c7da724f70b516a71bbd7bbfc3d4bb99c",
+    "implemented_commands": 11,
+    "reference_kinds": 14,
+    "reserved_commands": 4,
+    "wire_types": 7
+  },
+  "ownership": {
+    "adapter_contracts": "Host provenance, capability truth, external readback",
+    "reducer": "state transition and subject-chain invariants",
+    "typed_manifest": "wire shape and command/event/error/reference/capability catalogs"
+  },
+  "recorded_date": "2026-07-27",
+  "status": "PASS"
+}

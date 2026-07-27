@@ -1,0 +1,279 @@
+{
+  "capabilities": [
+    "project_registration",
+    "task_create",
+    "thread_create",
+    "resource_read",
+    "message_send",
+    "eventual_indexing",
+    "lifecycle_readback",
+    "heartbeat",
+    "sandbox_receipt",
+    "trust_receipt",
+    "model_receipt",
+    "memory",
+    "provider_idempotency",
+    "artifact_existing_git",
+    "artifact_non_git",
+    "artifact_new_git"
+  ],
+  "commands": {
+    "AcknowledgeResult": {
+      "semantic_payload": {}
+    },
+    "AdvanceGoal": {
+      "semantic_payload": {
+        "disposition": {
+          "enum": [
+            "DONE"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "BeginEffectDelivery": {
+      "semantic_payload": {}
+    },
+    "BindHostResource": {
+      "semantic_payload": {
+        "role": {
+          "type": "string"
+        }
+      }
+    },
+    "CloseExecution": {
+      "semantic_payload": {}
+    },
+    "CreateLoop": {
+      "semantic_payload": {
+        "objective": {
+          "type": "string"
+        }
+      }
+    },
+    "ImportV3Snapshot": {
+      "reserved_until": "P6",
+      "semantic_payload": {}
+    },
+    "PauseLoop": {
+      "reserved_until": "full-alpha",
+      "semantic_payload": {
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "PrepareFinalization": {
+      "semantic_payload": {
+        "disposition": {
+          "enum": [
+            "SUCCEEDED",
+            "LIMITATION"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "PrepareRoute": {
+      "semantic_payload": {
+        "intent": {
+          "type": "string"
+        }
+      }
+    },
+    "RecordEffectObservation": {
+      "semantic_payload": {}
+    },
+    "RecordReview": {
+      "semantic_payload": {
+        "verdict": {
+          "enum": [
+            "PASS",
+            "REPAIR",
+            "LIMITATION"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "ResumeLoop": {
+      "reserved_until": "full-alpha",
+      "semantic_payload": {}
+    },
+    "StageResult": {
+      "semantic_payload": {
+        "outcome": {
+          "enum": [
+            "PASS"
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "StrengthenClosureAssurance": {
+      "reserved_until": "P4",
+      "semantic_payload": {}
+    }
+  },
+  "errors": [
+    "INVALID_COMMAND",
+    "UNSUPPORTED_PROTOCOL_VERSION",
+    "RESOURCE_LIMIT_EXCEEDED",
+    "INVALID_UTF8",
+    "CONTROL_FIELD_INJECTION",
+    "INVALID_AUTHORITY",
+    "AUTHORITY_EXPIRED",
+    "AUTHORITY_SCOPE_MISMATCH",
+    "STALE_LOOP_REVISION",
+    "STALE_SUBJECT_REVISION",
+    "IDEMPOTENCY_CONFLICT",
+    "FOREIGN_REFERENCE",
+    "WRONG_REFERENCE_KIND",
+    "INVALID_TRANSITION",
+    "CAPABILITY_UNAVAILABLE",
+    "CAPABILITY_UNVERIFIABLE",
+    "RECEIPT_REQUIRED",
+    "RECEIPT_ISSUER_UNTRUSTED",
+    "RECEIPT_EXPIRED",
+    "RECEIPT_IDENTITY_MISMATCH",
+    "ATTEMPT_ALREADY_CONSUMED",
+    "ADAPTER_SCHEMA_DRIFT",
+    "ARTIFACT_IDENTITY_MISMATCH",
+    "ARTIFACT_STALE",
+    "REPORT_IDENTITY_MISMATCH",
+    "PATH_CONFINEMENT_VIOLATION",
+    "FINALIZATION_PRECONDITION_FAILED",
+    "MIGRATION_NOT_QUIESCENT",
+    "DUAL_WRITE_FORBIDDEN",
+    "STORE_RECOVERY_REQUIRED",
+    "INTERNAL_INVARIANT_VIOLATION"
+  ],
+  "events": [
+    "LoopCreated",
+    "GoalRegistered",
+    "GoalActivated",
+    "HostResourceBound",
+    "RoutePrepared",
+    "DeliveryAttemptCommitted",
+    "DeliveryObserved",
+    "DeliveryUnknown",
+    "DeliveryUnverifiable",
+    "LateDeliveryObserved",
+    "ResultStaged",
+    "ReportStaged",
+    "ArtifactCaptured",
+    "ArtifactVerified",
+    "ArtifactStale",
+    "ReportAccepted",
+    "ResultAcknowledged",
+    "ReviewRecorded",
+    "GoalAdvanced",
+    "LoopPaused",
+    "LoopResumed",
+    "FinalizationPrepared",
+    "ExecutionFinalized",
+    "StrictFinalizationAcknowledged",
+    "ClosureAssuranceStrengthened",
+    "V3SnapshotImported",
+    "OperationRejected"
+  ],
+  "manifest_sha256": "1f303868e9c303bd96281e75445cf30f55815726326049b0160a67c8a1dd9ff2",
+  "protocol_version": "4.0-draft.2",
+  "reference_kinds": [
+    "LoopRef",
+    "ActorRef",
+    "AuthorityGrantRef",
+    "GoalRef",
+    "HostResourceRef",
+    "RouteRef",
+    "DeliveryRef",
+    "AttemptRef",
+    "ResultRef",
+    "ReportRef",
+    "ArtifactRef",
+    "ReviewRef",
+    "FinalizationRef",
+    "ReceiptRef"
+  ],
+  "wire_types": {
+    "ActorRef": [
+      "actor_ref",
+      "loop_namespace",
+      "actor_kind",
+      "identity_digest",
+      "issuer_ref",
+      "issuer_trust"
+    ],
+    "ApplyResult": [
+      "operation_id",
+      "loop_ref",
+      "loop_revision",
+      "event_types",
+      "response",
+      "snapshot_digest",
+      "replayed"
+    ],
+    "AuthorityGrant": [
+      "grant_ref",
+      "actor_ref",
+      "issuer_actor_ref",
+      "issuer_trust",
+      "allowed_commands",
+      "loop_scope",
+      "subject_kinds",
+      "exact_subjects",
+      "not_before",
+      "expires_at",
+      "nonce",
+      "canonical_digest"
+    ],
+    "CapabilityRecord": [
+      "capability",
+      "availability",
+      "assurance",
+      "issuer_ref",
+      "receipt_ref",
+      "details"
+    ],
+    "CommandEnvelope": [
+      "operation_id",
+      "command_type",
+      "protocol_version",
+      "actor_ref",
+      "authority_grant_ref",
+      "subject",
+      "expected_loop_revision",
+      "expected_subject_revisions",
+      "issued_at",
+      "machine_bindings",
+      "semantic_payload",
+      "request_digest"
+    ],
+    "Receipt": [
+      "receipt_ref",
+      "issuer_ref",
+      "issuer_trust",
+      "trust_class",
+      "action",
+      "loop_ref",
+      "subject_ref",
+      "attempt_ref",
+      "target_ref",
+      "request_digest",
+      "provider_idempotency_key",
+      "outcome",
+      "issued_at",
+      "expires_at",
+      "evidence_digest"
+    ],
+    "Reference": [
+      "kind",
+      "value",
+      "loop_ref"
+    ]
+  },
+  "write_cas": "per_loop_revision"
+}

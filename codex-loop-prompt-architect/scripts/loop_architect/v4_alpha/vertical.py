@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from .kernel import AuthorityContext, artifact_fixture_digest
-from .protocol import ActorRef, AuthorityGrant, CommandEnvelope, Receipt, build_command
+from .protocol import (
+    ActorRef,
+    AuthorityGrant,
+    CommandEnvelope,
+    Receipt,
+    authority_grant_digest,
+    build_command,
+)
 
 
 LOOP_REF = "loop-0001"
@@ -67,7 +74,7 @@ def _grant(
 
 def replace_grant_digest(grant: AuthorityGrant) -> AuthorityGrant:
     values = dict(grant.__dict__)
-    values["canonical_digest"] = grant.calculated_digest()
+    values["canonical_digest"] = authority_grant_digest(grant)
     return AuthorityGrant(**values)
 
 

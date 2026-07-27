@@ -16,8 +16,10 @@ from loop_architect.v4_alpha.protocol import (
     InjectedCrash,
     ProtocolRejection,
     canonical_bytes,
+    command_digest,
     raw_domain_digest,
     snapshot_digest,
+    validate_command,
 )
 
 
@@ -303,7 +305,7 @@ class SQLiteStore:
         if fault_at not in {None, *DURABLE_FAULT_BOUNDARIES}:
             raise ValueError(f"unknown durable fault boundary: {fault_at}")
         loop_ref = str(command.subject.get("loop_ref", ""))
-        calculated_digest = command.calculated_digest()
+        calculated_digest = command_digest(command)
         if fault_at == "before_begin":
             raise InjectedCrash(fault_at)
         self._begin()
@@ -331,7 +333,7 @@ class SQLiteStore:
                     return _apply_result(outcome, replayed=True)
                 raise ProtocolRejection(outcome["code"], outcome["detail"])
 
-            command.validate_shape()
+            validate_command(command)
             current = self._snapshot_in_transaction(loop_ref)
             actual_revision = 0 if current is None else current["loop_revision"]
             if actual_revision != command.expected_loop_revision:
