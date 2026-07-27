@@ -317,6 +317,32 @@ class V4PreservationRegisterTests(unittest.TestCase):
         ):
             validator._validate_anti_bloat_contract(registry)
 
+    def test_compat_only_disposition_cannot_reenter_v4(self) -> None:
+        registry = copy.deepcopy(self.registry)
+        capability = next(
+            item
+            for item in registry["capabilities"]
+            if item["capability_id"] == "PRES-COMPAT"
+        )
+        capability["disposition"] = "COMPAT_ONLY"
+        with self.assertRaisesRegex(
+            validator.ValidationFailure, "v3 runtime hard-break disposition drift"
+        ):
+            validator._validate_anti_bloat_contract(registry)
+
+    def test_importer_disposition_cannot_reenter_v4(self) -> None:
+        registry = copy.deepcopy(self.registry)
+        capability = next(
+            item
+            for item in registry["capabilities"]
+            if item["capability_id"] == "PRES-MIGRATION"
+        )
+        capability["disposition"] = "RETAIN_LIBRARY"
+        with self.assertRaisesRegex(
+            validator.ValidationFailure, "v3 runtime hard-break disposition drift"
+        ):
+            validator._validate_anti_bloat_contract(registry)
+
     def test_anti_bloat_evidence_metric_mutation_fails_closed(self) -> None:
         evidence = json.loads(
             (ROOT / validator.ANTI_BLOAT_EVIDENCE_RELATIVE).read_text(

@@ -1,0 +1,54 @@
+{
+  "artifact": "loopskill-v4-p8-superseded-candidate-receipt-v1",
+  "candidate_sha": "5d3d671da11ea5795a629b3df50ff6eb57252432",
+  "decision": "semantic preservation, runtime hard break",
+  "disposition": "SUPERSEDED_PREDECESSOR_NOT_V4_ONLY_RELEASE_EVIDENCE",
+  "external_publication_effects": 0,
+  "files": {
+    "docs/v4/rc-author-packet.md": {
+      "bytes": 5070,
+      "sha256": "dfbe96dc1e5ece0bab0e2586625ecdffced210fc71b77b837ece9ffea76db966"
+    },
+    "evidence/v4-development/p8-app-canary-receipt.json": {
+      "bytes": 1199,
+      "sha256": "35558c6dfc262740306198ed9b3afc3a22edbf39e71b0d4805c031ad36277f61"
+    },
+    "evidence/v4-development/p8-conformance-execution.json": {
+      "bytes": 173140,
+      "sha256": "e45264539ef8f3b4152d8f438551fade132570b5c3b6a296fe3781b339d97249"
+    },
+    "evidence/v4-development/p8-distribution-receipt.json": {
+      "bytes": 1051,
+      "sha256": "d533f64004b8e3993538d4f10617b280d27c53fb96d57446b9d8705bcff58b25"
+    },
+    "evidence/v4-development/p8-full-test.log": {
+      "bytes": 1600,
+      "sha256": "4c1faf418f6ab7d205483eda1b0109d7fda938a01d939ed2ef3d96385c10b11e"
+    },
+    "evidence/v4-development/p8-rc-acceptance-evidence.json": {
+      "bytes": 5078,
+      "sha256": "7096c2b241641031bd61f1e4f302270aa9c8a2a88d83b54dca8108ec355d4ad1"
+    },
+    "evidence/v4-development/p8-sbom.json": {
+      "bytes": 2574,
+      "sha256": "67b095c742879cbfb60ed555ddfc1faa3de53be078fe448a80c3d8a46f9a8076"
+    },
+    "evidence/v4-development/p8-static-receipt.json": {
+      "bytes": 3173,
+      "sha256": "c0d7bc03fab6f4e4b417a723fa51e0a87220e412020374a26fe60df3eddf1448"
+    },
+    "evidence/v4-development/p8-test-evidence.json": {
+      "bytes": 1013,
+      "sha256": "2e9fab484de590d62619e7c6043e6d1d6f33fb840fa97123dc3babda72cbed96"
+    }
+  },
+  "full_repository_tests": {
+    "failed": 0,
+    "passed": 939,
+    "status": "PASS",
+    "superseded_reason": "The suite and candidate included the now-retired v3 runtime compatibility surface."
+  },
+  "raw_evidence_policy": "Retain locally for provenance; do not commit or attach raw logs/receipts that may expose local or Host identity.",
+  "release_eligible": false,
+  "replacement_requirement": "A new SHA must remove v3 runtime/data/CLI/Pack/MCP compatibility and rerun all v4-only release gates."
+}

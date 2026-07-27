@@ -8,9 +8,11 @@
 
 ## Purpose and authority
 
-This register is a versioned migration and RC acceptance checklist. It answers
+This register is a versioned semantic-preservation and v4-only release
+checklist. It answers
 which v3 user value and safety semantics must survive, where each item belongs
-in v4, how it is tested, and when compatibility ends. It is not a protocol
+in v4, how it is tested, and which runtime behaviors remain only on the
+external v3.3.8 product line. It is not a protocol
 manifest, runtime writer, heartbeat, recovery process, policy engine, or second
 canonical ledger. The v4 typed protocol manifest remains wire-shape authority;
 the reducer owns transitions; Adapter/library contracts own Host and filesystem
@@ -65,8 +67,10 @@ not a requirement that v4 reproduce 705 runtime error literals.
 - `MOVE_TO_ADAPTER`: Codex/App/provider facts move behind the Codex Host Adapter.
 - `MOVE_TO_POLICY`: optional coordination and human-governance behavior moves
   above Core without becoming a writer.
-- `COMPAT_ONLY`: one-major-cycle read/facade/import behavior; no v4 canonical
-  write compatibility and no dual write.
+- `EXTERNAL_V3_LINE`: the user value remains available only from the immutable
+  v3.3.8 tag/Release; v4 exposes no matching runtime API.
+- `DEPRECATED_NOT_SHIPPED`: the old behavior is inventoried for provenance and
+  stale-surface rejection but has no production v4 implementation.
 - `DEPRECATE`: no new v4-loop surface; the replacement and preserved user value
   are explicit.
 
@@ -97,13 +101,13 @@ validator.
 | `PRES-AUDIT` | public stable | `RETAIN_LIBRARY` | Read-only projections/archive | `CAP-AUDIT` | Preserve rejection history, audit/status/archive/next action as rebuildable views, never writers. |
 | `PRES-PRIVACY` | public stable | `RETAIN_LIBRARY` | Risk scan and privacy export | `CAP-PRIVACY` | Keep category/digest evidence; never export prompt/chat/task/thread/path/PII/secret/raw log. |
 | `PRES-METRICS` | public stable | `RETAIN_LIBRARY` | Metrics projection | `CAP-AUDIT` | Keep liveness/cost counters and explicit `UNMETERED`; metrics never authorize routing. |
-| `PRES-COMPAT` | public stable | `COMPAT_ONLY` | One-major-cycle facade | `CAP-COMPAT` | Preserve legacy intake/generate/repair, Pack views, and compact/full/minimal_patch behavior without byte promises. |
-| `PRES-MIGRATION` | public stable | `COMPAT_ONLY` | Shadow reader/importer | `CAP-DISTRIBUTION` | Explicit safe-point preview/confirm/cancel/import only; original v3 bytes remain unchanged. |
-| `PRES-DISTRIBUTION` | public stable | `RETAIN_ENTRY` | Isolated install/uninstall/rollback | `CAP-DISTRIBUTION` | Preserve conflict fail-closed, absolute runtime, single registration, byte-exact rollback; add isolated uninstall. |
+| `PRES-COMPAT` | public stable | `EXTERNAL_V3_LINE` | Immutable v3.3.8 tag/Release | `CAP-COMPAT` | v4 rejects v3 loops/Packs with zero writes and points to v3.3.8; legacy intake/generate/repair/views are not shipped. |
+| `PRES-MIGRATION` | public stable | `DEPRECATED_NOT_SHIPPED` | No v4 runtime owner | `CAP-DISTRIBUTION` | No read/shadow/preview/import/conversion API ships; v3 bytes remain untouched because v4 never migrates them. |
+| `PRES-DISTRIBUTION` | public stable | `RETAIN_ENTRY` | v4-owned install/uninstall/rollback | `CAP-DISTRIBUTION` | Install only v4-owned paths, preserve config.toml byte-for-byte, register no MCP, require no LoopSkill restart, and never overwrite v3. |
 | `PRES-DOCS` | public stable | `RETAIN_ENTRY` | Docs/examples | `CAP-DOCS` | Preserve Chinese/English quickstarts and Standard/Adaptive examples with the four-phase v4 entry. |
 | `PRES-RELEASE` | public stable | `RETAIN_ENTRY` | RC validator/author packet | `CAP-RELEASE` | Exact candidate SHA and real disposable App receipt remain mandatory; CI/synthetic history is not release authority. |
 | `PRES-DEPRECATIONS` | public stable | `DEPRECATE` | Dependency/compatibility validator | `CAP-ARCHITECTURE` | No new State-Writer, native Goal recovery, Supervisor, 97-field write, model authority, Pack truth, dual write, or blind retry. |
-| `PRES-PUBLIC-SCHEMA-COMPAT` | public stable | `COMPAT_ONLY` | Read-only v3 decoder | `CAP-DISTRIBUTION` | Inventory and decode v3 closed schemas for shadow/preview only; never write them canonically from v4. |
+| `PRES-PUBLIC-SCHEMA-COMPAT` | public stable | `DEPRECATED_NOT_SHIPPED` | Preservation validator only | `CAP-DISTRIBUTION` | Inventory exact v3 schemas to prove disposition and removal; production v4 performs no legacy decode into live state. |
 
 The machine registry contains, for every row, exact source anchors and test
 method identities, v4 API/schema owner, migration and rollback behavior,
@@ -127,14 +131,15 @@ Adapter writes canonical state. One canonical store may contain orthogonal
 aggregates/event streams without a giant enum or single physical stream.
 
 The 24 capability groups compress old public value into owners and
-compatibility/deprecation boundaries. They are not 24 required runtime
+external-v3/deprecation boundaries. They are not 24 required runtime
 services, and the 1,766 source identities are not branches. The validator holds
 if a preservation mapping would copy a legacy error/schema/runtime mechanism
 instead of retaining its user value or safety invariant.
 
 `CAP-ARCHITECTURE` blocks on one manifest authority, one writer, acyclic import
 graph, Kernel forbidden-dependency scan, and minimal-profile isolation. In the
-minimal profile, optional policy and v3 compatibility imports are unavailable,
+minimal profile, optional policy imports are unavailable and production v3
+compatibility imports do not exist,
 yet the default intake→prepare→confirm→start/status/UNKNOWN path must run. After
 P5.1, an evidence receipt freezes actual loaded modules/dependency edges,
 command/event/error counts, user start actions and confirmation count, Host and
@@ -146,19 +151,17 @@ edges, 16 commands/33 events/40 errors, one start action plus one confirmation,
 zero Host interactions, one protocol mutation and canonical commit, 5+1 local
 preparation/confirmation writes, 11,125 entry bytes, and a 627-byte human Plan.
 These are regression observations, not new size ceilings or beta performance
-PASS. P6/P7 may add default-path cost only for a mapped capability and existing
+PASS. Later v4-only work may add default-path cost only for a mapped capability and existing
 ADR decision; the two candidate beta thresholds remain locked only after the
 pre-observation v3 baseline procedure.
 
-P6 binds `PRES-COMPAT` and `PRES-MIGRATION` to
-`tests/test_v4_compatibility_import.py`. The compatibility facade consumes the
-exact public Standard/Adaptive example inputs but emits a typed v4 PREPARE
-bundle plus optional human view; it never loads on the default path. The
-stateful importer is deliberately narrower: public v3.3.8 schema-v3, one READY
-Goal, paused/lease-free/outbox-empty, copied or synthetic fixtures only. It
-uses a disjoint new v4 root, preserves source bytes, rejects terminal revival,
-and maps the source to one paused v4 Goal without copying the v3 state shape.
-This is fixture conformance, not authorization to migrate real loops.
+The former P6 importer/facade implementation and evidence are immutable
+predecessor history only. They are excluded from v4-only acceptance. New
+conformance binds `PRES-COMPAT`, `PRES-MIGRATION`, and
+`PRES-PUBLIC-SCHEMA-COMPAT` to a single stable unsupported-version result,
+zero writes/effects, a direct v3.3.8 release reference, and production/import/
+distribution scans proving that no importer, Pack execution path, legacy CLI,
+MCP bridge, or schema decoder ships.
 
 ## Deprecation replacements
 
@@ -169,27 +172,22 @@ This is fixture conformance, not authorization to migrate real loops.
 | Supervisor and third governance layer | Kernel next-command invariant plus optional bounded policy | Liveness diagnosis and bounded repair without a second router |
 | 97-field canonical write API | Minimal typed command/event manifest and orthogonal aggregates | Closed validation and deterministic transitions |
 | Model/LLM-carried IDs, SHA, receipt, enum, argv | Machine envelope, Adapter receipt, and capability resolution | Zero user control-identity entry and exact routing |
-| Markdown Pack as execution truth | Typed manifest; Pack remains review/export/emergency view | Familiar human-readable plan and emergency portability |
+| Markdown Pack as execution truth | Typed manifest plus small human-readable v4 Plan | Reviewable boundaries without legacy Pack runtime transport |
 | Blind retry and dual canonical write | At-most-one automatic attempt, readback, UNKNOWN, one writer | Crash safety without duplicate external action |
 
-## Compatibility window and sunset
+## Runtime hard boundary
 
-The v3.3.8 public maintenance line remains available and unchanged. For one v4
-major cycle, v4 retains behavior-equivalent natural-language intake/generate,
-existing-Pack repair, human Pack export, compact/full/minimal_patch views,
-public `loopctl` command coverage, v3 read/shadow/preview/import, and old-runtime
-rollback readability. This is not a promise that every v3 flag, sentence, Pack
-byte, error wording, or 97-field write shape remains identical.
-
-Sunset is allowed only after one full major cycle and requires usage evidence,
-a documented replacement for every affected public flow, migration/rollback
-evidence, an ADR amendment, conformance removal in a major-version corpus
-change, and separate author approval. Stable v3 data readability cannot be
-silently sunset with the facade.
+The v3.3.8 tag and GitHub Release remain available and unchanged as an
+independent historical product line. LoopSkill 4 has no compatibility window:
+it cannot open, import, repair, or run v3 loops or Packs and never edits or
+probes them into live state. Users who need those behaviors continue with a
+separately installed v3.3.8. Restoring any v3 runtime compatibility would
+require a new ADR and cannot be implemented by a wrapper, daemon, importer,
+Supervisor, dual writer, or hidden Pack path.
 
 ## Preservation gate
 
-Before P5.1 implementation resumes and before P6 begins:
+Before the v4-only hard-break implementation replaces predecessor P6 evidence:
 
 1. exact inventory and one-disposition validation pass;
 2. every `CAP-*` family has normal, reject, boundary/drift, and zero-effect

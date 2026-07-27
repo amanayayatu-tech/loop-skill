@@ -1,7 +1,7 @@
-# ADR 0011: LoopSkill 4.0 compatible kernel refactor
+# ADR 0011: LoopSkill 4.0 kernel refactor
 
 - Status: Accepted
-- Implementation boundary: local implementation authorized through an RC candidate; public release remains unauthorized
+- Implementation boundary: v4-only implementation and public GitHub 4.0.0 release authorized after all frozen gates pass
 - Date: 2026-07-27
 - Decision scope: LoopSkill 4.0 architecture, authority boundary, recovery semantics, compatibility, and gates
 - Conformance design: `docs/conformance/loopskill-4-conformance-corpus-design.md`
@@ -9,12 +9,12 @@
 ## Authorization and source identities
 
 The author selects route B: replace the protocol kernel, persistence model, and
-Host boundary while reusing provenance-bound v3 safety assets. The initial
-authorization covered only the disposable alpha pure-kernel slice. A later
-author authorization now permits continuous local implementation through an
-exact-SHA RC candidate and approval packet. Push, tag, PR, public release,
-installation-channel changes, real v3-loop migration, private research data,
-and a stable-release claim remain forbidden.
+Host boundary while reusing provenance-bound v3 safety assets. Successive
+author decisions expanded the boundary from a disposable alpha slice to a
+v4-only public 4.0.0 release. External Git writes remain gated on a clean new
+candidate, full local acceptance, a new exact-SHA App canary, independent
+review, and secret/privacy checks. Real v3-loop migration, private research
+data, force pushes, and unsupported efficacy claims remain forbidden.
 
 The identities below are separate products/evidence sources:
 
@@ -87,8 +87,48 @@ Rejected:
 - **v3 patches renamed 4.0**: preserves manual mirrors, Host leakage, and
   multi-ledger verification cost. v3.3.8 receives bounded safety maintenance
   only.
-- **clean-slate without migration/conformance**: discards proven identity,
+- **clean-slate without preservation/conformance**: discards proven identity,
   replay, path, artifact, and crash evidence and creates an unverified rewrite.
+
+## Decision addendum: semantic preservation, runtime hard break
+
+**Accepted 2026-07-27; this subsection supersedes only the earlier runtime/data/
+CLI/Pack/MCP compatibility direction.** LoopSkill 4 preserves proven v3 safety
+principles and user value through smaller v4 invariants and conformance cases,
+but ships no v3 runtime, importer, repair path, Pack execution path, State
+Gateway, State-Writer, MCP registration, CLI alias, or canonical schema
+compatibility. The immutable `v3.3.8` tag and GitHub Release remain the sole
+supported product line for opening, repairing, or running v3 loops and Packs.
+
+Consequences:
+
+- `PRESERVE`/`REDESIGN` capabilities remain v4 RC/release gates; old mechanisms
+  are never copied merely to satisfy the preservation inventory.
+- `COMPAT_ONLY` runtime dispositions are replaced by `EXTERNAL_V3_LINE` or
+  `DEPRECATED_NOT_SHIPPED`. The 24 capability groups remain semantic mappings,
+  not 1,766 runtime branches.
+- A v4 entry that detects a v3 root/state/Pack performs zero writes and returns
+  one stable `UNSUPPORTED_LEGACY_VERSION` error with a direct v3.3.8 release
+  reference. It does not import, repair, mutate, partially activate, or propose
+  automatic migration.
+- v4 owns a distinct root, installation identity, and SQLite store. Its
+  installer never reads or edits `[mcp_servers.*]`, never requires a LoopSkill
+  App restart, and never replaces a v3 installation.
+- The ordinary flow remains `INTAKE → PREPARE → CONFIRM → START`; the hard break
+  removes manual control-plane transport, not the human authorization boundary.
+- P6 compatibility code/tests/evidence and candidate `5d3d671da11ea5795a629b3df50ff6eb57252432`
+  remain immutable predecessor evidence and are excluded from v4-only release
+  acceptance. A new candidate SHA must pass new install, documentation, CI,
+  conformance, App-canary, privacy, and release-identity gates.
+- After those gates pass, the author has authorized a non-force feature-branch
+  push, PR, CI-gated merge, annotated `v4.0.0` tag, and public non-prerelease
+  GitHub Release. No v3 tag/release/history may be rewritten or deleted.
+
+Any later compatibility restoration requires a new ADR; it cannot enter through
+an importer, wrapper, daemon, Supervisor, dual writer, or Pack-as-truth escape
+hatch. Earlier compatibility-sunset, importer, registered-v3-MCP, and
+RC-ready-only passages below are retained as decision history and are
+normatively superseded by this addendum.
 
 ## v3.3.8 product-capability preservation decision
 

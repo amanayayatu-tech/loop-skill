@@ -36,6 +36,7 @@ ANTI_BLOAT_EVIDENCE_RELATIVE = Path(
 P6_EVIDENCE_RELATIVE = Path(
     "evidence/v4-development/p6-fixture-compatibility-evidence.json"
 )
+P6_SUPERSEDED_SHA256 = "410493c9120880b1b9a22c1512ec295cee7e1bbf64fc5723cb5fd2b50ed874af"
 P7_BASELINE_RELATIVE = Path(
     "evidence/v4-development/p7-v3-baseline-freeze.json"
 )
@@ -49,8 +50,9 @@ ALLOWED_DISPOSITIONS = {
     "RETAIN_LIBRARY",
     "MOVE_TO_ADAPTER",
     "MOVE_TO_POLICY",
-    "COMPAT_ONLY",
     "DEPRECATE",
+    "EXTERNAL_V3_LINE",
+    "DEPRECATED_NOT_SHIPPED",
 }
 ALLOWED_LEVELS = {
     "PUBLIC_STABLE",
@@ -543,6 +545,10 @@ def _validate_anti_bloat_contract(registry: dict[str, Any]) -> None:
         raise ValidationFailure("anti-bloat semantic capability group count must remain 24")
     if contract["legacy_inventory_runtime_branch_count"] != 0:
         raise ValidationFailure("legacy inventory may not define v4 runtime branches")
+    if "no v3 compatibility runtime" not in contract["optional_isolation"]:
+        raise ValidationFailure("v4-only optional-isolation contract drift")
+    if "immutable external v3.3.8 line" not in contract["compatibility_boundary"]:
+        raise ValidationFailure("semantic-preservation/runtime-hard-break drift")
     if contract["canonical_writer_count"] != 1:
         raise ValidationFailure("canonical writer count drift")
     if contract["port_independence"] != {
@@ -596,6 +602,20 @@ def _validate_anti_bloat_contract(registry: dict[str, Any]) -> None:
         "paper/Oracle apparatus",
     }:
         raise ValidationFailure("anti-bloat Kernel forbidden-dependency set drift")
+
+    dispositions = {
+        capability["capability_id"]: capability["disposition"]
+        for capability in registry["capabilities"]
+    }
+    expected_hard_break = {
+        "PRES-COMPAT": "EXTERNAL_V3_LINE",
+        "PRES-MIGRATION": "DEPRECATED_NOT_SHIPPED",
+        "PRES-PUBLIC-SCHEMA-COMPAT": "DEPRECATED_NOT_SHIPPED",
+    }
+    if any(dispositions.get(key) != value for key, value in expected_hard_break.items()):
+        raise ValidationFailure("v3 runtime hard-break disposition drift")
+    if "COMPAT_ONLY" in dispositions.values():
+        raise ValidationFailure("COMPAT_ONLY may not remain in the v4-only register")
 
 
 def _v4_module_name(package_root: Path, source: Path) -> str:
@@ -1017,6 +1037,14 @@ def _validate_p6_evidence_value(root: Path, evidence: dict[str, Any]) -> None:
 
 def _validate_p6_evidence(root: Path) -> None:
     _validate_p6_evidence_value(root, _strict_json(root / P6_EVIDENCE_RELATIVE))
+
+
+def _validate_p6_predecessor_evidence(root: Path) -> None:
+    """Keep the former importer evidence immutable without accepting it for v4."""
+
+    source = root / P6_EVIDENCE_RELATIVE
+    if hashlib.sha256(source.read_bytes()).hexdigest() != P6_SUPERSEDED_SHA256:
+        raise ValidationFailure("superseded P6 predecessor evidence drift")
 
 
 def _validate_p7_baseline_value(root: Path, evidence: dict[str, Any]) -> None:
@@ -1483,7 +1511,7 @@ def validate(root: Path) -> dict[str, Any]:
     )
     family_count, instance_count = _validate_corpus(root, registry)
     _validate_anti_bloat_evidence(root)
-    _validate_p6_evidence(root)
+    _validate_p6_predecessor_evidence(root)
     _validate_p7_baseline(root)
     _validate_p7_evidence(root)
     _scan_stale(root)

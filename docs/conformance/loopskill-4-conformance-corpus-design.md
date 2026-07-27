@@ -19,8 +19,8 @@ evidence that a real Host/provider/artifact/migration path exists.
 
 Each phase may implement only its authorized gate set. The bounded alpha slice
 was synthetic and in-memory; later local phases add SQLite, artifact libraries,
-the Codex Adapter, the public facade, fixture-only v3 compatibility, and isolated
-RC validation without authorizing public release or real-loop migration.
+the Codex Adapter, the public facade, the v3-runtime hard boundary, and isolated
+release validation. It never authorizes v3 import, repair, or mutation.
 
 ## Decision owners
 
@@ -257,11 +257,11 @@ is normative and expands before execution.
 
 | Family | Atomic/parameterized instances | Gate | Count |
 | --- | --- | --- | ---: |
-| `M-001` | `a` safe-point dry run, no write | P6/beta | 1 |
-| `M-002` | `a` import new store; `b` exact replay | P6/beta | 2 |
-| `M-003` | `a` rollback readability without reverse conversion | P6/beta | 1 |
-| `M-004` | reject `a` active lease; `b` live outbox; `c` non-paused source; `d` nonempty destination | P6/beta | 4 |
-| `M-005` | `a` dual write forbidden | P6/beta | 1 |
+| `M-001` | `a` v3 root/state detection returns stable unsupported-version with zero writes | v4-only/rc | 1 |
+| `M-002` | `a` repeated identical rejection is deterministic; `b` changed legacy bytes still cannot become a live v4 import | v4-only/rc | 2 |
+| `M-003` | `a` v3.3.8 release reference is stable and no reverse conversion exists | v4-only/rc | 1 |
+| `M-004` | reject `a` active lease; `b` live outbox; `c` non-paused source; `d` nonempty destination without parsing any into live v4 state | v4-only/rc | 4 |
+| `M-005` | `a` importer/dual-write command and runtime surface absent | v4-only/rc | 1 |
 | `P-001` | `a` REPAIR policy proposes one authorized new route | beta | 1 |
 | `P-002` | explicit BLOCKED by `a` repair exhaustion; `b` user stop | beta | 2 |
 | `P-003` | `a` explicit SUPERSEDED preserves predecessor | beta | 1 |
@@ -282,7 +282,7 @@ internal protocol calls do not count as additional user actions.
 | `UX-003` | `a` minimal startup requires no policy pack installation, selection, or knowledge | beta | 1 |
 | `UX-004` | invalid `a` malformed input; `b` missing goal; `c` unsupported public option returns stable user error without handle/schema leakage | beta | 3 |
 | `UX-005` | visible `a` UNKNOWN; `b` UNVERIFIABLE explains limitation/action and performs no automatic resend | beta | 2 |
-| `UX-006` | v3 import `a` preview; `b` cancel preserves exact v3 bytes and leaves new v4 store absent or empty | beta | 2 |
+| `UX-006` | legacy input `a` shows stable v3.3.8 fallback; `b` leaves v3 bytes/config/new v4 store unchanged | rc | 2 |
 | `UX-007` | `a` default status hides internal receipt/identity; `b` explicit diagnostics/export reveals bounded authorized diagnostics | beta | 2 |
 | `UX-008` | same scenario measures `a` user-visible action count; `b` Pack/entry-artifact bytes against pre-observation frozen beta budget | beta | 2 |
 | `UX-009` | `a` RC real non-research, private-data-free new-user canary proves intake zero effect → prepare zero Host effect → explicit digest-bound confirmation → one machine-owned start/readback without manual control identity | rc | 1 |
@@ -291,7 +291,7 @@ internal protocol calls do not count as additional user actions.
 | `UX-012` | prepare `a` writes exactly five owner-only local artifacts (manifest, boundary, plan, Chinese guide, bundle) and 0 canonical/Host/execution effects; `b` readback verifies all digests with 0 writes; confirm `c` writes exactly one digest-bound local confirmation receipt and 0 canonical/Host effects | P5.1-before-P6 | 3 |
 | `UX-013` | START rejects `a` absent confirmation; `b` expired confirmation; `c` changed manifest/boundary digest; `d` forged/wrong-scope receipt, each with 0 startup Attempt/Host call | P5.1-before-P6 | 4 |
 | `UX-014` | `a` valid confirmation commits exactly one canonical startup Attempt with 0 Host calls; `b` identical replay returns the same result with no second commit/Attempt/Host call; Adapter `c` invokes once and authoritative readback binds machine Host identity; `d` missing readback yields UNKNOWN with no bind/resend | P5.1-before-P6 | 4 |
-| `UX-015` | `a` DIRECT_TASK_RECOMMENDED creates 0 loop; `b` legacy Skill intake/prepare compatibility fixture remains behavior-equivalent; `c` user/LLM control identity count is exactly 0 | P5.1-before-P6 | 3 |
+| `UX-015` | `a` DIRECT_TASK_RECOMMENDED creates 0 loop; `b` legacy Skill/Pack request is rejected with the external v3.3.8 fallback and zero writes; `c` user/LLM control identity count is exactly 0 | v4-only/rc | 3 |
 | `UX-016` | `a` high-impact automation without pre-signed digest-bound authority cannot use `--yes`, defaults, or noninteractive fallback to bypass confirmation | P5.1-before-P6 | 1 |
 
 P5.1 case files use the full record format above. Their nonzero boundaries are
@@ -339,10 +339,10 @@ instance.
 | `CAP-OPERABILITY` | new: doctor pass/drift, compile pass/reject, canary pass/reject, lifecycle boundary, and zero-effect check under exact `CAP-OPERABILITY-*` IDs | rc | 8 |
 | `CAP-AUDIT` | new: rejection, index, status, archive, tamper, legacy-boundary, next-action, and zero-writer projection under exact `CAP-AUDIT-*` IDs | beta | 8 |
 | `CAP-PRIVACY` | new: scan/export pass, secret/PII/raw-log reject, stale allowlist, category boundary, and zero-effect under exact `CAP-PRIVACY-*` IDs | beta | 8 |
-| `CAP-COMPAT` | new: legacy intake/generate/Pack-repair, compact/full/minimal-patch, sunset, and zero-effect under exact `CAP-COMPAT-*` IDs; alias: `UX-015-b` | P6/beta | 8 |
+| `CAP-COMPAT` | v4-only hard boundary: every legacy entry/Pack/view/import surface is not shipped or returns one stable unsupported-version result with zero write/effect; alias: `UX-015-b` | rc | 8 |
 | `CAP-DISTRIBUTION` | new: install, conflict, rollback, runtime identity, MCP, uninstall, drift, and zero-effect under exact `CAP-DISTRIBUTION-*` IDs | rc | 8 |
-| `CAP-DOCS` | new: Chinese/English/minimal/Standard/Adaptive/migration, stale reject, and zero-effect under exact `CAP-DOCS-*` IDs | rc | 8 |
-| `CAP-RELEASE` | new: SHA, manifest, compatibility CI, canary, SBOM, license, secret, artifact, failure, candidate drift, no-public-effect, and author packet under exact `CAP-RELEASE-*` IDs; aliases: `UX-009-a`, `F-001-a` | rc | 12 |
+| `CAP-DOCS` | Chinese/English/minimal/Standard/Adaptive/hard-break guidance, stale-v3 reject, and zero-effect under exact `CAP-DOCS-*` IDs | rc/release | 8 |
+| `CAP-RELEASE` | exact SHA, manifest, v4 release CI, canary, SBOM, license, secret, artifact, failure, candidate drift, publication boundary, and release packet under exact `CAP-RELEASE-*` IDs; aliases: `UX-009-a`, `F-001-a` | rc/release | 12 |
 | `CAP-ARTIFACT` | aliases: all atomic `A-001`, `A-GIT-*`, `A-NONGIT-*`, `A-NEWGIT-*`, and `A-PATH-*` instances | beta | 0 |
 | `CAP-ARCHITECTURE` | new: `CAP-ARCHITECTURE-ONE-WRITER`, `CAP-ARCHITECTURE-FORBIDDEN-IMPORT`, `CAP-ARCHITECTURE-MINIMAL-ISOLATION`, `CAP-ARCHITECTURE-NO-LEGACY-BRANCHES` | P5.1-before-P6 | 4 |
 
@@ -1020,15 +1020,14 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
 - full alpha: all remaining alpha instances;
 - alpha.2: all Host/artifact instances including `H-011`; any real integration
   remains disposable, isolated, non-research, and claim-limited;
-- P5.1-before-P6: all `UX-001`, `UX-010..016`, `CAP-INTAKE`, `CAP-ENTRY`,
+- P5.1: all `UX-001`, `UX-010..016`, `CAP-INTAKE`, `CAP-ENTRY`,
   and `CAP-ARCHITECTURE` instances, including minimal-profile isolation with
-  optional policy and v3 compatibility modules unavailable;
-- P6: `M-001..005`, `UX-006-a..b`, and all `CAP-COMPAT` instances against
-  public/synthetic v3.3.8 fixtures; nine SQLite durable-boundary subcases;
-  exact source-byte preservation; terminal revival, non-quiescence,
-  destination collision, and dual-write rejection; the default path must
-  remain compat-unavailable and unchanged;
-- beta: all migration/policy/liveness/cost instances, same-scenario v3 baseline,
+  optional policy unavailable and production v3 compatibility absent;
+- v4-only hard break: `M-001..005`, `UX-006-a..b`, and all `CAP-COMPAT`
+  instances against public/synthetic v3.3.8 markers; one stable
+  unsupported-version result, exact zero-write preservation, external v3.3.8
+  fallback, and absence of importer/facade/MCP/Pack runtime;
+- beta: all policy/liveness/cost instances, same-scenario v3 baseline,
   all remaining `UX-001..008`, `UX-010..016`, `CAP-MODES`, `CAP-ROLES`,
   `CAP-HUMAN`, `CAP-REPAIR`, `CAP-AUDIT`, `CAP-PRIVACY`, and `CAP-ARTIFACT`,
   and thresholds frozen before observing v4 performance;
@@ -1036,8 +1035,9 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
   evidence, independent review, `UX-009`, `CAP-OPERABILITY`,
   `CAP-DISTRIBUTION`, `CAP-DOCS`, and `CAP-RELEASE`, real new-user usability
   canary, fixed candidate SHA, and preserved failures/UNKNOWN;
-- stable/public release: always requires separate author approval and is not
-  implied by an RC-ready result.
+- public release: author authorization is recorded in ADR 0011, but still
+  requires exact merged-main identity, green PR/main/tag CI, a new exact-SHA
+  App canary, independent review, annotated tag, and release readback.
 
 The RC distribution implementation binds `CAP-DISTRIBUTION-*` to the existing
 staged installer plus `scripts/uninstall_v4.py` and
@@ -1098,8 +1098,8 @@ digests, loaded modules and dependency edges, manifest command/event/error
 counts, user start actions, confirmation count, Host interactions, protocol
 calls, local writes, entry/Pack bytes, latency, UNKNOWN count, and human
 intervention. PASS additionally requires a cycle-free import graph, Kernel
-forbidden-dependency scan, single-writer scan, and the optional-policy/v3-compat
-unavailable minimal profile. This receipt is build evidence only, never a
+forbidden-dependency scan, single-writer scan, optional-policy isolation, and
+production-v3-runtime absence. This receipt is build evidence only, never a
 runtime authority.
 
 The P5.1 frozen synthetic observation is: 13 loaded v4 modules, 17 internal
@@ -1113,22 +1113,18 @@ Latency is a nonblocking single-sample diagnostic until the P7 measurement
 fixture and v3 baseline are frozen. Any later default-path increase must cite a
 registry capability and an already accepted ADR decision.
 
-The P6 implementation binding is
-`tests/test_v4_compatibility_import.py`. `M-001-a` and `UX-006-a..b` bind
-shadow/preview/cancel; `M-002-a..b` bind one accepted import and exact replay;
-`M-003-a` binds unchanged v3 bytes plus v3-runtime readability; `M-004-a..d`
-bind non-paused/lease/outbox and destination rejection; `M-005-a` binds
-disjoint-root enforcement. `CAP-COMPAT-INTAKE`, `-GENERATE`, `-PACK-REPAIR`,
-`-COMPACT`, `-FULL`, `-MINIMAL-PATCH`, and `-ZERO` bind the public v3 Standard
-and Adaptive examples and the optional facade. `-SUNSET` binds the explicit
-one-major-cycle contract; actual removal remains a later separately approved
-major-version decision. It also runs the installed-Skill routing regression:
-an explicit v4 request reaches native INTAKE before any legacy Doctor or v3
-control-plane load, while an explicit legacy request keeps the compatibility
-facade. Each SQLite durable fault boundary is a separate
-subcase; an import recovers to exact pre-state or the single committed
-post-state and creates no external Attempt. These bindings do not change the
-independent 101-family/343-instance catalog count.
+The v4-only legacy-boundary suite replaces
+`tests/test_v4_compatibility_import.py` as active acceptance. `M-001-a` and
+`UX-006-a..b` bind stable detection, an external-v3 fallback, and byte-exact
+zero-write behavior; `M-002-a..b` bind deterministic rejection replay and
+changed-input rejection; `M-003-a` binds the immutable v3.3.8 Release
+reference; `M-004-a..d` prove that no historical state class is parsed into
+live v4 state; `M-005-a` proves importer and dual-write surfaces are absent.
+Existing `CAP-COMPAT-*` IDs cover retired legacy entry/Pack/view categories as
+rejection and stale-production-scan cases, never as supported APIs. Optional
+policy remains removable; production v3 compatibility modules are absent
+rather than merely disabled. The exact catalog count is mechanically
+recomputed after the new bindings replace predecessor P6 evidence.
 
 The P7 policy/operability implementation binding is
 `tests/test_v4_product_policy_operability.py`. `CAP-MODES-*` bind default
@@ -1176,14 +1172,14 @@ failure and must stop implementation.
 | Result/Report/Artifact/Review chain | `R-001..004`, `F-001`, corrected snapshot |
 | canonical encoder across languages | `ENC-001-a..j` |
 | bounds and fail-closed rejection | `RES-001`, `K-005..008`, `REJ-001` |
-| no Host/Git/SQLite/migration dependency | forbidden-import scan and hard side-effect counts |
+| no Host/Git/SQLite-concrete/v3-compat dependency in Kernel | forbidden-import scan and hard side-effect counts |
 | one manifest, one writer, independent ports, acyclic graph | `CAP-ARCHITECTURE-ONE-WRITER`, `CAP-ARCHITECTURE-FORBIDDEN-IMPORT`; architecture-fitness validator |
-| policy/compat isolation and deletability | `CAP-ARCHITECTURE-MINIMAL-ISOLATION`, `CAP-ARCHITECTURE-NO-LEGACY-BRANCHES`; minimal profile makes both module sets unavailable |
+| policy isolation and v3-runtime absence | `CAP-ARCHITECTURE-MINIMAL-ISOLATION`, `CAP-ARCHITECTURE-NO-LEGACY-BRANCHES`; minimal profile removes policy and shipped files contain no compatibility runtime |
 | authorized stop without fabricated cancellation | `P-002`, `P-004` |
-| v3 compatibility without shape copy | `M-001..005` and exact provenance mapping |
+| semantic preservation with runtime hard break | `M-001..005`, `CAP-COMPAT-*`, exact provenance mapping, and production stale-runtime scan |
 | one-entry, explicit-confirmation, zero-control-identity UX | `UX-001..003`, `UX-010..016`; blocking P5.1 before P6 |
 | non-leaking status and honest uncertainty | `UX-004`, `UX-005`, `UX-007` |
-| explicit safe migration UX | `UX-006` |
+| stable zero-write legacy rejection UX | `UX-006` |
 | frozen UX cost budget and real usability | `UX-008`, `UX-009` |
 | complete v3 product-asset preservation | all 14 `CAP-*` families; 24 semantic capability groups; exact registry/error-ownership/closed-set validator |
 | resolved author decisions | phase gates and ADR OD table; no open semantic for slice |
