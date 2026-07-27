@@ -332,7 +332,6 @@ def _machine_bootstrap(
                 "PauseLoop",
                 "PrepareFinalization",
                 "RecordPolicyDecision",
-                "RegisterGoalPlan",
                 "ResumeLoop",
                 "ReviseGoalPlan",
                 "StopLoop",

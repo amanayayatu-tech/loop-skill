@@ -155,9 +155,11 @@ PASS. Later v4-only work may add default-path cost only for a mapped capability 
 ADR decision; the two candidate beta thresholds remain locked only after the
 pre-observation v3 baseline procedure.
 
-The later `PRES-MODES` implementation adds typed `goal_plan`,
-`RegisterGoalPlan`, and `ReviseGoalPlan` to make the retained Standard/Adaptive
-semantics publicly reachable without importing optional policy into Kernel.
+The later `PRES-MODES` implementation adds typed `goal_plan` and
+`ReviseGoalPlan` to make the retained Standard/Adaptive semantics publicly
+reachable without importing optional policy into Kernel. The complete initial
+plan and all machine chain references are accepted only inside the confirmed
+atomic `CreateLoop`; no post-confirmation plan-registration command exists.
 Entry supplies semantic objectives from the prepared author envelope; Kernel
 allocates references, owns the canonical dependency graph and revision, and
 rejects out-of-envelope or stale revisions before Host execution. The earlier

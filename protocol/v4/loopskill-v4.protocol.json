@@ -85,18 +85,6 @@
         }
       }
     },
-    "RegisterGoalPlan": {
-      "semantic_payload": {
-        "execution_mode": {
-          "enum": ["STANDARD", "ADAPTIVE"],
-          "type": "string"
-        },
-        "objectives": {
-          "items": {"type": "string"},
-          "type": "array"
-        }
-      }
-    },
     "PauseLoop": {
       "semantic_payload": {
         "reason": {

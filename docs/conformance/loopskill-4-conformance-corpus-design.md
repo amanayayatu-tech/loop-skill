@@ -1088,10 +1088,12 @@ closed. The output contains 349 sorted unique coverage mappings, their target
 test identities and result digests, plus a canonical aggregate digest. It
 separately reports the number of unique executable test methods; it does not
 claim 349 independent executions. `UX-009-a` and
-`CAP-RELEASE-CANARY` additionally require the real App receipt. One bound
-assertion may cover multiple explicitly parameterized atomic instances only
-when each instance independently consumes and validates its own contract; no
-family row alone produces PASS and no unbound instance may be omitted.
+`CAP-RELEASE-CANARY` additionally require the real App receipt. One executable
+test may cover multiple semantic mappings; the receipt must not present those
+mappings as independently executed or observed. No family row alone produces
+PASS and no mapping may be omitted. Selecting this evidence profile instead of
+349 selector-specific executable results is a release-claim decision and must
+be author-approved before publication.
 
 32 KiB Pack and at least 50% control-interaction reduction were candidate beta
 targets, not alpha correctness gates. The P7 pre-comparison freeze makes them

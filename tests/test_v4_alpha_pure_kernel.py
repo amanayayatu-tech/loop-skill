@@ -81,7 +81,8 @@ class V4AlphaPureKernelTests(unittest.TestCase):
     def test_manifest_freezes_slice_and_per_loop_cas(self):
         self.assertEqual(PROTOCOL_MANIFEST["protocol_version"], "4.0.0")
         self.assertEqual(PROTOCOL_MANIFEST["write_cas"], "per_loop_revision")
-        self.assertEqual(len(PROTOCOL_MANIFEST["commands"]), 20)
+        self.assertEqual(len(PROTOCOL_MANIFEST["commands"]), 19)
+        self.assertNotIn("RegisterGoalPlan", PROTOCOL_MANIFEST["commands"])
         reserved = {
             name
             for name, specification in PROTOCOL_MANIFEST[
@@ -89,7 +90,7 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             ].items()
             if "reserved_until" in specification
         }
-        self.assertEqual(len(set(PROTOCOL_MANIFEST["commands"]) - reserved), 20)
+        self.assertEqual(len(set(PROTOCOL_MANIFEST["commands"]) - reserved), 19)
         self.assertEqual(reserved, set())
         self.assertIn("UNKNOWN", PROTOCOL_MANIFEST["delivery_states"])
         self.assertIn("UNVERIFIABLE", PROTOCOL_MANIFEST["delivery_states"])

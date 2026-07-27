@@ -633,7 +633,7 @@ from delivery observation.
 
 ### Mutation commands
 
-`CreateLoop`, `RegisterGoalPlan`, `ReviseGoalPlan`, `BindHostResource`, `PrepareRoute`, `BeginEffectDelivery`,
+`CreateLoop`, `ReviseGoalPlan`, `BindHostResource`, `PrepareRoute`, `BeginEffectDelivery`,
 `RecordEffectObservation`, `RecordExternalEffectObservation`, `StageResult`,
 `StageExternalResult`, `AcknowledgeResult`, `RecordReview`,
 `AdvanceGoal`, `RecordPolicyDecision`, `PauseLoop`, `ResumeLoop`, `StopLoop`, `PrepareFinalization`,

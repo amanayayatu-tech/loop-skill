@@ -677,86 +677,6 @@ def _create_loop(
     return state, events, response
 
 
-def _register_goal_plan(
-    snapshot: dict[str, Any] | None,
-    command: CommandEnvelope,
-    _: AuthorityContext,
-) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    """Register one machine-identified, dependency-ordered policy plan."""
-    assert snapshot is not None
-    if "goal_plan" in snapshot or snapshot.get("routes") or snapshot.get("results"):
-        raise ProtocolRejection("INVALID_TRANSITION", "Goal plan is already fixed")
-    objectives = command.semantic_payload.get("objectives")
-    mode = command.semantic_payload.get("execution_mode")
-    if (
-        not isinstance(objectives, list)
-        or not 2 <= len(objectives) <= 16
-        or not all(isinstance(item, str) and item.strip() for item in objectives)
-        or len(set(item.strip() for item in objectives)) != len(objectives)
-        or mode not in {"STANDARD", "ADAPTIVE"}
-    ):
-        raise ProtocolRejection("INVALID_COMMAND", "invalid Goal plan")
-    existing_ref, existing = _only_record(snapshot, "goals")
-    if existing["objective_digest"] != domain_digest(
-        "loopskill-goal-objective-v1\n", objectives[0].strip()
-    ):
-        raise ProtocolRejection("AUTHORITY_SCOPE_MISMATCH", "primary Goal changed")
-    allocated = {
-        key: value
-        for key, value in command.machine_bindings["allocate_refs"].items()
-        if key.startswith("new_goal_ref_")
-    }
-    expected_keys = {f"new_goal_ref_{index:03d}" for index in range(1, len(objectives))}
-    if set(allocated) != expected_keys or len(set(allocated.values())) != len(allocated):
-        raise ProtocolRejection("INVALID_COMMAND", "Goal allocation drift")
-    ordered = [existing_ref]
-    existing.update({"depends_on": None, "order": 0})
-    events = []
-    previous = existing_ref
-    for index, objective in enumerate(objectives[1:], 1):
-        goal_ref = allocated[f"new_goal_ref_{index:03d}"]
-        if _kind_for_ref(goal_ref) != "GoalRef" or goal_ref in snapshot["goals"]:
-            raise ProtocolRejection("FOREIGN_REFERENCE", goal_ref)
-        snapshot["goals"][goal_ref] = {
-            "depends_on": previous,
-            "objective_digest": domain_digest(
-                "loopskill-goal-objective-v1\n", objective.strip()
-            ),
-            "order": index,
-            "revision": 1,
-            "state": "PENDING",
-        }
-        ordered.append(goal_ref)
-        previous = goal_ref
-        events.append(_event("GoalRegistered", goal_ref=goal_ref))
-    plan_digest = domain_digest(
-        "loopskill-goal-plan-v1\n",
-        {
-            "max_roadmap_revisions": 4 if mode == "ADAPTIVE" else 1,
-            "mode": mode,
-            "objectives": [item.strip() for item in objectives],
-        },
-    )
-    snapshot["goal_plan"] = {
-        "active_goal_ref": existing_ref,
-        "envelope_digest": domain_digest(
-            "loopskill-goal-envelope-v1\n",
-            {
-                "max_roadmap_revisions": 4 if mode == "ADAPTIVE" else 1,
-                "mode": mode,
-                "objectives": [item.strip() for item in objectives],
-            },
-        ),
-        "max_roadmap_revisions": 4 if mode == "ADAPTIVE" else 1,
-        "mode": mode,
-        "ordered_goal_refs": ordered,
-        "plan_digest": plan_digest,
-        "revision": 1,
-    }
-    events.append(_event("GoalPlanRegistered", mode=mode, plan_digest=plan_digest))
-    return snapshot, events, {"goal_count": len(ordered), "plan_revision": 1}
-
-
 def _revise_goal_plan(
     snapshot: dict[str, Any] | None,
     command: CommandEnvelope,
@@ -1811,7 +1731,6 @@ def _strengthen_closure_assurance(
 
 _REDUCERS = {
     "CreateLoop": _create_loop,
-    "RegisterGoalPlan": _register_goal_plan,
     "BindHostResource": _bind_host_resource,
     "RecordExternalEffectObservation": _observe_external_effect,
     "PrepareRoute": _prepare_route,
