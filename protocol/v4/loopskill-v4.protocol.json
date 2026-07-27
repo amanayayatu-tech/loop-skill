@@ -163,12 +163,18 @@
     "USER_INPUT_INVALID",
     "USER_LOOP_EXISTS",
     "USER_STORE_UNAVAILABLE",
-    "USER_INTERNAL_ERROR"
+    "USER_INTERNAL_ERROR",
+    "USER_CLARIFICATION_REQUIRED",
+    "USER_DIRECT_TASK_RECOMMENDED",
+    "USER_CONFIRMATION_REQUIRED",
+    "USER_CONFIRMATION_STALE",
+    "USER_PREPARATION_INVALID"
   ],
   "events": [
     "LoopCreated",
     "GoalRegistered",
     "GoalActivated",
+    "StartAuthorized",
     "HostResourceBound",
     "ExternalEffectPrepared",
     "ExternalEffectObserved",
@@ -296,6 +302,43 @@
     ],
     "LoopStartInput": [
       ["goal", "str", {"type": "string"}]
+    ],
+    "LoopIntakeInput": [
+      ["goal", "str", {"type": "string"}],
+      ["task_horizon", "str", {"type": "string"}],
+      ["write_scope", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["budget", "str", {"type": "string"}],
+      ["external_actions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["acceptance_criteria", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["stop_conditions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["authorization_boundaries", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}]
+    ],
+    "LoopIntakeDecision": [
+      ["disposition", "str", {"enum": ["READY_FOR_LOOP", "NEEDS_CLARIFICATION", "BLOCKED", "DIRECT_TASK_RECOMMENDED"], "type": "string"}],
+      ["route", "str", {"enum": ["DIRECT_TASK", "STANDARD_LOOP", "ADAPTIVE_LOOP", "UNDETERMINED"], "type": "string"}],
+      ["reason", "str", {"type": "string"}],
+      ["questions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}]
+    ],
+    "PreparedLoopManifest": [
+      ["manifest_version", "str", {"type": "string"}],
+      ["control_namespace", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}],
+      ["goal", "str", {"type": "string"}],
+      ["task_horizon", "str", {"type": "string"}],
+      ["write_scope", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["budget", "str", {"type": "string"}],
+      ["external_actions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["acceptance_criteria", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["stop_conditions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["authorization_boundaries", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["prepared_at", "str", {"type": "string"}]
+    ],
+    "PreparedLoopBundle": [
+      ["manifest_digest", "str", {"type": "string"}],
+      ["boundary_digest", "str", {"type": "string"}],
+      ["controller_plan_digest", "str", {"type": "string"}],
+      ["instructions_digest", "str", {"type": "string"}],
+      ["bundle_digest", "str", {"type": "string"}]
     ],
     "UserFacingStatus": [
       ["goal", "str", {"type": "string"}],

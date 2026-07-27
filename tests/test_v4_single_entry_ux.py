@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import importlib.machinery
+import importlib.util
+import io
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -17,13 +23,31 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from loop_architect.v4_alpha.kernel import AuthorityContext  # noqa: E402
-from loop_architect.v4_alpha.protocol import InjectedCrash, LoopStartInput  # noqa: E402
+from loop_architect.v4_alpha.protocol import (  # noqa: E402
+    InjectedCrash,
+    LoopIntakeInput,
+    Receipt,
+)
 from loop_architect.v4_alpha.vertical import (  # noqa: E402
     LOOP_REF,
     fixture_authority,
     vertical_commands,
 )
-from loop_architect.v4_entry import EntryError, diagnostics, start_loop, status  # noqa: E402
+from loop_architect.v4_entry import (  # noqa: E402
+    EntryError,
+    confirm_loop,
+    diagnostics,
+    intake_report_loop,
+    prepare_loop,
+    record_external_observation,
+    start_loop,
+    status,
+)
+from loop_architect.v4_entry.preparation import (  # noqa: E402
+    CONFIRMATION_FILENAME,
+    boundary_display,
+    load_prepared,
+)
 from loop_architect.v4_entry.service import STORE_FILENAME, _machine_bootstrap  # noqa: E402
 from loop_architect.v4_persistence.sqlite_store import SQLiteStore  # noqa: E402
 from loop_architect.v4_persistence.sqlite_store import PersistenceCorruption  # noqa: E402
@@ -46,6 +70,38 @@ def fixed_tokens():
         )
     )
     return lambda: next(values)
+
+
+def ready_request(goal="Ship a bounded public change", *, horizon="long"):
+    return LoopIntakeInput(
+        goal=goal,
+        task_horizon=horizon,
+        write_scope=("synthetic-workspace",),
+        budget="10 minutes; 1 Host create attempt",
+        external_actions=(),
+        acceptance_criteria=("one canonical startup Attempt",),
+        stop_conditions=("stop on UNKNOWN",),
+        authorization_boundaries=("no commit, push, publish, or deploy",),
+    )
+
+
+def prepare_confirm(root, goal="Ship a bounded public change", *, token="000000000000000000000001"):
+    prepared = prepare_loop(
+        ready_request(goal),
+        Path(root) / "prepared",
+        clock=lambda: NOW,
+        token_factory=lambda: token,
+    )
+    return confirm_loop(prepared.directory, confirmed=True, clock=lambda: NOW)
+
+
+def load_cli_module():
+    loader = importlib.machinery.SourceFileLoader("loopskill4_test_cli", str(ENTRY))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def changed_authority_with_delivery(*, outcome, trust_class):
@@ -76,23 +132,275 @@ class V4SingleEntryUXTests(unittest.TestCase):
             timeout=10,
         )
 
-    def test_one_literal_command_creates_and_starts_without_control_identity(self):
+    def test_intake_four_outcomes_seven_sections_and_zero_side_effects(self):
+        ready = ready_request()
+        clarification = replace(ready, write_scope=(), budget="")
+        blocked = replace(
+            ready,
+            external_actions=("publish",),
+            authorization_boundaries=("no publish",),
+        )
+        direct = replace(
+            ready,
+            task_horizon="one_off",
+            external_actions=(),
+        )
+        expected = (
+            (ready, "READY_FOR_LOOP"),
+            (clarification, "NEEDS_CLARIFICATION"),
+            (blocked, "BLOCKED"),
+            (direct, "DIRECT_TASK_RECOMMENDED"),
+        )
+        headings = (
+            "1 最终判定",
+            "2 质量闸矩阵",
+            "3 阻断项",
+            "4 必须澄清的问题",
+            "5 风险与待确认假设",
+            "6 规范化需求",
+            "7 Loop 输入结果",
+        )
         with tempfile.TemporaryDirectory() as temporary:
-            status_view = start_loop(
-                LoopStartInput(goal="Ship a bounded public change"),
-                root=temporary,
+            root = Path(temporary)
+            before = tuple(root.iterdir())
+            for request, disposition in expected:
+                with self.subTest(disposition=disposition):
+                    report = intake_report_loop(request)
+                    self.assertEqual(tuple(report), headings)
+                    self.assertEqual(
+                        report["1 最终判定"]["disposition"], disposition
+                    )
+                    self.assertLessEqual(
+                        len(report["4 必须澄清的问题"]), 3
+                    )
+            self.assertEqual(tuple(root.iterdir()), before)
+
+    def test_prepare_confirm_and_start_have_exact_side_effect_boundaries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared = prepare_loop(
+                ready_request(),
+                root / "prepared",
                 clock=lambda: NOW,
-                token_factory=fixed_tokens(),
+                token_factory=lambda: "111111111111111111111111",
+            )
+            self.assertEqual(len(tuple(prepared.directory.iterdir())), 5)
+            self.assertFalse((root / "data").exists())
+            self.assertEqual(set(boundary_display(prepared)), {
+                "acceptance_criteria",
+                "authorization_boundaries",
+                "budget",
+                "external_actions",
+                "goal",
+                "stop_conditions",
+                "write_scope",
+            })
+            with self.assertRaises(EntryError) as unconfirmed:
+                start_loop(prepared, root=root / "data", clock=lambda: NOW)
+            self.assertEqual(unconfirmed.exception.code, "USER_CONFIRMATION_REQUIRED")
+            self.assertFalse((root / "data").exists())
+            with self.assertRaises(EntryError) as declined:
+                confirm_loop(prepared.directory, confirmed=False, clock=lambda: NOW)
+            self.assertEqual(declined.exception.code, "USER_CONFIRMATION_REQUIRED")
+            confirmed = confirm_loop(
+                prepared.directory, confirmed=True, clock=lambda: NOW
+            )
+            self.assertEqual(len(tuple(prepared.directory.iterdir())), 6)
+            start_loop(confirmed, root=root / "data", clock=lambda: NOW)
+            with SQLiteStore(root / "data" / STORE_FILENAME) as store:
+                self.assertEqual(store.commit_count, 1)
+                self.assertEqual(len(store.ready_effect_attempts()), 1)
+                descriptor = store.loop_descriptors()[0]
+                self.assertEqual(
+                    tuple(event["type"] for event in store.events(descriptor["loop_ref"])),
+                    (
+                        "LoopCreated",
+                        "GoalRegistered",
+                        "GoalActivated",
+                        "StartAuthorized",
+                        "ExternalEffectPrepared",
+                    ),
+                )
+
+    def test_stale_expired_and_changed_confirmation_fail_closed(self):
+        later = datetime(2026, 7, 27, 1, 31, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expired = prepare_confirm(root / "expired", token="222222222222222222222222")
+            with self.assertRaises(EntryError) as caught:
+                start_loop(expired, root=root / "expired-data", clock=lambda: later)
+            self.assertEqual(caught.exception.code, "USER_CONFIRMATION_STALE")
+            self.assertFalse((root / "expired-data").exists())
+
+            changed = prepare_confirm(root / "changed", token="333333333333333333333333")
+            boundary_path = changed.directory / "boundary-summary.json"
+            value = json.loads(boundary_path.read_text(encoding="utf-8"))
+            value["budget"] = "changed after confirmation"
+            boundary_path.write_text(
+                json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            with self.assertRaises(EntryError) as caught:
+                start_loop(changed, root=root / "changed-data", clock=lambda: NOW)
+            self.assertEqual(caught.exception.code, "USER_CONFIRMATION_STALE")
+            self.assertFalse((root / "changed-data").exists())
+
+            forged = prepare_confirm(root / "forged", token="555555555555555555555555")
+            confirmation_path = forged.directory / CONFIRMATION_FILENAME
+            value = json.loads(confirmation_path.read_text(encoding="utf-8"))
+            value["issuer_ref"] = "model-supplied-fake-issuer"
+            confirmation_path.write_text(
+                json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            with self.assertRaises(EntryError) as caught:
+                start_loop(forged, root=root / "forged-data", clock=lambda: NOW)
+            self.assertEqual(caught.exception.code, "USER_CONFIRMATION_STALE")
+            self.assertFalse((root / "forged-data").exists())
+
+    def test_direct_task_recommendation_never_creates_loop_or_preparation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            request = replace(
+                ready_request("Answer one bounded question"),
+                task_horizon="one_off",
+            )
+            report = intake_report_loop(request)
+            self.assertEqual(
+                report["1 最终判定"]["disposition"],
+                "DIRECT_TASK_RECOMMENDED",
+            )
+            with self.assertRaises(EntryError) as caught:
+                prepare_loop(request, root / "prepared", clock=lambda: NOW)
+            self.assertEqual(caught.exception.code, "USER_DIRECT_TASK_RECOMMENDED")
+            self.assertEqual(tuple(root.iterdir()), ())
+
+    def test_noninteractive_main_entry_stops_after_prepare_without_confirmation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "goal.json"
+            source.write_text(
+                json.dumps(
+                    {
+                        "goal": "Prepare but do not silently start",
+                        "task_horizon": "long",
+                        "write_scope": ["synthetic-workspace"],
+                        "budget": "10 minutes",
+                        "external_actions": [],
+                        "acceptance_criteria": ["one startup"],
+                        "stop_conditions": ["stop on UNKNOWN"],
+                        "authorization_boundaries": ["no publish"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            prepared = root / "prepared"
+            data = root / "data"
+            result = self.run_entry(
+                "start",
+                source,
+                "--root",
+                data,
+                "--prepared-output",
+                prepared,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("USER_CONFIRMATION_REQUIRED", result.stderr)
+            self.assertEqual(len(tuple(prepared.iterdir())), 5)
+            self.assertFalse((prepared / CONFIRMATION_FILENAME).exists())
+            self.assertFalse(data.exists())
+
+    def test_explicit_confirm_displays_boundary_and_requires_interaction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared = prepare_loop(
+                ready_request("Explicit confirmation"),
+                root / "prepared",
+                clock=lambda: NOW,
+                token_factory=lambda: "777777777777777777777777",
+            )
+            noninteractive = self.run_entry("confirm", prepared.directory)
+            self.assertEqual(noninteractive.returncode, 2)
+            self.assertIn("USER_CONFIRMATION_REQUIRED", noninteractive.stderr)
+            self.assertFalse((prepared.directory / CONFIRMATION_FILENAME).exists())
+
+            cli = load_cli_module()
+            stdout = io.StringIO()
+            with mock.patch.object(sys.stdin, "isatty", return_value=True), mock.patch(
+                "builtins.input", return_value="START THIS LOOP"
+            ), contextlib.redirect_stdout(stdout):
+                result = cli.main(["confirm", str(prepared.directory)])
+            self.assertEqual(result, 0)
+            self.assertIn("LoopSkill 4 start boundary", stdout.getvalue())
+            self.assertIn("Confirmation: accepted", stdout.getvalue())
+            self.assertTrue((prepared.directory / CONFIRMATION_FILENAME).is_file())
+
+    def test_minimal_profile_runs_without_policy_or_compat_imports(self):
+        original_import = __import__
+
+        def deny_optional(name, globals=None, locals=None, fromlist=(), level=0):
+            if name.startswith("loop_architect.v4_policy") or name.startswith(
+                "loop_architect.v4_compat"
+            ):
+                raise ImportError("optional module unavailable")
+            return original_import(name, globals, locals, fromlist, level)
+
+        with tempfile.TemporaryDirectory() as temporary, mock.patch(
+            "builtins.__import__", side_effect=deny_optional
+        ):
+            root = Path(temporary)
+            prepared = prepare_confirm(
+                root,
+                "Minimal profile loop",
+                token="444444444444444444444444",
+            )
+            data = root / "data"
+            start_loop(prepared, root=data, clock=lambda: NOW)
+            self.assertEqual(status(root=data).progress, "Starting")
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                attempt = store.ready_effect_attempts()[0]
+            receipt = Receipt(
+                receipt_ref="receipt-minimal-profile-unknown",
+                issuer_ref="loopskill-codex-adapter-v1",
+                issuer_trust="local-codex-adapter",
+                trust_class="cooperative",
+                action=attempt.action,
+                loop_ref=attempt.loop_ref,
+                subject_ref=attempt.subject_ref,
+                attempt_ref=attempt.attempt_ref,
+                target_ref=attempt.target_ref,
+                request_digest=attempt.provider_request_digest,
+                provider_idempotency_key=attempt.provider_idempotency_key,
+                outcome="unknown",
+                issued_at=NOW.isoformat().replace("+00:00", "Z"),
+                expires_at=(NOW + timedelta(minutes=5)).isoformat().replace(
+                    "+00:00", "Z"
+                ),
+                evidence_digest="minimal-profile-no-readback",
+            )
+            unknown = record_external_observation(receipt, root=data)
+            self.assertEqual(unknown.progress, "Needs attention")
+            self.assertIn("unknown", unknown.limitations[0].lower())
+            self.assertNotIn("resend", " ".join(unknown.next_actions).lower())
+
+    def test_confirmed_preparation_creates_and_starts_without_control_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_confirm(temporary)
+            data = Path(temporary) / "data"
+            status_view = start_loop(
+                prepared,
+                root=data,
+                clock=lambda: NOW,
             )
             self.assertEqual(status_view.goal, "Ship a bounded public change")
             self.assertEqual(status_view.progress, "Starting")
             self.assertEqual(status_view.result, "Pending")
-            self.assertTrue((Path(temporary) / STORE_FILENAME).is_file())
-            self.assertEqual(Path(temporary).stat().st_mode & 0o777, 0o700)
+            self.assertTrue((data / STORE_FILENAME).is_file())
+            self.assertEqual(data.stat().st_mode & 0o777, 0o700)
 
-            reopened = status(root=temporary)
+            reopened = status(root=data)
             self.assertEqual(reopened, status_view)
-            with SQLiteStore(Path(temporary) / STORE_FILENAME) as store:
+            with SQLiteStore(data / STORE_FILENAME) as store:
                 descriptors = store.loop_descriptors()
                 self.assertEqual(len(descriptors), 1)
                 loop_ref = descriptors[0]["loop_ref"]
@@ -104,31 +412,49 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 self.assertEqual(store.ready_effect_attempts()[0].action, "create_task")
                 self.assertNotIn("Ship a bounded public change", store.authority.actors)
 
-    def test_one_input_file_action_and_one_main_command_action(self):
-        for extension, content in (
-            (".json", '{"goal":"Start from one JSON file"}'),
-            (".txt", "Start from one text file\n"),
-        ):
-            with self.subTest(extension=extension):
-                with tempfile.TemporaryDirectory() as temporary:
-                    root = Path(temporary)
-                    source = root / f"goal{extension}"
-                    source.write_text(content, encoding="utf-8")
-                    data = root / "data"
-                    result = self.run_entry("start", source, "--root", data)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertIn("Progress: Starting", result.stdout)
-                    self.assertTrue((data / STORE_FILENAME).is_file())
-
+    def test_one_input_file_or_main_command_runs_four_phases_with_explicit_confirm(self):
         with tempfile.TemporaryDirectory() as temporary:
-            result = self.run_entry(
-                "start",
-                "Start from one command",
-                "--root",
-                temporary,
+            root = Path(temporary)
+            source = root / "goal.json"
+            source.write_text(
+                json.dumps(
+                    {
+                        "goal": "Start from one JSON file",
+                        "task_horizon": "long",
+                        "write_scope": ["synthetic-workspace"],
+                        "budget": "10 minutes",
+                        "external_actions": [],
+                        "acceptance_criteria": ["one startup"],
+                        "stop_conditions": ["stop on UNKNOWN"],
+                        "authorization_boundaries": ["no publish"],
+                    }
+                ),
+                encoding="utf-8",
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Goal: "Start from one command"', result.stdout)
+            data = root / "data"
+            prepared = root / "prepared-output"
+            cli = load_cli_module()
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch.object(sys.stdin, "isatty", return_value=True), mock.patch(
+                "builtins.input", return_value="START THIS LOOP"
+            ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                result = cli.main(
+                    [
+                        "start",
+                        str(source),
+                        "--root",
+                        str(data),
+                        "--prepared-output",
+                        str(prepared),
+                    ]
+                )
+            self.assertEqual(result, 0, stderr.getvalue())
+            self.assertIn("1 最终判定", stdout.getvalue())
+            self.assertIn("LoopSkill 4 start boundary", stdout.getvalue())
+            self.assertIn("Progress: Starting", stdout.getvalue())
+            self.assertTrue((data / STORE_FILENAME).is_file())
+            self.assertTrue((prepared / CONFIRMATION_FILENAME).is_file())
 
     def test_default_path_has_zero_control_fields_and_no_policy_pack(self):
         help_result = self.run_entry("start", "--help")
@@ -147,14 +473,15 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertNotIn(forbidden, help_result.stdout.lower())
 
         with tempfile.TemporaryDirectory() as temporary:
-            result = self.run_entry(
-                "start",
-                "threadId=from-model does not grant authority",
-                "--root",
+            prepared = prepare_confirm(
                 temporary,
+                "threadId=from-model does not grant authority",
             )
+            data = Path(temporary) / "data"
+            start_loop(prepared, root=data, clock=lambda: NOW)
+            result = self.run_entry("status", "--root", data)
             self.assertEqual(result.returncode, 0, result.stderr)
-            view = diagnostics(root=temporary)
+            view = diagnostics(root=data)
             self.assertNotIn("from-model", view["loop_ref"])
 
     def test_invalid_inputs_are_stable_non_leaking_and_leave_no_store(self):
@@ -194,18 +521,21 @@ class V4SingleEntryUXTests(unittest.TestCase):
 
     def test_default_status_hides_internal_identity_diagnostics_is_opt_in(self):
         with tempfile.TemporaryDirectory() as temporary:
-            started = self.run_entry("start", "Visible goal", "--root", temporary)
+            prepared = prepare_confirm(temporary, "Visible goal")
+            data = Path(temporary) / "data"
+            start_loop(prepared, root=data, clock=lambda: NOW)
+            started = self.run_entry("status", "--root", data)
             self.assertEqual(started.returncode, 0, started.stderr)
             for hidden in ("loop-", "receipt", "snapshot_digest", "schema"):
                 self.assertNotIn(hidden, started.stdout.lower())
 
-            ordinary = self.run_entry("status", "--root", temporary)
+            ordinary = self.run_entry("status", "--root", data)
             self.assertEqual(ordinary.returncode, 0, ordinary.stderr)
             self.assertNotIn("loop-", ordinary.stdout)
             self.assertNotIn("snapshot_digest", ordinary.stdout)
 
             diagnostic = self.run_entry(
-                "status", "--root", temporary, "--diagnostics"
+                "status", "--root", data, "--diagnostics"
             )
             self.assertEqual(diagnostic.returncode, 0, diagnostic.stderr)
             self.assertIn("Diagnostics:", diagnostic.stdout)
@@ -233,15 +563,34 @@ class V4SingleEntryUXTests(unittest.TestCase):
 
     def test_duplicate_start_is_safe_and_does_not_create_a_second_loop(self):
         with tempfile.TemporaryDirectory() as temporary:
-            first = self.run_entry("start", "First goal", "--root", temporary)
-            self.assertEqual(first.returncode, 0, first.stderr)
-            replay = self.run_entry("start", "First goal", "--root", temporary)
-            self.assertEqual(replay.returncode, 0, replay.stderr)
-            self.assertIn("Progress: Starting", replay.stdout)
-            second = self.run_entry("start", "Second goal", "--root", temporary)
-            self.assertEqual(second.returncode, 2)
-            self.assertIn("USER_LOOP_EXISTS", second.stderr)
-            with SQLiteStore(Path(temporary) / STORE_FILENAME) as store:
+            root = Path(temporary)
+            first_prepared = prepare_loop(
+                ready_request("First goal"),
+                root / "prepared-first",
+                clock=lambda: NOW,
+                token_factory=lambda: "000000000000000000000001",
+            )
+            first_prepared = confirm_loop(
+                first_prepared.directory, confirmed=True, clock=lambda: NOW
+            )
+            second_prepared = prepare_loop(
+                ready_request("Second goal"),
+                root / "prepared-second",
+                clock=lambda: NOW,
+                token_factory=lambda: "000000000000000000000002",
+            )
+            second_prepared = confirm_loop(
+                second_prepared.directory, confirmed=True, clock=lambda: NOW
+            )
+            data = root / "data"
+            first = start_loop(first_prepared, root=data, clock=lambda: NOW)
+            self.assertEqual(first.progress, "Starting")
+            replay = start_loop(first_prepared, root=data, clock=lambda: NOW)
+            self.assertEqual(replay.progress, "Starting")
+            with self.assertRaises(EntryError) as caught:
+                start_loop(second_prepared, root=data, clock=lambda: NOW)
+            self.assertEqual(caught.exception.code, "USER_LOOP_EXISTS")
+            with SQLiteStore(data / STORE_FILENAME) as store:
                 self.assertEqual(store.commit_count, 1)
                 self.assertEqual(len(store.loop_descriptors()), 1)
                 self.assertEqual(store.loop_descriptors()[0]["goal"], "First goal")
@@ -253,12 +602,12 @@ class V4SingleEntryUXTests(unittest.TestCase):
             target.mkdir()
             linked = root / "linked"
             linked.symlink_to(target, target_is_directory=True)
+            prepared = prepare_confirm(root / "preparation-parent", "safe goal")
             with self.assertRaises(EntryError) as caught:
                 start_loop(
-                    LoopStartInput(goal="safe goal"),
+                    prepared,
                     root=linked,
                     clock=lambda: NOW,
-                    token_factory=fixed_tokens(),
                 )
             self.assertEqual(caught.exception.code, "USER_STORE_UNAVAILABLE")
             self.assertFalse((target / STORE_FILENAME).exists())
@@ -276,13 +625,15 @@ class V4SingleEntryUXTests(unittest.TestCase):
         for target in ("goal", "actor"):
             with self.subTest(target=target):
                 with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    prepared = prepare_confirm(root, "Integrity-bound goal")
+                    data = root / "data"
                     start_loop(
-                        LoopStartInput(goal="Integrity-bound goal"),
-                        root=temporary,
+                        prepared,
+                        root=data,
                         clock=lambda: NOW,
-                        token_factory=fixed_tokens(),
                     )
-                    path = Path(temporary) / STORE_FILENAME
+                    path = data / STORE_FILENAME
                     with SQLiteStore(path) as store:
                         if target == "goal":
                             store._connection.execute(
@@ -336,10 +687,15 @@ class V4SingleEntryUXTests(unittest.TestCase):
             )
 
     def test_startup_effect_all_durable_boundaries_are_atomic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_confirm(
+                temporary,
+                "Atomic startup effect",
+                token="cccccccccccccccccccccccc",
+            )
         _, authority, command = _machine_bootstrap(
-            LoopStartInput(goal="Atomic startup effect"),
+            prepared,
             now=NOW,
-            token_factory=lambda: "cccccccccccccccccccccccc",
             receipt_trust_roots={},
         )
         for boundary in DURABLE_FAULT_BOUNDARIES:

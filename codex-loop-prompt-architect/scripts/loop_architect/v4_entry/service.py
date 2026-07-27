@@ -17,7 +17,8 @@ from loop_architect.v4_alpha.protocol import (
     AuthorityGrant,
     CommandEnvelope,
     ERROR_CODES,
-    LoopStartInput,
+    LoopIntakeDecision,
+    LoopIntakeInput,
     ProtocolRejection,
     Receipt,
     UserFacingError,
@@ -26,6 +27,17 @@ from loop_architect.v4_alpha.protocol import (
     build_command,
     domain_digest,
     snapshot_digest,
+)
+from loop_architect.v4_entry.preparation import (
+    CONFIRMATION_ISSUER,
+    CONFIRMATION_TRUST,
+    PreparedContext,
+    PreparationError,
+    confirm_prepared,
+    intake,
+    intake_report,
+    load_prepared,
+    prepare,
 )
 from loop_architect.v4_persistence.sqlite_store import (
     PersistenceError,
@@ -87,14 +99,13 @@ def _with_digest(grant: AuthorityGrant) -> AuthorityGrant:
 
 
 def _machine_bootstrap(
-    goal: LoopStartInput,
+    prepared: PreparedContext,
     *,
     now: datetime,
-    token_factory: Callable[[], str],
     receipt_trust_roots: Mapping[str, str],
 ) -> tuple[str, AuthorityContext, CommandEnvelope]:
-    namespace = token_factory()
-    if not namespace or any(
+    namespace = prepared.manifest.control_namespace
+    if len(namespace) != 24 or any(
         character not in "0123456789abcdef" for character in namespace
     ):
         raise EntryError(
@@ -108,7 +119,13 @@ def _machine_bootstrap(
             {"label": label, "namespace": namespace},
         )[:24]
 
-    loop_ref = f"loop-{namespace}"
+    loop_ref = prepared.manifest.loop_ref
+    if loop_ref != f"loop-{namespace}" or prepared.confirmation is None:
+        raise EntryError(
+            "USER_CONFIRMATION_REQUIRED",
+            "A valid prepared confirmation is required before starting.",
+            "Review the current boundary summary and confirm it explicitly.",
+        )
     goal_ref = f"goal-{identity('goal')}"
     author_ref = f"actor-author-{identity('author')}"
     system_ref = f"actor-system-{identity('system')}"
@@ -177,16 +194,25 @@ def _machine_bootstrap(
             canonical_digest="",
         )
     )
+    trusted_receipts = dict(receipt_trust_roots)
+    existing_confirmation_trust = trusted_receipts.get(CONFIRMATION_ISSUER)
+    if existing_confirmation_trust not in (None, CONFIRMATION_TRUST):
+        raise EntryError(
+            "USER_CONFIRMATION_STALE",
+            "The local confirmation trust root conflicts with this preparation.",
+            "Preserve the preparation and inspect the local runtime.",
+        )
+    trusted_receipts[CONFIRMATION_ISSUER] = CONFIRMATION_TRUST
     authority = AuthorityContext(
         actors=actors,
         grants={
             create_grant_ref: create_grant,
             observe_grant_ref: observe_grant,
         },
-        receipts={},
+        receipts={prepared.confirmation.receipt_ref: prepared.confirmation},
         trusted_actor_issuers={LOCAL_AUTHORITY_ISSUER: LOCAL_AUTHORITY_TRUST},
         trusted_grant_issuers={system_ref: LOCAL_AUTHORITY_TRUST},
-        trusted_receipt_issuers=dict(receipt_trust_roots),
+        trusted_receipt_issuers=trusted_receipts,
     )
     command = build_command(
         operation_id=operation_id,
@@ -209,15 +235,76 @@ def _machine_bootstrap(
                 "new_host_resource_ref": host_resource_ref,
                 "provider_idempotency_key": provider_key,
             },
-            "receipt_refs": {},
+            "receipt_refs": {"receipt": prepared.confirmation.receipt_ref},
             "resolved_refs": {
+                "boundary_digest": prepared.bundle.boundary_digest,
+                "prepared_bundle_digest": prepared.bundle.bundle_digest,
+                "prepared_manifest_digest": prepared.bundle.manifest_digest,
                 "provider_action": "create_task",
                 "target_ref": provider_target,
             },
         },
-        semantic_payload={"objective": goal.goal},
+        semantic_payload={"objective": prepared.manifest.goal},
     )
     return loop_ref, authority, command
+
+
+def _raise_preparation_error(exc: PreparationError) -> None:
+    raise EntryError(exc.code, exc.message, exc.next_action) from exc
+
+
+def intake_loop(request: LoopIntakeInput) -> LoopIntakeDecision:
+    return intake(request)
+
+
+def intake_report_loop(request: LoopIntakeInput) -> Mapping[str, Any]:
+    return intake_report(request)
+
+
+def prepare_loop(
+    request: LoopIntakeInput,
+    output_directory: Path | str,
+    *,
+    clock: Callable[[], datetime] = _now,
+    token_factory: Callable[[], str] = _token,
+) -> PreparedContext:
+    try:
+        return prepare(
+            request,
+            output_directory,
+            clock=clock,
+            token_factory=token_factory,
+        )
+    except PreparationError as exc:
+        _raise_preparation_error(exc)
+
+
+def confirm_loop(
+    prepared_directory: Path | str,
+    *,
+    confirmed: bool,
+    clock: Callable[[], datetime] = _now,
+) -> PreparedContext:
+    try:
+        return confirm_prepared(
+            prepared_directory,
+            confirmed=confirmed,
+            clock=clock,
+        )
+    except PreparationError as exc:
+        _raise_preparation_error(exc)
+
+
+def review_prepared(
+    prepared_directory: Path | str,
+    *,
+    clock: Callable[[], datetime] = _now,
+) -> PreparedContext:
+    """Read and verify preparation for human display without confirming it."""
+    try:
+        return load_prepared(prepared_directory, clock=clock)
+    except PreparationError as exc:
+        _raise_preparation_error(exc)
 
 
 def _store_path(root: Path | str) -> Path:
@@ -286,46 +373,31 @@ def _existing_store_path(root: Path | str) -> Path:
 
 
 def start_loop(
-    start_input: LoopStartInput,
+    prepared: PreparedContext | Path | str,
     *,
     root: Path | str,
     clock: Callable[[], datetime] = _now,
-    token_factory: Callable[[], str] = _token,
     receipt_trust_roots: Mapping[str, str] | None = None,
     host_provider: CodexProviderPort | None = None,
     host_issuer_ref: str = DEFAULT_CODEX_RECEIPT_ISSUER,
     host_issuer_trust: str = DEFAULT_CODEX_RECEIPT_TRUST,
 ) -> UserFacingStatus:
-    goal = start_input.goal
-    if not isinstance(goal, str) or not goal.strip():
-        raise EntryError(
-            "USER_INPUT_INVALID",
-            "A non-empty goal is required.",
-            "Provide a goal as text or in one UTF-8 input file.",
-        )
-    goal = goal.strip()
+    prepared_directory = prepared.directory if isinstance(prepared, PreparedContext) else prepared
     try:
-        goal_bytes = goal.encode("utf-8", "strict")
-    except UnicodeEncodeError as exc:
-        raise EntryError(
-            "USER_INPUT_INVALID",
-            "The goal is not valid UTF-8 text.",
-            "Provide a valid UTF-8 goal.",
-        ) from exc
-    if len(goal_bytes) > 4096:
-        raise EntryError(
-            "USER_INPUT_INVALID",
-            "The goal is too large.",
-            "Reduce the goal to at most 4096 UTF-8 bytes.",
+        prepared_context = load_prepared(
+            prepared_directory,
+            require_confirmation=True,
+            clock=clock,
         )
-    start_input = LoopStartInput(goal=goal)
+    except PreparationError as exc:
+        _raise_preparation_error(exc)
+    goal = prepared_context.manifest.goal
     if receipt_trust_roots is None:
         receipt_trust_roots = {host_issuer_ref: host_issuer_trust}
     start_time = clock()
     loop_ref, authority, command = _machine_bootstrap(
-        start_input,
+        prepared_context,
         now=start_time,
-        token_factory=token_factory,
         receipt_trust_roots=receipt_trust_roots,
     )
     path = _store_path(root)

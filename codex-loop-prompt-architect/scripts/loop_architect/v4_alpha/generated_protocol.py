@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-MANIFEST_SHA256 = 'c479bdf758cb2f3258c90f7d56a2f4a0e8646f86cd73e6df96fa9c43247dec56'
+MANIFEST_SHA256 = '4dc81a9e09a8c0c2190e4f02b593d237bfaa75ad9fca9609f279a27bbcf34b4b'
 PROTOCOL_VERSION = '4.0-draft.2'
 COMMAND_TYPES = (
     'AcknowledgeResult',
@@ -29,6 +29,7 @@ EVENT_TYPES = (
     'LoopCreated',
     'GoalRegistered',
     'GoalActivated',
+    'StartAuthorized',
     'HostResourceBound',
     'ExternalEffectPrepared',
     'ExternalEffectObserved',
@@ -95,6 +96,11 @@ ERROR_CODES = (
     'USER_LOOP_EXISTS',
     'USER_STORE_UNAVAILABLE',
     'USER_INTERNAL_ERROR',
+    'USER_CLARIFICATION_REQUIRED',
+    'USER_DIRECT_TASK_RECOMMENDED',
+    'USER_CONFIRMATION_REQUIRED',
+    'USER_CONFIRMATION_STALE',
+    'USER_PREPARATION_INVALID',
 )
 REFERENCE_KINDS = (
     'LoopRef',
@@ -225,6 +231,47 @@ class EffectAttempt:
 @dataclass(frozen=True)
 class LoopStartInput:
     goal: str
+
+@dataclass(frozen=True)
+class LoopIntakeInput:
+    goal: str
+    task_horizon: str
+    write_scope: tuple[str, ...]
+    budget: str
+    external_actions: tuple[str, ...]
+    acceptance_criteria: tuple[str, ...]
+    stop_conditions: tuple[str, ...]
+    authorization_boundaries: tuple[str, ...]
+
+@dataclass(frozen=True)
+class LoopIntakeDecision:
+    disposition: str
+    route: str
+    reason: str
+    questions: tuple[str, ...]
+
+@dataclass(frozen=True)
+class PreparedLoopManifest:
+    manifest_version: str
+    control_namespace: str
+    loop_ref: str
+    goal: str
+    task_horizon: str
+    write_scope: tuple[str, ...]
+    budget: str
+    external_actions: tuple[str, ...]
+    acceptance_criteria: tuple[str, ...]
+    stop_conditions: tuple[str, ...]
+    authorization_boundaries: tuple[str, ...]
+    prepared_at: str
+
+@dataclass(frozen=True)
+class PreparedLoopBundle:
+    manifest_digest: str
+    boundary_digest: str
+    controller_plan_digest: str
+    instructions_digest: str
+    bundle_digest: str
 
 @dataclass(frozen=True)
 class UserFacingStatus:

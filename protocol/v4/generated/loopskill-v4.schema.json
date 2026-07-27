@@ -285,6 +285,100 @@
       ],
       "type": "object"
     },
+    "LoopIntakeDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "enum": [
+            "READY_FOR_LOOP",
+            "NEEDS_CLARIFICATION",
+            "BLOCKED",
+            "DIRECT_TASK_RECOMMENDED"
+          ],
+          "type": "string"
+        },
+        "questions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "route": {
+          "enum": [
+            "DIRECT_TASK",
+            "STANDARD_LOOP",
+            "ADAPTIVE_LOOP",
+            "UNDETERMINED"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "disposition",
+        "route",
+        "reason",
+        "questions"
+      ],
+      "type": "object"
+    },
+    "LoopIntakeInput": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "authorization_boundaries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "budget": {
+          "type": "string"
+        },
+        "external_actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "stop_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task_horizon": {
+          "type": "string"
+        },
+        "write_scope": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "goal",
+        "task_horizon",
+        "write_scope",
+        "budget",
+        "external_actions",
+        "acceptance_criteria",
+        "stop_conditions",
+        "authorization_boundaries"
+      ],
+      "type": "object"
+    },
     "LoopStartInput": {
       "additionalProperties": false,
       "properties": {
@@ -294,6 +388,105 @@
       },
       "required": [
         "goal"
+      ],
+      "type": "object"
+    },
+    "PreparedLoopBundle": {
+      "additionalProperties": false,
+      "properties": {
+        "boundary_digest": {
+          "type": "string"
+        },
+        "bundle_digest": {
+          "type": "string"
+        },
+        "controller_plan_digest": {
+          "type": "string"
+        },
+        "instructions_digest": {
+          "type": "string"
+        },
+        "manifest_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest_digest",
+        "boundary_digest",
+        "controller_plan_digest",
+        "instructions_digest",
+        "bundle_digest"
+      ],
+      "type": "object"
+    },
+    "PreparedLoopManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "authorization_boundaries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "budget": {
+          "type": "string"
+        },
+        "control_namespace": {
+          "type": "string"
+        },
+        "external_actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "loop_ref": {
+          "type": "string"
+        },
+        "manifest_version": {
+          "type": "string"
+        },
+        "prepared_at": {
+          "type": "string"
+        },
+        "stop_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task_horizon": {
+          "type": "string"
+        },
+        "write_scope": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "manifest_version",
+        "control_namespace",
+        "loop_ref",
+        "goal",
+        "task_horizon",
+        "write_scope",
+        "budget",
+        "external_actions",
+        "acceptance_criteria",
+        "stop_conditions",
+        "authorization_boundaries",
+        "prepared_at"
       ],
       "type": "object"
     },
@@ -454,6 +647,6 @@
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "c479bdf758cb2f3258c90f7d56a2f4a0e8646f86cd73e6df96fa9c43247dec56",
+  "manifest_sha256": "4dc81a9e09a8c0c2190e4f02b593d237bfaa75ad9fca9609f279a27bbcf34b4b",
   "title": "LoopSkill 4 protocol wire shapes"
 }

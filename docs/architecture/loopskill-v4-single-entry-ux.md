@@ -3,48 +3,77 @@
 ## Public contract
 
 The first v4 command name is `loopskill4`. It is currently a source-tree entry
-and is not installed or published. Its default happy path is one invocation:
+and is not installed or published. Its native flow is
+`INTAKE → PREPARE → CONFIRM → START`. A complete semantic input can enter the
+whole flow with one invocation:
 
 ```text
-loopskill4 start "one semantic goal"
-loopskill4 start goal.txt
 loopskill4 start goal.json
 ```
 
-Each form is exactly one user-visible action. A successful action atomically
-persists one canonical loop with Goal and Execution ACTIVE plus one startup
-`ExternalEffect`, `Attempt`, and outbox descriptor. “Started” means the local
-lifecycle and the machine-owned Host-start request are durable; it does not
-claim that a Host task was created or that the effect was observed. Host work
-remains visibly `Starting` until the Codex Adapter provides evidence.
+The command prints a stable seven-section intake report, writes five owner-only
+preparation artifacts, displays Goal/scope/budget/external actions/acceptance/
+stop/authorization boundaries, and pauses for exact interactive confirmation.
+A non-interactive invocation stops after PREPARE and directs the user to the
+explicit `confirm` action; piped input, `--yes`, defaults, and vague continuation
+cannot become start authority. Equivalent explicit actions are:
 
-The only required user value is semantic goal text. The command accepts no
-thread, task, route, effect, Artifact, Review, Finalization, Actor, Grant,
+```text
+loopskill4 intake goal.json
+loopskill4 prepare goal.json --output prepared-loop
+loopskill4 confirm prepared-loop
+loopskill4 start prepared-loop
+```
+
+One public start invocation is one user start action; mandatory human
+confirmation is measured separately. START atomically persists one canonical
+loop with Goal and Execution ACTIVE plus one startup `ExternalEffect`,
+`Attempt`, and outbox descriptor. “Started” means the local lifecycle and the
+machine-owned Host-start request are durable; it does not claim that a Host task
+was created or that the effect was observed. Host work remains visibly
+`Starting` until the Codex Adapter provides evidence.
+
+The user supplies semantic requirements only. INTAKE asks at most three
+highest-priority missing questions and returns exactly one of
+`READY_FOR_LOOP`, `NEEDS_CLARIFICATION`, `BLOCKED`, or
+`DIRECT_TASK_RECOMMENDED`; the last outcome creates no loop. The command accepts
+no thread, task, route, effect, Artifact, Review, Finalization, Actor, Grant,
 operation, revision, receipt, digest, Host enum, heartbeat, retry, capture
 algorithm, or policy-pack input. All control identity and command-envelope
 fields are allocated and bound by the local machine-authority service. Goal
 text containing an identifier-like token remains inert text.
 
-No policy pack is installed, selected, or required. The entry is a thin
-application service over generated protocol records, the Kernel reducer, the
-single SQLite canonical writer, and an injected Host provider port when one is
-available. The public action may synchronously ask the Codex Adapter to claim
-and execute the already-durable startup Attempt. The facade never calls a
-provider directly, allocates a second Attempt, or retries an uncertain effect.
-It is not a Supervisor, retry controller, second writer, or second control
-plane.
+No policy pack is installed, selected, or required by the minimal path. Entry
+is the composition root over generated protocol records, Kernel, independent
+Store/Artifact/Host ports, and the selected implementations. Store never calls
+Host, and Artifact/Host never write canonical state. The facade never allocates
+a second Attempt or retries an uncertain effect. It is not a Supervisor, retry
+controller, second writer, or second control plane.
 
-## Input and storage
+## Intake, preparation, and storage
 
-A literal argument, strict UTF-8 text file, strict one-field JSON object, or
-standard input may provide the goal. JSON accepts only `{"goal":"..."}`.
-Empty input, invalid UTF-8/JSON, extra fields, a missing file, and input over
-4096 UTF-8 bytes fail before a store is created.
+A literal argument or strict UTF-8 text file is accepted as an incomplete
+semantic request and normally produces clarification questions. A complete
+JSON input contains only `goal`, `task_horizon`, `write_scope`, `budget`,
+`external_actions`, `acceptance_criteria`, `stop_conditions`, and
+`authorization_boundaries`. Unknown/control fields, invalid UTF-8/JSON, a
+missing file, and input over 32 KiB fail before preparation or store creation.
+
+INTAKE performs zero writes and zero Loop/Host/task/heartbeat/effect actions.
+PREPARE writes exactly five local files in a new owner-only empty directory:
+the typed manifest, boundary summary, human Controller Plan, Chinese
+instructions, and digest bundle. It performs zero canonical/Host/execution
+effects. Markdown is a review/export view; the typed manifest is machine truth.
+CONFIRM writes one local receipt bound to the manifest, boundary, and bundle
+digests with a bounded lifetime. Missing, expired, forged, wrong-scope, or
+content-stale confirmation makes START fail before creating the v4 store.
 
 The source-tree command accepts an optional `--root` for isolated development
 and testing. The default is the platform LoopSkill 4 data root. The root and
-SQLite file must be owner-only, regular, and non-symlinked. One P5 root contains
-one loop; a duplicate start fails without a second operation or loop. Status
+SQLite file must be owner-only, regular, and non-symlinked. One P5.1 root
+contains one loop; exact replay of the same prepared start returns the prior
+accepted result without a second commit/event/Attempt/Host call, while a
+different prepared loop fails. Status
 and diagnostics are read-only and never create an absent store.
 
 SQLite schema v4 stores the user-visible goal descriptor plus immutable Actor,
@@ -89,12 +118,16 @@ compatibility facade and explicit preview/confirm/cancel import remain P6 gates;
 entry-byte and action-count budgets remain P7 gates; installation and a real
 new-user canary remain P8 gates.
 
-## P5 evidence boundary
+## P5.1 evidence boundary
 
-P5 tests cover `UX-001-a..b`, `UX-002`, `UX-003`, `UX-004-a..c`,
-`UX-005-a..b`, and `UX-007-a..b` at the local source-entry level. They also
-cover `H-011-a..d`: atomic startup-subject creation, exact strict Host binding,
+P5.1 tests cover `UX-001`, `UX-010..016`, `CAP-INTAKE`, `CAP-ENTRY`, and
+`CAP-ARCHITECTURE` at the local source-entry level: four intake outcomes, seven
+report sections, zero-effect intake, five-file preparation, digest-bound
+confirmation, stale/expired/forged rejection, one canonical start, exact
+replay, non-interactive no-bypass, and policy/compat-unavailable minimal-profile
+isolation. They retain P5 coverage of `UX-002..005`, `UX-007`, and
+`H-011-a..d`: atomic startup-subject creation, exact strict Host binding,
 UNKNOWN without resend/binding, and cooperative-to-late-strict observation on
-the same Attempt. All provider behavior in these P5 tests is synthetic. P5 does
+the same Attempt. All provider behavior in these tests is synthetic. P5.1 does
 not claim `UX-006`, `UX-008`, or `UX-009`, installed usability, real Host
 completion, v3 migration safety, or release readiness.

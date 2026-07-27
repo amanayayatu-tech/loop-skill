@@ -38,16 +38,38 @@ from loop_architect.v4_alpha.vertical import (  # noqa: E402
 )
 from loop_architect.v4_persistence.sqlite_store import SQLiteStore  # noqa: E402
 from loop_architect.v4_entry import (  # noqa: E402
+    confirm_loop,
+    prepare_loop,
     record_external_observation,
     start_loop,
 )
 from loop_architect.v4_entry.service import STORE_FILENAME  # noqa: E402
-from loop_architect.v4_alpha.protocol import LoopStartInput  # noqa: E402
+from loop_architect.v4_alpha.protocol import LoopIntakeInput  # noqa: E402
 
 
 NOW = datetime(2026, 7, 27, 0, 0, 4, tzinfo=timezone.utc)
 ISSUER_REF = "codex-adapter-issuer-0001"
 ISSUER_TRUST = "trusted-adapter"
+
+
+def prepared_start(root: Path, goal: str, token: str):
+    request = LoopIntakeInput(
+        goal=goal,
+        task_horizon="long",
+        write_scope=("synthetic-workspace",),
+        budget="10 minutes; one Host create attempt",
+        external_actions=(),
+        acceptance_criteria=("one exact Host readback",),
+        stop_conditions=("stop on UNKNOWN",),
+        authorization_boundaries=("no publish",),
+    )
+    prepared = prepare_loop(
+        request,
+        root / "prepared",
+        clock=lambda: NOW,
+        token_factory=lambda: token,
+    )
+    return confirm_loop(prepared.directory, confirmed=True, clock=lambda: NOW)
 
 
 def request_payload(target_ref="host-target-0001"):
@@ -602,18 +624,24 @@ class V4CodexAdapterTests(unittest.TestCase):
 
     def test_single_entry_startup_effect_runs_through_real_store_and_adapter_contract(self):
         with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
             provider = CodexProviderFixture(invoke_mode="response_lost")
+            prepared = prepared_start(
+                root,
+                "Create one disposable Host task",
+                "aaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            data = root / "data"
             view = start_loop(
-                LoopStartInput(goal="Create one disposable Host task"),
-                root=temporary,
+                prepared,
+                root=data,
                 clock=lambda: NOW,
-                token_factory=lambda: "aaaaaaaaaaaaaaaaaaaaaaaa",
                 host_provider=provider,
                 host_issuer_ref=ISSUER_REF,
                 host_issuer_trust=ISSUER_TRUST,
             )
             self.assertEqual(view.progress, "Active")
-            path = Path(temporary) / STORE_FILENAME
+            path = data / STORE_FILENAME
             with SQLiteStore(path) as store:
                 descriptor = store.loop_descriptors()[0]
                 snapshot = store.snapshot(descriptor["loop_ref"])
@@ -645,19 +673,25 @@ class V4CodexAdapterTests(unittest.TestCase):
         for expected, provider_options in instances:
             with self.subTest(expected=expected):
                 with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    prepared = prepared_start(
+                        root,
+                        "Bounded uncertain startup",
+                        "bbbbbbbbbbbbbbbbbbbbbbbb",
+                    )
+                    data = root / "data"
                     start_loop(
-                        LoopStartInput(goal="Bounded uncertain startup"),
-                        root=temporary,
+                        prepared,
+                        root=data,
                         clock=lambda: NOW,
-                        token_factory=lambda: "bbbbbbbbbbbbbbbbbbbbbbbb",
                         receipt_trust_roots={ISSUER_REF: ISSUER_TRUST},
                     )
-                    path = Path(temporary) / STORE_FILENAME
+                    path = data / STORE_FILENAME
                     provider = CodexProviderFixture(**provider_options)
                     with SQLiteStore(path) as store:
                         attempt = store.ready_effect_attempts()[0]
                         receipt = adapter(provider, store).execute(attempt)
-                    view = record_external_observation(receipt, root=temporary)
+                    view = record_external_observation(receipt, root=data)
                     self.assertEqual(view.progress, "Needs attention")
                     with SQLiteStore(path) as reopened:
                         snapshot = reopened.snapshot(receipt.loop_ref)
@@ -673,7 +707,7 @@ class V4CodexAdapterTests(unittest.TestCase):
                         provider.readback_mode = "authoritative"
                         with SQLiteStore(path) as reopened:
                             late = adapter(provider, reopened).execute(attempt)
-                        record_external_observation(late, root=temporary)
+                        record_external_observation(late, root=data)
                         with SQLiteStore(path) as reopened:
                             snapshot = reopened.snapshot(late.loop_ref)
                             self.assertEqual(

@@ -89,7 +89,141 @@ Rejected:
 - **clean-slate without migration/conformance**: discards proven identity,
   replay, path, artifact, and crash evidence and creates an unverified rewrite.
 
+## v3.3.8 product-capability preservation decision
+
+Route B is not permission to retain only the Kernel-shaped assets that are
+convenient to reimplement. The authoritative human and machine registers are:
+
+- `docs/architecture/v3-to-v4-capability-preservation-register.md`; and
+- `docs/architecture/v3-to-v4-capability-preservation-register.json`.
+
+They bind the exact public `v3.3.8` commit and machine-enumerate 10 reference
+files, 27 architecture modules, 38 product test files with 771 exact test
+methods, 19 SPEC invariant entries, seven public `loopctl` commands, 705
+recovery errors, and 922 public schema enum/const symbols, including the
+dynamic v3 `INPUT_SCHEMA`. The preservation
+validator requires every active invariant, public flow, command, schema,
+stable symbol/error, and release/install contract to have exactly one
+disposition and an executable conformance gate. The register is a migration/RC
+checklist only; it is not a protocol authority, writer, heartbeat, recovery
+process, or third governance layer.
+
+| Capability | Decision | v4 boundary |
+| --- | --- | --- |
+| `PRES-INTAKE` | retain | Entry owns G1–G10, four readiness outcomes, seven-section intake-only output, clarification priority/deduplication, and zero effects. |
+| `PRES-ENTRY` | retain | Entry owns native `INTAKE → PREPARE → CONFIRM → START`; one command may orchestrate it but cannot skip confirmation. |
+| `PRES-MODES` | move | Optional policy owns direct/Standard/Adaptive selection, fixed queues, and bounded roadmaps. |
+| `PRES-ROLES` | move | Optional review policy owns JIT Worker/Reviewer/Local Verifier requirements; Host creation remains an Adapter effect. |
+| `PRES-HUMAN` | move | Optional human-control policy owns pause/resume, Decision Cards, review surfaces, and freshness; Kernel validates authority receipts. |
+| `PRES-REPAIR` | move | Optional bounded-repair policy uses immutable Kernel attempt history and cannot create a Supervisor. |
+| `PRES-KERNEL` | retain | Core keeps per-loop CAS, idempotency, single-writer state, attempts/outbox, and fail-closed transitions without v3 state shape. |
+| `PRES-TRANSPORT` | lower | Codec library keeps bounded strict-UTF-8 structured framing and duplicate-key rejection. |
+| `PRES-RECOVERY` | lower | Attempt/outbox plus typed-error projection keeps lost-response recovery and one next action; no blind resend or independent recovery writer. |
+| `PRES-FINALIZATION` | retain | Core keeps orthogonal Goal/Result/Report/Artifact/Review/Finalization and closure/assurance separation. |
+| `PRES-ARTIFACT` | lower | Libraries keep existing-Git/non-Git/new-Git capture, binary/untracked/empty identity, confinement, symlink/casefold/special/race rejection. |
+| `PRES-EVIDENCE` | lower | Evidence normalization plus Core subject bindings keep current artifact/dispatch/report/review identity. |
+| `PRES-HOST` | move | Codex Adapter owns every project/task/thread/turn/heartbeat/trust/sandbox/model/memory/App enum/lifecycle/readback fact. |
+| `PRES-OPERABILITY` | retain | Entry commands keep doctor, compile, and disposable canary with diagnostics-only internal identity. |
+| `PRES-AUDIT` | lower | Hash-chained rejection history, audit/status/archive/business timeline and next-action views are read-only rebuildable projections. |
+| `PRES-PRIVACY` | lower | Libraries keep risky-artifact classification and aggregate export with no prompt/chat/task/thread/path/PII/secret/raw-log disclosure. |
+| `PRES-METRICS` | lower | Read-only metrics retain counts, latency and explicit `UNMETERED`; they never authorize progress. |
+| `PRES-COMPAT` | compatibility only | One-major-cycle facade preserves intake/generate, existing-Pack repair, Markdown views and compact/full/minimal_patch behavior, not exact bytes. |
+| `PRES-MIGRATION` | compatibility only | Safe-point read/shadow/dry-run/preview/confirm/cancel/import keeps original v3 bytes and forbids dual write. |
+| `PRES-DISTRIBUTION` | retain | Isolated install/uninstall/rollback keeps conflict fail-closed, absolute runtime identity, one registration and byte-exact recovery. |
+| `PRES-DOCS` | retain | Chinese/English quickstarts and Standard/Adaptive examples remain RC-blocking public assets. |
+| `PRES-RELEASE` | retain | Exact candidate SHA, local acceptance, compatibility CI separation, App canary, security and artifact gates remain mandatory. |
+| `PRES-DEPRECATIONS` | deprecate | New v4 loops have no session State-Writer, native Goal generation recovery, Supervisor, 97-field write API, model authority, Pack truth, blind retry, or dual writer. |
+| `PRES-PUBLIC-SCHEMA-COMPAT` | compatibility only | Closed v3 schemas remain readable for diagnostics/shadow/import preview; v4 never writes their giant shape canonically. |
+
+### Compatibility sunset
+
+The facade and v3 schema reader remain for one complete v4 major cycle. The
+window preserves user workflows and rollback readability, not every old flag,
+wording, Pack byte, error sentence, or canonical-write field. Sunset requires
+usage evidence, a documented replacement for every affected public flow,
+migration and rollback evidence, a major corpus version, an ADR amendment, and
+separate author approval. Original v3 data readability and the public v3.3.8
+maintenance line are not implicitly sunset with the facade.
+
+P5.1 implementation validation and every P6 change are gated on the register,
+ADR/corpus consistency, stale/duplicate scans, and an independent read-only
+architecture/product review bound to the exact document digests.
+
+### Preservation is semantic compression, not mechanism replication
+
+The first inventory pass counted 1,640 required identities. Independent review
+found that it omitted 126 enum/const symbols generated by v3's dynamic
+`INPUT_SCHEMA`; the corrected closed inventory therefore contains **1,766**
+required identities, including 705 recovery codes and 922 schema symbols. This
+larger count improves omission detection but does not enlarge v4 Core. The 24
+capability groups are semantic dispositions: legacy errors are assigned to one
+owner or deprecation path, legacy schemas are read/translated at the
+compatibility edge, and neither becomes a branch-per-item runtime contract.
+
+The preservation validator must HOLD if preserving a legacy item would require
+literal duplication of the old error catalog, schema, State-Writer,
+Supervisor, recovery registry, or monolithic state shape. It must instead bind
+the item to a retained semantic invariant, compatibility mapping, or explicit
+deprecation with replacement.
+
+### Anti-bloat structural and execution gates
+
+- one manifest owns wire literals; one transactional authority/writer owns
+  operation idempotency, per-loop CAS, canonical events/snapshots, and outbox;
+- read-only projection, audit, archive, export, policy, Artifact, Adapter, and
+  compatibility code cannot sign receipts or mutate the canonical store;
+- the minimal profile makes optional policy and v3 compatibility modules
+  unavailable and proves that intake, prepare, confirm, start, status, and
+  honest UNKNOWN/UNVERIFIABLE still work without importing them;
+- after P5.1, evidence freezes default-path loaded modules and dependency edges,
+  command/event/error counts, user start actions, authorization confirmations,
+  Host interactions, protocol calls, local writes, entry/Pack bytes, latency,
+  UNKNOWN count, and human interventions; and
+- no arbitrary LOC/module/command ceiling is added. P6/P7 default-path cost
+  increases require a mapped capability plus an existing ADR decision.
+
+The 32 KiB Pack and at least 50% reduction in internal control interactions
+remain candidate targets. They become blocking only after the same user
+scenario, exact v3.3.8 SHA, measurement code/digest, and counting boundaries
+are frozen before observing the matching v4 result. Necessary human
+confirmation is reported separately from internal control interaction. If the
+units cannot be compared honestly, the result is a product decision, not a
+manufactured PASS.
+
+The P5.1 minimal-profile observation freezes the metric names and counting
+boundary, not the beta performance thresholds. In the synthetic no-Host
+scenario it loads 13 `loop_architect.v4_*` modules over 17 internal dependency
+edges; the manifest declares 16 commands, 33 events, and 40 errors. One public
+start action contains one separately reported human confirmation, then one
+Kernel mutation/canonical commit emitting five events and one startup Attempt;
+INTAKE writes 0 files, PREPARE writes 5, CONFIRM writes 1, and Host interactions
+are 0. The source entry is 11,125 bytes and the generated Controller Plan view
+is 627 bytes for the frozen synthetic request. One latency sample is recorded
+only as diagnostic evidence, never as a gate. P7 must freeze the same-scenario
+v3 baseline, measurement-code digest, units, and final thresholds before
+reading the comparison result.
+
 ## Product and dependency boundary
+
+### Composition and ports
+
+Entry is the composition root. It may call Kernel and the public query/services
+needed to present a user flow. Kernel depends only on the generated typed
+protocol and declared ports. Transactional Store, Artifact capability, and the
+single Codex Host Adapter independently implement those ports:
+
+```text
+Entry/composition root ──> Kernel ──> typed protocol + ports
+                              ^
+             ┌────────────────┼────────────────┐
+ transactional Store     Artifact library   Codex Adapter
+       implements port    implements port    implements port
+```
+
+Store never calls or controls Host. Artifact and Host components never write
+canonical state. One transactional authority may persist several orthogonal
+aggregate/event streams; “one authority” does not collapse them into one giant
+enum or require one physical event stream.
 
 ### Core owns
 
@@ -127,10 +261,18 @@ fabricate a receipt, make the Host transactional, or mutate canonical state.
 
 ### Kernel import prohibition
 
-The kernel must not import or invoke Codex/App modules, Host enums, Git,
-`subprocess`, filesystem mutation, Pack/prompt rendering, SQLite, network
-clients, v3 migration, or paper/Oracle/apparatus code. Alpha tests enforce this
-as a blocking dependency scan.
+The kernel must not import or invoke Codex/App modules, Host enums, policy,
+compat/importer, UI/CLI, Git, `subprocess`, filesystem mutation, concrete
+SQLite, Pack/prompt rendering, network clients, v3 migration, or
+paper/Oracle/apparatus code. A fail-closed AST/import-graph gate enforces the
+ban and requires the complete v4 import graph to be acyclic.
+
+The typed protocol manifest is the only declaration authority for command,
+event, reference, receipt, capability, and error wire literals. Reducer
+invariants, filesystem-race checks, and Host-effect contracts remain separate
+code authorities, but cannot redefine those literals. Generated schema, CLI
+types, Pack API summaries, error tables, and corpus fixtures must consume or
+strictly validate the manifest.
 
 ## User-experience compatibility requirement
 
@@ -138,9 +280,11 @@ The v4 internals may change, but the default user entry model is a normative
 compatibility boundary:
 
 - a fresh user supplies one goal/input file **or** invokes one public main
-  command, and that single public action creates and starts one loop; the final
-  command name is deferred to CLI design, but multi-step control-plane
-  choreography is forbidden on the happy path;
+  command, and that single public action enters a same-session
+  `INTAKE → PREPARE → CONFIRM → START` flow. It must pause at an explicit human
+  confirmation before any Host/execution effect; “single entry” never means
+  silent start or skipped authorization. The final command name is deferred to
+  CLI design, and manual control-plane choreography is forbidden;
 - the number of control identities an ordinary user must provide is exactly
   zero. Users do not fill in or relay thread/task/route/effect/artifact/review/
   finalization IDs, SHAs, receipts, Pack identities, Gateway schemas, Host
@@ -164,10 +308,40 @@ compatibility boundary:
   CLI flag, or old wording. It promises no increase in default startup action
   complexity, no control-plane leakage, and no implicit v3 migration.
 
-The future public entry is a facade over Kernel/Adapter machine authority, not
-a Supervisor, second writer, or second control plane. These requirements are
-reserved in alpha, become blocking in beta, and require a real disposable
-new-user usability canary at RC.
+The future public entry is a composition facade over Kernel/Adapter machine
+authority, not a Supervisor, second writer, or second control plane. The
+four-phase authorization contract is P5.1-blocking before P6; broader UX cost,
+documentation, migration, and usability gates remain beta/RC gates.
+
+### Native four-phase entry contract
+
+1. **INTAKE** is strictly read-only. It returns exactly
+   `READY_FOR_LOOP`, `NEEDS_CLARIFICATION`, `BLOCKED`, or
+   `DIRECT_TASK_RECOMMENDED`, renders the stable seven-section intake report,
+   and asks at most three highest-priority deduplicated questions. It creates
+   no loop, role, task, heartbeat, delivery, or external effect.
+2. **PREPARE** writes only to an explicit local preparation output. It creates
+   one typed Loop Manifest, a human Controller Plan/Pack, Chinese instructions,
+   and a minimal boundary summary. Canonical manifest and human views have
+   machine-bound digests. PREPARE creates no Host task, heartbeat, delivery, or
+   treatment execution; Markdown is a review/export/compatibility view, never
+   machine truth.
+3. **CONFIRM** shows Goal, write scope, budget, external actions, acceptance
+   criteria, stop conditions, and commit/push/publish/deploy boundaries. A
+   machine-issued receipt binds actor/grant, manifest digest, human-view digest,
+   boundary digest, scope, and validity. Any bound change or expiry invalidates
+   it. High-impact work cannot use `--yes`, defaults, vague “continue”, or a
+   noninteractive fallback; automation must consume a pre-signed bound grant.
+4. **START** accepts only a valid current confirmation. It commits exactly one
+   canonical startup Attempt; the Adapter may then create/read back one Host
+   resource under the existing at-most-one automatic-attempt rules. Missing
+   authoritative readback yields UNKNOWN, never a resend. User/model-provided
+   control identity remains zero.
+
+`DIRECT_TASK_RECOMMENDED` does not create a Loop. Explicit `intake`, `prepare`,
+and `start prepared-manifest` commands may coexist with the one-session main
+entry. The legacy Skill's intake/generate behavior remains available for one
+major cycle through a behavior-equivalent facade.
 
 ## Protocol authority
 
@@ -323,7 +497,7 @@ or `UNVERIFIABLE`.
 Delivery observation never represents Result acceptance.
 
 Host bootstrap is a generic `ExternalEffect`, not an implicit Adapter side
-effect. The one-action CreateLoop path may atomically add one startup
+effect. After a valid digest-bound confirmation, the one-entry CreateLoop path may atomically add one startup
 ExternalEffect and its Attempt/outbox descriptor in the same local transaction.
 The canonical subject is `ExternalEffectRef`; the Adapter never invents it.
 `RecordExternalEffectObservation` maps strict/cooperative/missing readback to
@@ -392,7 +566,7 @@ from delivery observation.
 
 `CreateLoop`, `BindHostResource`, `PrepareRoute`, `BeginEffectDelivery`,
 `RecordEffectObservation`, `RecordExternalEffectObservation`, `StageResult`, `AcknowledgeResult`, `RecordReview`,
-`AdvanceGoal`, `PauseLoop`, `ResumeLoop`, `PrepareFinalization`,
+`AdvanceGoal`, `PauseLoop`, `ResumeLoop`, `StopLoop`, `PrepareFinalization`,
 `CloseExecution`, `StrengthenClosureAssurance`, and later
 `ImportV3Snapshot`.
 
@@ -408,7 +582,8 @@ are read-only and have no operation/CAS side effects.
 `DeliveryUnknown`, `DeliveryUnverifiable`, `LateDeliveryObserved`,
 `ResultStaged`, `ReportStaged`, `ArtifactCaptured`, `ArtifactVerified`,
 `ArtifactStale`, `ReportAccepted`, `ResultAcknowledged`, `ReviewRecorded`,
-`GoalAdvanced`, `LoopPaused`, `LoopResumed`, `FinalizationPrepared`,
+`GoalAdvanced`, `LoopPaused`, `LoopResumed`, `LoopStopRequested`,
+`ExecutionStopped`, `FinalizationPrepared`,
 `ExecutionFinalized`, `StrictFinalizationAcknowledged`,
 `ClosureAssuranceStrengthened`, `V3SnapshotImported`, and
 `OperationRejected`.
@@ -443,13 +618,31 @@ traceback.
 `UNKNOWN` and `UNVERIFIABLE` are Delivery or ExternalEffect/Attempt states,
 never acceptance or error values.
 
+### Stop semantics
+
+`StopLoop` is a machine-envelope mutation with a fresh operation ID, protocol
+version, trusted Actor/Grant scoped to the exact loop and command, expected
+per-loop revision, and semantic stop reason. It never accepts a model-carried
+handle or grant as authority. On acceptance it emits `LoopStopRequested`,
+prevents new product attempts, preserves all accepted evidence immutably, and
+records `ExecutionStopped` with honest `BLOCKED` or `LIMITATION` disposition.
+The same command may prepare finalization only when its subject chain is
+complete; Host pause/readback and finalization acknowledgement remain separate
+Adapter effects.
+
+An unresolved committed Attempt is not rewritten as cancelled: it remains
+`UNKNOWN` or `UNVERIFIABLE`, forbids automatic resend, and limits closure
+assurance. Exact command replay returns the prior result without another event
+or effect; a changed request conflicts; stale revision, forged/wrong-loop
+authority, or invalid subject fails closed with zero canonical/external effect.
+
 ## External-effect executor contract
 
 `PrepareRoute` creates Delivery `PREPARED` with automatic-attempt budget `1`.
 `BeginEffectDelivery` is the only command that obtains execution authority:
 
 The startup exception is not an untracked side effect: when requested by the
-single-entry machine envelope, `CreateLoop` itself atomically commits one
+single-entry machine envelope carrying a valid current confirmation, `CreateLoop` itself atomically commits one
 ExternalEffect, Attempt, provider request digest, and outbox row. It does not
 call the provider. Both Delivery and startup ExternalEffect then use the same
 claim/readback/UNKNOWN rules below.
@@ -547,8 +740,8 @@ Compatibility decisions:
 - read/shadow/import compatibility is approved for one major cycle;
 - import has an explicit preview/confirm boundary and cancel leaves the source
   bytes unchanged and the destination absent or empty;
-- a one-major-cycle v3 public-entry facade preserves the one-action default
-  experience without canonical dual write;
+- a one-major-cycle v3 public-entry facade preserves the one-entry default
+  experience and explicit human confirmation without canonical dual write;
 - import requires paused, lease-free, outbox-quiescent dry-run and exact source
   digest;
 - dual write and reverse conversion are forbidden;
@@ -594,18 +787,24 @@ profiles, and the Codex Adapter passed their frozen local synthetic gates. One
 separate projectless disposable App readback was retained as limited P4
 evidence; it is not the exact-RC installed usability canary.
 
+### P5.1 before P6: native entry authorization gate
+
+The public facade must pass the complete four-phase contract and
+`UX-001`, `UX-010..016`, `CAP-INTAKE`, `CAP-ENTRY`, and
+`CAP-ARCHITECTURE` before any P6 work. A valid confirmation permits one
+`CreateLoop` transaction to create one typed startup ExternalEffect, Attempt,
+and outbox record; only the Adapter may execute that machine-owned request.
+Direct start without the bound confirmation is forbidden. The facade is not a
+Supervisor or retry layer.
+
 ### Beta: local implementation authorized; gates remain blocking
 
-The P5 public facade must create and start one loop from one goal/file action,
-with zero user-supplied control identities and no required policy pack. Its
-CreateLoop transaction also creates one typed startup ExternalEffect, Attempt,
-and outbox record; only the Adapter may execute that machine-owned request. The
-facade is not a Supervisor or retry layer. Safe-point fixture-only import/shadow
-read and liveness/cost work follow in P6/P7. Measurement definitions are
-accepted, while 32 KiB and 50% remain candidate targets until the same-scenario
-v3 baseline and final thresholds are frozen before observing corresponding v4
-performance. Beta blocks on all `UX-001..008` cases and the full frozen corpus
-subset assigned to beta.
+Safe-point fixture-only import/shadow read and policy/liveness/cost work follow
+in P6/P7. Measurement definitions are accepted, while 32 KiB and 50% remain
+candidate targets until the same-scenario v3 baseline and final thresholds are
+frozen before observing corresponding v4 performance. Beta blocks on all
+remaining `UX-001..008`, `UX-010..016`, the preservation subset assigned to
+beta, and minimal-profile isolation.
 
 ### RC: local candidate and approval packet authorized; stable remains unauthorized
 
@@ -617,8 +816,8 @@ private-data-free new-user usability canary from the isolated installation
 through starting a minimal disposable loop, with no manual transcription of
 control identity. Push, tag, public release, installation-channel changes,
 automatic migration of real v3 loops, and any stable claim require a separate
-author decision. Stable retains all UX gates and the one-action default
-contract.
+author decision. Stable retains all UX gates and the one-entry plus explicit
+confirmation contract.
 
 ## Non-goals and safeguards
 

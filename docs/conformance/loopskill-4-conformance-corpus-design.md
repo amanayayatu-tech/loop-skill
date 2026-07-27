@@ -53,7 +53,9 @@ Each future case file is one canonical JSON object with these required fields:
 | `authority_registry` | immutable Actor/Grant fixture; never semantic input |
 | `receipt_registry` | immutable bounded receipt fixture when applicable |
 | `precondition` | exact loop snapshot/revisions and store idempotency/rejection state |
-| `command` | exact machine-constructed command envelope |
+| `stimulus_kind` | `KERNEL_COMMAND`, `ENTRY_ACTION`, `LIBRARY_CALL`, `ADAPTER_CALL`, or `STATIC_CHECK` |
+| `command` | exact machine-constructed command envelope for `KERNEL_COMMAND`; otherwise null with `not_applicable_reason` |
+| `entry_action` / `library_call` / `adapter_call` / `static_check` | exact owner-specific stimulus; all non-selected fields are null with one reason |
 | `fault_fixture` | exact crash/provider/parser observation, otherwise absent |
 | `expected_acceptance` | only `ACCEPT` or `REJECT` |
 | `expected_error` | stable error for rejection, otherwise absent |
@@ -62,9 +64,10 @@ Each future case file is one canonical JSON object with these required fields:
 | `expected_result_state` | `STAGED`, `ACKNOWLEDGED`, `STALE`, or absent |
 | `expected_execution` | state and optional terminal disposition |
 | `expected_assurance` | `NONE`, `LOCAL`, `COOPERATIVE`, or `STRICT` |
-| `expected_events[]` | exact ordered event objects |
-| `expected_snapshot` / `expected_snapshot_digest` | exact post-case canonical snapshot and digest |
-| `expected_counts` | commits, events, rejection records, provider calls, Git/filesystem/network effects |
+| `expected_events[]` | exact ordered typed-manifest event objects; empty for non-canonical cases |
+| `expected_snapshot` / `expected_snapshot_digest` | exact post-case canonical snapshot/digest, or both null when no Loop exists/canonical state is untouched, with `not_applicable_reason` |
+| `expected_output` | exact Entry/library/Adapter/static result when the case is not a Kernel mutation |
+| `expected_counts` | exact canonical commits/events/rejections, logical local store reads/writes, local filesystem reads/writes, Host/provider calls, Git process calls, network calls, user-workspace writes, and heartbeat creation |
 | `replay_expectation` | exact accepted/rejected replay and conflict behavior |
 
 `UNKNOWN` and `UNVERIFIABLE` are never acceptance values. An instance can be
@@ -73,7 +76,7 @@ Each future case file is one canonical JSON object with these required fields:
 
 ## Command and authority fixture rules
 
-Each mutation uses the ADR's machine envelope:
+Each Kernel mutation uses the ADR's machine envelope:
 
 ```text
 operation_id, command_type, protocol_version, actor_ref, authority_grant_ref,
@@ -262,6 +265,7 @@ is normative and expands before execution.
 | `P-001` | `a` REPAIR policy proposes one authorized new route | beta | 1 |
 | `P-002` | explicit BLOCKED by `a` repair exhaustion; `b` user stop | beta | 2 |
 | `P-003` | `a` explicit SUPERSEDED preserves predecessor | beta | 1 |
+| `P-004` | `a` authorized StopLoop closes execution with preserved evidence; `b` exact replay is idempotent; reject `c` stale revision; `d` forged/wrong-loop grant; boundary `e` unresolved Attempt stays UNKNOWN and is never presented as cancelled | beta | 5 |
 | `L-001` | seven frozen nonterminal snapshots: `a` prepared; `b` attempt committed; `c` unknown; `d` unverifiable; `e` result staged; `f` repair; `g` finalization prepared | beta | 7 |
 | `L-002` | measure `a` Pack bytes; `b` Host interactions; `c` protocol calls; `d` local writes; `e` latency; `f` unresolved outcomes | beta | 6 |
 
@@ -273,7 +277,7 @@ internal protocol calls do not count as additional user actions.
 
 | Family | Atomic/parameterized instances | Gate | Count |
 | --- | --- | --- | ---: |
-| `UX-001` | fresh minimal goal via `a` one input-file action; `b` one main-command action creates and starts a loop | beta | 2 |
+| `UX-001` | fresh minimal goal via `a` one input-file action; `b` one main-command action enters the same-session INTAKE→PREPARE→CONFIRM→START flow and pauses for explicit confirmation before external effect | P5.1-before-P6 | 2 |
 | `UX-002` | `a` default startup requires exactly zero user-provided control identities | beta | 1 |
 | `UX-003` | `a` minimal startup requires no policy pack installation, selection, or knowledge | beta | 1 |
 | `UX-004` | invalid `a` malformed input; `b` missing goal; `c` unsupported public option returns stable user error without handle/schema leakage | beta | 3 |
@@ -281,11 +285,517 @@ internal protocol calls do not count as additional user actions.
 | `UX-006` | v3 import `a` preview; `b` cancel preserves exact v3 bytes and leaves new v4 store absent or empty | beta | 2 |
 | `UX-007` | `a` default status hides internal receipt/identity; `b` explicit diagnostics/export reveals bounded authorized diagnostics | beta | 2 |
 | `UX-008` | same scenario measures `a` user-visible action count; `b` Pack/entry-artifact bytes against pre-observation frozen beta budget | beta | 2 |
-| `UX-009` | `a` RC real non-research, private-data-free new-user canary reaches minimal disposable-loop start without manual control identity | rc | 1 |
+| `UX-009` | `a` RC real non-research, private-data-free new-user canary proves intake zero effect → prepare zero Host effect → explicit digest-bound confirmation → one machine-owned start/readback without manual control identity | rc | 1 |
+| `UX-010` | atomic intake outcomes `a` READY_FOR_LOOP; `b` NEEDS_CLARIFICATION; `c` BLOCKED; `d` DIRECT_TASK_RECOMMENDED, each with stable seven-section projection and at most three deduplicated questions | P5.1-before-P6 | 4 |
+| `UX-011` | `a` intake is strictly read-only: 0 loop/task/heartbeat/provider/external effect | P5.1-before-P6 | 1 |
+| `UX-012` | prepare `a` writes exactly five owner-only local artifacts (manifest, boundary, plan, Chinese guide, bundle) and 0 canonical/Host/execution effects; `b` readback verifies all digests with 0 writes; confirm `c` writes exactly one digest-bound local confirmation receipt and 0 canonical/Host effects | P5.1-before-P6 | 3 |
+| `UX-013` | START rejects `a` absent confirmation; `b` expired confirmation; `c` changed manifest/boundary digest; `d` forged/wrong-scope receipt, each with 0 startup Attempt/Host call | P5.1-before-P6 | 4 |
+| `UX-014` | `a` valid confirmation commits exactly one canonical startup Attempt with 0 Host calls; `b` identical replay returns the same result with no second commit/Attempt/Host call; Adapter `c` invokes once and authoritative readback binds machine Host identity; `d` missing readback yields UNKNOWN with no bind/resend | P5.1-before-P6 | 4 |
+| `UX-015` | `a` DIRECT_TASK_RECOMMENDED creates 0 loop; `b` legacy Skill intake/prepare compatibility fixture remains behavior-equivalent; `c` user/LLM control identity count is exactly 0 | P5.1-before-P6 | 3 |
+| `UX-016` | `a` high-impact automation without pre-signed digest-bound authority cannot use `--yes`, defaults, or noninteractive fallback to bypass confirmation | P5.1-before-P6 | 1 |
+
+P5.1 case files use the full record format above. Their nonzero boundaries are
+frozen separately so “zero Host effect” is never confused with “zero local
+write”:
+
+| Instance | Stimulus | Canonical commit/events | Local filesystem writes | Host/provider calls | Required typed events |
+| --- | --- | --- | ---: | ---: | --- |
+| `UX-011-a` | `ENTRY_ACTION intake` | 0 / 0 | 0 | 0 / 0 | none |
+| `UX-012-a` | `ENTRY_ACTION prepare` with an existing owner-only empty output directory | 0 / 0 | 5 | 0 / 0 | none |
+| `UX-012-b` | `ENTRY_ACTION load_prepared` | 0 / 0 | 0 | 0 / 0 | none |
+| `UX-012-c` | `ENTRY_ACTION confirm` | 0 / 0 | 1 | 0 / 0 | none |
+| `UX-014-a` | confirmed `KERNEL_COMMAND CreateLoop` | 1 / 5 | 0 | 0 / 0 | `LoopCreated`, `GoalRegistered`, `GoalActivated`, `StartAuthorized`, `ExternalEffectPrepared` |
+| `UX-014-b` | exact CreateLoop replay | 0 / 0 | 0 | 0 / 0 | none; returns prior result |
+| `UX-014-c` | `ADAPTER_CALL` invoke + strict readback, then observation command | 1 / 2 | 0 | 1 / 1 | `ExternalEffectObserved`, `HostResourceBound` |
+| `UX-014-d` | `ADAPTER_CALL` invoke + missing readback, then observation command | 1 / 1 | 0 | 1 / 1 | `ExternalEffectUnknown`; no bind/resend |
+
+“Local filesystem writes” counts preparation artifacts, not SQLite page/WAL
+internals. “Canonical commit” is one logical Store transaction, and logical
+local store reads/writes remain separately populated in each case's
+`expected_counts`. Exact event objects and post-snapshot digests are generated
+from the typed manifest/reducer fixture; event-name strings not declared by the
+manifest are rejected by conformance validation.
+
+### v3.3.8 product-capability preservation
+
+These families are atomic preservation gates, not claims that v3 internal state
+shape is a v4 contract. The machine-readable preservation registry contains
+capability claims and exact case references only. The independent exact case
+catalog below declares which references exist; executable case files, added at
+the stage that owns each case, contain provenance, precondition, stimulus,
+acceptance, effect state, ordered events, canonical expected-snapshot digest,
+exact side-effect counts, and replay expectation. A binding index is never an
+instance-existence authority, and a prose branch is never counted as an
+instance.
+
+| Family | New atomic instances and existing case aliases | Gate | New count |
+| --- | --- | --- | ---: |
+| `CAP-INTAKE` | new: `CAP-INTAKE-G01..G10`, four `CAP-INTAKE-STATUS-*`, seven `CAP-INTAKE-REPORT-01..07`, `CAP-INTAKE-QUESTIONS`; alias: `UX-011-a` | P5.1-before-P6 | 22 |
+| `CAP-ENTRY` | aliases: `UX-001-a..b`, `UX-012-a..c`, `UX-013-a..d`, `UX-014-a..d`, `UX-015-a..c`, `UX-016-a` | P5.1-before-P6 | 0 |
+| `CAP-MODES` | new: `CAP-MODES-DIRECT`, `CAP-MODES-STANDARD`, `CAP-MODES-ADAPTIVE`, `CAP-MODES-REJECT`, `CAP-MODES-BOUNDARY`, `CAP-MODES-ZERO` | beta | 6 |
+| `CAP-ROLES` | new: `CAP-ROLES-WORKER`, `CAP-ROLES-REVIEWER`, `CAP-ROLES-LOCAL-VERIFIER`, `CAP-ROLES-WRONG-ROLE`, `CAP-ROLES-STALE-ARTIFACT`, `CAP-ROLES-ZERO`; aliases: `R-001-a`, `R-002-a`, `R-003-a` | beta | 6 |
+| `CAP-HUMAN` | aliases: `K-007-a..b`, `P-002-b`, `P-004-a..e`, `UX-013-a..d`, `UX-014-a..b` | beta | 0 |
+| `CAP-REPAIR` | aliases: `P-001-a`, `P-002-a`, `P-003-a`, `P-004-e` | beta | 0 |
+| `CAP-OPERABILITY` | new: doctor pass/drift, compile pass/reject, canary pass/reject, lifecycle boundary, and zero-effect check under exact `CAP-OPERABILITY-*` IDs | rc | 8 |
+| `CAP-AUDIT` | new: rejection, index, status, archive, tamper, legacy-boundary, next-action, and zero-writer projection under exact `CAP-AUDIT-*` IDs | beta | 8 |
+| `CAP-PRIVACY` | new: scan/export pass, secret/PII/raw-log reject, stale allowlist, category boundary, and zero-effect under exact `CAP-PRIVACY-*` IDs | beta | 8 |
+| `CAP-COMPAT` | new: legacy intake/generate/Pack-repair, compact/full/minimal-patch, sunset, and zero-effect under exact `CAP-COMPAT-*` IDs; alias: `UX-015-b` | beta | 8 |
+| `CAP-DISTRIBUTION` | new: install, conflict, rollback, runtime identity, MCP, uninstall, drift, and zero-effect under exact `CAP-DISTRIBUTION-*` IDs | rc | 8 |
+| `CAP-DOCS` | new: Chinese/English/minimal/Standard/Adaptive/migration, stale reject, and zero-effect under exact `CAP-DOCS-*` IDs | rc | 8 |
+| `CAP-RELEASE` | new: SHA, manifest, compatibility CI, canary, SBOM, license, secret, artifact, failure, candidate drift, no-public-effect, and author packet under exact `CAP-RELEASE-*` IDs; aliases: `UX-009-a`, `F-001-a` | rc | 12 |
+| `CAP-ARTIFACT` | aliases: all atomic `A-001`, `A-GIT-*`, `A-NONGIT-*`, `A-NEWGIT-*`, and `A-PATH-*` instances | beta | 0 |
+| `CAP-ARCHITECTURE` | new: `CAP-ARCHITECTURE-ONE-WRITER`, `CAP-ARCHITECTURE-FORBIDDEN-IMPORT`, `CAP-ARCHITECTURE-MINIMAL-ISOLATION`, `CAP-ARCHITECTURE-NO-LEGACY-BRANCHES` | P5.1-before-P6 | 4 |
+
+The following catalog is the independent existence authority for the 343
+atomic case identities declared by this design. `parameterized_families`
+machine-expands an existing family row as `<family>-<parameter>`;
+`preservation_declarations` names each new `CAP-*` case explicitly. The
+preservation registry and binding index may only refer to this catalog; neither
+can create a case by adding a plausible suffix.
+
+<!-- CORPUS-EXACT-CASE-CATALOG-BEGIN -->
+```json
+{
+  "schema_version": "loopskill-v4-exact-case-catalog-v1",
+  "parameterized_families": {
+    "K-001": ["a"],
+    "K-002": ["a", "b"],
+    "K-003": ["op01", "op02", "op03", "op04", "op05", "op06", "op07", "op08", "op09", "op10", "op11"],
+    "K-004": ["a", "b", "c"],
+    "K-005": ["a", "b", "c", "d"],
+    "K-006": ["a", "b", "c"],
+    "K-007": ["a", "b"],
+    "K-008": ["a", "b"],
+    "K-009": ["a", "b", "c", "d"],
+    "AUTH-001": ["a", "b", "c", "d", "e", "f", "g", "h"],
+    "AUTH-002": ["a", "b"],
+    "AUTH-003": ["a", "b"],
+    "AUTH-004": ["a", "b", "c"],
+    "AUTH-005": ["a", "b", "c"],
+    "AUTH-006": ["a", "b", "c", "d"],
+    "RES-001": ["a", "b", "c", "d", "e"],
+    "ENC-001": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"],
+    "REJ-001": ["a", "b"],
+    "S-001": ["op01-a", "op01-b", "op01-c", "op02-a", "op02-b", "op02-c", "op03-a", "op03-b", "op03-c", "op04-a", "op04-b", "op04-c", "op05-a", "op05-b", "op05-c", "op06-a", "op06-b", "op06-c", "op07-a", "op07-b", "op07-c", "op08-a", "op08-b", "op08-c", "op09-a", "op09-b", "op09-c", "op10-a", "op10-b", "op10-c", "op11-a", "op11-b", "op11-c"],
+    "S-002": ["a"],
+    "S-003": ["a"],
+    "S-004": ["a", "b"],
+    "S-005": ["a", "b"],
+    "S-006": ["a", "b"],
+    "XFX-001": ["a"],
+    "XFX-002": ["a"],
+    "XFX-003": ["a"],
+    "XFX-004": ["a"],
+    "XFX-005": ["a", "b"],
+    "XFX-006": ["a", "b"],
+    "XFX-007": ["a", "b"],
+    "XFX-008": ["a", "b", "c"],
+    "H-001": ["a"],
+    "H-002": ["a"],
+    "H-003": ["a", "b"],
+    "H-004": ["a", "b"],
+    "H-005": ["a", "b"],
+    "H-006": ["a", "b"],
+    "H-007": ["a", "b", "c"],
+    "H-008": ["a", "b"],
+    "H-009": ["a", "b", "c"],
+    "H-010": ["a", "b"],
+    "H-011": ["a", "b", "c", "d"],
+    "A-001": ["a", "b"],
+    "A-GIT-001": ["a"],
+    "A-GIT-002": ["a", "b"],
+    "A-GIT-003": ["a"],
+    "A-NONGIT-001": ["a", "b", "c"],
+    "A-NONGIT-002": ["a"],
+    "A-NEWGIT-001": ["a"],
+    "A-PATH-001": ["a", "b", "c", "d", "e"],
+    "R-001": ["a"],
+    "R-002": ["a"],
+    "R-003": ["a"],
+    "R-004": ["a", "b", "c"],
+    "F-001": ["a"],
+    "F-002": ["a", "b"],
+    "F-003": ["a", "b"],
+    "F-004": ["a", "b"],
+    "M-001": ["a"],
+    "M-002": ["a", "b"],
+    "M-003": ["a"],
+    "M-004": ["a", "b", "c", "d"],
+    "M-005": ["a"],
+    "P-001": ["a"],
+    "P-002": ["a", "b"],
+    "P-003": ["a"],
+    "P-004": ["a", "b", "c", "d", "e"],
+    "L-001": ["a", "b", "c", "d", "e", "f", "g"],
+    "L-002": ["a", "b", "c", "d", "e", "f"],
+    "UX-001": ["a", "b"],
+    "UX-002": ["a"],
+    "UX-003": ["a"],
+    "UX-004": ["a", "b", "c"],
+    "UX-005": ["a", "b"],
+    "UX-006": ["a", "b"],
+    "UX-007": ["a", "b"],
+    "UX-008": ["a", "b"],
+    "UX-009": ["a"],
+    "UX-010": ["a", "b", "c", "d"],
+    "UX-011": ["a"],
+    "UX-012": ["a", "b", "c"],
+    "UX-013": ["a", "b", "c", "d"],
+    "UX-014": ["a", "b", "c", "d"],
+    "UX-015": ["a", "b", "c"],
+    "UX-016": ["a"]
+  },
+  "preservation_declarations": [
+    "CAP-INTAKE-G01", "CAP-INTAKE-G02", "CAP-INTAKE-G03", "CAP-INTAKE-G04", "CAP-INTAKE-G05", "CAP-INTAKE-G06", "CAP-INTAKE-G07", "CAP-INTAKE-G08", "CAP-INTAKE-G09", "CAP-INTAKE-G10",
+    "CAP-INTAKE-STATUS-READY", "CAP-INTAKE-STATUS-CLARIFICATION", "CAP-INTAKE-STATUS-BLOCKED", "CAP-INTAKE-STATUS-DIRECT",
+    "CAP-INTAKE-REPORT-01", "CAP-INTAKE-REPORT-02", "CAP-INTAKE-REPORT-03", "CAP-INTAKE-REPORT-04", "CAP-INTAKE-REPORT-05", "CAP-INTAKE-REPORT-06", "CAP-INTAKE-REPORT-07", "CAP-INTAKE-QUESTIONS",
+    "CAP-MODES-DIRECT", "CAP-MODES-STANDARD", "CAP-MODES-ADAPTIVE", "CAP-MODES-REJECT", "CAP-MODES-BOUNDARY", "CAP-MODES-ZERO",
+    "CAP-ROLES-WORKER", "CAP-ROLES-REVIEWER", "CAP-ROLES-LOCAL-VERIFIER", "CAP-ROLES-WRONG-ROLE", "CAP-ROLES-STALE-ARTIFACT", "CAP-ROLES-ZERO",
+    "CAP-OPERABILITY-DOCTOR-PASS", "CAP-OPERABILITY-DOCTOR-DRIFT", "CAP-OPERABILITY-COMPILE-PASS", "CAP-OPERABILITY-COMPILE-REJECT", "CAP-OPERABILITY-CANARY-PASS", "CAP-OPERABILITY-CANARY-REJECT", "CAP-OPERABILITY-LIFECYCLE-BOUNDARY", "CAP-OPERABILITY-ZERO",
+    "CAP-AUDIT-REJECTION", "CAP-AUDIT-INDEX", "CAP-AUDIT-STATUS", "CAP-AUDIT-ARCHIVE", "CAP-AUDIT-TAMPER", "CAP-AUDIT-LEGACY-BOUNDARY", "CAP-AUDIT-NEXT-ACTION", "CAP-AUDIT-ZERO",
+    "CAP-PRIVACY-SCAN-PASS", "CAP-PRIVACY-EXPORT-PASS", "CAP-PRIVACY-SECRET-REJECT", "CAP-PRIVACY-PII-REJECT", "CAP-PRIVACY-RAW-LOG-REJECT", "CAP-PRIVACY-ALLOWLIST-STALE", "CAP-PRIVACY-CATEGORY-BOUNDARY", "CAP-PRIVACY-ZERO",
+    "CAP-COMPAT-INTAKE", "CAP-COMPAT-GENERATE", "CAP-COMPAT-PACK-REPAIR", "CAP-COMPAT-COMPACT", "CAP-COMPAT-FULL", "CAP-COMPAT-MINIMAL-PATCH", "CAP-COMPAT-SUNSET", "CAP-COMPAT-ZERO",
+    "CAP-DISTRIBUTION-INSTALL", "CAP-DISTRIBUTION-CONFLICT", "CAP-DISTRIBUTION-ROLLBACK", "CAP-DISTRIBUTION-RUNTIME-ID", "CAP-DISTRIBUTION-MCP", "CAP-DISTRIBUTION-UNINSTALL", "CAP-DISTRIBUTION-DRIFT", "CAP-DISTRIBUTION-ZERO",
+    "CAP-DOCS-ZH-QUICKSTART", "CAP-DOCS-EN-QUICKSTART", "CAP-DOCS-MINIMAL", "CAP-DOCS-STANDARD", "CAP-DOCS-ADAPTIVE", "CAP-DOCS-MIGRATION", "CAP-DOCS-STALE-REJECT", "CAP-DOCS-ZERO",
+    "CAP-RELEASE-SHA", "CAP-RELEASE-MANIFEST", "CAP-RELEASE-COMPAT-CI", "CAP-RELEASE-CANARY", "CAP-RELEASE-SBOM", "CAP-RELEASE-LICENSE", "CAP-RELEASE-SECRET", "CAP-RELEASE-ARTIFACT", "CAP-RELEASE-FAILURE", "CAP-RELEASE-CANDIDATE-DRIFT", "CAP-RELEASE-NO-PUBLIC-EFFECT", "CAP-RELEASE-AUTHOR-PACKET",
+    "CAP-ARCHITECTURE-ONE-WRITER", "CAP-ARCHITECTURE-FORBIDDEN-IMPORT", "CAP-ARCHITECTURE-MINIMAL-ISOLATION", "CAP-ARCHITECTURE-NO-LEGACY-BRANCHES"
+  ]
+}
+```
+<!-- CORPUS-EXACT-CASE-CATALOG-END -->
+
+The canonical expansion below is the exact preservation binding index. It
+contains no duplicate test case; aliases point to an instance already counted
+in its original family. The 98 new `CAP-*` IDs are counted above, while every
+other entry is an existing atomic corpus ID.
+
+<!-- PRESERVATION-CASE-BINDING-INDEX-BEGIN -->
+```json
+[
+  "A-001-a",
+  "A-001-b",
+  "A-GIT-001-a",
+  "A-GIT-002-a",
+  "A-GIT-002-b",
+  "A-GIT-003-a",
+  "A-NEWGIT-001-a",
+  "A-NONGIT-001-a",
+  "A-NONGIT-001-b",
+  "A-NONGIT-001-c",
+  "A-NONGIT-002-a",
+  "A-PATH-001-a",
+  "A-PATH-001-b",
+  "A-PATH-001-c",
+  "A-PATH-001-d",
+  "A-PATH-001-e",
+  "AUTH-001-a",
+  "AUTH-001-b",
+  "AUTH-001-c",
+  "AUTH-001-d",
+  "AUTH-001-e",
+  "AUTH-001-f",
+  "AUTH-001-g",
+  "AUTH-001-h",
+  "AUTH-002-a",
+  "AUTH-002-b",
+  "AUTH-003-a",
+  "AUTH-003-b",
+  "AUTH-004-a",
+  "AUTH-004-b",
+  "AUTH-004-c",
+  "AUTH-005-a",
+  "AUTH-005-b",
+  "AUTH-005-c",
+  "AUTH-006-a",
+  "AUTH-006-b",
+  "AUTH-006-c",
+  "AUTH-006-d",
+  "CAP-ARCHITECTURE-FORBIDDEN-IMPORT",
+  "CAP-ARCHITECTURE-MINIMAL-ISOLATION",
+  "CAP-ARCHITECTURE-NO-LEGACY-BRANCHES",
+  "CAP-ARCHITECTURE-ONE-WRITER",
+  "CAP-AUDIT-ARCHIVE",
+  "CAP-AUDIT-INDEX",
+  "CAP-AUDIT-LEGACY-BOUNDARY",
+  "CAP-AUDIT-NEXT-ACTION",
+  "CAP-AUDIT-REJECTION",
+  "CAP-AUDIT-STATUS",
+  "CAP-AUDIT-TAMPER",
+  "CAP-AUDIT-ZERO",
+  "CAP-COMPAT-COMPACT",
+  "CAP-COMPAT-FULL",
+  "CAP-COMPAT-GENERATE",
+  "CAP-COMPAT-INTAKE",
+  "CAP-COMPAT-MINIMAL-PATCH",
+  "CAP-COMPAT-PACK-REPAIR",
+  "CAP-COMPAT-SUNSET",
+  "CAP-COMPAT-ZERO",
+  "CAP-DISTRIBUTION-CONFLICT",
+  "CAP-DISTRIBUTION-DRIFT",
+  "CAP-DISTRIBUTION-INSTALL",
+  "CAP-DISTRIBUTION-MCP",
+  "CAP-DISTRIBUTION-ROLLBACK",
+  "CAP-DISTRIBUTION-RUNTIME-ID",
+  "CAP-DISTRIBUTION-UNINSTALL",
+  "CAP-DISTRIBUTION-ZERO",
+  "CAP-DOCS-ADAPTIVE",
+  "CAP-DOCS-EN-QUICKSTART",
+  "CAP-DOCS-MIGRATION",
+  "CAP-DOCS-MINIMAL",
+  "CAP-DOCS-STALE-REJECT",
+  "CAP-DOCS-STANDARD",
+  "CAP-DOCS-ZERO",
+  "CAP-DOCS-ZH-QUICKSTART",
+  "CAP-INTAKE-G01",
+  "CAP-INTAKE-G02",
+  "CAP-INTAKE-G03",
+  "CAP-INTAKE-G04",
+  "CAP-INTAKE-G05",
+  "CAP-INTAKE-G06",
+  "CAP-INTAKE-G07",
+  "CAP-INTAKE-G08",
+  "CAP-INTAKE-G09",
+  "CAP-INTAKE-G10",
+  "CAP-INTAKE-QUESTIONS",
+  "CAP-INTAKE-REPORT-01",
+  "CAP-INTAKE-REPORT-02",
+  "CAP-INTAKE-REPORT-03",
+  "CAP-INTAKE-REPORT-04",
+  "CAP-INTAKE-REPORT-05",
+  "CAP-INTAKE-REPORT-06",
+  "CAP-INTAKE-REPORT-07",
+  "CAP-INTAKE-STATUS-BLOCKED",
+  "CAP-INTAKE-STATUS-CLARIFICATION",
+  "CAP-INTAKE-STATUS-DIRECT",
+  "CAP-INTAKE-STATUS-READY",
+  "CAP-MODES-ADAPTIVE",
+  "CAP-MODES-BOUNDARY",
+  "CAP-MODES-DIRECT",
+  "CAP-MODES-REJECT",
+  "CAP-MODES-STANDARD",
+  "CAP-MODES-ZERO",
+  "CAP-OPERABILITY-CANARY-PASS",
+  "CAP-OPERABILITY-CANARY-REJECT",
+  "CAP-OPERABILITY-COMPILE-PASS",
+  "CAP-OPERABILITY-COMPILE-REJECT",
+  "CAP-OPERABILITY-DOCTOR-DRIFT",
+  "CAP-OPERABILITY-DOCTOR-PASS",
+  "CAP-OPERABILITY-LIFECYCLE-BOUNDARY",
+  "CAP-OPERABILITY-ZERO",
+  "CAP-PRIVACY-ALLOWLIST-STALE",
+  "CAP-PRIVACY-CATEGORY-BOUNDARY",
+  "CAP-PRIVACY-EXPORT-PASS",
+  "CAP-PRIVACY-PII-REJECT",
+  "CAP-PRIVACY-RAW-LOG-REJECT",
+  "CAP-PRIVACY-SCAN-PASS",
+  "CAP-PRIVACY-SECRET-REJECT",
+  "CAP-PRIVACY-ZERO",
+  "CAP-RELEASE-ARTIFACT",
+  "CAP-RELEASE-AUTHOR-PACKET",
+  "CAP-RELEASE-CANARY",
+  "CAP-RELEASE-CANDIDATE-DRIFT",
+  "CAP-RELEASE-COMPAT-CI",
+  "CAP-RELEASE-FAILURE",
+  "CAP-RELEASE-LICENSE",
+  "CAP-RELEASE-MANIFEST",
+  "CAP-RELEASE-NO-PUBLIC-EFFECT",
+  "CAP-RELEASE-SBOM",
+  "CAP-RELEASE-SECRET",
+  "CAP-RELEASE-SHA",
+  "CAP-ROLES-LOCAL-VERIFIER",
+  "CAP-ROLES-REVIEWER",
+  "CAP-ROLES-STALE-ARTIFACT",
+  "CAP-ROLES-WORKER",
+  "CAP-ROLES-WRONG-ROLE",
+  "CAP-ROLES-ZERO",
+  "ENC-001-a",
+  "ENC-001-b",
+  "ENC-001-c",
+  "ENC-001-d",
+  "ENC-001-e",
+  "ENC-001-f",
+  "ENC-001-g",
+  "ENC-001-h",
+  "ENC-001-i",
+  "ENC-001-j",
+  "F-001-a",
+  "F-002-a",
+  "F-002-b",
+  "F-003-a",
+  "F-003-b",
+  "F-004-a",
+  "F-004-b",
+  "H-001-a",
+  "H-002-a",
+  "H-003-a",
+  "H-003-b",
+  "H-004-a",
+  "H-004-b",
+  "H-005-a",
+  "H-005-b",
+  "H-006-a",
+  "H-006-b",
+  "H-007-a",
+  "H-007-b",
+  "H-007-c",
+  "H-008-a",
+  "H-008-b",
+  "H-009-a",
+  "H-009-b",
+  "H-009-c",
+  "H-010-a",
+  "H-010-b",
+  "H-011-a",
+  "H-011-b",
+  "H-011-c",
+  "H-011-d",
+  "K-001-a",
+  "K-002-a",
+  "K-002-b",
+  "K-003-op01",
+  "K-003-op02",
+  "K-003-op03",
+  "K-003-op04",
+  "K-003-op05",
+  "K-003-op06",
+  "K-003-op07",
+  "K-003-op08",
+  "K-003-op09",
+  "K-003-op10",
+  "K-003-op11",
+  "K-004-a",
+  "K-004-b",
+  "K-004-c",
+  "K-005-a",
+  "K-005-b",
+  "K-005-c",
+  "K-005-d",
+  "K-006-a",
+  "K-006-b",
+  "K-006-c",
+  "K-007-a",
+  "K-007-b",
+  "K-008-a",
+  "K-008-b",
+  "K-009-a",
+  "K-009-b",
+  "K-009-c",
+  "K-009-d",
+  "L-002-a",
+  "L-002-b",
+  "L-002-c",
+  "L-002-d",
+  "L-002-e",
+  "L-002-f",
+  "M-001-a",
+  "M-002-a",
+  "M-002-b",
+  "M-003-a",
+  "M-004-a",
+  "M-004-b",
+  "M-004-c",
+  "M-004-d",
+  "M-005-a",
+  "P-001-a",
+  "P-002-a",
+  "P-002-b",
+  "P-003-a",
+  "P-004-a",
+  "P-004-b",
+  "P-004-c",
+  "P-004-d",
+  "P-004-e",
+  "R-001-a",
+  "R-002-a",
+  "R-003-a",
+  "R-004-a",
+  "R-004-b",
+  "R-004-c",
+  "REJ-001-a",
+  "REJ-001-b",
+  "RES-001-a",
+  "RES-001-b",
+  "RES-001-c",
+  "RES-001-d",
+  "RES-001-e",
+  "S-001-op01-a",
+  "S-001-op01-b",
+  "S-001-op01-c",
+  "S-001-op02-a",
+  "S-001-op02-b",
+  "S-001-op02-c",
+  "S-001-op03-a",
+  "S-001-op03-b",
+  "S-001-op03-c",
+  "S-001-op04-a",
+  "S-001-op04-b",
+  "S-001-op04-c",
+  "S-001-op05-a",
+  "S-001-op05-b",
+  "S-001-op05-c",
+  "S-001-op06-a",
+  "S-001-op06-b",
+  "S-001-op06-c",
+  "S-001-op07-a",
+  "S-001-op07-b",
+  "S-001-op07-c",
+  "S-001-op08-a",
+  "S-001-op08-b",
+  "S-001-op08-c",
+  "S-001-op09-a",
+  "S-001-op09-b",
+  "S-001-op09-c",
+  "S-001-op10-a",
+  "S-001-op10-b",
+  "S-001-op10-c",
+  "S-001-op11-a",
+  "S-001-op11-b",
+  "S-001-op11-c",
+  "S-002-a",
+  "S-003-a",
+  "S-005-a",
+  "S-005-b",
+  "UX-001-a",
+  "UX-001-b",
+  "UX-006-a",
+  "UX-006-b",
+  "UX-009-a",
+  "UX-011-a",
+  "UX-012-a",
+  "UX-012-b",
+  "UX-012-c",
+  "UX-013-a",
+  "UX-013-b",
+  "UX-013-c",
+  "UX-013-d",
+  "UX-014-a",
+  "UX-014-b",
+  "UX-014-c",
+  "UX-014-d",
+  "UX-015-a",
+  "UX-015-b",
+  "UX-015-c",
+  "UX-016-a",
+  "XFX-001-a",
+  "XFX-002-a",
+  "XFX-003-a",
+  "XFX-004-a",
+  "XFX-005-a",
+  "XFX-005-b",
+  "XFX-006-a",
+  "XFX-006-b",
+  "XFX-007-a",
+  "XFX-007-b",
+  "XFX-008-a",
+  "XFX-008-b",
+  "XFX-008-c"
+]
+```
+<!-- PRESERVATION-CASE-BINDING-INDEX-END -->
 
 <!-- INSTANCE-CATALOG-END -->
 
-The catalog contains exactly **78 families and 220 independently reportable
+The catalog contains exactly **101 families and 343 independently reportable
 instances**. Counts are machine-recomputed during readiness review; they are
 not inferred from prose.
 
@@ -510,16 +1020,50 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
 - full alpha: all remaining alpha instances;
 - alpha.2: all Host/artifact instances including `H-011`; any real integration
   remains disposable, isolated, non-research, and claim-limited;
+- P5.1-before-P6: all `UX-001`, `UX-010..016`, `CAP-INTAKE`, `CAP-ENTRY`,
+  and `CAP-ARCHITECTURE` instances, including minimal-profile isolation with
+  optional policy and v3 compatibility modules unavailable;
 - beta: all migration/policy/liveness/cost instances, same-scenario v3 baseline,
-  all `UX-001..008`, and thresholds frozen before observing v4 performance;
+  all remaining `UX-001..008`, `UX-010..016`, `CAP-MODES`, `CAP-ROLES`,
+  `CAP-HUMAN`, `CAP-REPAIR`, `CAP-AUDIT`, `CAP-PRIVACY`, and `CAP-ARTIFACT`,
+  and thresholds frozen before observing v4 performance;
 - rc: full fault matrix, isolated install/rollback, exact-candidate real App
-  evidence, independent review, `UX-009` real new-user usability canary, fixed
-  candidate SHA, and preserved failures/UNKNOWN;
+  evidence, independent review, `UX-009`, `CAP-OPERABILITY`,
+  `CAP-DISTRIBUTION`, `CAP-DOCS`, and `CAP-RELEASE`, real new-user usability
+  canary, fixed candidate SHA, and preserved failures/UNKNOWN;
 - stable/public release: always requires separate author approval and is not
   implied by an RC-ready result.
 
 32 KiB Pack and at least 50% control-interaction reduction are candidate beta
 targets, not alpha correctness gates.
+
+Before either target becomes blocking, the measurement receipt freezes the
+same user scenario, v3.3.8 SHA, measurement-code digest, and counting boundary.
+It reports user start actions and mandatory authorization confirmations
+separately from internal control interactions. Only then may Pack ≤32 KiB and
+internal control-interaction reduction ≥50% become beta/RC thresholds. No v4
+result may be read before that freeze, and no LOC/module/command ceiling is
+invented as a substitute.
+
+The P5.1/default-path anti-bloat receipt reports exact HEAD and document/code
+digests, loaded modules and dependency edges, manifest command/event/error
+counts, user start actions, confirmation count, Host interactions, protocol
+calls, local writes, entry/Pack bytes, latency, UNKNOWN count, and human
+intervention. PASS additionally requires a cycle-free import graph, Kernel
+forbidden-dependency scan, single-writer scan, and the optional-policy/v3-compat
+unavailable minimal profile. This receipt is build evidence only, never a
+runtime authority.
+
+The P5.1 frozen synthetic observation is: 13 loaded v4 modules, 17 internal
+dependency edges, 16/33/40 manifest command/event/error literals, one public
+start action, one separately counted authorization confirmation, zero Host
+interactions, one protocol mutation, one canonical commit, five PREPARE files,
+one CONFIRM file, five startup events, one Attempt, 11,125 entry bytes, and a
+627-byte human Controller Plan view. `UNKNOWN=0` on the no-Host-call default
+sample; the isolation case separately forces exact UNKNOWN with no resend.
+Latency is a nonblocking single-sample diagnostic until the P7 measurement
+fixture and v3 baseline are frozen. Any later default-path increase must cite a
+registry capability and an already accepted ADR decision.
 
 ## Implementation-readiness checklist
 
@@ -530,7 +1074,7 @@ targets, not alpha correctness gates.
 | A3 effect executor | commit-before-call contract, AttemptRef/budget/executor ownership, all crash windows, no resend, exact late readback |
 | A4 liveness/assurance | TERMINAL disposition is independent from assurance; cooperative limited closure is legal; strict claim still requires authoritative readback |
 | A5 CAS unit | per-loop revision is sole write CAS; subject revisions are guards; no store version in snapshot |
-| A6 executable corpus | acceptance and subject state separated; 78 families expand to 220 instances; bounds/rejection/authority/encoder/UX windows explicit |
+| A6 executable corpus | acceptance and subject state separated; 101 families expand to 343 instances; 15 preservation mapping families bind 317 unique exact case IDs without duplicating fake snapshots; bounds/rejection/authority/encoder/UX/preservation windows explicit |
 | A7 vertical trace | 11 operations, 18 events, full subject bindings, loop/aggregate revisions, 2715 bytes, exact domain digest |
 
 There is no unresolved semantic decision that blocks the bounded pure-kernel
@@ -548,16 +1092,21 @@ failure and must stop implementation.
 | crash-deterministic atomic store | all `S-001`, `S-004..006` |
 | external Attempt and no resend | `XFX-001..008` |
 | machine-owned startup effect | `H-011`, `UX-001..003`, `UX-005` |
+| intake→prepare→confirm→start authorization | `UX-001`, `UX-010..016`, `CAP-INTAKE`, `CAP-ENTRY`; P5.1-before-P6 |
 | UNKNOWN/UNVERIFIABLE independent from Result | `XFX-005..008`, `F-003` |
 | terminality independent from assurance | `F-001`, `F-003`, `F-004`, cooperative substitution |
 | Result/Report/Artifact/Review chain | `R-001..004`, `F-001`, corrected snapshot |
 | canonical encoder across languages | `ENC-001-a..j` |
 | bounds and fail-closed rejection | `RES-001`, `K-005..008`, `REJ-001` |
 | no Host/Git/SQLite/migration dependency | forbidden-import scan and hard side-effect counts |
+| one manifest, one writer, independent ports, acyclic graph | `CAP-ARCHITECTURE-ONE-WRITER`, `CAP-ARCHITECTURE-FORBIDDEN-IMPORT`; architecture-fitness validator |
+| policy/compat isolation and deletability | `CAP-ARCHITECTURE-MINIMAL-ISOLATION`, `CAP-ARCHITECTURE-NO-LEGACY-BRANCHES`; minimal profile makes both module sets unavailable |
+| authorized stop without fabricated cancellation | `P-002`, `P-004` |
 | v3 compatibility without shape copy | `M-001..005` and exact provenance mapping |
-| one-action, zero-control-identity default UX | `UX-001..003`; reserved in alpha, blocking beta onward |
+| one-entry, explicit-confirmation, zero-control-identity UX | `UX-001..003`, `UX-010..016`; blocking P5.1 before P6 |
 | non-leaking status and honest uncertainty | `UX-004`, `UX-005`, `UX-007` |
 | explicit safe migration UX | `UX-006` |
 | frozen UX cost budget and real usability | `UX-008`, `UX-009` |
+| complete v3 product-asset preservation | all 14 `CAP-*` families; 24 semantic capability groups; exact registry/error-ownership/closed-set validator |
 | resolved author decisions | phase gates and ADR OD table; no open semantic for slice |
 | corpus is not governance | immutable cases only; no writer/retry/Supervisor |

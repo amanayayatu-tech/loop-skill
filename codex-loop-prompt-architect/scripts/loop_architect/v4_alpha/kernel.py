@@ -298,7 +298,7 @@ def reduce_command(
 def _create_loop(
     snapshot: dict[str, Any] | None,
     command: CommandEnvelope,
-    _: AuthorityContext,
+    context: AuthorityContext,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     if snapshot is not None or command.expected_loop_revision != 0:
         raise ProtocolRejection("INVALID_TRANSITION", "loop already exists")
@@ -353,6 +353,40 @@ def _create_loop(
             raise ProtocolRejection(
                 "INVALID_COMMAND", "incomplete startup external effect bindings"
             )
+        manifest_digest = resolved.get("prepared_manifest_digest")
+        boundary_digest = resolved.get("boundary_digest")
+        bundle_digest = resolved.get("prepared_bundle_digest")
+        if not all((manifest_digest, boundary_digest, bundle_digest)):
+            raise ProtocolRejection(
+                "USER_CONFIRMATION_REQUIRED",
+                "startup requires a digest-bound prepared bundle",
+            )
+        confirmation = _receipt(
+            command,
+            context,
+            action="confirm_start",
+            subject_ref=loop_ref,
+            target_ref=boundary_digest,
+            request_digest=manifest_digest,
+        )
+        if (
+            confirmation.trust_class != "strict"
+            or confirmation.outcome != "observed"
+            or confirmation.evidence_digest != bundle_digest
+        ):
+            raise ProtocolRejection(
+                "USER_CONFIRMATION_STALE",
+                "confirmation does not bind the current prepared bundle",
+            )
+        state["start_authorization"] = {
+            "boundary_digest": boundary_digest,
+            "bundle_digest": bundle_digest,
+            "manifest_digest": manifest_digest,
+            "receipt_ref": confirmation.receipt_ref,
+        }
+        events.append(
+            _event("StartAuthorized", receipt_ref=confirmation.receipt_ref)
+        )
         external_effect_ref = allocate["new_external_effect_ref"]
         attempt_ref = allocate["new_attempt_ref"]
         host_resource_ref = allocate["new_host_resource_ref"]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-action LoopSkill 4 public entry; no Host control identity is accepted."""
+"""Native LoopSkill 4 intake/prepare/confirm/start public entry."""
 
 from __future__ import annotations
 
@@ -9,8 +9,18 @@ import os
 import sys
 from pathlib import Path
 
-from loop_architect.v4_alpha.protocol import LoopStartInput
-from loop_architect.v4_entry import EntryError, diagnostics, start_loop, status
+from loop_architect.v4_alpha.protocol import LoopIntakeInput
+from loop_architect.v4_entry import (
+    EntryError,
+    confirm_loop,
+    diagnostics,
+    intake_report_loop,
+    prepare_loop,
+    review_prepared,
+    start_loop,
+    status,
+)
+from loop_architect.v4_entry.preparation import boundary_display
 
 
 class PublicParser(argparse.ArgumentParser):
@@ -32,9 +42,17 @@ def default_root() -> Path:
 def parser() -> PublicParser:
     result = PublicParser(prog="loopskill4")
     subcommands = result.add_subparsers(dest="action", required=True)
+    inspect = subcommands.add_parser("intake")
+    inspect.add_argument("goal_or_file")
+    prepare = subcommands.add_parser("prepare")
+    prepare.add_argument("goal_or_file")
+    prepare.add_argument("--output", type=Path, required=True)
+    confirm = subcommands.add_parser("confirm")
+    confirm.add_argument("prepared_directory", type=Path)
     start = subcommands.add_parser("start")
-    start.add_argument("goal_or_file")
+    start.add_argument("goal_file_or_prepared_directory")
     start.add_argument("--root", type=Path, default=default_root())
+    start.add_argument("--prepared-output", type=Path)
     start.add_argument("--diagnostics", action="store_true")
     show = subcommands.add_parser("status")
     show.add_argument("--root", type=Path, default=default_root())
@@ -42,11 +60,68 @@ def parser() -> PublicParser:
     return result
 
 
-def read_goal(value: str) -> LoopStartInput:
+_INTAKE_FIELDS = {
+    "acceptance_criteria",
+    "authorization_boundaries",
+    "budget",
+    "external_actions",
+    "goal",
+    "stop_conditions",
+    "task_horizon",
+    "write_scope",
+}
+_SEQUENCE_FIELDS = {
+    "acceptance_criteria",
+    "authorization_boundaries",
+    "external_actions",
+    "stop_conditions",
+    "write_scope",
+}
+
+
+def _intake_value(document) -> LoopIntakeInput:
+    if not isinstance(document, dict) or not set(document) <= _INTAKE_FIELDS:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The input file has unsupported fields.",
+            "Use only the documented semantic intake fields.",
+        )
+    values = {
+        "goal": "",
+        "task_horizon": "unspecified",
+        "write_scope": (),
+        "budget": "",
+        "external_actions": (),
+        "acceptance_criteria": (),
+        "stop_conditions": (),
+        "authorization_boundaries": (),
+    }
+    values.update(document)
+    if not isinstance(values["goal"], str) or not isinstance(values["task_horizon"], str) or not isinstance(values["budget"], str):
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The input file contains an invalid semantic value.",
+            "Use UTF-8 strings and arrays of strings.",
+        )
+    for field in _SEQUENCE_FIELDS:
+        value = values[field]
+        if not isinstance(value, (list, tuple)) or not all(
+            isinstance(item, str) for item in value
+        ):
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The input file contains an invalid semantic list.",
+                "Use arrays containing only UTF-8 strings.",
+            )
+        values[field] = tuple(value)
+    return LoopIntakeInput(**values)
+
+
+def read_intake_input(value: str) -> LoopIntakeInput:
     path = Path(value)
     if value == "-":
-        raw = sys.stdin.buffer.read(4097)
-        return LoopStartInput(goal=_decode_text(raw))
+        raw = sys.stdin.buffer.read(32769)
+        return _decode_intake_bytes(raw, json_document=True)
     if path.is_file():
         try:
             raw = path.read_bytes()
@@ -56,36 +131,43 @@ def read_goal(value: str) -> LoopStartInput:
                 "The goal file could not be read.",
                 "Provide one readable UTF-8 goal file.",
             ) from exc
-        if len(raw) > 4096:
+        if len(raw) > 32768:
             raise EntryError(
                 "USER_INPUT_INVALID",
                 "The goal file is too large.",
-                "Reduce the goal to at most 4096 UTF-8 bytes.",
+                "Reduce the semantic input to at most 32768 UTF-8 bytes.",
             )
         if path.suffix.lower() == ".json":
-            try:
-                document = json.loads(raw.decode("utf-8", "strict"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise EntryError(
-                    "USER_INPUT_INVALID",
-                    "The goal file is not valid UTF-8 JSON.",
-                    "Use an object containing only a non-empty goal field.",
-                ) from exc
-            if not isinstance(document, dict) or set(document) != {"goal"}:
-                raise EntryError(
-                    "USER_INPUT_INVALID",
-                    "The goal file has unsupported fields.",
-                    "Use an object containing only a non-empty goal field.",
-                )
-            return LoopStartInput(goal=document["goal"])
-        return LoopStartInput(goal=_decode_text(raw))
+            return _decode_intake_bytes(raw, json_document=True)
+        return _intake_value({"goal": _decode_text(raw)})
     if path.suffix.lower() in {".json", ".txt"} or "/" in value:
         raise EntryError(
             "USER_INPUT_INVALID",
             "The goal file was not found.",
             "Provide one readable goal file or literal goal text.",
         )
-    return LoopStartInput(goal=value)
+    return _intake_value({"goal": value})
+
+
+def _decode_intake_bytes(raw: bytes, *, json_document: bool) -> LoopIntakeInput:
+    if len(raw) > 32768:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The input is too large.",
+            "Reduce the semantic input to at most 32768 UTF-8 bytes.",
+        )
+    text = _decode_text(raw)
+    if not json_document:
+        return _intake_value({"goal": text})
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The input file is not valid UTF-8 JSON.",
+            "Use one JSON object containing documented semantic intake fields.",
+        ) from exc
+    return _intake_value(document)
 
 
 def _decode_text(raw: bytes) -> str:
@@ -114,11 +196,89 @@ def print_status(value) -> None:
         print("Next action: None")
 
 
+def print_intake_report(report) -> None:
+    for section, value in report.items():
+        print(section)
+        print(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+
+def print_boundary(context) -> None:
+    print("LoopSkill 4 start boundary")
+    for label, value in boundary_display(context).items():
+        print(f"{label}: " + json.dumps(value, ensure_ascii=False))
+
+
+def _interactive_start(args):
+    subject = Path(args.goal_file_or_prepared_directory)
+    if subject.is_dir():
+        return start_loop(subject, root=args.root)
+    request = read_intake_input(args.goal_file_or_prepared_directory)
+    report = intake_report_loop(request)
+    print_intake_report(report)
+    disposition = report["1 最终判定"]["disposition"]
+    if disposition == "DIRECT_TASK_RECOMMENDED":
+        raise EntryError(
+            "USER_DIRECT_TASK_RECOMMENDED",
+            report["1 最终判定"]["reason"],
+            "Run the task directly in Codex; no loop was created.",
+        )
+    if disposition != "READY_FOR_LOOP":
+        raise EntryError(
+            "USER_CLARIFICATION_REQUIRED",
+            report["1 最终判定"]["reason"],
+            "Answer the listed intake questions; no loop was created.",
+        )
+    output = args.prepared_output or Path(str(args.root) + ".prepared")
+    prepared = prepare_loop(request, output)
+    print_boundary(prepared)
+    if not sys.stdin.isatty():
+        raise EntryError(
+            "USER_CONFIRMATION_REQUIRED",
+            "The preparation is ready but interactive confirmation is unavailable.",
+            f"Review {output}, run loopskill4 confirm on it, then start that prepared directory.",
+        )
+    answer = input('Type "START THIS LOOP" to confirm the displayed boundary: ')
+    if answer != "START THIS LOOP":
+        raise EntryError(
+            "USER_CONFIRMATION_REQUIRED",
+            "The displayed start boundary was not explicitly confirmed.",
+            "Review the prepared artifacts and confirm them explicitly.",
+        )
+    confirmed = confirm_loop(output, confirmed=True)
+    return start_loop(confirmed, root=args.root)
+
+
 def main(argv=None) -> int:
     try:
         args = parser().parse_args(argv)
+        if args.action == "intake":
+            print_intake_report(intake_report_loop(read_intake_input(args.goal_or_file)))
+            return 0
+        if args.action == "prepare":
+            prepared = prepare_loop(read_intake_input(args.goal_or_file), args.output)
+            print_boundary(prepared)
+            return 0
+        if args.action == "confirm":
+            prepared = review_prepared(args.prepared_directory)
+            print_boundary(prepared)
+            if not sys.stdin.isatty():
+                raise EntryError(
+                    "USER_CONFIRMATION_REQUIRED",
+                    "Interactive confirmation is required for this prepared boundary.",
+                    "Review the preparation in an interactive session; no start authority was created.",
+                )
+            answer = input('Type "START THIS LOOP" to confirm the displayed boundary: ')
+            if answer != "START THIS LOOP":
+                raise EntryError(
+                    "USER_CONFIRMATION_REQUIRED",
+                    "The displayed start boundary was not explicitly confirmed.",
+                    "Review the prepared artifacts and confirm them explicitly.",
+                )
+            prepared = confirm_loop(args.prepared_directory, confirmed=True)
+            print("Confirmation: accepted for the unchanged prepared boundary")
+            return 0
         if args.action == "start":
-            value = start_loop(read_goal(args.goal_or_file), root=args.root)
+            value = _interactive_start(args)
         else:
             value = status(root=args.root)
         print_status(value)

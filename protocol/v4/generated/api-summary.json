@@ -156,12 +156,18 @@
     "USER_INPUT_INVALID",
     "USER_LOOP_EXISTS",
     "USER_STORE_UNAVAILABLE",
-    "USER_INTERNAL_ERROR"
+    "USER_INTERNAL_ERROR",
+    "USER_CLARIFICATION_REQUIRED",
+    "USER_DIRECT_TASK_RECOMMENDED",
+    "USER_CONFIRMATION_REQUIRED",
+    "USER_CONFIRMATION_STALE",
+    "USER_PREPARATION_INVALID"
   ],
   "events": [
     "LoopCreated",
     "GoalRegistered",
     "GoalActivated",
+    "StartAuthorized",
     "HostResourceBound",
     "ExternalEffectPrepared",
     "ExternalEffectObserved",
@@ -192,7 +198,7 @@
     "V3SnapshotImported",
     "OperationRejected"
   ],
-  "manifest_sha256": "c479bdf758cb2f3258c90f7d56a2f4a0e8646f86cd73e6df96fa9c43247dec56",
+  "manifest_sha256": "4dc81a9e09a8c0c2190e4f02b593d237bfaa75ad9fca9609f279a27bbcf34b4b",
   "protocol_version": "4.0-draft.2",
   "reference_kinds": [
     "LoopRef",
@@ -277,8 +283,45 @@
       "action",
       "payload"
     ],
+    "LoopIntakeDecision": [
+      "disposition",
+      "route",
+      "reason",
+      "questions"
+    ],
+    "LoopIntakeInput": [
+      "goal",
+      "task_horizon",
+      "write_scope",
+      "budget",
+      "external_actions",
+      "acceptance_criteria",
+      "stop_conditions",
+      "authorization_boundaries"
+    ],
     "LoopStartInput": [
       "goal"
+    ],
+    "PreparedLoopBundle": [
+      "manifest_digest",
+      "boundary_digest",
+      "controller_plan_digest",
+      "instructions_digest",
+      "bundle_digest"
+    ],
+    "PreparedLoopManifest": [
+      "manifest_version",
+      "control_namespace",
+      "loop_ref",
+      "goal",
+      "task_horizon",
+      "write_scope",
+      "budget",
+      "external_actions",
+      "acceptance_criteria",
+      "stop_conditions",
+      "authorization_boundaries",
+      "prepared_at"
     ],
     "Receipt": [
       "receipt_ref",
