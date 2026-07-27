@@ -201,6 +201,153 @@ class AppServerProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(HostUnavailable, "status drift"):
                 provider.read_task_result("host-thread-result")
 
+    def test_resource_readback_maps_host_lifecycle_without_becoming_a_writer(self):
+        expected = {
+            "active": "ACTIVE",
+            "idle": "TERMINAL",
+            "notLoaded": "PAUSED",
+            "systemError": "TERMINAL",
+        }
+        sessions = [
+            FakeSession(
+                {
+                    "thread/read": {
+                        "thread": {
+                            "id": "host-thread-resource",
+                            "status": {"type": host_status},
+                        }
+                    }
+                }
+            )
+            for host_status in expected
+        ]
+        sessions.extend(
+            [
+                FakeSession(
+                    {"thread/read": {"thread": {"id": "foreign-thread"}}}
+                ),
+                FakeSession(
+                    {
+                        "thread/read": {
+                            "thread": {
+                                "id": "host-thread-resource",
+                                "status": {"type": "future-status"},
+                            }
+                        }
+                    }
+                ),
+                FakeSession(
+                    {
+                        "thread/read": lambda: (_ for _ in ()).throw(
+                            HostUnavailable("synthetic absence")
+                        )
+                    }
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(Path(temporary), sessions)
+            for host_status, lifecycle in expected.items():
+                with self.subTest(host_status=host_status):
+                    resource = provider.read_resource(
+                        "task", "host-thread-resource"
+                    )
+                    self.assertEqual(resource["state"], lifecycle)
+                    self.assertEqual(resource["trust"], "authoritative")
+            missing = provider.read_resource("task", "host-thread-resource")
+            self.assertEqual(missing["state"], "NOT_FOUND")
+            self.assertEqual(missing["trust"], "none")
+            with self.assertRaisesRegex(HostUnavailable, "status schema drift"):
+                provider.read_resource("task", "host-thread-resource")
+            unavailable = provider.read_resource("task", "host-thread-resource")
+            self.assertEqual(unavailable["state"], "NOT_FOUND")
+
+    def test_task_result_maps_pending_and_terminal_host_states(self):
+        sessions = [
+            FakeSession(
+                {
+                    "thread/read": {
+                        "thread": {"id": "host-thread-result", "turns": []}
+                    }
+                }
+            )
+        ]
+        for host_status in ("failed", "interrupted", "inProgress"):
+            sessions.append(
+                FakeSession(
+                    {
+                        "thread/read": {
+                            "thread": {
+                                "id": "host-thread-result",
+                                "turns": [
+                                    {
+                                        "items": [
+                                            {"type": "tool", "text": "ignored"},
+                                            {
+                                                "type": "agentMessage",
+                                                "text": host_status,
+                                            },
+                                        ],
+                                        "status": host_status,
+                                    }
+                                ],
+                            }
+                        }
+                    }
+                )
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(Path(temporary), sessions)
+            pending = provider.read_task_result("host-thread-result")
+            self.assertEqual((pending["status"], pending["result_text"]), ("PENDING", ""))
+            self.assertEqual(
+                provider.read_task_result("host-thread-result")["status"], "FAILED"
+            )
+            self.assertEqual(
+                provider.read_task_result("host-thread-result")["status"], "FAILED"
+            )
+            in_progress = provider.read_task_result("host-thread-result")
+            self.assertEqual(in_progress["status"], "PENDING")
+            self.assertEqual(in_progress["result_text"], "inProgress")
+
+    def test_readback_absence_schema_drift_and_unsupported_action_are_explicit(self):
+        empty = FakeSession({"thread/list": {"data": []}})
+        drift = FakeSession({"thread/list": {"data": {"not": "a list"}}})
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(Path(temporary), [empty, drift])
+            self.assertIsNone(provider.readback("unsupported", KEY))
+            self.assertIsNone(provider.readback("create_task", KEY))
+            with self.assertRaisesRegex(HostUnavailable, "thread/list schema drift"):
+                provider.readback("create_task", KEY)
+
+    def test_provider_rejects_unknown_payload_and_oversized_confirmed_prompt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(Path(temporary), [])
+            with self.assertRaisesRegex(HostUnavailable, "Unsupported"):
+                provider.invoke("future-action", payload(), KEY)
+            changed = payload()
+            changed["future"] = "field"
+            with self.assertRaisesRegex(HostUnavailable, "Unsupported"):
+                provider.invoke("create_task", changed, KEY)
+            oversized = payload()
+            oversized["acceptance_criteria"] = ["g" * 4_000] * 10
+            with self.assertRaisesRegex(HostUnavailable, "32 KiB"):
+                provider._prompt(oversized, _request_marker(KEY))
+
+    def test_authoritative_thread_validator_rejects_identity_and_status_drift(self):
+        marker = _request_marker(KEY)
+        with self.assertRaisesRegex(HostUnavailable, "identity mismatch"):
+            CodexAppServerProvider._validate_thread({"id": "host"}, marker)
+        with self.assertRaisesRegex(HostUnavailable, "status drift"):
+            CodexAppServerProvider._validate_thread(
+                {
+                    "id": "host",
+                    "preview": marker,
+                    "status": {"type": "future-status"},
+                },
+                marker,
+            )
+
     def test_public_cli_constructs_provider_only_after_explicit_confirmation(self):
         import importlib.machinery
         import importlib.util

@@ -472,7 +472,7 @@ def main(argv=None) -> int:
                 else status(root=args.root)
             )
         print_status(value)
-        if args.diagnostics:
+        if getattr(args, "diagnostics", False):
             print(
                 "Diagnostics: "
                 + json.dumps(

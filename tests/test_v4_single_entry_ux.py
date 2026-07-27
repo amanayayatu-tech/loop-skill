@@ -7,10 +7,12 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -218,6 +220,225 @@ def changed_authority_with_delivery(*, outcome, trust_class):
 
 
 class V4SingleEntryUXTests(unittest.TestCase):
+    def test_public_cli_input_decoding_doctor_and_confirmation_edges(self):
+        cli = load_cli_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(cli.read_intake_input("literal goal").goal, "literal goal")
+
+            text = root / "goal.txt"
+            text.write_text("UTF-8 goal", encoding="utf-8")
+            self.assertEqual(cli.read_intake_input(str(text)).goal, "UTF-8 goal")
+
+            document = root / "goal.json"
+            document.write_text(
+                json.dumps(
+                    {
+                        "goal": "JSON goal",
+                        "goal_plan": ["first", "second"],
+                        "task_horizon": "long",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            decoded = cli.read_intake_input(str(document))
+            self.assertEqual(decoded.goal_plan, ("first", "second"))
+
+            invalid_json = root / "invalid.json"
+            invalid_json.write_text("{", encoding="utf-8")
+            invalid_utf8 = root / "invalid.txt"
+            invalid_utf8.write_bytes(b"\xff")
+            oversized = root / "oversized.txt"
+            oversized.write_bytes(b"g" * 32769)
+            invalid_list = root / "invalid-list.json"
+            invalid_list.write_text(
+                json.dumps({"goal": "goal", "write_scope": [1]}),
+                encoding="utf-8",
+            )
+            invalid_scalar = root / "invalid-scalar.json"
+            invalid_scalar.write_text(
+                json.dumps({"goal": 1}), encoding="utf-8"
+            )
+            unknown_field = root / "unknown.json"
+            unknown_field.write_text(
+                json.dumps({"goal": "goal", "thread_id": "model-copy"}),
+                encoding="utf-8",
+            )
+            for source in (
+                invalid_json,
+                invalid_utf8,
+                oversized,
+                invalid_list,
+                invalid_scalar,
+                unknown_field,
+                root / "missing.json",
+            ):
+                with self.subTest(source=source.name), self.assertRaises(EntryError) as caught:
+                    cli.read_intake_input(str(source))
+                self.assertEqual(caught.exception.code, "USER_INPUT_INVALID")
+
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(root / "codex")}, clear=False):
+                view = cli._doctor_view(include_diagnostics=False)
+            self.assertIn("status", view)
+            receipt_root = root / "codex" / "install-receipts" / "loopskill4"
+            receipt_root.mkdir(parents=True)
+            (receipt_root / "broken.json").write_text("{", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(root / "codex")}, clear=False):
+                diagnostic = cli._doctor_view(include_diagnostics=True)
+            self.assertEqual(diagnostic["status"], "BLOCKED")
+            self.assertEqual(
+                diagnostic["diagnostics"]["capabilities"]["install_receipt"],
+                "UNVERIFIABLE",
+            )
+
+            args = SimpleNamespace(
+                goal_file_or_prepared_directory="one-off",
+                prepared_output=root / "prepared-direct",
+                root=root / "data-direct",
+            )
+            direct_report = {
+                "1 最终判定": {
+                    "disposition": "DIRECT_TASK_RECOMMENDED",
+                    "reason": "Run directly.",
+                }
+            }
+            with mock.patch.object(cli, "read_intake_input", return_value=object()), mock.patch.object(
+                cli, "intake_report_loop", return_value=direct_report
+            ), mock.patch.object(cli, "print_intake_report"):
+                with self.assertRaises(EntryError) as caught:
+                    cli._interactive_start(args)
+            self.assertEqual(caught.exception.code, "USER_DIRECT_TASK_RECOMMENDED")
+
+            clarification = {
+                "1 最终判定": {
+                    "disposition": "NEEDS_CLARIFICATION",
+                    "reason": "Clarify boundary.",
+                }
+            }
+            with mock.patch.object(cli, "read_intake_input", return_value=object()), mock.patch.object(
+                cli, "intake_report_loop", return_value=clarification
+            ), mock.patch.object(cli, "print_intake_report"):
+                with self.assertRaises(EntryError) as caught:
+                    cli._interactive_start(args)
+            self.assertEqual(caught.exception.code, "USER_CLARIFICATION_REQUIRED")
+
+    def test_public_cli_dispatches_every_v4_action_without_hidden_control_input(self):
+        cli = load_cli_module()
+        visible = SimpleNamespace(
+            goal="Visible semantic goal",
+            progress="Active",
+            result="Pending",
+            limitations=(),
+            next_actions=("Wait for readback.",),
+        )
+
+        def invoke(arguments):
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = cli.main(arguments)
+            return code, stdout.getvalue(), stderr.getvalue()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared = SimpleNamespace(
+                bundle=SimpleNamespace(
+                    boundary_digest="b" * 64,
+                    manifest_digest="m" * 64,
+                )
+            )
+            report = {"1 最终判定": {"disposition": "READY_FOR_LOOP"}}
+            with mock.patch.object(cli, "read_intake_input", return_value=object()), mock.patch.object(
+                cli, "intake_report_loop", return_value=report
+            ), mock.patch.object(cli, "print_intake_report") as printed:
+                self.assertEqual(invoke(["intake", "goal"])[0], 0)
+                printed.assert_called_once_with(report)
+            with mock.patch.object(cli, "read_intake_input", return_value=object()), mock.patch.object(
+                cli, "prepare_loop", return_value=prepared
+            ), mock.patch.object(cli, "print_boundary") as boundary:
+                self.assertEqual(
+                    invoke(["prepare", "goal", "--output", str(root / "prepared")])[0],
+                    0,
+                )
+                boundary.assert_called_once_with(prepared)
+            with mock.patch.object(cli, "review_prepared", return_value=prepared):
+                code, output, _ = invoke(["compile", str(root / "prepared")])
+                self.assertEqual(code, 0)
+                self.assertIn('"status":"PREPARED_VALID"', output)
+            with mock.patch.object(cli, "_doctor_view", return_value={"status": "READY"}):
+                code, output, _ = invoke(["doctor", "--diagnostics"])
+                self.assertEqual(code, 0)
+                self.assertIn('"status":"READY"', output)
+            with mock.patch.object(cli, "policy_view", return_value={"policy": "STANDARD"}):
+                self.assertEqual(invoke(["policy", "--root", str(root)])[0], 0)
+            with mock.patch.object(
+                cli, "revise_goal_plan", return_value={"revision": 2}
+            ) as revised:
+                self.assertEqual(
+                    invoke(
+                        [
+                            "roadmap-revise",
+                            "Goal one",
+                            "Goal two",
+                            "--reason",
+                            "Bounded reorder",
+                            "--root",
+                            str(root),
+                        ]
+                    )[0],
+                    0,
+                )
+                revised.assert_called_once()
+            with mock.patch.object(cli, "_interactive_start", return_value=visible):
+                self.assertEqual(invoke(["start", "goal", "--root", str(root)])[0], 0)
+            for action in ("pause", "resume", "stop"):
+                with self.subTest(action=action), mock.patch.object(
+                    cli, "control_loop", return_value=visible
+                ) as controlled:
+                    self.assertEqual(invoke([action, "--root", str(root)])[0], 0)
+                    controlled.assert_called_once()
+            with mock.patch.object(cli, "steer_loop", return_value=visible) as steered:
+                self.assertEqual(
+                    invoke(
+                        [
+                            "steer",
+                            "wait",
+                            "--failure-fingerprint",
+                            "same-failure",
+                            "--root",
+                            str(root),
+                        ]
+                    )[0],
+                    0,
+                )
+                steered.assert_called_once()
+            with mock.patch.object(cli, "status", return_value=visible):
+                self.assertEqual(invoke(["status", "--root", str(root)])[0], 0)
+            with mock.patch.object(cli, "sync_loop", return_value=visible), mock.patch.object(
+                cli, "diagnostics", return_value={"internal": "opt-in"}
+            ):
+                code, output, _ = invoke(
+                    ["status", "--refresh", "--diagnostics", "--root", str(root)]
+                )
+                self.assertEqual(code, 0)
+                self.assertIn("Diagnostics:", output)
+            with mock.patch.object(
+                cli,
+                "status",
+                side_effect=EntryError(
+                    "USER_STORE_UNAVAILABLE", "Stable error.", "Choose another root."
+                ),
+            ):
+                code, _, error = invoke(["status", "--root", str(root)])
+                self.assertEqual(code, 2)
+                self.assertIn("USER_STORE_UNAVAILABLE", error)
+                self.assertNotIn("loop-", error)
+            with mock.patch.object(cli, "status", side_effect=RuntimeError("private")):
+                code, _, error = invoke(["status", "--root", str(root)])
+                self.assertEqual(code, 70)
+                self.assertIn("USER_INTERNAL_ERROR", error)
+                self.assertNotIn("private", error)
+
     def test_installed_skill_is_v4_only_and_preserves_four_phase_boundary(self) -> None:
         skill = (ROOT / "codex-loop-prompt-architect/SKILL.md").read_text(
             encoding="utf-8"
