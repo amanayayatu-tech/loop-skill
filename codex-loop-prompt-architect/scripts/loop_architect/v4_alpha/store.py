@@ -13,6 +13,7 @@ from .protocol import (
     InjectedCrash,
     ProtocolRejection,
     snapshot_digest,
+    canonical_bytes,
 )
 
 
@@ -46,6 +47,91 @@ class InMemoryStore:
     @property
     def rejection_count(self) -> int:
         return len(self._rejected)
+
+    def canonical_export(self) -> bytes:
+        return canonical_bytes(
+            {
+                "accepted": [
+                    {
+                        "loop_ref": loop_ref,
+                        "operation_id": operation_id,
+                        "request_digest": request_digest,
+                        "result": {
+                            "event_types": list(result.event_types),
+                            "loop_ref": result.loop_ref,
+                            "loop_revision": result.loop_revision,
+                            "operation_id": result.operation_id,
+                            "response": dict(result.response),
+                            "snapshot_digest": result.snapshot_digest,
+                        },
+                    }
+                    for (loop_ref, operation_id), (
+                        request_digest,
+                        result,
+                    ) in sorted(self._accepted.items())
+                ],
+                "events": {
+                    loop_ref: copy.deepcopy(events)
+                    for loop_ref, events in sorted(self._events.items())
+                },
+                "outbox": [
+                    {
+                        "attempt_ref": attempt_ref,
+                        "automatic_budget_consumed": attempt[
+                            "automatic_budget_consumed"
+                        ],
+                        "delivery_ref": attempt["delivery_ref"],
+                        "loop_ref": loop_ref,
+                        "provider_idempotency_key": attempt[
+                            "provider_idempotency_key"
+                        ],
+                        "provider_request_digest": attempt[
+                            "provider_request_digest"
+                        ],
+                        "revision": attempt["revision"],
+                        "state": attempt["state"],
+                    }
+                    for loop_ref, snapshot in sorted(self._snapshots.items())
+                    for attempt_ref, attempt in sorted(snapshot["attempts"].items())
+                ],
+                "rejected": [
+                    {
+                        "error": dict(error),
+                        "loop_ref": loop_ref,
+                        "operation_id": operation_id,
+                        "request_digest": request_digest,
+                    }
+                    for (loop_ref, operation_id), (
+                        request_digest,
+                        error,
+                    ) in sorted(self._rejected.items())
+                ],
+                "schema_version": 1,
+                "snapshots": {
+                    loop_ref: copy.deepcopy(snapshot)
+                    for loop_ref, snapshot in sorted(self._snapshots.items())
+                },
+            }
+        )
+
+    def verify_integrity(self) -> None:
+        for loop_ref, snapshot in self._snapshots.items():
+            expected_sequence = list(range(1, len(self._events.get(loop_ref, [])) + 1))
+            actual_sequence = [
+                event["sequence"] for event in self._events.get(loop_ref, [])
+            ]
+            if actual_sequence != expected_sequence:
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION", "event sequence is not contiguous"
+                )
+            accepted = sum(
+                1 for accepted_loop, _ in self._accepted if accepted_loop == loop_ref
+            )
+            if snapshot["loop_revision"] != accepted:
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION", "loop revision/operation mismatch"
+                )
+            snapshot_digest(snapshot)
 
     def apply(
         self,

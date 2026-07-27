@@ -1,0 +1,45 @@
+{
+  "adr": {
+    "path": "docs/adr/0012-loopskill-4-sqlite-persistence-selection.md",
+    "sha256": "d849aa7a05075bb58f40992d5b4f3f5627e519412c0bd037e120e70984d7c7b2",
+    "status": "Accepted for LoopSkill 4 local development"
+  },
+  "artifact": "loopskill-v4-p1-sqlite-persistence-evidence-v1",
+  "candidate": "SQLite",
+  "checks": {
+    "active_wal_reader": "PASS",
+    "atomic_operation_result_event_snapshot_outbox": "PASS",
+    "backup_restore": "PASS",
+    "bounded_writer_contention": "PASS",
+    "canonical_manual_export": "PASS",
+    "durable_fault_boundaries": 9,
+    "immutable_blob_boundary": "PASS",
+    "logical_and_physical_corruption": "PASS",
+    "macos_filesystem_profile": "PASS",
+    "operation_boundary_fault_cases": 99,
+    "semantic_oracle_match": "PASS",
+    "test_methods_total_with_alpha": 24,
+    "test_methods_persistence": 10
+  },
+  "decision": "SELECT_SQLITE_AS_V4_LOCAL_CANONICAL_STORE",
+  "environment": {
+    "os": "Darwin",
+    "python": "3.14.6",
+    "sqlite": "3.53.3",
+    "sqlite_threadsafety": 3
+  },
+  "guarantee_boundary": {
+    "external_effect": "at-most-one automatic attempt; outcome may be UNKNOWN",
+    "local": "atomic durable operation acceptance and deterministic recovery",
+    "prohibited_claim": "end-to-end exactly-once across SQLite/Host/Git/network"
+  },
+  "implementation_sha256": {
+    "in_memory_store": "e7143115fd6d3f8e8adc242bd8aef4a0e7ff159d8633c9f489d0351f2c750808",
+    "persistence_init": "ce56d56aa13381aa2bd0abab8b875a619f2a0303c2f45e92734a30a07b9b09a7",
+    "sqlite_store": "b98c85eed7a126e7bfa7f0d38239a901b322d703ce68a502640daf24ea505c91",
+    "store_port": "ab86b0725c0b3d77b503d971564cbc2e6dc3521e679bc240c819d5471c353df6",
+    "tests": "387356fd67255f4e2b9c346e2b4029f0bfb103de4ac7d9dad512cede20a8484a"
+  },
+  "recorded_date": "2026-07-27",
+  "status": "PASS"
+}
