@@ -24,6 +24,7 @@ from .generated_protocol import (
     AuthorityGrant,
     CapabilityRecord,
     CommandEnvelope,
+    EffectAttempt,
     Receipt,
     Reference,
 )

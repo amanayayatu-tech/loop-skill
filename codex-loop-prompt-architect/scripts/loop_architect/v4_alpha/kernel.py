@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping
 
@@ -28,6 +28,7 @@ class AuthorityContext:
     actors: Mapping[str, ActorRef]
     grants: Mapping[str, AuthorityGrant]
     receipts: Mapping[str, Receipt]
+    trusted_receipt_issuers: Mapping[str, str] = field(default_factory=dict)
 
 
 _COLLECTIONS = {
@@ -175,7 +176,7 @@ def _receipt(
     if receipt is None:
         raise ProtocolRejection("RECEIPT_REQUIRED", receipt_ref)
     validate_receipt_size(receipt)
-    if receipt.issuer_trust != "trusted-fixture" or receipt.issuer_ref not in context.actors:
+    if context.trusted_receipt_issuers.get(receipt.issuer_ref) != receipt.issuer_trust:
         raise ProtocolRejection("RECEIPT_ISSUER_UNTRUSTED", receipt_ref)
     now = _parse_time(command.issued_at)
     if now < _parse_time(receipt.issued_at) or now > _parse_time(receipt.expires_at):
@@ -687,6 +688,7 @@ def _close_execution(
         context,
         action="lifecycle-readback",
         subject_ref=finalization_ref,
+        request_digest=finalization["subject_chain_digest"],
     )
     current_chain = domain_digest(
         "loopskill-subject-chain-v1\n", _final_chain(snapshot)

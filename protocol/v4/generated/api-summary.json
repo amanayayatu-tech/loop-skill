@@ -180,7 +180,7 @@
     "V3SnapshotImported",
     "OperationRejected"
   ],
-  "manifest_sha256": "1f303868e9c303bd96281e75445cf30f55815726326049b0160a67c8a1dd9ff2",
+  "manifest_sha256": "8a0e977b86a79847e023f5802551ca57aadc69c05a5f0c9827b005c996999289",
   "protocol_version": "4.0-draft.2",
   "reference_kinds": [
     "LoopRef",
@@ -251,6 +251,16 @@
       "machine_bindings",
       "semantic_payload",
       "request_digest"
+    ],
+    "EffectAttempt": [
+      "attempt_ref",
+      "loop_ref",
+      "delivery_ref",
+      "target_ref",
+      "provider_idempotency_key",
+      "provider_request_digest",
+      "action",
+      "payload"
     ],
     "Receipt": [
       "receipt_ref",

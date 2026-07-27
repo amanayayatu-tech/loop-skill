@@ -1,0 +1,73 @@
+{
+  "artifact": "loopskill-v4-p4-codex-host-adapter-evidence-v1",
+  "canary": {
+    "classification": "disposable non-research non-scored App conformance smoke",
+    "completion_error": null,
+    "duration_ms": 7129,
+    "host_id": "local",
+    "output_bytes": 65,
+    "output_sha256": "210bf4cd5f27f8e12bb0c0d4245318980b0aead3189f633ef43b28ec8ff4199c",
+    "projectless_root": "/Users/peachy/Documents/Codex/2026-07-27/loopskill-v4-p4-disposable-canary-20260727",
+    "readback": "CANARY_NONCE=loopskill-v4-p4-20260727-0001\nCANARY_STATUS=OBSERVED",
+    "repository_attached": false,
+    "status": "PASS",
+    "thread_id": "019fa28f-0351-7fa1-a10a-ec3836fe4f71",
+    "tool_marker": null,
+    "turn_id": "019fa28f-09a7-74d2-8fe7-ce9d914755e3"
+  },
+  "checks": {
+    "action_profiles": [
+      "register_project",
+      "create_task",
+      "create_thread",
+      "send",
+      "heartbeat"
+    ],
+    "adapter_schema_enum_drift": "FAIL_CLOSED",
+    "all_v4_test_methods": 53,
+    "all_v4_tests": "PASS",
+    "attempt_claim": "ATOMIC_READY_TO_STARTED",
+    "automatic_attempt_budget": "ONE_AND_NEVER_RESEND_AFTER_STARTED",
+    "capability_records": 16,
+    "capability_receipt_identity_trust_freshness": "FAIL_CLOSED",
+    "cooperative_strict_claim": "FORBIDDEN",
+    "eventual_indexing": "BOUNDED_READBACK",
+    "finalization_chain_binding": "PASS",
+    "forbidden_import_graph": "PASS",
+    "host_test_methods": 11,
+    "late_unknown_observation": "PASS",
+    "memory_unavailable_unverifiable": "PASS",
+    "provider_response_lost": "AUTHORITATIVE_READBACK_ONLY",
+    "receipt_issuer_trust_freshness": "FAIL_CLOSED",
+    "resource_profiles": [
+      "project",
+      "task",
+      "thread",
+      "message",
+      "lifecycle"
+    ],
+    "sqlite_schema": 2,
+    "sqlite_v1_to_v2_migration": "PASS",
+    "unknown_no_readback": "PRESERVED_WITH_NO_RESEND"
+  },
+  "guarantees": {
+    "both_strict_prerequisites": "effectively-once",
+    "cross_system_exactly_once": "FORBIDDEN",
+    "missing_prerequisite": "at-most-one automatic attempt; outcome may be UNKNOWN"
+  },
+  "implementation_sha256": {
+    "adapter": "e7153a56c61b7da5737282ee872a98d0f4ca2f107441b502c09f130404915ede",
+    "adapter_contract": "1c8a59b49edb733206ba42bc24e8892791393cf65f25445e197def24253e2160",
+    "architecture": "dccf16b2de54e2d9859c92783a5eacb68b74f3b07692a7f4403b3ba63bd01407",
+    "sqlite_store": "dc4e7587d67064f63af7f842dea461afde2449a7248cd2f9f891077f32ce2e5b",
+    "tests": "31fe957e6a8000a51aa5dd29f6f5c74d800081b63162db74fe5176e36e192f0c"
+  },
+  "manifest": {
+    "canonical_sha256": "8a0e977b86a79847e023f5802551ca57aadc69c05a5f0c9827b005c996999289",
+    "effect_attempt_source": "protocol/v4/loopskill-v4.protocol.json",
+    "generation_check": "PASS",
+    "wire_types": 8
+  },
+  "scope": "synthetic temporary roots plus one isolated projectless App canary",
+  "status": "PASS"
+}

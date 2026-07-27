@@ -269,6 +269,16 @@
       ["semantic_payload", "Mapping[str, Any]", {"type": "object"}],
       ["request_digest", "str", {"type": "string"}]
     ],
+    "EffectAttempt": [
+      ["attempt_ref", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}],
+      ["delivery_ref", "str", {"type": "string"}],
+      ["target_ref", "str", {"type": "string"}],
+      ["provider_idempotency_key", "str", {"type": "string"}],
+      ["provider_request_digest", "str", {"type": "string"}],
+      ["action", "str", {"type": "string"}],
+      ["payload", "Mapping[str, Any]", {"type": "object"}]
+    ],
     "Reference": [
       ["kind", "str", {"type": "string"}],
       ["value", "str", {"type": "string"}],

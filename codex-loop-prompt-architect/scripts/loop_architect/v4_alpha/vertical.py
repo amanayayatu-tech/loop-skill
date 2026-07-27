@@ -203,9 +203,17 @@ def fixture_authority() -> AuthorityContext:
             "receipt-finalize-0001",
             action="lifecycle-readback",
             subject_ref="finalization-0001",
+            request_digest=(
+                "ff690e9ec52836b8c5d657fc0d5c71d94a83498a20ee4f10f354f34c4e907062"
+            ),
         ),
     }
-    return AuthorityContext(actors=actors, grants=grants, receipts=receipts)
+    return AuthorityContext(
+        actors=actors,
+        grants=grants,
+        receipts=receipts,
+        trusted_receipt_issuers={"actor-system-0001": "trusted-fixture"},
+    )
 
 
 def _bindings(

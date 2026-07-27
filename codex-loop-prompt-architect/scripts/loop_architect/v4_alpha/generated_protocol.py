@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-MANIFEST_SHA256 = '1f303868e9c303bd96281e75445cf30f55815726326049b0160a67c8a1dd9ff2'
+MANIFEST_SHA256 = '8a0e977b86a79847e023f5802551ca57aadc69c05a5f0c9827b005c996999289'
 PROTOCOL_VERSION = '4.0-draft.2'
 COMMAND_TYPES = (
     'AcknowledgeResult',
@@ -197,6 +197,17 @@ class CommandEnvelope:
     machine_bindings: Mapping[str, Mapping[str, str]]
     semantic_payload: Mapping[str, Any]
     request_digest: str
+
+@dataclass(frozen=True)
+class EffectAttempt:
+    attempt_ref: str
+    loop_ref: str
+    delivery_ref: str
+    target_ref: str
+    provider_idempotency_key: str
+    provider_request_digest: str
+    action: str
+    payload: Mapping[str, Any]
 
 @dataclass(frozen=True)
 class Reference:

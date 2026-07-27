@@ -234,6 +234,46 @@
       ],
       "type": "object"
     },
+    "EffectAttempt": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "attempt_ref": {
+          "type": "string"
+        },
+        "delivery_ref": {
+          "type": "string"
+        },
+        "loop_ref": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "provider_idempotency_key": {
+          "type": "string"
+        },
+        "provider_request_digest": {
+          "type": "string"
+        },
+        "target_ref": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt_ref",
+        "loop_ref",
+        "delivery_ref",
+        "target_ref",
+        "provider_idempotency_key",
+        "provider_request_digest",
+        "action",
+        "payload"
+      ],
+      "type": "object"
+    },
     "Receipt": {
       "additionalProperties": false,
       "properties": {
@@ -337,6 +377,6 @@
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "1f303868e9c303bd96281e75445cf30f55815726326049b0160a67c8a1dd9ff2",
+  "manifest_sha256": "8a0e977b86a79847e023f5802551ca57aadc69c05a5f0c9827b005c996999289",
   "title": "LoopSkill 4 protocol wire shapes"
 }

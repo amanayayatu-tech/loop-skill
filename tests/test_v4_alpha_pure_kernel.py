@@ -57,6 +57,7 @@ def changed_authority(
         actors=dict(authority.actors) if actors is None else actors,
         grants=dict(authority.grants) if grants is None else grants,
         receipts=dict(authority.receipts) if receipts is None else receipts,
+        trusted_receipt_issuers=dict(authority.trusted_receipt_issuers),
     )
 
 
@@ -581,6 +582,19 @@ class V4AlphaPureKernelTests(unittest.TestCase):
         self.assertNotIn(
             "StrictFinalizationAcknowledged",
             tuple(event["type"] for event in store.events(LOOP_REF)),
+        )
+
+    def test_finalization_receipt_binds_exact_subject_chain_digest(self):
+        base = fixture_authority()
+        receipts = dict(base.receipts)
+        receipts["receipt-finalize-0001"] = replace(
+            receipts["receipt-finalize-0001"], request_digest="foreign-chain"
+        )
+        authority = changed_authority(base, receipts=receipts)
+        store = self.store_after(10, authority)
+        self.assert_rejected(
+            "RECEIPT_IDENTITY_MISMATCH",
+            lambda: store.apply(vertical_commands()[10]),
         )
 
     def test_v4_alpha_has_no_forbidden_runtime_dependencies(self):

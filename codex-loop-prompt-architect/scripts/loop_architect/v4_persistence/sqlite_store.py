@@ -23,7 +23,7 @@ from loop_architect.v4_alpha.protocol import (
 )
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DURABLE_FAULT_BOUNDARIES = (
     "before_begin",
     "after_begin",
@@ -107,7 +107,13 @@ class SQLiteStore:
             self._configure()
             self._initialize_schema()
         except sqlite3.DatabaseError as exc:
+            if hasattr(self, "_connection"):
+                self._connection.close()
             raise PersistenceCorruption(f"cannot open SQLite store: {self.path}") from exc
+        except Exception:
+            if hasattr(self, "_connection"):
+                self._connection.close()
+            raise
 
     def _prepare_path(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,6 +179,7 @@ class SQLiteStore:
                 attempt_ref TEXT PRIMARY KEY,
                 loop_ref TEXT NOT NULL,
                 delivery_ref TEXT NOT NULL,
+                target_ref TEXT NOT NULL,
                 provider_idempotency_key TEXT NOT NULL UNIQUE,
                 provider_request_digest TEXT NOT NULL,
                 automatic_budget_consumed INTEGER NOT NULL CHECK (
@@ -180,6 +187,9 @@ class SQLiteStore:
                 ),
                 attempt_revision INTEGER NOT NULL,
                 attempt_state TEXT NOT NULL,
+                invocation_state TEXT NOT NULL DEFAULT 'READY',
+                executor_ref TEXT,
+                observation_receipt_ref TEXT,
                 FOREIGN KEY (loop_ref) REFERENCES loops(loop_ref)
             ) STRICT;
             CREATE TABLE IF NOT EXISTS immutable_blobs (
@@ -188,15 +198,53 @@ class SQLiteStore:
                 content_bytes INTEGER NOT NULL
             ) STRICT;
             INSERT OR IGNORE INTO metadata(key, value)
-                VALUES ('schema_version', '1');
+                VALUES ('schema_version', '2');
             COMMIT;
             """
         )
         row = self._connection.execute(
             "SELECT value FROM metadata WHERE key = 'schema_version'"
         ).fetchone()
+        if row is not None and int(row[0]) == 1:
+            self._migrate_v1_to_v2()
+            row = self._connection.execute(
+                "SELECT value FROM metadata WHERE key = 'schema_version'"
+            ).fetchone()
         if row is None or int(row[0]) != SCHEMA_VERSION:
             raise PersistenceCorruption("unsupported SQLite schema version")
+
+    def _migrate_v1_to_v2(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute(
+                "ALTER TABLE outbox ADD COLUMN invocation_state TEXT NOT NULL DEFAULT 'READY'"
+            )
+            self._connection.execute("ALTER TABLE outbox ADD COLUMN executor_ref TEXT")
+            self._connection.execute(
+                "ALTER TABLE outbox ADD COLUMN observation_receipt_ref TEXT"
+            )
+            self._connection.execute("ALTER TABLE outbox ADD COLUMN target_ref TEXT")
+            for row in self._connection.execute("SELECT loop_ref, snapshot_json FROM loops"):
+                snapshot = _decode_canonical(
+                    bytes(row["snapshot_json"]), f"v1-migration:{row['loop_ref']}"
+                )
+                for attempt_ref, attempt in snapshot["attempts"].items():
+                    self._connection.execute(
+                        "UPDATE outbox SET target_ref = ? WHERE attempt_ref = ?",
+                        (attempt["target_ref"], attempt_ref),
+                    )
+            missing = self._connection.execute(
+                "SELECT COUNT(*) FROM outbox WHERE target_ref IS NULL"
+            ).fetchone()[0]
+            if missing:
+                raise PersistenceCorruption("v1 outbox target migration incomplete")
+            self._connection.execute(
+                "UPDATE metadata SET value = '2' WHERE key = 'schema_version'"
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
 
     def close(self) -> None:
         if not self._closed:
@@ -453,26 +501,46 @@ class SQLiteStore:
                 """
                 INSERT INTO outbox(
                     attempt_ref, loop_ref, delivery_ref,
-                    provider_idempotency_key, provider_request_digest,
-                    automatic_budget_consumed, attempt_revision, attempt_state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    target_ref, provider_idempotency_key, provider_request_digest,
+                    automatic_budget_consumed, attempt_revision, attempt_state,
+                    invocation_state, observation_receipt_ref
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(attempt_ref) DO UPDATE SET
                     delivery_ref = excluded.delivery_ref,
+                    target_ref = excluded.target_ref,
                     provider_idempotency_key = excluded.provider_idempotency_key,
                     provider_request_digest = excluded.provider_request_digest,
                     automatic_budget_consumed = excluded.automatic_budget_consumed,
                     attempt_revision = excluded.attempt_revision,
-                    attempt_state = excluded.attempt_state
+                    attempt_state = excluded.attempt_state,
+                    invocation_state = CASE
+                        WHEN excluded.attempt_state = 'OBSERVED' THEN 'OBSERVED'
+                        WHEN excluded.attempt_state = 'UNKNOWN' THEN 'UNKNOWN'
+                        WHEN excluded.attempt_state = 'UNVERIFIABLE' THEN 'UNVERIFIABLE'
+                        ELSE outbox.invocation_state
+                    END,
+                    observation_receipt_ref = CASE
+                        WHEN excluded.attempt_state IN ('OBSERVED', 'UNKNOWN', 'UNVERIFIABLE')
+                        THEN excluded.observation_receipt_ref
+                        ELSE outbox.observation_receipt_ref
+                    END
                 """,
                 (
                     attempt_ref,
                     loop_ref,
                     attempt["delivery_ref"],
+                    attempt["target_ref"],
                     attempt["provider_idempotency_key"],
                     attempt["provider_request_digest"],
                     int(attempt["automatic_budget_consumed"]),
                     attempt["revision"],
                     attempt["state"],
+                    (
+                        attempt["state"]
+                        if attempt["state"] in {"OBSERVED", "UNKNOWN", "UNVERIFIABLE"}
+                        else "READY"
+                    ),
+                    attempt.get("observation_receipt_ref"),
                 ),
             )
         rows = self._connection.execute(
@@ -481,6 +549,45 @@ class SQLiteStore:
         unexpected = {str(row[0]) for row in rows} - expected_attempts
         if unexpected:
             raise PersistenceCorruption("outbox contains an attempt absent from snapshot")
+
+    def claim_attempt(self, attempt_ref: str, executor_ref: str) -> bool:
+        """Atomically consume execution ownership without invoking a provider."""
+        self._begin()
+        try:
+            row = self._connection.execute(
+                "SELECT attempt_state, invocation_state FROM outbox WHERE attempt_ref = ?",
+                (attempt_ref,),
+            ).fetchone()
+            if row is None:
+                raise PersistenceCorruption("Attempt outbox record is absent")
+            if row["attempt_state"] != "COMMITTED":
+                self._connection.commit()
+                return False
+            if row["invocation_state"] != "READY":
+                self._connection.commit()
+                return False
+            changed = self._connection.execute(
+                """
+                UPDATE outbox
+                   SET invocation_state = 'STARTED', executor_ref = ?
+                 WHERE attempt_ref = ?
+                   AND attempt_state = 'COMMITTED'
+                   AND invocation_state = 'READY'
+                """,
+                (executor_ref, attempt_ref),
+            ).rowcount
+            self._connection.commit()
+            return changed == 1
+        except Exception:
+            if self._connection.in_transaction:
+                self._connection.rollback()
+            raise
+
+    def outbox_attempt(self, attempt_ref: str) -> dict[str, Any] | None:
+        row = self._connection.execute(
+            "SELECT * FROM outbox WHERE attempt_ref = ?", (attempt_ref,)
+        ).fetchone()
+        return None if row is None else dict(row)
 
     def put_blob(self, content: bytes) -> str:
         digest = raw_domain_digest("loopskill-blob-v1\n", content)
@@ -621,6 +728,7 @@ class SQLiteStore:
                     (
                         attempt_ref,
                         attempt["delivery_ref"],
+                        attempt["target_ref"],
                         attempt["provider_idempotency_key"],
                         attempt["provider_request_digest"],
                         int(attempt["automatic_budget_consumed"]),
@@ -633,6 +741,7 @@ class SQLiteStore:
                     (
                         outbox["attempt_ref"],
                         outbox["delivery_ref"],
+                        outbox["target_ref"],
                         outbox["provider_idempotency_key"],
                         outbox["provider_request_digest"],
                         outbox["automatic_budget_consumed"],
@@ -645,6 +754,24 @@ class SQLiteStore:
                 }
                 if actual_outbox != expected_outbox:
                     raise PersistenceCorruption("snapshot/outbox mismatch")
+                for outbox in self._connection.execute(
+                    "SELECT * FROM outbox WHERE loop_ref = ?", (row["loop_ref"],)
+                ):
+                    attempt = snapshot["attempts"][outbox["attempt_ref"]]
+                    if attempt["state"] in {"OBSERVED", "UNKNOWN", "UNVERIFIABLE"}:
+                        if outbox["invocation_state"] != attempt["state"]:
+                            raise PersistenceCorruption(
+                                "snapshot/outbox invocation state mismatch"
+                            )
+                        if (
+                            outbox["observation_receipt_ref"]
+                            != attempt["observation_receipt_ref"]
+                        ):
+                            raise PersistenceCorruption(
+                                "snapshot/outbox observation receipt mismatch"
+                            )
+                    elif outbox["invocation_state"] not in {"READY", "STARTED"}:
+                        raise PersistenceCorruption("invalid pending invocation state")
             for row in self._connection.execute("SELECT * FROM operations"):
                 _decode_canonical(
                     bytes(row["outcome_json"]),
