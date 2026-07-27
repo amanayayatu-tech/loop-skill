@@ -81,7 +81,7 @@ class V4AlphaPureKernelTests(unittest.TestCase):
     def test_manifest_freezes_slice_and_per_loop_cas(self):
         self.assertEqual(PROTOCOL_MANIFEST["protocol_version"], "4.0.0")
         self.assertEqual(PROTOCOL_MANIFEST["write_cas"], "per_loop_revision")
-        self.assertEqual(len(PROTOCOL_MANIFEST["commands"]), 15)
+        self.assertEqual(len(PROTOCOL_MANIFEST["commands"]), 16)
         reserved = {
             name
             for name, specification in PROTOCOL_MANIFEST[
@@ -89,7 +89,7 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             ].items()
             if "reserved_until" in specification
         }
-        self.assertEqual(len(set(PROTOCOL_MANIFEST["commands"]) - reserved), 15)
+        self.assertEqual(len(set(PROTOCOL_MANIFEST["commands"]) - reserved), 16)
         self.assertEqual(reserved, set())
         self.assertIn("UNKNOWN", PROTOCOL_MANIFEST["delivery_states"])
         self.assertIn("UNVERIFIABLE", PROTOCOL_MANIFEST["delivery_states"])
@@ -179,6 +179,127 @@ class V4AlphaPureKernelTests(unittest.TestCase):
         self.assertEqual(runner_snapshot, snapshot)
         self.assertEqual(runner_events, tuple(store.events(LOOP_REF)))
         self.assertEqual(runner_results[-1].snapshot_digest, EXPECTED_SNAPSHOT_DIGEST)
+
+    def test_failed_limitation_and_stopped_are_honest_terminal_paths(self):
+        chains = (
+            ("FAILED", "LIMITATION", "FAILED", "FAILED"),
+            ("UNVERIFIABLE", "LIMITATION", "LIMITATION", "LIMITATION"),
+        )
+        commands = vertical_commands()
+        for outcome, verdict, goal_disposition, final_disposition in chains:
+            with self.subTest(outcome=outcome):
+                store = self.store_after(5)
+                tail = (
+                    changed(
+                        commands[5],
+                        semantic_payload={
+                            "outcome": outcome,
+                            "summary": f"honest {outcome.lower()} result",
+                        },
+                    ),
+                    commands[6],
+                    changed(commands[7], semantic_payload={"verdict": verdict}),
+                    changed(
+                        commands[8],
+                        semantic_payload={"disposition": goal_disposition},
+                    ),
+                    changed(
+                        commands[9],
+                        semantic_payload={"disposition": final_disposition},
+                    ),
+                    commands[10],
+                )
+                for command in tail:
+                    store.apply(command)
+                snapshot = store.snapshot(LOOP_REF)
+                self.assertEqual(snapshot["execution"]["state"], "TERMINAL")
+                self.assertEqual(
+                    snapshot["execution"]["disposition"], final_disposition
+                )
+                self.assertEqual(snapshot["results"]["result-0001"]["outcome"], outcome)
+                self.assertEqual(
+                    snapshot["goals"]["goal-0001"]["state"], goal_disposition
+                )
+
+        stop = changed(
+            commands[0],
+            operation_id="operation-stop-0001",
+            command_type="StopLoop",
+            actor_ref="actor-author-0001",
+            authority_grant_ref="grant-author-0001",
+            expected_loop_revision=1,
+            expected_subject_revisions={"execution": 1, "goal-0001": 1},
+            machine_bindings={
+                "allocate_refs": {},
+                "receipt_refs": {},
+                "resolved_refs": {},
+            },
+            semantic_payload={"reason": "author requested a bounded stop"},
+        )
+        store = self.store_after(1)
+        result = store.apply(stop)
+        snapshot = store.snapshot(LOOP_REF)
+        self.assertEqual(result.event_types, ("GoalAdvanced", "LoopStopped"))
+        self.assertEqual(snapshot["execution"]["disposition"], "STOPPED")
+        self.assertEqual(snapshot["goals"]["goal-0001"]["state"], "STOPPED")
+        self.assertTrue(store.apply(stop).replayed)
+
+    def test_stop_loop_cas_authority_and_unresolved_effect_are_honest(self):
+        commands = vertical_commands()
+
+        def stop_for(revision, *, operation="operation-stop-gate", expected=None):
+            return changed(
+                commands[0],
+                operation_id=operation,
+                command_type="StopLoop",
+                actor_ref="actor-author-0001",
+                authority_grant_ref="grant-author-0001",
+                expected_loop_revision=revision,
+                expected_subject_revisions=expected
+                or {"execution": 1, "goal-0001": 1},
+                machine_bindings={
+                    "allocate_refs": {},
+                    "receipt_refs": {},
+                    "resolved_refs": {},
+                },
+                semantic_payload={"reason": "bounded author stop"},
+            )
+
+        store = self.store_after(1)
+        command = stop_for(1)
+        store.apply(command)
+        self.assertTrue(store.apply(command).replayed)
+
+        stale_store = self.store_after(1)
+        stale = stop_for(0, operation="operation-stop-stale")
+        self.assert_rejected("STALE_LOOP_REVISION", lambda: stale_store.apply(stale))
+
+        forged_store = self.store_after(1)
+        forged = changed(
+            stop_for(1, operation="operation-stop-forged"),
+            actor_ref="actor-forged-0001",
+        )
+        self.assert_rejected("INVALID_AUTHORITY", lambda: forged_store.apply(forged))
+
+        base = fixture_authority()
+        unknown_receipt = replace(
+            base.receipts["receipt-delivery-0001"], outcome="unknown"
+        )
+        authority = changed_authority(
+            base,
+            receipts={**base.receipts, unknown_receipt.receipt_ref: unknown_receipt},
+        )
+        unresolved = self.store_after(4, authority)
+        unresolved.apply(commands[4])
+        stop_after_unknown = stop_for(
+            5,
+            operation="operation-stop-after-unknown",
+            expected={"execution": 1, "goal-0001": 1, "attempt-0001": 2},
+        )
+        unresolved.apply(stop_after_unknown)
+        snapshot = unresolved.snapshot(LOOP_REF)
+        self.assertEqual(snapshot["attempts"]["attempt-0001"]["state"], "UNKNOWN")
+        self.assertEqual(snapshot["execution"]["disposition"], "STOPPED")
 
     def test_verified_vertical_evidence_is_identity_free_and_exact(self):
         self.assertEqual(

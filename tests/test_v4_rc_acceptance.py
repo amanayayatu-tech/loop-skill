@@ -166,7 +166,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
             ):
                 validator.validate_author_packet(packet, candidate, root)
 
-    def test_conformance_receipt_requires_all_343_canonical_results(self) -> None:
+    def test_conformance_receipt_requires_all_349_canonical_results(self) -> None:
         candidate = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()

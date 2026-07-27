@@ -66,7 +66,7 @@ def canary(candidate: str) -> dict:
 
 
 class V4ConformanceRunnerTests(unittest.TestCase):
-    def test_all_343_instances_bind_to_an_executed_gate(self) -> None:
+    def test_all_349_instances_bind_to_an_executed_gate(self) -> None:
         candidate = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()
@@ -75,21 +75,31 @@ class V4ConformanceRunnerTests(unittest.TestCase):
             path.write_text(json.dumps(canary(candidate)), encoding="utf-8")
             with mock.patch.object(
                 runner,
-                "_run_test",
-                side_effect=lambda test_id: {
-                    "assertion_test_id": test_id,
+                "_run_case",
+                side_effect=lambda case_id, family, test_id: {
+                    "assertion_test_id": f"{case_id}::{test_id}",
+                    "case_id": case_id,
+                    "family": family,
                     "result_digest": hashlib.sha256(
                         runner.rc._canonical(
-                            {"assertion_test_id": test_id, "status": "PASS", "tests_run": 1}
+                            {
+                                "assertion_test_id": f"{case_id}::{test_id}",
+                                "case_id": case_id,
+                                "family": family,
+                                "status": "PASS",
+                                "target_test_id": test_id,
+                                "tests_run": 1,
+                            }
                         )
                     ).hexdigest(),
                     "status": "PASS",
+                    "target_test_id": test_id,
                     "tests_run": 1,
                 },
             ):
                 receipt = runner.run(ROOT, candidate, path)
-        self.assertEqual(receipt["case_count"], 343)
-        self.assertEqual(receipt["passed"], 343)
+        self.assertEqual(receipt["case_count"], 349)
+        self.assertEqual(receipt["passed"], 349)
         self.assertEqual(receipt["failed"], 0)
         self.assertEqual(
             [item["case_id"] for item in receipt["case_results"]],
@@ -114,6 +124,9 @@ class V4ConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(result["tests_run"], 1)
         with self.assertRaisesRegex(RuntimeError, "CONFORMANCE_TEST_(?:ID_INVALID|FAILED)"):
             runner._run_test("test_v4_preservation_register.DoesNotExist.test_missing")
+        atomic = runner._run_case("CAP-ARCHITECTURE-ONE-WRITER", "CAP-ARCHITECTURE", test_id)
+        self.assertEqual(atomic["case_id"], "CAP-ARCHITECTURE-ONE-WRITER")
+        self.assertEqual(atomic["target_test_id"], test_id)
 
     def test_hosted_run_executes_all_bindings_without_faking_app_receipt(self) -> None:
         candidate = subprocess.check_output(
@@ -121,16 +134,19 @@ class V4ConformanceRunnerTests(unittest.TestCase):
         ).strip()
         with mock.patch.object(
             runner,
-            "_run_test",
-            side_effect=lambda test_id: {
-                "assertion_test_id": test_id,
+            "_run_case",
+            side_effect=lambda case_id, family, test_id: {
+                "assertion_test_id": f"{case_id}::{test_id}",
+                "case_id": case_id,
+                "family": family,
                 "result_digest": "d" * 64,
                 "status": "PASS",
+                "target_test_id": test_id,
                 "tests_run": 1,
             },
         ) as executed:
             receipt = runner.hosted_run(ROOT, candidate)
-        self.assertEqual(receipt["case_count"], 343)
+        self.assertEqual(receipt["case_count"], 349)
         self.assertEqual(receipt["real_external_effects"], 0)
         self.assertEqual(receipt["status"], "PASS_LOCAL_APP_GATE_REQUIRED")
         self.assertEqual(

@@ -626,8 +626,7 @@ from delivery observation.
 `CreateLoop`, `BindHostResource`, `PrepareRoute`, `BeginEffectDelivery`,
 `RecordEffectObservation`, `RecordExternalEffectObservation`, `StageResult`, `AcknowledgeResult`, `RecordReview`,
 `AdvanceGoal`, `PauseLoop`, `ResumeLoop`, `StopLoop`, `PrepareFinalization`,
-`CloseExecution`, `StrengthenClosureAssurance`, and later
-`ImportV3Snapshot`.
+`CloseExecution`, and `StrengthenClosureAssurance`.
 
 Queries (`ReadStatus`, `ReadDelivery`, `ReadResult`, `ReadCapabilities`, export)
 are read-only and have no operation/CAS side effects.
@@ -641,11 +640,9 @@ are read-only and have no operation/CAS side effects.
 `DeliveryUnknown`, `DeliveryUnverifiable`, `LateDeliveryObserved`,
 `ResultStaged`, `ReportStaged`, `ArtifactCaptured`, `ArtifactVerified`,
 `ArtifactStale`, `ReportAccepted`, `ResultAcknowledged`, `ReviewRecorded`,
-`GoalAdvanced`, `LoopPaused`, `LoopResumed`, `LoopStopRequested`,
-`ExecutionStopped`, `FinalizationPrepared`,
+`GoalAdvanced`, `LoopPaused`, `LoopResumed`, `LoopStopped`, `FinalizationPrepared`,
 `ExecutionFinalized`, `StrictFinalizationAcknowledged`,
-`ClosureAssuranceStrengthened`, `V3SnapshotImported`, and
-`OperationRejected`.
+`ClosureAssuranceStrengthened`, and `OperationRejected`.
 
 ### References
 
@@ -665,8 +662,7 @@ are read-only and have no operation/CAS side effects.
 `RECEIPT_IDENTITY_MISMATCH`, `ATTEMPT_ALREADY_CONSUMED`,
 `ADAPTER_SCHEMA_DRIFT`, `ARTIFACT_IDENTITY_MISMATCH`, `ARTIFACT_STALE`,
 `REPORT_IDENTITY_MISMATCH`, `PATH_CONFINEMENT_VIOLATION`,
-`FINALIZATION_PRECONDITION_FAILED`, `MIGRATION_NOT_QUIESCENT`,
-`DUAL_WRITE_FORBIDDEN`, `STORE_RECOVERY_REQUIRED`, and
+`FINALIZATION_PRECONDITION_FAILED`, `STORE_RECOVERY_REQUIRED`, and
 `INTERNAL_INVARIANT_VIOLATION`.
 
 The manifest also owns the bounded public-entry errors `USER_INPUT_INVALID`,
@@ -682,12 +678,10 @@ never acceptance or error values.
 `StopLoop` is a machine-envelope mutation with a fresh operation ID, protocol
 version, trusted Actor/Grant scoped to the exact loop and command, expected
 per-loop revision, and semantic stop reason. It never accepts a model-carried
-handle or grant as authority. On acceptance it emits `LoopStopRequested`,
-prevents new product attempts, preserves all accepted evidence immutably, and
-records `ExecutionStopped` with honest `BLOCKED` or `LIMITATION` disposition.
-The same command may prepare finalization only when its subject chain is
-complete; Host pause/readback and finalization acknowledgement remain separate
-Adapter effects.
+handle or grant as authority. On acceptance it emits `LoopStopped`, sets the
+active Goal and execution to `STOPPED`, records only LOCAL assurance, prevents
+new product attempts, and preserves every accepted result/effect unchanged.
+It does not fabricate a Result, PASS review, or Host finalization receipt.
 
 An unresolved committed Attempt is not rewritten as cancelled: it remains
 `UNKNOWN` or `UNVERIFIABLE`, forbids automatic resend, and limits closure
@@ -743,8 +737,10 @@ Execution may terminate as:
 - `SUCCEEDED`: required product/result/review chain passes;
 - `LIMITATION`: bounded work is honestly closed with missing/unverifiable Host
   evidence, Review LIMITATION, or another declared assurance limitation; or
-- `BLOCKED`: an explicit authorized decision states that the goal cannot
-  continue.
+- `FAILED`: the acknowledged Result reports failure and review accepts that
+  evidence without converting it to PASS;
+- `STOPPED`: an authorized stop terminates locally without fabricating a
+  Result or Host acknowledgement.
 
 These dispositions do not imply assurance strength. A cooperative run can
 reach `TERMINAL/LIMITATION` instead of remaining indefinitely PAUSED. It may
@@ -968,12 +964,12 @@ of the machine-returned Host observation, never raw thread/task identity or
 content. These receipts are build evidence, not runtime authority.
 
 `scripts/validate_v4_rc.py` defaults to the final fail-closed mode: canary,
-343-instance conformance, and privacy-minimized publication-packet receipts are
+349-instance conformance, and privacy-minimized publication-packet receipts are
 all mandatory. The explicit `--static-only` mode is a pre-canary diagnostic and
 always records `publication_ready=false`; it cannot satisfy the publication
 candidate gate. `scripts/run_v4_conformance.py`
 expands the frozen exact catalog, executes every bound module, emits one result
-record for each of the 343 canonical case IDs, and additionally binds the two
+record for each of the 349 canonical case IDs, and additionally binds the two
 real-App cases to the exact canary receipt.
 
 ## Non-goals and safeguards

@@ -7,7 +7,7 @@
 [中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> Release status: LoopSkill 4.0.0 stable release. Public-release identity is established by final readback of the `v4.0.0` tag and GitHub Release.
+> Release status: The LoopSkill 4.0.0 candidate is passing release gates and is not yet published. Public-release identity is established by final readback of the `v4.0.0` tag and GitHub Release.
 
 LoopSkill turns long-running work into a recoverable loop with explicit authority, evidence, and stop conditions. An ordinary user supplies only a goal or goal file; machines own protocol identities, versions, receipts, and Host readback. The necessary human boundary remains:
 
@@ -71,6 +71,8 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 ```
 
 The same interaction performs read-only intake, writes local preparation artifacts, and shows the Goal, write scope, budget, external actions, acceptance criteria, stop conditions, and publication boundary. Only exact explicit confirmation can start. A non-interactive session stops at PREPARE; `DIRECT_TASK_RECOMMENDED` creates no loop.
+
+After confirmation, the public entry uses the local Codex `app-server` to create at most one task and perform authoritative readback. It registers no LoopSkill MCP and asks the user for no Host identity. If a create response is lost and the machine request marker cannot uniquely recover it, the state is `UNKNOWN`; it does not create again.
 
 The four phases may also be invoked explicitly:
 

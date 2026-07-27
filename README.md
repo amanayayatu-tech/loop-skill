@@ -7,7 +7,7 @@
 [English](README.en.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> 发布状态：LoopSkill 4.0.0 稳定版。公开发行身份以 `v4.0.0` tag 与 GitHub Release 的最终 readback 为准。
+> 发布状态：LoopSkill 4.0.0 候选正在接受发行门禁；尚未发布。公开发行身份最终以 `v4.0.0` tag 与 GitHub Release 的 readback 为准。
 
 LoopSkill 把长任务变成一个有明确授权、证据和停止条件的可恢复 loop。普通用户只提供目标或目标文件；机器负责协议身份、版本、收据和 Host readback。产品仍保留必要的人类流程：
 
@@ -71,6 +71,8 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 ```
 
 同一交互会先只读质检，再写本地准备产物并展示 Goal、写入范围、预算、外部动作、验收标准、停止条件和发布边界。只有精确的显式确认才能启动。非交互环境会停在 PREPARE；`DIRECT_TASK_RECOMMENDED` 不创建 loop。
+
+确认后，公开入口通过本机 Codex `app-server` 创建至多一个 task 并执行权威 readback；它不注册 LoopSkill MCP，也不要求用户复制 Host identity。若 create 响应丢失且无法用机器 request marker 唯一回读，状态为 `UNKNOWN`，不会再次 create。
 
 也可以显式执行四个阶段：
 

@@ -63,7 +63,7 @@ def _document(path: Path) -> dict[str, Any]:
     return value
 
 
-def _rebuild_first(command, goal: str):
+def _rebuild_first(command, semantic: dict[str, Any]):
     return build_command(
         operation_id=command.operation_id,
         command_type=command.command_type,
@@ -76,7 +76,16 @@ def _rebuild_first(command, goal: str):
         machine_bindings={
             group: dict(values) for group, values in command.machine_bindings.items()
         },
-        semantic_payload={"objective": goal},
+        semantic_payload={
+            "acceptance_criteria": tuple(semantic["acceptance_criteria"]),
+            "authorization_boundaries": tuple(semantic["authorization_boundaries"]),
+            "budget": semantic["budget"],
+            "execution_mode": "STANDARD",
+            "external_actions": tuple(semantic["external_actions"]),
+            "objective": semantic["goal"],
+            "stop_conditions": tuple(semantic["stop_conditions"]),
+            "write_scope": tuple(semantic["write_scope"]),
+        },
     )
 
 
@@ -113,7 +122,7 @@ def run_fixture() -> dict[str, Any]:
         if confirmed.manifest.execution_mode != "STANDARD":
             raise AssertionError("same scenario must default to Standard")
         commands = list(vertical_commands())
-        commands[0] = _rebuild_first(commands[0], semantic["goal"])
+        commands[0] = _rebuild_first(commands[0], semantic)
         store = InMemoryStore(fixture_authority())
         actions: list[tuple[str, str | None]] = []
         for command in commands:

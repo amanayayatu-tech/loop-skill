@@ -404,7 +404,19 @@ def _create_loop(
             )
         ):
             raise ProtocolRejection("INVALID_COMMAND", "empty startup effect identity")
-        provider_request = {"goal": objective, "target_ref": target_ref}
+        provider_request = {
+            "acceptance_criteria": list(command.semantic_payload["acceptance_criteria"]),
+            "authorization_boundaries": list(
+                command.semantic_payload["authorization_boundaries"]
+            ),
+            "budget": command.semantic_payload["budget"],
+            "execution_mode": command.semantic_payload["execution_mode"],
+            "external_actions": list(command.semantic_payload["external_actions"]),
+            "goal": objective,
+            "stop_conditions": list(command.semantic_payload["stop_conditions"]),
+            "target_ref": target_ref,
+            "write_scope": list(command.semantic_payload["write_scope"]),
+        }
         provider_digest = domain_digest(
             "loopskill-provider-request-v1\n", provider_request
         )
@@ -483,6 +495,11 @@ def _observe_external_effect(
     )
     if receipt.provider_idempotency_key != attempt["provider_idempotency_key"]:
         raise ProtocolRejection("RECEIPT_IDENTITY_MISMATCH", receipt.receipt_ref)
+    if receipt.outcome == "observed" and not receipt.provider_resource_ref:
+        raise ProtocolRejection(
+            "RECEIPT_IDENTITY_MISMATCH",
+            "observed Host receipt lacks provider resource identity",
+        )
     events = []
     if receipt.outcome == "observed" and receipt.trust_class == "strict":
         new_state = "OBSERVED"
@@ -498,6 +515,7 @@ def _observe_external_effect(
         existing = snapshot["host_resources"].get(host_resource_ref)
         if existing is None:
             snapshot["host_resources"][host_resource_ref] = {
+                "provider_resource_ref": receipt.provider_resource_ref,
                 "receipt_ref": receipt.receipt_ref,
                 "revision": 1,
                 "state": "BOUND",
@@ -707,8 +725,10 @@ def _stage_result(
     report_ref = _binding(command, "allocate_refs", "new_report_ref")
     outcome = command.semantic_payload.get("outcome")
     summary = command.semantic_payload.get("summary")
-    if outcome != "PASS" or summary != "bounded result complete":
-        raise ProtocolRejection("INVALID_COMMAND", "unexpected result payload")
+    if outcome not in {"PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"}:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid result outcome")
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 4096:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid result summary")
     report_content = {"outcome": outcome, "summary": summary}
     report_digest = domain_digest("loopskill-report-v1\n", report_content)
     snapshot["results"][result_ref] = {
@@ -815,12 +835,21 @@ def _advance_goal(
     goal_ref = str(command.subject["subject_ref"])
     review_ref = _binding(command, "resolved_refs", "review_ref")
     disposition = command.semantic_payload.get("disposition")
-    if disposition != "DONE" or snapshot["reviews"][review_ref]["state"] != "PASS":
+    result = snapshot["results"][snapshot["reviews"][review_ref]["result_ref"]]
+    allowed = {
+        "DONE": result["outcome"] == "PASS"
+        and snapshot["reviews"][review_ref]["state"] == "PASS",
+        "FAILED": result["outcome"] == "FAILED"
+        and snapshot["reviews"][review_ref]["state"] in {"PASS", "LIMITATION"},
+        "LIMITATION": result["outcome"] in {"LIMITATION", "UNVERIFIABLE"}
+        and snapshot["reviews"][review_ref]["state"] == "LIMITATION",
+    }
+    if disposition not in allowed or not allowed[disposition]:
         raise ProtocolRejection("INVALID_TRANSITION", "Goal cannot advance")
     goal = snapshot["goals"][goal_ref]
-    goal.update({"revision": goal["revision"] + 1, "state": "DONE"})
+    goal.update({"revision": goal["revision"] + 1, "state": disposition})
     return snapshot, [_event("GoalAdvanced", goal_ref=goal_ref)], {
-        "goal_state": "DONE"
+        "goal_state": disposition
     }
 
 
@@ -865,6 +894,41 @@ def _resume_loop(
     return snapshot, [_event("LoopResumed")], {"execution_state": "ACTIVE"}
 
 
+def _stop_loop(
+    snapshot: dict[str, Any] | None,
+    command: CommandEnvelope,
+    _: AuthorityContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    assert snapshot is not None
+    execution = snapshot["execution"]
+    if execution["state"] not in {"ACTIVE", "PAUSED"}:
+        raise ProtocolRejection("INVALID_TRANSITION", "only a live loop can stop")
+    reason = command.semantic_payload.get("reason")
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
+        raise ProtocolRejection("INVALID_COMMAND", "stop reason is invalid")
+    goal_ref, goal = _only_record(snapshot, "goals")
+    if goal["state"] != "ACTIVE":
+        raise ProtocolRejection("INVALID_TRANSITION", "active Goal is unavailable")
+    reason_digest = domain_digest("loopskill-stop-reason-v1\n", reason)
+    goal.update({"revision": goal["revision"] + 1, "state": "STOPPED"})
+    execution.update(
+        {
+            "disposition": "STOPPED",
+            "revision": execution["revision"] + 1,
+            "state": "TERMINAL",
+            "stop_reason_digest": reason_digest,
+        }
+    )
+    snapshot["closure_assurance"] = {
+        "revision": snapshot["closure_assurance"]["revision"] + 1,
+        "strength": "LOCAL",
+    }
+    return snapshot, [
+        _event("GoalAdvanced", goal_ref=goal_ref),
+        _event("LoopStopped", reason_digest=reason_digest),
+    ], {"disposition": "STOPPED", "execution_state": "TERMINAL"}
+
+
 def _prepare_finalization(
     snapshot: dict[str, Any] | None,
     command: CommandEnvelope,
@@ -874,17 +938,34 @@ def _prepare_finalization(
     chain = _final_chain(snapshot)
     review = snapshot["reviews"][chain["review_ref"]]
     disposition = command.semantic_payload.get("disposition")
-    if snapshot["goals"][chain["goal_ref"]]["state"] != "DONE":
+    goal_state = snapshot["goals"][chain["goal_ref"]]["state"]
+    result_outcome = snapshot["results"][chain["result_ref"]]["outcome"]
+    if goal_state not in {"DONE", "FAILED", "LIMITATION"}:
         raise ProtocolRejection(
             "FINALIZATION_PRECONDITION_FAILED", "current chain incomplete"
         )
     delivery_state = snapshot["deliveries"][chain["delivery_ref"]]["state"]
     if disposition == "SUCCEEDED":
-        if review["state"] != "PASS" or delivery_state != "OBSERVED":
+        if (
+            goal_state != "DONE"
+            or result_outcome != "PASS"
+            or review["state"] != "PASS"
+            or delivery_state != "OBSERVED"
+        ):
             raise ProtocolRejection(
                 "FINALIZATION_PRECONDITION_FAILED", "strict success unavailable"
             )
-    elif disposition != "LIMITATION":
+    elif disposition == "FAILED":
+        if goal_state != "FAILED" or result_outcome != "FAILED":
+            raise ProtocolRejection(
+                "FINALIZATION_PRECONDITION_FAILED", "failure chain is inconsistent"
+            )
+    elif disposition == "LIMITATION":
+        if goal_state == "FAILED":
+            raise ProtocolRejection(
+                "FINALIZATION_PRECONDITION_FAILED", "failed Goal is not a limitation"
+            )
+    else:
         raise ProtocolRejection("INVALID_COMMAND", "invalid terminal disposition")
     finalization_ref = _binding(
         command, "allocate_refs", "new_finalization_ref"
@@ -1052,6 +1133,7 @@ _REDUCERS = {
     "AdvanceGoal": _advance_goal,
     "PauseLoop": _pause_loop,
     "ResumeLoop": _resume_loop,
+    "StopLoop": _stop_loop,
     "PrepareFinalization": _prepare_finalization,
     "CloseExecution": _close_execution,
     "StrengthenClosureAssurance": _strengthen_closure_assurance,

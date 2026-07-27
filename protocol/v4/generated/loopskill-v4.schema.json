@@ -541,6 +541,12 @@
             "null"
           ]
         },
+        "provider_resource_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "receipt_ref": {
           "type": "string"
         },
@@ -575,6 +581,7 @@
         "target_ref",
         "request_digest",
         "provider_idempotency_key",
+        "provider_resource_ref",
         "outcome",
         "issued_at",
         "expires_at",
@@ -655,65 +662,10 @@
         "next_actions"
       ],
       "type": "object"
-    },
-    "V3ImportPreview": {
-      "additionalProperties": false,
-      "properties": {
-        "goal": {
-          "type": "string"
-        },
-        "preview_digest": {
-          "type": "string"
-        },
-        "source_loop_id": {
-          "type": "string"
-        },
-        "source_schema_version": {
-          "type": "integer"
-        },
-        "source_state_digest": {
-          "type": "string"
-        },
-        "source_state_version": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "source_loop_id",
-        "source_schema_version",
-        "source_state_version",
-        "source_state_digest",
-        "goal",
-        "preview_digest"
-      ],
-      "type": "object"
-    },
-    "V3ImportResult": {
-      "additionalProperties": false,
-      "properties": {
-        "loop_ref": {
-          "type": "string"
-        },
-        "replayed": {
-          "type": "boolean"
-        },
-        "snapshot_digest": {
-          "type": "string"
-        },
-        "source_state_digest": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "loop_ref",
-        "source_state_digest",
-        "snapshot_digest"
-      ],
-      "type": "object"
     }
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "4b43ba3c20b1907145cbad42100f56ab0f1dcbd17d45ae9904c5a72c9fbf91ce",
+  "manifest_sha256": "bc28905a5c395b5fd15245b4bb5b3bd9552cef8b1224c8cc232ee9b8ed68493a",
   "title": "LoopSkill 4 protocol wire shapes"
 }

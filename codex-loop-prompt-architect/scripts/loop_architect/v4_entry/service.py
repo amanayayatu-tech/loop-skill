@@ -244,7 +244,16 @@ def _machine_bootstrap(
                 "target_ref": provider_target,
             },
         },
-        semantic_payload={"objective": prepared.manifest.goal},
+        semantic_payload={
+            "acceptance_criteria": prepared.manifest.acceptance_criteria,
+            "authorization_boundaries": prepared.manifest.authorization_boundaries,
+            "budget": prepared.manifest.budget,
+            "execution_mode": prepared.manifest.execution_mode,
+            "external_actions": prepared.manifest.external_actions,
+            "objective": prepared.manifest.goal,
+            "stop_conditions": prepared.manifest.stop_conditions,
+            "write_scope": prepared.manifest.write_scope,
+        },
     )
     return loop_ref, authority, command
 
@@ -421,7 +430,7 @@ def start_loop(
                 host_provider,
                 issuer_ref=host_issuer_ref,
                 issuer_trust=host_issuer_trust,
-                clock=lambda: start_time,
+                clock=clock,
             )
         return status(root=root)
     except EntryError:

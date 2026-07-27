@@ -38,14 +38,14 @@ class V4PreservationRegisterTests(unittest.TestCase):
         self.assertEqual(result["capability_count"], 24)
         self.assertEqual(result["mapped_required_items"], 1766)
         self.assertEqual(result["corpus_family_count"], 101)
-        self.assertEqual(result["corpus_instance_count"], 343)
+        self.assertEqual(result["corpus_instance_count"], 349)
         self.assertEqual(result["preservation_family_count"], 15)
         self.assertEqual(result["preservation_case_binding_count"], 317)
 
     def test_exact_case_catalog_is_frozen(self) -> None:
         corpus = (ROOT / validator.CORPUS_RELATIVE).read_text(encoding="utf-8")
         exact, _ = validator._exact_case_catalog(corpus)
-        self.assertEqual(len(exact), 343)
+        self.assertEqual(len(exact), 349)
         self.assertEqual(
             validator._domain_digest(
                 b"loopskill.v4.corpus.exact-case-catalog.v1\0", sorted(exact)

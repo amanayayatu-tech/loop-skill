@@ -25,6 +25,18 @@ SECRET_PATTERNS = (
     ("github_token", re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}")),
     ("openai_token", re.compile(rb"sk-[A-Za-z0-9]{20,}")),
 )
+PRIVATE_TEXT_PATTERNS = (
+    (
+        "absolute_user_path",
+        re.compile(rb"/(?:Users|home)/[A-Za-z0-9._-]+(?:/[^\x00\r\n\t <>\"']*)?"),
+    ),
+    (
+        "raw_host_uuid",
+        re.compile(
+            rb"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-8][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])"
+        ),
+    ),
+)
 FORBIDDEN_EVIDENCE_KEYS = {
     "host_id",
     "projectless_root",
@@ -248,34 +260,41 @@ def _runtime_identity(dependencies: list[dict[str, Any]]) -> dict[str, Any]:
     return body
 
 
-def _evidence_privacy_findings(entries: list[dict[str, Any]], root: Path, candidate: str) -> list[dict[str, str]]:
-    findings = []
-
-    def visit(value: Any, file_digest: str) -> None:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if key in FORBIDDEN_EVIDENCE_KEYS:
-                    findings.append({"file_digest": file_digest, "rule": "raw_identity_key"})
-                visit(item, file_digest)
-        elif isinstance(value, list):
-            for item in value:
-                visit(item, file_digest)
-        elif isinstance(value, str) and value.startswith("/Users/"):
-            findings.append({"file_digest": file_digest, "rule": "absolute_user_path"})
-
+def _tree_privacy_findings(entries: list[dict[str, Any]], root: Path, candidate: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
     for entry in entries:
         path = entry["path"]
-        if not path.startswith("evidence/v4-development/") or not path.endswith(".json"):
-            continue
         payload = _run(root, "git", "show", f"{candidate}:{path}")
-        try:
-            value = json.loads(payload.decode("utf-8", "strict"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            findings.append(
-                {"file_digest": hashlib.sha256(path.encode()).hexdigest(), "rule": "invalid_json"}
-            )
+        if b"\x00" in payload:
             continue
-        visit(value, hashlib.sha256(path.encode()).hexdigest())
+        file_digest = hashlib.sha256(path.encode()).hexdigest()
+        for rule, pattern in PRIVATE_TEXT_PATTERNS:
+            for match in pattern.finditer(payload):
+                findings.append(
+                    {
+                        "file_digest": file_digest,
+                        "finding_digest": hashlib.sha256(match.group(0)).hexdigest(),
+                        "rule": rule,
+                    }
+                )
+        if path.startswith("evidence/") and path.endswith(".json"):
+            try:
+                value = json.loads(payload.decode("utf-8", "strict"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                findings.append({"file_digest": file_digest, "rule": "invalid_json"})
+                continue
+            stack = [value]
+            while stack:
+                current = stack.pop()
+                if isinstance(current, dict):
+                    for key, item in current.items():
+                        if key in FORBIDDEN_EVIDENCE_KEYS:
+                            findings.append(
+                                {"file_digest": file_digest, "rule": "raw_identity_key"}
+                            )
+                        stack.append(item)
+                elif isinstance(current, list):
+                    stack.extend(current)
     return findings
 
 
@@ -426,7 +445,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
         raise RcValidationError("RC_SECRET_SCAN_FAILED")
     if oversized:
         raise RcValidationError("RC_LARGE_ARTIFACT_SCAN_FAILED")
-    evidence_privacy = _evidence_privacy_findings(entries, root, candidate)
+    evidence_privacy = _tree_privacy_findings(entries, root, candidate)
     if evidence_privacy:
         raise RcValidationError("RC_EVIDENCE_PRIVACY_SCAN_FAILED")
     stale_production = _stale_production_findings(entries, root, candidate)
@@ -592,20 +611,20 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
         value.get("artifact") != "loopskill-v4-conformance-execution-v1"
         or value.get("candidate_sha") != candidate
         or value.get("status") != "PASS"
-        or value.get("case_count") != 343
-        or value.get("passed") != 343
+        or value.get("case_count") != 349
+        or value.get("passed") != 349
         or value.get("failed") != 0
         or value.get("real_external_effects") != 1
         or value.get("canonical_case_ids") is not True
     ):
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
     results = value.get("case_results")
-    if not isinstance(results, list) or len(results) != 343:
+    if not isinstance(results, list) or len(results) != 349:
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
     ids = [item.get("case_id") for item in results if isinstance(item, dict)]
     exact_ids, exact_digest, corpus_digest = _exact_case_catalog(root, candidate)
     if (
-        len(ids) != 343
+        len(ids) != 349
         or ids != exact_ids
         or value.get("case_catalog_digest") != exact_digest
         or value.get("corpus_sha256") != corpus_digest
@@ -621,7 +640,10 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
         test_id = item.get("assertion_test_id")
         deterministic = {
             "assertion_test_id": test_id,
+            "case_id": item.get("case_id"),
+            "family": item.get("family"),
             "status": item.get("status"),
+            "target_test_id": item.get("target_test_id"),
             "tests_run": item.get("tests_run"),
         }
         if (
@@ -640,12 +662,13 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
         family = item.get("family")
         parameter = item.get("parameter")
         test_id = item.get("assertion_test_id")
+        target_test_id = item.get("target_test_id")
         contract = {
             "case_id": case_id,
             "corpus_sha256": corpus_digest,
             "family": family,
             "parameter": parameter,
-            "test_id": test_id,
+            "test_id": target_test_id,
         }
         if (
             item.get("status") != "PASS"
@@ -653,14 +676,17 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
             or not isinstance(family, str)
             or case_id != f"{family}-{parameter}"
             or test_id not in tests_by_id
+            or tests_by_id[test_id].get("case_id") != case_id
+            or tests_by_id[test_id].get("family") != family
+            or tests_by_id[test_id].get("target_test_id") != target_test_id
             or item.get("test_result_digest") != tests_by_id[test_id]["result_digest"]
             or item.get("case_contract_digest") != hashlib.sha256(_canonical(contract)).hexdigest()
         ):
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
         expected_kind = (
-            "REAL_APP_RECEIPT+UNITTEST_METHOD_PARAMETER"
+            "REAL_APP_RECEIPT+PARAMETERIZED_UNITTEST_CASE"
             if case_id in {"UX-009-a", "CAP-RELEASE-CANARY"}
-            else "UNITTEST_METHOD_PARAMETER"
+            else "PARAMETERIZED_UNITTEST_CASE"
         )
         if item.get("evidence_kind") != expected_kind:
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")

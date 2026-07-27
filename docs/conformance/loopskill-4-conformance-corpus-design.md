@@ -225,7 +225,7 @@ is normative and expands before execution.
 | `H-008` | final readback `a` strict; `b` missing/inconclusive | alpha.2 | 2 |
 | `H-009` | `a` trust; `b` sandbox; `c` model/turn identity absent or mismatched | alpha.2 | 3 |
 | `H-010` | effectively-once `a` both prerequisites; `b` one prerequisite missing | alpha.2 | 2 |
-| `H-011` | startup ExternalEffect `a` atomically committed with Attempt/outbox; `b` exact strict observation binds reserved HostResource; `c` missing readback is UNKNOWN with no bind/resend; `d` cooperative UNVERIFIABLE later becomes OBSERVED only on the same exact Attempt | alpha.2 | 4 |
+| `H-011` | startup ExternalEffect `a` atomically committed with Attempt/outbox; `b` exact strict observation binds reserved HostResource and provider resource identity; `c` missing readback is UNKNOWN with no bind/resend; `d` cooperative UNVERIFIABLE later becomes OBSERVED only on the same exact Attempt; production app-server `e` executes the public Entry bridge, `f` crash recovery performs marker-bound readback without create, `g` ambiguous/foreign Host identity fails closed | alpha.2/rc | 7 |
 
 ### Artifact libraries
 
@@ -250,7 +250,7 @@ is normative and expands before execution.
 | `R-004` | mismatch `a` Report identity; `b` content digest; `c` author Actor | alpha | 3 |
 | `F-001` | `a` strict execution close plus StrictFinalizationAcknowledged | alpha-slice | 1 |
 | `F-002` | duplicate close `a` exact replay; `b` changed receipt/chain conflict | alpha | 2 |
-| `F-003` | terminal LIMITATION with `a` Delivery UNKNOWN; `b` UNVERIFIABLE | alpha-slice | 2 |
+| `F-003` | terminal LIMITATION with `a` Delivery UNKNOWN; `b` UNVERIFIABLE; honest non-success `c` FAILED Result/Goal/Execution; `d` UNVERIFIABLE Result with LIMITATION closure; `e` STOPPED terminality with local assurance and no fabricated PASS | alpha-slice | 5 |
 | `F-004` | late assurance `a` exact chain strengthens; `b` changed chain rejected | alpha | 2 |
 
 ### Compatibility, policy, liveness, and cost
@@ -346,7 +346,7 @@ instance.
 | `CAP-ARTIFACT` | aliases: all atomic `A-001`, `A-GIT-*`, `A-NONGIT-*`, `A-NEWGIT-*`, and `A-PATH-*` instances | beta | 0 |
 | `CAP-ARCHITECTURE` | new: `CAP-ARCHITECTURE-ONE-WRITER`, `CAP-ARCHITECTURE-FORBIDDEN-IMPORT`, `CAP-ARCHITECTURE-MINIMAL-ISOLATION`, `CAP-ARCHITECTURE-NO-LEGACY-BRANCHES` | P5.1-before-P6 | 4 |
 
-The following catalog is the independent existence authority for the 343
+The following catalog is the independent existence authority for the 349
 atomic case identities declared by this design. `parameterized_families`
 machine-expands an existing family row as `<family>-<parameter>`;
 `preservation_declarations` names each new `CAP-*` case explicitly. The
@@ -400,7 +400,7 @@ can create a case by adding a plausible suffix.
     "H-008": ["a", "b"],
     "H-009": ["a", "b", "c"],
     "H-010": ["a", "b"],
-    "H-011": ["a", "b", "c", "d"],
+    "H-011": ["a", "b", "c", "d", "e", "f", "g"],
     "A-001": ["a", "b"],
     "A-GIT-001": ["a"],
     "A-GIT-002": ["a", "b"],
@@ -415,7 +415,7 @@ can create a case by adding a plausible suffix.
     "R-004": ["a", "b", "c"],
     "F-001": ["a"],
     "F-002": ["a", "b"],
-    "F-003": ["a", "b"],
+    "F-003": ["a", "b", "c", "d", "e"],
     "F-004": ["a", "b"],
     "M-001": ["a"],
     "M-002": ["a", "b"],
@@ -795,7 +795,7 @@ other entry is an existing atomic corpus ID.
 
 <!-- INSTANCE-CATALOG-END -->
 
-The catalog contains exactly **101 families and 343 independently reportable
+The catalog contains exactly **101 families and 349 independently reportable
 instances**. Counts are machine-recomputed during readiness review; they are
 not inferred from prose.
 
@@ -1054,7 +1054,7 @@ exact clean candidate HEAD and includes tree digest, generated protocol counts,
 absolute Python, all distributions installed in that bound runtime plus their
 license/dependency metadata, secret and large-artifact results, zero public
 effects, and `publication_ready=false`. Default/final validation fails closed
-unless the exact canary, 343-instance execution receipt, and privacy-minimized
+unless the exact canary, 349-instance execution receipt, and privacy-minimized
 publication packet are all
 provided. The App canary receipt rejects extra raw Host
 identity/content fields and independently requires: public entry `loopskill4`;
@@ -1069,7 +1069,7 @@ can validate this shape but cannot satisfy `CAP-RELEASE-CANARY` or `UX-009-a`.
 than retyping IDs. It maps every case to the responsible Kernel, Store,
 Artifact library, Codex Adapter, Entry, Policy/projection, compatibility, or RC
 gate module; every mapped module must run successfully in the same invocation.
-The output contains 343 sorted unique per-instance records and a canonical
+The output contains 349 sorted unique per-instance records and a canonical
 digest. `UX-009-a` and `CAP-RELEASE-CANARY` additionally require the real App
 receipt. One passing module may cover multiple explicitly parameterized atomic
 instances, but no family row alone produces PASS and no unbound instance may be
@@ -1151,7 +1151,7 @@ pause/resume and late assurance strengthening bind `P-004`, `F-003`, and
 | A3 effect executor | commit-before-call contract, AttemptRef/budget/executor ownership, all crash windows, no resend, exact late readback |
 | A4 liveness/assurance | TERMINAL disposition is independent from assurance; cooperative limited closure is legal; strict claim still requires authoritative readback |
 | A5 CAS unit | per-loop revision is sole write CAS; subject revisions are guards; no store version in snapshot |
-| A6 executable corpus | acceptance and subject state separated; 101 families expand to 343 instances; 15 preservation mapping families bind 317 unique exact case IDs without duplicating fake snapshots; bounds/rejection/authority/encoder/UX/preservation windows explicit |
+| A6 executable corpus | acceptance and subject state separated; 101 families expand to 349 instances; 15 preservation mapping families bind 317 unique exact case IDs without duplicating fake snapshots; bounds/rejection/authority/encoder/UX/preservation windows explicit |
 | A7 vertical trace | 11 operations, 18 events, full subject bindings, loop/aggregate revisions, 2715 bytes, exact domain digest |
 
 There is no unresolved semantic decision that blocks the bounded pure-kernel

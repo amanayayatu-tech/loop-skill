@@ -25,7 +25,9 @@
       "semantic_payload": {
         "disposition": {
           "enum": [
-            "DONE"
+            "DONE",
+            "FAILED",
+            "LIMITATION"
           ],
           "type": "string"
         }
@@ -46,8 +48,33 @@
     },
     "CreateLoop": {
       "semantic_payload": {
+        "acceptance_criteria": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "authorization_boundaries": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "budget": {"type": "string"},
+        "execution_mode": {
+          "enum": ["STANDARD", "ADAPTIVE"],
+          "type": "string"
+        },
+        "external_actions": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
         "objective": {
           "type": "string"
+        },
+        "stop_conditions": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "write_scope": {
+          "items": {"type": "string"},
+          "type": "array"
         }
       }
     },
@@ -63,7 +90,8 @@
         "disposition": {
           "enum": [
             "SUCCEEDED",
-            "LIMITATION"
+            "LIMITATION",
+            "FAILED"
           ],
           "type": "string"
         }
@@ -97,11 +125,19 @@
     "ResumeLoop": {
       "semantic_payload": {}
     },
+    "StopLoop": {
+      "semantic_payload": {
+        "reason": {"type": "string"}
+      }
+    },
     "StageResult": {
       "semantic_payload": {
         "outcome": {
           "enum": [
-            "PASS"
+            "PASS",
+            "FAILED",
+            "LIMITATION",
+            "UNVERIFIABLE"
           ],
           "type": "string"
         },
@@ -190,6 +226,7 @@
     "GoalAdvanced",
     "LoopPaused",
     "LoopResumed",
+    "LoopStopped",
     "FinalizationPrepared",
     "ExecutionFinalized",
     "StrictFinalizationAcknowledged",
@@ -260,6 +297,7 @@
       ["target_ref", "str | None", {"type": ["string", "null"]}],
       ["request_digest", "str | None", {"type": ["string", "null"]}],
       ["provider_idempotency_key", "str | None", {"type": ["string", "null"]}],
+      ["provider_resource_ref", "str | None", {"type": ["string", "null"]}],
       ["outcome", "str", {"type": "string"}],
       ["issued_at", "str", {"type": "string"}],
       ["expires_at", "str", {"type": "string"}],
@@ -344,20 +382,6 @@
       ["code", "str", {"type": "string"}],
       ["message", "str", {"type": "string"}],
       ["next_action", "str", {"type": "string"}]
-    ],
-    "V3ImportPreview": [
-      ["source_loop_id", "str", {"type": "string"}],
-      ["source_schema_version", "int", {"type": "integer"}],
-      ["source_state_version", "int", {"type": "integer"}],
-      ["source_state_digest", "str", {"type": "string"}],
-      ["goal", "str", {"type": "string"}],
-      ["preview_digest", "str", {"type": "string"}]
-    ],
-    "V3ImportResult": [
-      ["loop_ref", "str", {"type": "string"}],
-      ["source_state_digest", "str", {"type": "string"}],
-      ["snapshot_digest", "str", {"type": "string"}],
-      ["replayed", "bool", {"type": "boolean"}, false]
     ],
     "Reference": [
       ["kind", "str", {"type": "string"}],

@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 import unittest
 from io import StringIO
@@ -49,6 +50,7 @@ RC = "test_v4_rc_acceptance"
 RD = "test_v4_rc_distribution"
 UX = "test_v4_single_entry_ux"
 DOC = "test_v4_docs"
+APP = "test_v4_app_server_provider"
 
 
 # Every exact catalog family binds to one concrete unittest method whose
@@ -115,7 +117,7 @@ FAMILY_TEST_BINDINGS = {
     "P-001": _test(PP, "V4ProductPolicyTests", "test_repair_is_bounded_and_same_failure_routes_to_human"),
     "P-002": _test(PP, "V4ProductPolicyTests", "test_repair_is_bounded_and_same_failure_routes_to_human"),
     "P-003": _test(PP, "V4ProductPolicyTests", "test_standard_is_fixed_dependency_order_and_adaptive_is_bounded"),
-    "P-004": _test(PP, "V4ProductPolicyTests", "test_uncertain_repair_paused_and_cooperative_states_are_not_dead"),
+    "P-004": _test(A, "V4AlphaPureKernelTests", "test_stop_loop_cas_authority_and_unresolved_effect_are_honest"),
     "R-001": _test(A, "V4AlphaPureKernelTests", "test_corrected_vertical_exact_snapshot_events_and_replay"),
     "R-002": _test(PP, "V4ProductPolicyTests", "test_repair_is_bounded_and_same_failure_routes_to_human"),
     "R-003": _test(A, "V4AlphaPureKernelTests", "test_cooperative_fixture_terminates_with_limitation_not_strict_claim"),
@@ -173,6 +175,36 @@ CASE_TEST_OVERRIDES = {
         "V4AlphaPureKernelTests",
         "test_verified_vertical_evidence_is_identity_free_and_exact",
     ),
+    "F-003-c": _test(
+        A,
+        "V4AlphaPureKernelTests",
+        "test_failed_limitation_and_stopped_are_honest_terminal_paths",
+    ),
+    "F-003-d": _test(
+        A,
+        "V4AlphaPureKernelTests",
+        "test_failed_limitation_and_stopped_are_honest_terminal_paths",
+    ),
+    "F-003-e": _test(
+        A,
+        "V4AlphaPureKernelTests",
+        "test_stop_loop_cas_authority_and_unresolved_effect_are_honest",
+    ),
+    "H-011-e": _test(
+        APP,
+        "AppServerProviderTests",
+        "test_public_cli_constructs_provider_only_after_explicit_confirmation",
+    ),
+    "H-011-f": _test(
+        APP,
+        "AppServerProviderTests",
+        "test_crash_recovery_is_readback_only_and_ambiguous_identity_fails",
+    ),
+    "H-011-g": _test(
+        APP,
+        "AppServerProviderTests",
+        "test_crash_recovery_is_readback_only_and_ambiguous_identity_fails",
+    ),
 }
 
 
@@ -199,12 +231,60 @@ def _run_test(test_id: str) -> dict[str, Any]:
     }
 
 
+def _run_case(case_id: str, family: str, target_test_id: str) -> dict[str, Any]:
+    wrapper = _test(
+        "test_v4_atomic_conformance",
+        "V4AtomicConformanceTests",
+        "test_case",
+    )
+    previous = {
+        key: os.environ.get(key)
+        for key in (
+            "LOOPSKILL4_CONFORMANCE_CASE_ID",
+            "LOOPSKILL4_CONFORMANCE_FAMILY",
+            "LOOPSKILL4_CONFORMANCE_TARGET",
+        )
+    }
+    os.environ.update(
+        {
+            "LOOPSKILL4_CONFORMANCE_CASE_ID": case_id,
+            "LOOPSKILL4_CONFORMANCE_FAMILY": family,
+            "LOOPSKILL4_CONFORMANCE_TARGET": target_test_id,
+        }
+    )
+    try:
+        suite = unittest.defaultTestLoader.loadTestsFromName(wrapper)
+        stream = StringIO()
+        result = unittest.TextTestRunner(stream=stream, verbosity=0).run(suite)
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    if not result.wasSuccessful() or result.testsRun != 1 or result.skipped:
+        digest = hashlib.sha256(stream.getvalue().encode()).hexdigest()
+        raise RuntimeError(f"CONFORMANCE_CASE_FAILED: {case_id}: {digest}")
+    deterministic = {
+        "assertion_test_id": f"{case_id}::{target_test_id}",
+        "case_id": case_id,
+        "family": family,
+        "status": "PASS",
+        "target_test_id": target_test_id,
+        "tests_run": 1,
+    }
+    return {
+        **deterministic,
+        "result_digest": hashlib.sha256(rc._canonical(deterministic)).hexdigest(),
+    }
+
+
 def _catalog_and_bindings(root: Path, candidate: str):
     corpus = rc._run(
         root, "git", "show", f"{candidate}:{preservation.CORPUS_RELATIVE}"
     ).decode("utf-8", "strict")
     catalog, by_family = preservation._exact_case_catalog(corpus)
-    if len(catalog) != 343:
+    if len(catalog) != 349:
         raise RuntimeError("CONFORMANCE_CASE_COUNT_DRIFT")
     concrete_families = {family for family, cases in by_family.items() if cases}
     if set(FAMILY_TEST_BINDINGS) != concrete_families:
@@ -228,13 +308,13 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
     corpus, catalog, bindings = _catalog_and_bindings(root, candidate)
     canary = json.loads(canary_path.read_text(encoding="utf-8"))
     rc.validate_canary_receipt(canary, candidate)
-    test_ids = sorted({test_id for _, test_id in bindings.values()})
-    test_results = {test_id: _run_test(test_id) for test_id in test_ids}
     real_canary_cases = {"UX-009-a", "CAP-RELEASE-CANARY"}
     corpus_digest = hashlib.sha256(corpus.encode("utf-8")).hexdigest()
     results = []
+    case_executions = []
     for case_id in sorted(catalog):
         family, test_id = bindings[case_id]
+        execution = _run_case(case_id, family, test_id)
         parameter = case_id[len(family) + 1 :]
         contract = {
             "case_id": case_id,
@@ -245,24 +325,26 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
         }
         result = {
             "assertion_count": 1,
-            "assertion_test_id": test_id,
+            "assertion_test_id": execution["assertion_test_id"],
             "case_id": case_id,
             "case_contract_digest": hashlib.sha256(rc._canonical(contract)).hexdigest(),
             "evidence_kind": (
-                "REAL_APP_RECEIPT+UNITTEST_METHOD_PARAMETER"
+                "REAL_APP_RECEIPT+PARAMETERIZED_UNITTEST_CASE"
                 if case_id in real_canary_cases
-                else "UNITTEST_METHOD_PARAMETER"
+                else "PARAMETERIZED_UNITTEST_CASE"
             ),
             "family": family,
             "parameter": parameter,
             "status": "PASS",
-            "test_result_digest": test_results[test_id]["result_digest"],
+            "target_test_id": test_id,
+            "test_result_digest": execution["result_digest"],
         }
         if case_id in real_canary_cases:
             result["canary_receipt_sha256"] = hashlib.sha256(
                 rc._canonical(canary)
             ).hexdigest()
         results.append(result)
+        case_executions.append(execution)
     body = {
         "artifact": "loopskill-v4-conformance-execution-v1",
         "candidate_sha": candidate,
@@ -275,8 +357,8 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
         "passed": len(results),
         "real_external_effects": 1,
         "status": "PASS",
-        "test_method_count": len(test_results),
-        "test_method_results": [test_results[test_id] for test_id in test_ids],
+        "test_method_count": len(case_executions),
+        "test_method_results": case_executions,
     }
     body["case_results_digest"] = hashlib.sha256(rc._canonical(results)).hexdigest()
     body["binding_manifest_digest"] = hashlib.sha256(
@@ -298,8 +380,10 @@ def hosted_run(root: Path, candidate: str) -> dict[str, Any]:
     """Run every bound deterministic assertion without pretending to run App."""
 
     corpus, catalog, bindings = _catalog_and_bindings(root, candidate)
-    test_ids = sorted({test_id for _, test_id in bindings.values()})
-    test_results = [_run_test(test_id) for test_id in test_ids]
+    test_results = [
+        _run_case(case_id, bindings[case_id][0], bindings[case_id][1])
+        for case_id in sorted(catalog)
+    ]
     return {
         "artifact": "loopskill-v4-hosted-conformance-v1",
         "candidate_sha": candidate,

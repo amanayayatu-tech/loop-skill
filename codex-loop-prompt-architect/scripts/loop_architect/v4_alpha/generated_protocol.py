@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-MANIFEST_SHA256 = '4b43ba3c20b1907145cbad42100f56ab0f1dcbd17d45ae9904c5a72c9fbf91ce'
+MANIFEST_SHA256 = 'bc28905a5c395b5fd15245b4bb5b3bd9552cef8b1224c8cc232ee9b8ed68493a'
 PROTOCOL_VERSION = '4.0.0'
 COMMAND_TYPES = (
     'AcknowledgeResult',
@@ -21,6 +21,7 @@ COMMAND_TYPES = (
     'RecordExternalEffectObservation',
     'RecordReview',
     'ResumeLoop',
+    'StopLoop',
     'StageResult',
     'StrengthenClosureAssurance',
 )
@@ -52,6 +53,7 @@ EVENT_TYPES = (
     'GoalAdvanced',
     'LoopPaused',
     'LoopResumed',
+    'LoopStopped',
     'FinalizationPrepared',
     'ExecutionFinalized',
     'StrictFinalizationAcknowledged',
@@ -153,7 +155,7 @@ ASSURANCE_STRENGTHS = (
     'STRICT',
 )
 WRITE_CAS = 'per_loop_revision'
-SEMANTIC_PAYLOAD_SPECS = {'AcknowledgeResult': {'semantic_payload': {}}, 'AdvanceGoal': {'semantic_payload': {'disposition': {'enum': ['DONE'], 'type': 'string'}}}, 'BeginEffectDelivery': {'semantic_payload': {}}, 'BindHostResource': {'semantic_payload': {'role': {'type': 'string'}}}, 'CloseExecution': {'semantic_payload': {}}, 'CreateLoop': {'semantic_payload': {'objective': {'type': 'string'}}}, 'PauseLoop': {'semantic_payload': {'reason': {'type': 'string'}}}, 'PrepareFinalization': {'semantic_payload': {'disposition': {'enum': ['SUCCEEDED', 'LIMITATION'], 'type': 'string'}}}, 'PrepareRoute': {'semantic_payload': {'intent': {'type': 'string'}}}, 'RecordEffectObservation': {'semantic_payload': {}}, 'RecordExternalEffectObservation': {'semantic_payload': {}}, 'RecordReview': {'semantic_payload': {'verdict': {'enum': ['PASS', 'REPAIR', 'LIMITATION'], 'type': 'string'}}}, 'ResumeLoop': {'semantic_payload': {}}, 'StageResult': {'semantic_payload': {'outcome': {'enum': ['PASS'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StrengthenClosureAssurance': {'semantic_payload': {}}}
+SEMANTIC_PAYLOAD_SPECS = {'AcknowledgeResult': {'semantic_payload': {}}, 'AdvanceGoal': {'semantic_payload': {'disposition': {'enum': ['DONE', 'FAILED', 'LIMITATION'], 'type': 'string'}}}, 'BeginEffectDelivery': {'semantic_payload': {}}, 'BindHostResource': {'semantic_payload': {'role': {'type': 'string'}}}, 'CloseExecution': {'semantic_payload': {}}, 'CreateLoop': {'semantic_payload': {'acceptance_criteria': {'items': {'type': 'string'}, 'type': 'array'}, 'authorization_boundaries': {'items': {'type': 'string'}, 'type': 'array'}, 'budget': {'type': 'string'}, 'execution_mode': {'enum': ['STANDARD', 'ADAPTIVE'], 'type': 'string'}, 'external_actions': {'items': {'type': 'string'}, 'type': 'array'}, 'objective': {'type': 'string'}, 'stop_conditions': {'items': {'type': 'string'}, 'type': 'array'}, 'write_scope': {'items': {'type': 'string'}, 'type': 'array'}}}, 'PauseLoop': {'semantic_payload': {'reason': {'type': 'string'}}}, 'PrepareFinalization': {'semantic_payload': {'disposition': {'enum': ['SUCCEEDED', 'LIMITATION', 'FAILED'], 'type': 'string'}}}, 'PrepareRoute': {'semantic_payload': {'intent': {'type': 'string'}}}, 'RecordEffectObservation': {'semantic_payload': {}}, 'RecordExternalEffectObservation': {'semantic_payload': {}}, 'RecordReview': {'semantic_payload': {'verdict': {'enum': ['PASS', 'REPAIR', 'LIMITATION'], 'type': 'string'}}}, 'ResumeLoop': {'semantic_payload': {}}, 'StopLoop': {'semantic_payload': {'reason': {'type': 'string'}}}, 'StageResult': {'semantic_payload': {'outcome': {'enum': ['PASS', 'FAILED', 'LIMITATION', 'UNVERIFIABLE'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StrengthenClosureAssurance': {'semantic_payload': {}}}
 
 @dataclass(frozen=True)
 class ActorRef:
@@ -192,6 +194,7 @@ class Receipt:
     target_ref: str | None
     request_digest: str | None
     provider_idempotency_key: str | None
+    provider_resource_ref: str | None
     outcome: str
     issued_at: str
     expires_at: str
@@ -285,22 +288,6 @@ class UserFacingError:
     code: str
     message: str
     next_action: str
-
-@dataclass(frozen=True)
-class V3ImportPreview:
-    source_loop_id: str
-    source_schema_version: int
-    source_state_version: int
-    source_state_digest: str
-    goal: str
-    preview_digest: str
-
-@dataclass(frozen=True)
-class V3ImportResult:
-    loop_ref: str
-    source_state_digest: str
-    snapshot_digest: str
-    replayed: bool = False
 
 @dataclass(frozen=True)
 class Reference:

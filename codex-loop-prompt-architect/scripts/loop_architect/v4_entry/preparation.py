@@ -644,6 +644,7 @@ def confirm_prepared(
         target_ref=context.bundle.boundary_digest,
         request_digest=context.bundle.manifest_digest,
         provider_idempotency_key=None,
+        provider_resource_ref=None,
         outcome="observed",
         issued_at=_iso(issued),
         expires_at=_iso(issued + timedelta(minutes=30)),

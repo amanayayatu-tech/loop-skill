@@ -24,10 +24,12 @@ if str(SCRIPTS) not in sys.path:
 
 from loop_architect.v4_alpha.kernel import AuthorityContext  # noqa: E402
 from loop_architect.v4_alpha.protocol import (  # noqa: E402
+    CAPABILITY_NAMES,
     InjectedCrash,
     LoopIntakeInput,
     Receipt,
 )
+from loop_architect.v4_adapters.codex.adapter import HOST_SCHEMA_VERSION  # noqa: E402
 from loop_architect.v4_alpha.vertical import (  # noqa: E402
     LOOP_REF,
     fixture_authority,
@@ -55,6 +57,59 @@ from loop_architect.v4_persistence.sqlite_store import DURABLE_FAULT_BOUNDARIES 
 
 
 NOW = datetime(2026, 7, 27, 1, 0, 0, tzinfo=timezone.utc)
+
+
+class EntryProviderFixture:
+    def __init__(self):
+        self.invoke_count = 0
+        self.records = {}
+
+    def capability_snapshot(self):
+        now = datetime.now(timezone.utc)
+        rows = []
+        for name in CAPABILITY_NAMES:
+            rows.append(
+                {
+                    "assurance": "STRICT",
+                    "availability": "AVAILABLE",
+                    "details": {
+                        "expires_at": (now + timedelta(minutes=5)).isoformat().replace("+00:00", "Z"),
+                        "identity_ref": f"synthetic-{name}",
+                        "issuer_ref": "loopskill-codex-adapter-v1",
+                        "issuer_trust": "local-codex-adapter",
+                        "observed_at": (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),
+                        "source": "synthetic-entry-provider",
+                    },
+                    "name": name,
+                    "receipt_ref": f"synthetic-capability-{name}",
+                }
+            )
+        return {"capabilities": rows, "schema_version": HOST_SCHEMA_VERSION}
+
+    def invoke(self, action, payload, provider_idempotency_key):
+        self.invoke_count += 1
+        self.records[provider_idempotency_key] = {
+            "action": action,
+            "idempotency_key": provider_idempotency_key,
+            "provider_id": "synthetic-entry-thread",
+            "schema_version": HOST_SCHEMA_VERSION,
+            "status": "OBSERVED",
+            "subject_id": payload["target_ref"],
+            "trust": "authoritative",
+        }
+        return {**self.records[provider_idempotency_key], "status": "ACCEPTED", "trust": "cooperative"}
+
+    def readback(self, action, provider_idempotency_key):
+        return self.records.get(provider_idempotency_key)
+
+    def read_resource(self, resource_kind, provider_id):
+        return {
+            "provider_id": provider_id,
+            "resource_kind": resource_kind,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "state": "ACTIVE",
+            "trust": "authoritative",
+        }
 
 
 def fixed_tokens():
@@ -383,6 +438,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 target_ref=attempt.target_ref,
                 request_digest=attempt.provider_request_digest,
                 provider_idempotency_key=attempt.provider_idempotency_key,
+                provider_resource_ref=None,
                 outcome="unknown",
                 issued_at=NOW.isoformat().replace("+00:00", "Z"),
                 expires_at=(NOW + timedelta(minutes=5)).isoformat().replace(
@@ -447,9 +503,10 @@ class V4SingleEntryUXTests(unittest.TestCase):
             data = root / "data"
             prepared = root / "prepared-output"
             cli = load_cli_module()
+            provider = EntryProviderFixture()
             stdout = io.StringIO()
             stderr = io.StringIO()
-            with mock.patch.object(sys.stdin, "isatty", return_value=True), mock.patch(
+            with mock.patch.object(cli, "CodexAppServerProvider", return_value=provider), mock.patch.object(sys.stdin, "isatty", return_value=True), mock.patch(
                 "builtins.input", return_value="START THIS LOOP"
             ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 result = cli.main(
@@ -465,7 +522,8 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertEqual(result, 0, stderr.getvalue())
             self.assertIn("1 最终判定", stdout.getvalue())
             self.assertIn("LoopSkill 4 start boundary", stdout.getvalue())
-            self.assertIn("Progress: Starting", stdout.getvalue())
+            self.assertIn("Progress: Active", stdout.getvalue())
+            self.assertEqual(provider.invoke_count, 1)
             self.assertTrue((data / STORE_FILENAME).is_file())
             self.assertTrue((prepared / CONFIRMATION_FILENAME).is_file())
 

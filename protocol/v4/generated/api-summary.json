@@ -25,7 +25,9 @@
       "semantic_payload": {
         "disposition": {
           "enum": [
-            "DONE"
+            "DONE",
+            "FAILED",
+            "LIMITATION"
           ],
           "type": "string"
         }
@@ -46,8 +48,48 @@
     },
     "CreateLoop": {
       "semantic_payload": {
+        "acceptance_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "authorization_boundaries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "budget": {
+          "type": "string"
+        },
+        "execution_mode": {
+          "enum": [
+            "STANDARD",
+            "ADAPTIVE"
+          ],
+          "type": "string"
+        },
+        "external_actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "objective": {
           "type": "string"
+        },
+        "stop_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "write_scope": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       }
     },
@@ -63,7 +105,8 @@
         "disposition": {
           "enum": [
             "SUCCEEDED",
-            "LIMITATION"
+            "LIMITATION",
+            "FAILED"
           ],
           "type": "string"
         }
@@ -101,11 +144,21 @@
       "semantic_payload": {
         "outcome": {
           "enum": [
-            "PASS"
+            "PASS",
+            "FAILED",
+            "LIMITATION",
+            "UNVERIFIABLE"
           ],
           "type": "string"
         },
         "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "StopLoop": {
+      "semantic_payload": {
+        "reason": {
           "type": "string"
         }
       }
@@ -183,13 +236,14 @@
     "GoalAdvanced",
     "LoopPaused",
     "LoopResumed",
+    "LoopStopped",
     "FinalizationPrepared",
     "ExecutionFinalized",
     "StrictFinalizationAcknowledged",
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "manifest_sha256": "4b43ba3c20b1907145cbad42100f56ab0f1dcbd17d45ae9904c5a72c9fbf91ce",
+  "manifest_sha256": "bc28905a5c395b5fd15245b4bb5b3bd9552cef8b1224c8cc232ee9b8ed68493a",
   "protocol_version": "4.0.0",
   "reference_kinds": [
     "LoopRef",
@@ -328,6 +382,7 @@
       "target_ref",
       "request_digest",
       "provider_idempotency_key",
+      "provider_resource_ref",
       "outcome",
       "issued_at",
       "expires_at",
@@ -349,20 +404,6 @@
       "result",
       "limitations",
       "next_actions"
-    ],
-    "V3ImportPreview": [
-      "source_loop_id",
-      "source_schema_version",
-      "source_state_version",
-      "source_state_digest",
-      "goal",
-      "preview_digest"
-    ],
-    "V3ImportResult": [
-      "loop_ref",
-      "source_state_digest",
-      "snapshot_digest",
-      "replayed"
     ]
   },
   "write_cas": "per_loop_revision"

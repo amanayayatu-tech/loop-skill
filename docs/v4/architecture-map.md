@@ -13,7 +13,7 @@ Entry / composition root
   ├─ Artifact / review / finalization libraries
   │    └─ existing-Git, non-Git, new-Git capability implementations
   ├─ Codex Host Adapter
-  │    └─ task/create/read/send/readback and capability receipts
+  │    └─ local Codex app-server task/create/read/send/readback and capability receipts
   ├─ optional Policy
   │    └─ Standard, Adaptive, roles, decisions, bounded repair
   └─ rebuildable projections
@@ -44,6 +44,12 @@ effectively-once statement. Without both, the contract is at-most-one automatic
 attempt and the outcome may be `UNKNOWN`; the system does not resend. A late
 authoritative observation can strengthen the same subject identity but cannot
 invent a new attempt or rewrite workflow history.
+
+The public composition root constructs the production app-server provider only
+after explicit confirmation. It sends the digest-bound semantic boundary, not
+user/model control identity. The Host provider exposes no create idempotency
+key; after a crash it may perform only exact machine-marker readback. Missing or
+ambiguous readback becomes `UNKNOWN`, never another create.
 
 ## State and evidence
 

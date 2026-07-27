@@ -1,7 +1,8 @@
 # LoopSkill 4 quickstart
 
-Status: LoopSkill 4.0.0 stable release. Public-release identity is established
-by final readback of the `v4.0.0` tag and GitHub Release.
+Status: the LoopSkill 4.0.0 candidate is passing release gates and is not yet
+published. Public-release identity is established by final readback of the
+`v4.0.0` tag and GitHub Release.
 
 ## Install
 

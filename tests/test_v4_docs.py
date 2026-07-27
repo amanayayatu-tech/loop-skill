@@ -59,7 +59,10 @@ class V4DocsTests(unittest.TestCase):
                 docs.validate(root)
 
     def test_release_mode_requires_stable_wording(self) -> None:
-        self.assertEqual(docs.validate(ROOT, release=True)["status"], "PASS")
+        with self.assertRaisesRegex(
+            docs.DocsError, "DOC_RELEASE_STATUS_NOT_STABLE"
+        ):
+            docs.validate(ROOT, release=True)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shutil.copytree(
@@ -70,24 +73,21 @@ class V4DocsTests(unittest.TestCase):
             )
             replacements = {
                 "README.md": (
-                    "LoopSkill 4.0.0 稳定版",
                     "4.0.0 候选正在接受发行门禁",
+                    "4.0.0 稳定版",
                 ),
                 "README.en.md": (
-                    "LoopSkill 4.0.0 stable release",
                     "4.0.0 candidate is passing release gates",
+                    "4.0.0 stable release",
                 ),
             }
-            for relative, (stable, candidate) in replacements.items():
+            for relative, (candidate, stable) in replacements.items():
                 path = root / relative
                 path.write_text(
-                    path.read_text(encoding="utf-8").replace(stable, candidate),
+                    path.read_text(encoding="utf-8").replace(candidate, stable),
                     encoding="utf-8",
                 )
-            with self.assertRaisesRegex(
-                docs.DocsError, "DOC_RELEASE_STATUS_NOT_STABLE"
-            ):
-                docs.validate(root, release=True)
+            self.assertEqual(docs.validate(root, release=True)["status"], "PASS")
 
 
 if __name__ == "__main__":

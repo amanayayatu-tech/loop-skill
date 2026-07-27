@@ -138,8 +138,8 @@ def validate(root: Path, *, release: bool = False) -> dict[str, object]:
     if release:
         if not stable_zh or candidate_zh:
             raise DocsError("DOC_RELEASE_STATUS_NOT_STABLE")
-    elif not ((candidate_zh and not stable_zh) or (stable_zh and not candidate_zh)):
-        raise DocsError("DOC_RELEASE_STATUS_AMBIGUOUS")
+    elif not candidate_zh or stable_zh:
+        raise DocsError("DOC_RELEASE_STATUS_PREMATURE_OR_AMBIGUOUS")
     return {
         "bash_command_blocks": len(zh_bash),
         "link_targets": sum(_links(zh).values()),

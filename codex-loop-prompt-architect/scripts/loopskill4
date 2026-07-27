@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from loop_architect.v4_alpha.protocol import LoopIntakeInput
+from loop_architect.v4_adapters.codex import CodexAppServerProvider
 from loop_architect.v4_entry import (
     EntryError,
     confirm_loop,
@@ -288,7 +289,11 @@ def _interactive_start(args):
     if subject.is_dir():
         if is_legacy_input(subject):
             raise EntryError(*unsupported_legacy_error())
-        return start_loop(subject, root=args.root)
+        return start_loop(
+            subject,
+            root=args.root,
+            host_provider=CodexAppServerProvider(Path.cwd()),
+        )
     request = read_intake_input(args.goal_file_or_prepared_directory)
     report = intake_report_loop(request)
     print_intake_report(report)
@@ -322,7 +327,11 @@ def _interactive_start(args):
             "Review the prepared artifacts and confirm them explicitly.",
         )
     confirmed = confirm_loop(output, confirmed=True)
-    return start_loop(confirmed, root=args.root)
+    return start_loop(
+        confirmed,
+        root=args.root,
+        host_provider=CodexAppServerProvider(Path.cwd()),
+    )
 
 
 def main(argv=None) -> int:

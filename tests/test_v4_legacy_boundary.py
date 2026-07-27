@@ -49,6 +49,14 @@ class V4LegacyBoundaryTests(unittest.TestCase):
     def test_public_protocol_has_one_legacy_error_and_no_import_surface(self) -> None:
         self.assertIn(LEGACY_ERROR_CODE, ERROR_CODES)
         self.assertNotIn("ImportV3Snapshot", COMMAND_TYPES)
+        for path in (
+            ROOT / "protocol/v4/loopskill-v4.protocol.json",
+            ROOT / "protocol/v4/generated/api-summary.json",
+            ROOT / "protocol/v4/generated/loopskill-v4.schema.json",
+            SCRIPTS / "loop_architect/v4_alpha/generated_protocol.py",
+            SCRIPTS / "loop_architect/v4_alpha/protocol.py",
+        ):
+            self.assertNotIn("V3Import", path.read_text(encoding="utf-8"), path)
         self.assertNotIn("V3SnapshotImported", EVENT_TYPES)
         self.assertFalse(any(code.startswith("MIGRATION_") for code in ERROR_CODES))
         self.assertNotIn("DUAL_WRITE_FORBIDDEN", ERROR_CODES)

@@ -34,8 +34,6 @@ from .generated_protocol import (
     Reference,
     UserFacingError,
     UserFacingStatus,
-    V3ImportPreview,
-    V3ImportResult,
 )
 
 INT64_MIN = -(2**63)
@@ -327,6 +325,11 @@ def validate_command(command: CommandEnvelope) -> None:
             isinstance(value, bool) or not isinstance(value, int)
         ):
             raise ProtocolRejection("INVALID_COMMAND", f"{name} must be integer")
+        if specification["type"] == "array" and (
+            not isinstance(value, (list, tuple))
+            or not all(isinstance(item, str) for item in value)
+        ):
+            raise ProtocolRejection("INVALID_COMMAND", f"{name} must be a string array")
         if "enum" in specification and value not in specification["enum"]:
             raise ProtocolRejection("INVALID_COMMAND", f"{name} enum drift")
     raw = canonical_bytes(command_without_digest(command))
