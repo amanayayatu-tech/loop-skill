@@ -157,10 +157,20 @@ FAMILY_TEST_BINDINGS = {
 # narrower than the rest of its family. They are still frozen test identities,
 # not runtime inference or a second schema.
 CASE_TEST_OVERRIDES = {
+    "CAP-RELEASE-CANARY": _test(
+        A,
+        "V4AlphaPureKernelTests",
+        "test_verified_vertical_evidence_is_identity_free_and_exact",
+    ),
     "CAP-COMPAT-SUNSET": _test(
         UX,
         "V4SingleEntryUXTests",
         "test_installed_skill_routes_explicit_v4_before_legacy_doctor",
+    ),
+    "UX-009-a": _test(
+        A,
+        "V4AlphaPureKernelTests",
+        "test_verified_vertical_evidence_is_identity_free_and_exact",
     ),
 }
 

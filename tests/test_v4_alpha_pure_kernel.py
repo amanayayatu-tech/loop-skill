@@ -36,6 +36,7 @@ from loop_architect.v4_alpha.vertical import (  # noqa: E402
     replace_grant_digest,
     run_vertical,
     vertical_commands,
+    verified_vertical_evidence,
 )
 
 
@@ -178,6 +179,22 @@ class V4AlphaPureKernelTests(unittest.TestCase):
         self.assertEqual(runner_snapshot, snapshot)
         self.assertEqual(runner_events, tuple(store.events(LOOP_REF)))
         self.assertEqual(runner_results[-1].snapshot_digest, EXPECTED_SNAPSHOT_DIGEST)
+
+    def test_verified_vertical_evidence_is_identity_free_and_exact(self):
+        self.assertEqual(
+            verified_vertical_evidence(),
+            {
+                "assurance": "STRICT",
+                "event_count": 18,
+                "final_event_from_typed_fixture": EXPECTED_EVENT_TYPES[-1],
+                "finalization": "ACKNOWLEDGED",
+                "operation_count": 11,
+                "result": "ACKNOWLEDGED",
+                "review": "PASS",
+                "snapshot_bytes": EXPECTED_SNAPSHOT_BYTES,
+                "snapshot_digest": EXPECTED_SNAPSHOT_DIGEST,
+            },
+        )
 
     def test_changed_accepted_and_rejected_operations_conflict(self):
         command = vertical_commands()[0]

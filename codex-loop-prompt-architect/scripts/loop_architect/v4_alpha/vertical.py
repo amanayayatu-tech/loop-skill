@@ -12,6 +12,8 @@ from .protocol import (
     Receipt,
     authority_grant_digest,
     build_command,
+    canonical_bytes,
+    snapshot_digest,
 )
 
 
@@ -429,3 +431,49 @@ def run_vertical():
     store = InMemoryStore(fixture_authority())
     results = tuple(store.apply(command) for command in vertical_commands())
     return store.snapshot(LOOP_REF), tuple(store.events(LOOP_REF)), results
+
+
+def verified_vertical_evidence() -> dict[str, Any]:
+    """Return identity-free evidence only after the frozen trace self-validates."""
+
+    snapshot, events, results = run_vertical()
+    encoded = canonical_bytes(snapshot)
+    event_types = tuple(event["type"] for event in events)
+    digest = snapshot_digest(snapshot)
+    if (
+        encoded != EXPECTED_CANONICAL_SNAPSHOT
+        or len(encoded) != EXPECTED_SNAPSHOT_BYTES
+        or digest != EXPECTED_SNAPSHOT_DIGEST
+        or event_types != EXPECTED_EVENT_TYPES
+        or len(results) != 11
+        or len(events) != 18
+    ):
+        raise RuntimeError("VERTICAL_FIXTURE_DRIFT")
+    result = snapshot["results"]["result-0001"]["state"]
+    review = snapshot["reviews"]["review-0001"]["state"]
+    assurance = snapshot["closure_assurance"]["strength"]
+    finalization = (
+        "ACKNOWLEDGED"
+        if event_types[-1] == EXPECTED_EVENT_TYPES[-1]
+        and snapshot["finalizations"]["finalization-0001"]["state"]
+        == "EXECUTION_CLOSED"
+        else "UNKNOWN"
+    )
+    if (result, review, finalization, assurance) != (
+        "ACKNOWLEDGED",
+        "PASS",
+        "ACKNOWLEDGED",
+        "STRICT",
+    ):
+        raise RuntimeError("VERTICAL_CLOSURE_DRIFT")
+    return {
+        "assurance": assurance,
+        "event_count": len(events),
+        "final_event_from_typed_fixture": event_types[-1],
+        "finalization": finalization,
+        "operation_count": len(results),
+        "result": result,
+        "review": review,
+        "snapshot_bytes": len(encoded),
+        "snapshot_digest": digest,
+    }

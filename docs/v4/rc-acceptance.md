@@ -40,6 +40,12 @@ The harness must consume the frozen vertical event sequence from the typed
 fixture authority; it must not restate a generic finalization event alias. The
 authoritative strict terminal event is validated through that generated/frozen
 sequence, keeping canary apparatus from becoming another wire-literal source.
+After repeated App-authored fixture interpretation failures, the only allowed
+canary interface is
+`loop_architect.v4_alpha.vertical.verified_vertical_evidence()`. That existing
+typed fixture authority self-validates snapshot bytes/digest, exact event
+sequence and closure before returning an identity-free summary. The App must
+not rebuild a verifier, index event objects, or restate snapshot keys.
 Before task creation, the orchestrator creates and attests one empty disposable
 canary-work root. The task may create descendants only inside that existing
 root. A prompt that leaves parent creation ambiguous is apparatus failure and

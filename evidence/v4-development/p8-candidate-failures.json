@@ -90,6 +90,21 @@
       "status": "FAIL",
       "vertical_event_count_observed": 0,
       "vertical_operation_count_observed": 0
+    },
+    {
+      "provider_invocations": 0,
+      "candidate_sha": "b42e670988025ec755533d609b59d39d39e1ea01",
+      "classification": "REPEATED_APPARATUS_FIXTURE_INTERPRETATION_FAILURE",
+      "host_task_create_count": 1,
+      "host_task_readback_count": 1,
+      "output_sha256": "0c45d9996daa6604fc1a3b76c29d6a7e6b5f29b40572094b1867b4e78413fc82",
+      "provider_resend_count": 0,
+      "reason": "The real Entry path passed through one START, but the App-authored verification wrapper misread the frozen event object shape. This repeated the earlier model-restated fixture/API root cause. New canaries pause until the existing typed fixture authority returns a self-validated identity-free evidence summary.",
+      "retry_on_same_candidate": false,
+      "stage": "exact_candidate_disposable_app_canary",
+      "status": "FAIL",
+      "vertical_event_count_observed": 18,
+      "vertical_operation_count_observed": 11
     }
   ],
   "public_release_effects": 0,
