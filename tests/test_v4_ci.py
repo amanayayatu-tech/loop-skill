@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -15,6 +16,28 @@ SPEC.loader.exec_module(ci)
 
 
 class V4CiTests(unittest.TestCase):
+    def test_coverage_binds_shipped_v4_runtime_and_omits_archive_aliases(self) -> None:
+        config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            config["tool"]["coverage"]["run"]["omit"],
+            [
+                "codex-loop-prompt-architect/scripts/loop_architect/human_control.py",
+                "codex-loop-prompt-architect/scripts/loop_architect/schema.py",
+            ],
+        )
+        self.assertEqual(config["tool"]["coverage"]["report"]["fail_under"], 80)
+        self.assertEqual(
+            config["tool"]["coverage"]["report"]["include"],
+            [
+                "codex-loop-prompt-architect/scripts/loop_architect/v4_*/*",
+                "codex-loop-prompt-architect/scripts/loopskill4",
+            ],
+        )
+        self.assertEqual(
+            config["tool"]["coverage"]["report"]["omit"],
+            config["tool"]["coverage"]["run"]["omit"],
+        )
+
     def test_v4_release_workflow_is_the_only_ci_and_passes_contract(self) -> None:
         result = ci.validate(ROOT)
         self.assertEqual(result["status"], "PASS")
