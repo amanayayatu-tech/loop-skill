@@ -714,6 +714,6 @@
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "2c89e5ed3598c783cd114f49ad5ede31e8ab6e5c2b7d0daf6afe32a1aa8c618f",
+  "manifest_sha256": "ba00dd1e7623d0318ffb96f45b39b0ce9bee1bfc236163c458f2bab6da44c259",
   "title": "LoopSkill 4 protocol wire shapes"
 }

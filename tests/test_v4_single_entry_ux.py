@@ -123,20 +123,17 @@ def changed_authority_with_delivery(*, outcome, trust_class):
 
 
 class V4SingleEntryUXTests(unittest.TestCase):
-    def test_installed_skill_routes_explicit_v4_before_legacy_doctor(self) -> None:
+    def test_installed_skill_is_v4_only_and_preserves_four_phase_boundary(self) -> None:
         skill = (ROOT / "codex-loop-prompt-architect/SKILL.md").read_text(
             encoding="utf-8"
         )
-        native = skill.index("## LoopSkill 4 Native Entry Routing")
-        legacy = skill.index("## Legacy v3 Mandatory First-Invocation Doctor")
-        self.assertLess(native, legacy)
-        native_contract = skill[native:legacy]
-        self.assertIn("before the legacy", native_contract)
-        self.assertIn("rules below", native_contract)
-        self.assertIn("must not run legacy `loopctl doctor`", native_contract)
-        self.assertIn("not a first-invocation gate", native_contract)
-        self.assertIn("INTAKE → PREPARE → CONFIRM → START", native_contract)
-        self.assertIn("supplies zero control identities", native_contract)
+        for phase in ("INTAKE", "PREPARE", "CONFIRM", "START"):
+            self.assertIn(phase, skill)
+        self.assertIn("never supply or become", skill)
+        self.assertIn("cannot open, import, repair, or run LoopSkill 3", skill)
+        self.assertNotIn("Legacy v3 Mandatory First-Invocation Doctor", skill)
+        self.assertNotIn("loopctl", skill)
+        self.assertNotIn("adaptive_state_mcp", skill)
 
     def run_entry(self, *arguments):
         return subprocess.run(
@@ -352,13 +349,11 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertIn("Confirmation: accepted", stdout.getvalue())
             self.assertTrue((prepared.directory / CONFIRMATION_FILENAME).is_file())
 
-    def test_minimal_profile_runs_without_policy_or_compat_imports(self):
+    def test_minimal_profile_runs_without_policy_and_compat_runtime_absent(self):
         original_import = __import__
 
         def deny_optional(name, globals=None, locals=None, fromlist=(), level=0):
-            if name.startswith("loop_architect.v4_policy") or name.startswith(
-                "loop_architect.v4_compat"
-            ):
+            if name.startswith("loop_architect.v4_policy"):
                 raise ImportError("optional module unavailable")
             return original_import(name, globals, locals, fromlist, level)
 
@@ -399,6 +394,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertEqual(unknown.progress, "Needs attention")
             self.assertIn("unknown", unknown.limitations[0].lower())
             self.assertNotIn("resend", " ".join(unknown.next_actions).lower())
+            self.assertFalse((SCRIPTS / "loop_architect/v4_compat").exists())
 
     def test_confirmed_preparation_creates_and_starts_without_control_identity(self):
         with tempfile.TemporaryDirectory() as temporary:

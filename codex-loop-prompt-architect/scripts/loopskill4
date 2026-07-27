@@ -22,6 +22,10 @@ from loop_architect.v4_entry import (
     status,
 )
 from loop_architect.v4_entry.preparation import boundary_display
+from loop_architect.v4_entry.legacy_boundary import (
+    is_legacy_input,
+    unsupported_legacy_error,
+)
 
 
 class PublicParser(argparse.ArgumentParser):
@@ -127,6 +131,8 @@ def read_intake_input(value: str) -> LoopIntakeInput:
     if value == "-":
         raw = sys.stdin.buffer.read(32769)
         return _decode_intake_bytes(raw, json_document=True)
+    if path.is_dir() and is_legacy_input(path):
+        raise EntryError(*unsupported_legacy_error())
     if path.is_file():
         try:
             raw = path.read_bytes()
@@ -142,6 +148,8 @@ def read_intake_input(value: str) -> LoopIntakeInput:
                 "The goal file is too large.",
                 "Reduce the semantic input to at most 32768 UTF-8 bytes.",
             )
+        if is_legacy_input(path, raw):
+            raise EntryError(*unsupported_legacy_error())
         if path.suffix.lower() == ".json":
             return _decode_intake_bytes(raw, json_document=True)
         return _intake_value({"goal": _decode_text(raw)})
@@ -229,7 +237,7 @@ def _doctor_view(*, include_diagnostics: bool):
     installed_identity = None
     codex_home = os.environ.get("CODEX_HOME")
     if codex_home:
-        receipt_root = Path(codex_home) / "install-receipts/codex-loop-prompt-architect"
+        receipt_root = Path(codex_home) / "install-receipts/loopskill4"
         receipts = sorted(receipt_root.glob("*.json")) if receipt_root.is_dir() else []
         if receipts:
             try:
@@ -278,6 +286,8 @@ def _doctor_view(*, include_diagnostics: bool):
 def _interactive_start(args):
     subject = Path(args.goal_file_or_prepared_directory)
     if subject.is_dir():
+        if is_legacy_input(subject):
+            raise EntryError(*unsupported_legacy_error())
         return start_loop(subject, root=args.root)
     request = read_intake_input(args.goal_file_or_prepared_directory)
     report = intake_report_loop(request)

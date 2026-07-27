@@ -278,10 +278,7 @@ def reduce_command(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     validate_command(command)
     validate_authority(command, context)
-    if snapshot is None and command.command_type not in {
-        "CreateLoop",
-        "ImportV3Snapshot",
-    }:
+    if snapshot is None and command.command_type != "CreateLoop":
         raise ProtocolRejection("INVALID_TRANSITION", "loop does not exist")
     validate_references(snapshot, command)
     reducer = _REDUCERS.get(command.command_type)
@@ -442,83 +439,6 @@ def _create_loop(
         )
         response["external_effect_ref"] = external_effect_ref
     return state, events, response
-
-
-def _import_v3_snapshot(
-    snapshot: dict[str, Any] | None,
-    command: CommandEnvelope,
-    context: AuthorityContext,
-) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    """Create one paused v4 loop from a machine-read v3.3.8 safe point.
-
-    The compatibility reader owns v3 shape validation.  Core accepts only the
-    small typed projection and never imports v3 runtime or schema code.
-    """
-
-    if snapshot is not None or command.expected_loop_revision != 0:
-        raise ProtocolRejection("INVALID_TRANSITION", "loop already exists")
-    payload = command.semantic_payload
-    required = {
-        "objective",
-        "source_goal_id",
-        "source_loop_id",
-        "source_product_version",
-        "source_schema_version",
-        "source_state_digest",
-        "source_state_version",
-    }
-    if set(payload) != required:
-        raise ProtocolRejection("INVALID_COMMAND", "incomplete v3 import projection")
-    if payload["source_product_version"] != "v3.3.8":
-        raise ProtocolRejection(
-            "MIGRATION_SOURCE_INVALID", "unsupported v3 product version"
-        )
-    if payload["source_schema_version"] != 3:
-        raise ProtocolRejection(
-            "MIGRATION_SOURCE_INVALID", "unsupported v3 schema version"
-        )
-    if (
-        isinstance(payload["source_state_version"], bool)
-        or not isinstance(payload["source_state_version"], int)
-        or payload["source_state_version"] < 1
-    ):
-        raise ProtocolRejection("MIGRATION_SOURCE_INVALID", "invalid state version")
-    source_digest = payload["source_state_digest"]
-    if (
-        not isinstance(source_digest, str)
-        or not source_digest.startswith("sha256:")
-        or len(source_digest) != 71
-        or any(character not in "0123456789abcdef" for character in source_digest[7:])
-    ):
-        raise ProtocolRejection("MIGRATION_SOURCE_INVALID", "invalid source digest")
-    if not isinstance(payload["source_goal_id"], str) or not payload["source_goal_id"]:
-        raise ProtocolRejection("MIGRATION_SOURCE_INVALID", "invalid source Goal")
-    if not isinstance(payload["source_loop_id"], str) or not payload["source_loop_id"]:
-        raise ProtocolRejection("MIGRATION_SOURCE_INVALID", "invalid source loop")
-
-    state, _, response = _create_loop(snapshot, command, context)
-    goal_ref = response["goal_ref"]
-    state["goals"][goal_ref]["state"] = "READY"
-    state["execution"] = {"disposition": None, "revision": 1, "state": "PAUSED"}
-    state["import_provenance"] = {
-        "source_goal_id": payload["source_goal_id"],
-        "source_loop_id": payload["source_loop_id"],
-        "source_product_version": payload["source_product_version"],
-        "source_schema_version": payload["source_schema_version"],
-        "source_state_digest": source_digest,
-        "source_state_version": payload["source_state_version"],
-    }
-    events = [
-        _event("LoopCreated", loop_ref=state["loop_ref"]),
-        _event("GoalRegistered", goal_ref=goal_ref),
-        _event("V3SnapshotImported", source_state_digest=source_digest),
-        _event("LoopPaused", reason="V3_IMPORT_SAFE_POINT"),
-    ]
-    return state, events, {
-        "goal_ref": goal_ref,
-        "loop_ref": state["loop_ref"],
-        "source_state_digest": source_digest,
-    }
 
 
 def _bind_host_resource(
@@ -1121,7 +1041,6 @@ def _strengthen_closure_assurance(
 
 _REDUCERS = {
     "CreateLoop": _create_loop,
-    "ImportV3Snapshot": _import_v3_snapshot,
     "BindHostResource": _bind_host_resource,
     "RecordExternalEffectObservation": _observe_external_effect,
     "PrepareRoute": _prepare_route,

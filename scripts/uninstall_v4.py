@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed uninstall for an explicitly selected isolated LoopSkill root.
-
-The v4 RC gate invokes this only against a disposable CODEX_HOME.  The
-uninstaller consumes the install receipt and the installer's byte-for-byte
-backup instead of trying to reverse-edit TOML.  It is not a migration tool and
-never touches loop stores.
-"""
+"""Transactional removal of one receipt-bound LoopSkill 4 installation."""
 
 from __future__ import annotations
 
@@ -14,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 from typing import Callable, Sequence
@@ -27,35 +22,56 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _config_digest(codex_home: Path) -> str:
+    config = codex_home / "config.toml"
+    return _sha256(config.read_bytes() if config.is_file() else b"")
+
+
 def _load_receipt(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise UninstallError("UNINSTALL_RECEIPT_INVALID") from exc
-    if not isinstance(value, dict):
-        raise UninstallError("UNINSTALL_RECEIPT_INVALID")
-    required = {"files", "mcp_registration", "source_install_drift"}
-    if not required <= set(value) or value["source_install_drift"] != []:
-        raise UninstallError("UNINSTALL_RECEIPT_INVALID")
+        raise UninstallError("V4_UNINSTALL_RECEIPT_INVALID") from exc
+    required = {
+        "artifact",
+        "config_after_sha256",
+        "config_before_sha256",
+        "files",
+        "mcp_entries_added",
+        "mcp_processes_created",
+        "source_install_drift",
+        "version",
+    }
+    if (
+        not isinstance(value, dict)
+        or not required <= set(value)
+        or value["artifact"] != "loopskill4-install-receipt-v1"
+        or value["version"] != "4.0.0"
+        or value["source_install_drift"] != []
+        or value["mcp_entries_added"] != 0
+        or value["mcp_processes_created"] != 0
+        or value["config_before_sha256"] != value["config_after_sha256"]
+    ):
+        raise UninstallError("V4_UNINSTALL_RECEIPT_INVALID")
     return value
 
 
-def _installed_files(root: Path) -> list[dict]:
+def _installed_files(root: Path) -> list[dict[str, object]]:
     if not root.is_dir() or root.is_symlink():
-        raise UninstallError("UNINSTALL_INSTALL_ROOT_INVALID")
-    result = []
+        raise UninstallError("V4_UNINSTALL_INSTALL_ROOT_INVALID")
+    result: list[dict[str, object]] = []
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root)
         if "__pycache__" in relative.parts or path.suffix == ".pyc" or path.name == ".DS_Store":
             continue
         if path.is_symlink():
-            raise UninstallError("UNINSTALL_SYMLINK_FORBIDDEN")
+            raise UninstallError("V4_UNINSTALL_SYMLINK_FORBIDDEN")
         if path.is_file():
             result.append(
                 {
+                    "executable": bool(path.stat().st_mode & stat.S_IXUSR),
                     "path": relative.as_posix(),
                     "sha256": _sha256(path.read_bytes()),
-                    "executable": bool(path.stat().st_mode & 0o111),
                 }
             )
     return result
@@ -67,78 +83,57 @@ def uninstall(
     *,
     fault: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
-    """Uninstall one exact receipt, restoring prior bytes on any exception."""
-
     codex_home = codex_home.resolve()
     receipt_path = receipt_path.resolve()
     if not codex_home.is_dir() or codex_home.is_symlink():
-        raise UninstallError("UNINSTALL_CODEX_HOME_INVALID")
-    receipt_root = (codex_home / "install-receipts/codex-loop-prompt-architect").resolve()
+        raise UninstallError("V4_UNINSTALL_CODEX_HOME_INVALID")
+    receipt_root = (codex_home / "install-receipts/loopskill4").resolve()
     if receipt_path.parent != receipt_root or receipt_path.suffix != ".json":
-        raise UninstallError("UNINSTALL_RECEIPT_OUTSIDE_ROOT")
+        raise UninstallError("V4_UNINSTALL_RECEIPT_OUTSIDE_ROOT")
     receipt = _load_receipt(receipt_path)
-    stamp = receipt_path.stem
-    target = codex_home / "skills/codex-loop-prompt-architect"
-    config = codex_home / "config.toml"
-    backup = codex_home / "skill-backups/codex-loop-prompt-architect" / stamp
-    prior_skill = backup / "skill"
-    prior_config = backup / "config.toml.before"
-    prior_absent = backup / "config.toml.absent"
-    if not backup.is_dir() or (prior_config.exists() == prior_absent.exists()):
-        raise UninstallError("UNINSTALL_BACKUP_INVALID")
+    if _config_digest(codex_home) != receipt["config_after_sha256"]:
+        raise UninstallError("V4_UNINSTALL_CONFIG_DRIFT")
+    target = codex_home / "skills/loopskill4"
+    if not target.exists():
+        return {
+            "config_unchanged": True,
+            "loop_store_mutations": 0,
+            "mcp_entries_removed": 0,
+            "status": "ALREADY_UNINSTALLED",
+        }
     if _installed_files(target) != receipt["files"]:
-        raise UninstallError("UNINSTALL_INSTALL_DRIFT")
-    registration = receipt["mcp_registration"]
-    if not isinstance(registration, dict) or not isinstance(registration.get("config_sha256"), str):
-        raise UninstallError("UNINSTALL_RECEIPT_INVALID")
-    config_payload = config.read_bytes() if config.exists() else b""
-    if _sha256(config_payload) != registration["config_sha256"]:
-        raise UninstallError("UNINSTALL_CONFIG_DRIFT")
+        raise UninstallError("V4_UNINSTALL_INSTALL_DRIFT")
 
-    transaction = codex_home / "uninstall-staging" / stamp
+    transaction = codex_home / "uninstall-staging" / f"loopskill4-{receipt_path.stem}"
     if transaction.exists():
-        raise UninstallError("UNINSTALL_TRANSACTION_CONFLICT")
-    transaction.mkdir(parents=True)
-    removed_skill = transaction / "installed-skill"
-    live_config = transaction / "installed-config.toml"
-    restored_prior_skill = False
-    restored_prior_config = False
+        raise UninstallError("V4_UNINSTALL_TRANSACTION_CONFLICT")
+    transaction.parent.mkdir(parents=True, exist_ok=True)
+    transaction.mkdir()
+    withdrawn = transaction / "installed"
+    committed = False
     try:
-        os.replace(target, removed_skill)
+        os.replace(target, withdrawn)
         if fault:
             fault("after_skill_withdrawn")
-        if config.exists():
-            os.replace(config, live_config)
-        if prior_config.exists():
-            shutil.copy2(prior_config, config)
-            restored_prior_config = True
+        if _config_digest(codex_home) != receipt["config_before_sha256"]:
+            raise UninstallError("V4_UNINSTALL_CONFIG_DRIFT")
         if fault:
-            fault("after_config_restored")
-        if prior_skill.exists():
-            os.replace(prior_skill, target)
-            restored_prior_skill = True
+            fault("after_config_verified")
+        shutil.rmtree(withdrawn)
+        committed = True
         if fault:
-            fault("after_prior_skill_restored")
+            fault("after_commit")
     except Exception:
-        if restored_prior_skill and target.exists() and not prior_skill.exists():
-            os.replace(target, prior_skill)
-        if restored_prior_config and config.exists():
-            config.unlink()
-        if live_config.exists():
-            os.replace(live_config, config)
-        if removed_skill.exists() and not target.exists():
-            os.replace(removed_skill, target)
+        if not committed and withdrawn.exists() and not target.exists():
+            os.replace(withdrawn, target)
         shutil.rmtree(transaction, ignore_errors=True)
         raise
-
     shutil.rmtree(transaction)
     return {
-        "status": "UNINSTALLED",
-        "receipt": receipt_path.name,
-        "prior_skill_restored": restored_prior_skill,
-        "prior_config_restored": restored_prior_config,
+        "config_unchanged": True,
         "loop_store_mutations": 0,
-        "public_release_effects": 0,
+        "mcp_entries_removed": 0,
+        "status": "UNINSTALLED",
     }
 
 

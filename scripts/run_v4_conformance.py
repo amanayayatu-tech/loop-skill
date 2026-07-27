@@ -40,7 +40,7 @@ A = "test_v4_alpha_pure_kernel"
 AR = "test_v4_artifact_capabilities"
 B = "test_v4_beta_measurement"
 H = "test_v4_codex_adapter"
-M = "test_v4_compatibility_import"
+M = "test_v4_legacy_boundary"
 PS = "test_v4_persistence_spike"
 PR = "test_v4_preservation_register"
 PP = "test_v4_product_policy_operability"
@@ -70,7 +70,7 @@ FAMILY_TEST_BINDINGS = {
     "AUTH-006": _test(A, "V4AlphaPureKernelTests", "test_receipt_trust_freshness_and_identity_failures"),
     "CAP-ARCHITECTURE": _test(PR, "V4PreservationRegisterTests", "test_architecture_fitness_passes_current_graph"),
     "CAP-AUDIT": _test(PP, "V4OperabilityProjectionTests", "test_audit_archive_and_status_are_deterministic_read_only_views"),
-    "CAP-COMPAT": _test(M, "V4LegacyEntryCompatibilityTests", "test_compact_full_and_minimal_patch_views_preserve_zero_start"),
+    "CAP-COMPAT": _test(M, "V4LegacyBoundaryTests", "test_cli_rejects_legacy_pack_with_stable_error_and_zero_writes"),
     "CAP-DISTRIBUTION": _test(RD, "V4RcDistributionTests", "test_isolated_install_contains_v4_entry_and_zero_drift"),
     "CAP-DOCS": _test(RC, "V4RcAcceptanceTests", "test_bilingual_v4_docs_examples_and_release_boundary_are_present"),
     "CAP-INTAKE": _test(UX, "V4SingleEntryUXTests", "test_intake_four_outcomes_seven_sections_and_zero_side_effects"),
@@ -106,11 +106,11 @@ FAMILY_TEST_BINDINGS = {
     "K-009": _test(PP, "V4OperabilityProjectionTests", "test_audit_archive_and_status_are_deterministic_read_only_views"),
     "L-001": _test(PP, "V4ProductPolicyTests", "test_every_vertical_nonterminal_snapshot_has_one_next_action_class"),
     "L-002": _test(B, "V4BetaMeasurementTests", "test_real_local_v4_fixture_passes_frozen_comparator"),
-    "M-001": _test(M, "V4CompatibilityImportTests", "test_shadow_preview_is_read_only_and_cancel_creates_no_destination"),
-    "M-002": _test(M, "V4CompatibilityImportTests", "test_confirm_import_is_one_way_paused_and_exactly_replayable"),
-    "M-003": _test(M, "V4CompatibilityImportTests", "test_schema2_standard_state_is_readable_by_v3_but_not_shape_copied"),
-    "M-004": _test(M, "V4CompatibilityImportTests", "test_nonpaused_active_lease_and_nonquiescent_outbox_fail_closed"),
-    "M-005": _test(M, "V4CompatibilityImportTests", "test_destination_nonempty_and_overlapping_roots_are_rejected"),
+    "M-001": _test(M, "V4LegacyBoundaryTests", "test_v3_root_detection_is_read_only"),
+    "M-002": _test(M, "V4LegacyBoundaryTests", "test_rejection_replay_and_changed_pack_remain_zero_write"),
+    "M-003": _test(M, "V4LegacyBoundaryTests", "test_stable_external_v3_release_reference"),
+    "M-004": _test(M, "V4LegacyBoundaryTests", "test_all_legacy_state_classes_share_one_zero_write_rejection"),
+    "M-005": _test(M, "V4LegacyBoundaryTests", "test_production_tree_contains_no_v4_compat_package"),
     "P-001": _test(PP, "V4ProductPolicyTests", "test_repair_is_bounded_and_same_failure_routes_to_human"),
     "P-002": _test(PP, "V4ProductPolicyTests", "test_repair_is_bounded_and_same_failure_routes_to_human"),
     "P-003": _test(PP, "V4ProductPolicyTests", "test_standard_is_fixed_dependency_order_and_adaptive_is_bounded"),
@@ -132,7 +132,7 @@ FAMILY_TEST_BINDINGS = {
     "UX-003": _test(UX, "V4SingleEntryUXTests", "test_default_path_has_zero_control_fields_and_no_policy_pack"),
     "UX-004": _test(UX, "V4SingleEntryUXTests", "test_invalid_inputs_are_stable_non_leaking_and_leave_no_store"),
     "UX-005": _test(UX, "V4SingleEntryUXTests", "test_unknown_and_unverifiable_are_visible_without_resend_controls"),
-    "UX-006": _test(M, "V4CompatibilityImportTests", "test_shadow_preview_is_read_only_and_cancel_creates_no_destination"),
+    "UX-006": _test(M, "V4LegacyBoundaryTests", "test_cli_rejects_legacy_root_without_creating_v4_store"),
     "UX-007": _test(UX, "V4SingleEntryUXTests", "test_default_status_hides_internal_identity_diagnostics_is_opt_in"),
     "UX-008": _test(B, "V4BetaMeasurementTests", "test_real_local_v4_fixture_passes_frozen_comparator"),
     "UX-009": _test(RC, "V4RcAcceptanceTests", "test_canary_receipt_is_minimized_and_fail_closed"),
@@ -163,9 +163,9 @@ CASE_TEST_OVERRIDES = {
         "test_verified_vertical_evidence_is_identity_free_and_exact",
     ),
     "CAP-COMPAT-SUNSET": _test(
-        UX,
-        "V4SingleEntryUXTests",
-        "test_installed_skill_routes_explicit_v4_before_legacy_doctor",
+        M,
+        "V4LegacyBoundaryTests",
+        "test_public_protocol_has_one_legacy_error_and_no_import_surface",
     ),
     "UX-009-a": _test(
         A,

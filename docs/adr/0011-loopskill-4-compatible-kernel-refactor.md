@@ -108,7 +108,7 @@ Consequences:
   `DEPRECATED_NOT_SHIPPED`. The 24 capability groups remain semantic mappings,
   not 1,766 runtime branches.
 - A v4 entry that detects a v3 root/state/Pack performs zero writes and returns
-  one stable `UNSUPPORTED_LEGACY_VERSION` error with a direct v3.3.8 release
+  one stable `USER_UNSUPPORTED_LEGACY_VERSION` error with a direct v3.3.8 release
   reference. It does not import, repair, mutate, partially activate, or propose
   automatic migration.
 - v4 owns a distinct root, installation identity, and SQLite store. Its

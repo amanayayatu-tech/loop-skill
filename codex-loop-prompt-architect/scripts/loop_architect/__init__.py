@@ -1,5 +1,3 @@
-"""Shared modules for the Codex Loop Prompt Architect scaffold."""
+"""LoopSkill 4 package root; public behavior lives in explicit v4 modules."""
 
-from .schema import COORDINATION_MODES, ROLE_KINDS
-
-__all__ = ["COORDINATION_MODES", "ROLE_KINDS"]
+__all__: list[str] = []

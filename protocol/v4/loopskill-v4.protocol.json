@@ -51,34 +51,6 @@
         }
       }
     },
-    "ImportV3Snapshot": {
-      "semantic_payload": {
-        "objective": {
-          "type": "string"
-        },
-        "source_goal_id": {
-          "type": "string"
-        },
-        "source_loop_id": {
-          "type": "string"
-        },
-        "source_product_version": {
-          "enum": [
-            "v3.3.8"
-          ],
-          "type": "string"
-        },
-        "source_schema_version": {
-          "type": "integer"
-        },
-        "source_state_digest": {
-          "type": "string"
-        },
-        "source_state_version": {
-          "type": "integer"
-        }
-      }
-    },
     "PauseLoop": {
       "semantic_payload": {
         "reason": {
@@ -177,12 +149,7 @@
     "REPORT_IDENTITY_MISMATCH",
     "PATH_CONFINEMENT_VIOLATION",
     "FINALIZATION_PRECONDITION_FAILED",
-    "MIGRATION_NOT_QUIESCENT",
-    "MIGRATION_SOURCE_INVALID",
-    "MIGRATION_SOURCE_CHANGED",
-    "MIGRATION_DESTINATION_NOT_EMPTY",
-    "MIGRATION_TERMINAL_REVIVAL_FORBIDDEN",
-    "DUAL_WRITE_FORBIDDEN",
+    "USER_UNSUPPORTED_LEGACY_VERSION",
     "STORE_RECOVERY_REQUIRED",
     "INTERNAL_INVARIANT_VIOLATION",
     "USER_INPUT_INVALID",
@@ -227,7 +194,6 @@
     "ExecutionFinalized",
     "StrictFinalizationAcknowledged",
     "ClosureAssuranceStrengthened",
-    "V3SnapshotImported",
     "OperationRejected"
   ],
   "protocol_version": "4.0-draft.2",

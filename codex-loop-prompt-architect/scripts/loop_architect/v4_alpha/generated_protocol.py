@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-MANIFEST_SHA256 = '2c89e5ed3598c783cd114f49ad5ede31e8ab6e5c2b7d0daf6afe32a1aa8c618f'
+MANIFEST_SHA256 = 'ba00dd1e7623d0318ffb96f45b39b0ce9bee1bfc236163c458f2bab6da44c259'
 PROTOCOL_VERSION = '4.0-draft.2'
 COMMAND_TYPES = (
     'AcknowledgeResult',
@@ -14,7 +14,6 @@ COMMAND_TYPES = (
     'BindHostResource',
     'CloseExecution',
     'CreateLoop',
-    'ImportV3Snapshot',
     'PauseLoop',
     'PrepareFinalization',
     'PrepareRoute',
@@ -57,7 +56,6 @@ EVENT_TYPES = (
     'ExecutionFinalized',
     'StrictFinalizationAcknowledged',
     'ClosureAssuranceStrengthened',
-    'V3SnapshotImported',
     'OperationRejected',
 )
 ERROR_CODES = (
@@ -88,12 +86,7 @@ ERROR_CODES = (
     'REPORT_IDENTITY_MISMATCH',
     'PATH_CONFINEMENT_VIOLATION',
     'FINALIZATION_PRECONDITION_FAILED',
-    'MIGRATION_NOT_QUIESCENT',
-    'MIGRATION_SOURCE_INVALID',
-    'MIGRATION_SOURCE_CHANGED',
-    'MIGRATION_DESTINATION_NOT_EMPTY',
-    'MIGRATION_TERMINAL_REVIVAL_FORBIDDEN',
-    'DUAL_WRITE_FORBIDDEN',
+    'USER_UNSUPPORTED_LEGACY_VERSION',
     'STORE_RECOVERY_REQUIRED',
     'INTERNAL_INVARIANT_VIOLATION',
     'USER_INPUT_INVALID',
@@ -160,7 +153,7 @@ ASSURANCE_STRENGTHS = (
     'STRICT',
 )
 WRITE_CAS = 'per_loop_revision'
-SEMANTIC_PAYLOAD_SPECS = {'AcknowledgeResult': {'semantic_payload': {}}, 'AdvanceGoal': {'semantic_payload': {'disposition': {'enum': ['DONE'], 'type': 'string'}}}, 'BeginEffectDelivery': {'semantic_payload': {}}, 'BindHostResource': {'semantic_payload': {'role': {'type': 'string'}}}, 'CloseExecution': {'semantic_payload': {}}, 'CreateLoop': {'semantic_payload': {'objective': {'type': 'string'}}}, 'ImportV3Snapshot': {'semantic_payload': {'objective': {'type': 'string'}, 'source_goal_id': {'type': 'string'}, 'source_loop_id': {'type': 'string'}, 'source_product_version': {'enum': ['v3.3.8'], 'type': 'string'}, 'source_schema_version': {'type': 'integer'}, 'source_state_digest': {'type': 'string'}, 'source_state_version': {'type': 'integer'}}}, 'PauseLoop': {'semantic_payload': {'reason': {'type': 'string'}}}, 'PrepareFinalization': {'semantic_payload': {'disposition': {'enum': ['SUCCEEDED', 'LIMITATION'], 'type': 'string'}}}, 'PrepareRoute': {'semantic_payload': {'intent': {'type': 'string'}}}, 'RecordEffectObservation': {'semantic_payload': {}}, 'RecordExternalEffectObservation': {'semantic_payload': {}}, 'RecordReview': {'semantic_payload': {'verdict': {'enum': ['PASS', 'REPAIR', 'LIMITATION'], 'type': 'string'}}}, 'ResumeLoop': {'semantic_payload': {}}, 'StageResult': {'semantic_payload': {'outcome': {'enum': ['PASS'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StrengthenClosureAssurance': {'semantic_payload': {}}}
+SEMANTIC_PAYLOAD_SPECS = {'AcknowledgeResult': {'semantic_payload': {}}, 'AdvanceGoal': {'semantic_payload': {'disposition': {'enum': ['DONE'], 'type': 'string'}}}, 'BeginEffectDelivery': {'semantic_payload': {}}, 'BindHostResource': {'semantic_payload': {'role': {'type': 'string'}}}, 'CloseExecution': {'semantic_payload': {}}, 'CreateLoop': {'semantic_payload': {'objective': {'type': 'string'}}}, 'PauseLoop': {'semantic_payload': {'reason': {'type': 'string'}}}, 'PrepareFinalization': {'semantic_payload': {'disposition': {'enum': ['SUCCEEDED', 'LIMITATION'], 'type': 'string'}}}, 'PrepareRoute': {'semantic_payload': {'intent': {'type': 'string'}}}, 'RecordEffectObservation': {'semantic_payload': {}}, 'RecordExternalEffectObservation': {'semantic_payload': {}}, 'RecordReview': {'semantic_payload': {'verdict': {'enum': ['PASS', 'REPAIR', 'LIMITATION'], 'type': 'string'}}}, 'ResumeLoop': {'semantic_payload': {}}, 'StageResult': {'semantic_payload': {'outcome': {'enum': ['PASS'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StrengthenClosureAssurance': {'semantic_payload': {}}}
 
 @dataclass(frozen=True)
 class ActorRef:
