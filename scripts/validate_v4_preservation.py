@@ -681,6 +681,7 @@ def _validate_architecture_fitness(root: Path, registry: dict[str, Any]) -> dict
         "loop_architect.v4_adapters",
         "loop_architect.v4_artifacts",
         "loop_architect.v4_entry",
+        "loop_architect.v4_operability",
         "loop_architect.v4_persistence",
         "loop_architect.v4_policy",
         "loop_architect.v4_compat",
@@ -716,6 +717,21 @@ def _validate_architecture_fitness(root: Path, registry: dict[str, Any]) -> dict
             "loop_architect.v4_entry",
             "loop_architect.v4_alpha.kernel",
             "loop_architect.v4_alpha.store",
+        ),
+        "loop_architect.v4_policy": (
+            "loop_architect.v4_adapters",
+            "loop_architect.v4_artifacts",
+            "loop_architect.v4_compat",
+            "loop_architect.v4_entry",
+            "loop_architect.v4_operability",
+            "loop_architect.v4_persistence",
+        ),
+        "loop_architect.v4_operability": (
+            "loop_architect.v4_adapters",
+            "loop_architect.v4_compat",
+            "loop_architect.v4_entry",
+            "loop_architect.v4_persistence",
+            "loop_architect.v4_policy",
         ),
     }
     for source_prefix, denied_prefixes in independent_ports.items():

@@ -846,6 +846,38 @@ fixture evidence plus all prior v4 regressions. It does not authorize real-loop
 migration, installed compatibility, or the removal of the one-major-cycle
 facade.
 
+### P7: optional policy and rebuildable operability
+
+Entry now freezes `STANDARD` or `ADAPTIVE` plus the selection reason inside the
+typed prepared manifest and digest-bound confirmation. Standard is the default
+for a ready durable task; Adaptive requires the explicit `adaptive` horizon.
+The minimal path still imports no policy module and requires no policy pack.
+
+The optional policy package is pure: Standard validates one fixed,
+dependency-ordered Goal Queue; Adaptive permits one active Goal and contiguous,
+bounded roadmap revisions inside the author envelope. JIT Worker, Reviewer, and
+Local Verifier requirements bind the current Artifact. Decision Cards bind
+Goal, Artifact, options, context digest, and expiry. Replayed or stale context
+fails closed. Repair selection has independent total-attempt and
+same-fingerprint bounds, after which it returns a human decision instead of
+dispatching again. Policy can name only a command declared by the typed
+manifest; it cannot write Store state, sign receipts, call Host, consume an
+Attempt, or retry.
+
+Kernel now implements the previously reserved `PauseLoop`, `ResumeLoop`, and
+`StrengthenClosureAssurance` transitions under the existing per-loop CAS and
+machine authority rules. A pause stores a reason digest rather than raw prose.
+Late authoritative readback may strengthen a terminal cooperative assurance to
+strict without changing the already honest execution disposition.
+
+Audit index, status, archive, privacy aggregate, risk scan, metrics, and Doctor
+views are deterministic, rebuildable projections. They are not ledgers or
+writers. Privacy output contains aggregate counts/digests only; risk findings
+contain categories and digests, never the matched secret, raw path, prompt,
+chat, task/thread identity, PII, or raw log. Missing metrics remain
+`UNMETERED`. The exact implementation binding is
+`tests/test_v4_product_policy_operability.py`.
+
 ### Beta: local implementation authorized; gates remain blocking
 
 Policy/liveness/cost work follows in P7 after the fixture-only P6 import gate.

@@ -1094,6 +1094,19 @@ subcase; an import recovers to exact pre-state or the single committed
 post-state and creates no external Attempt. These bindings do not change the
 independent 101-family/343-instance catalog count.
 
+The P7 policy/operability implementation binding is
+`tests/test_v4_product_policy_operability.py`. `CAP-MODES-*` bind default
+Standard, explicit Adaptive, fixed dependency order, bounded contiguous
+roadmap revision, author-envelope rejection, and zero-write decisions.
+`CAP-ROLES-*` bind JIT Worker/Reviewer/Local Verifier selection to the current
+Artifact. `CAP-HUMAN-*` bind Decision Card response, context freshness, expiry,
+and replay rejection. `CAP-REPAIR-*` bind total repair and same-failure limits
+plus human-decision exhaustion. `CAP-AUDIT-*`, `CAP-PRIVACY-*`, and `L-002-*`
+bind deterministic rebuild, zero writer authority, category/digest-only risk
+findings, aggregate-only privacy export, and explicit `UNMETERED`. Kernel
+pause/resume and late assurance strengthening bind `P-004`, `F-003`, and
+`F-004`; strengthening assurance never rewrites terminal disposition.
+
 ## Implementation-readiness checklist
 
 | Requirement | Frozen design evidence |

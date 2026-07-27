@@ -123,8 +123,10 @@ new-user canary remain P8 gates.
 
 The compatibility facade does not ask for a v3 loop ID, thread/task ID, SHA,
 receipt, schema, or Host enum. It extracts legacy identity from source bytes and
-keeps it machine-held. A Standard input is mapped to the Standard route and an
-Adaptive input to the Adaptive route, but actual policy execution remains P7.
+keeps it machine-held. A ready durable input defaults to Standard; only an
+explicit adaptive horizon selects Adaptive. The typed manifest and confirmation
+show that mode and the reason. Optional policy execution is now a pure P7
+capability and is not loaded by the minimal startup path.
 Terminal v3 loops are shown as non-importable rather than silently revived;
 the original v3 runtime and bytes remain the rollback path.
 

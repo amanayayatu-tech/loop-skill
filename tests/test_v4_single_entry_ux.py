@@ -191,7 +191,9 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 "authorization_boundaries",
                 "budget",
                 "external_actions",
+                "execution_mode",
                 "goal",
+                "selection_reason",
                 "stop_conditions",
                 "write_scope",
             })

@@ -158,14 +158,7 @@ class V4ProtocolAuthorityTests(unittest.TestCase):
             if "reserved_until" in specification
         }
         self.assertEqual(set(_REDUCERS), set(COMMAND_TYPES) - reserved)
-        self.assertEqual(
-            reserved,
-            {
-                "PauseLoop",
-                "ResumeLoop",
-                "StrengthenClosureAssurance",
-            },
-        )
+        self.assertEqual(reserved, set())
         kernel = (
             SCRIPTS / "loop_architect" / "v4_alpha" / "kernel.py"
         ).read_text(encoding="utf-8")

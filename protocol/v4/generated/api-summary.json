@@ -80,7 +80,6 @@
       }
     },
     "PauseLoop": {
-      "reserved_until": "full-alpha",
       "semantic_payload": {
         "reason": {
           "type": "string"
@@ -124,7 +123,6 @@
       }
     },
     "ResumeLoop": {
-      "reserved_until": "full-alpha",
       "semantic_payload": {}
     },
     "StageResult": {
@@ -141,7 +139,6 @@
       }
     },
     "StrengthenClosureAssurance": {
-      "reserved_until": "P4",
       "semantic_payload": {}
     }
   },
@@ -226,7 +223,7 @@
     "V3SnapshotImported",
     "OperationRejected"
   ],
-  "manifest_sha256": "0eeef00bf9d35633fc13859db323c223beee4108f49df33795720dd8ddfcf8c2",
+  "manifest_sha256": "2c89e5ed3598c783cd114f49ad5ede31e8ab6e5c2b7d0daf6afe32a1aa8c618f",
   "protocol_version": "4.0-draft.2",
   "reference_kinds": [
     "LoopRef",
@@ -343,6 +340,8 @@
       "loop_ref",
       "goal",
       "task_horizon",
+      "execution_mode",
+      "selection_reason",
       "write_scope",
       "budget",
       "external_actions",

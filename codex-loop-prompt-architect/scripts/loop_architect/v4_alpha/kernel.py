@@ -904,6 +904,47 @@ def _advance_goal(
     }
 
 
+def _pause_loop(
+    snapshot: dict[str, Any] | None,
+    command: CommandEnvelope,
+    _: AuthorityContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    assert snapshot is not None
+    execution = snapshot["execution"]
+    if execution["state"] != "ACTIVE":
+        raise ProtocolRejection("INVALID_TRANSITION", "only an active loop can pause")
+    reason = command.semantic_payload.get("reason")
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
+        raise ProtocolRejection("INVALID_COMMAND", "pause reason is invalid")
+    reason_digest = domain_digest("loopskill-pause-reason-v1\n", reason)
+    execution.update(
+        {
+            "pause_reason_digest": reason_digest,
+            "revision": execution["revision"] + 1,
+            "state": "PAUSED",
+        }
+    )
+    return snapshot, [_event("LoopPaused", reason_digest=reason_digest)], {
+        "execution_state": "PAUSED"
+    }
+
+
+def _resume_loop(
+    snapshot: dict[str, Any] | None,
+    command: CommandEnvelope,
+    _: AuthorityContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    assert snapshot is not None
+    execution = snapshot["execution"]
+    if execution["state"] != "PAUSED":
+        raise ProtocolRejection("INVALID_TRANSITION", "only a paused loop can resume")
+    execution.pop("pause_reason_digest", None)
+    execution.update(
+        {"revision": execution["revision"] + 1, "state": "ACTIVE"}
+    )
+    return snapshot, [_event("LoopResumed")], {"execution_state": "ACTIVE"}
+
+
 def _prepare_finalization(
     snapshot: dict[str, Any] | None,
     command: CommandEnvelope,
@@ -1023,6 +1064,61 @@ def _close_execution(
     }
 
 
+def _strengthen_closure_assurance(
+    snapshot: dict[str, Any] | None,
+    command: CommandEnvelope,
+    context: AuthorityContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    assert snapshot is not None
+    finalization_ref = str(command.subject["subject_ref"])
+    finalization = snapshot["finalizations"][finalization_ref]
+    assurance = snapshot["closure_assurance"]
+    if (
+        snapshot["execution"]["state"] != "TERMINAL"
+        or finalization["state"] != "EXECUTION_CLOSED"
+        or finalization["assurance_strength"] != "COOPERATIVE"
+        or assurance.get("strength") != "COOPERATIVE"
+        or assurance.get("finalization_ref") != finalization_ref
+    ):
+        raise ProtocolRejection(
+            "INVALID_TRANSITION", "closure assurance cannot be strengthened"
+        )
+    receipt = _receipt(
+        command,
+        context,
+        action="lifecycle-readback",
+        subject_ref=finalization_ref,
+        request_digest=finalization["subject_chain_digest"],
+    )
+    if receipt.trust_class != "strict" or receipt.outcome != "acknowledged":
+        raise ProtocolRejection(
+            "FINALIZATION_PRECONDITION_FAILED", "strict receipt required"
+        )
+    finalization.update(
+        {
+            "assurance_strength": "STRICT",
+            "revision": finalization["revision"] + 1,
+        }
+    )
+    snapshot["closure_assurance"] = {
+        "finalization_ref": finalization_ref,
+        "receipt_ref": receipt.receipt_ref,
+        "revision": assurance["revision"] + 1,
+        "strength": "STRICT",
+    }
+    return snapshot, [
+        _event(
+            "ClosureAssuranceStrengthened",
+            finalization_ref=finalization_ref,
+            strength="STRICT",
+        ),
+        _event(
+            "StrictFinalizationAcknowledged",
+            finalization_ref=finalization_ref,
+        ),
+    ], {"assurance": "STRICT", "disposition": finalization["disposition"]}
+
+
 _REDUCERS = {
     "CreateLoop": _create_loop,
     "ImportV3Snapshot": _import_v3_snapshot,
@@ -1035,8 +1131,11 @@ _REDUCERS = {
     "AcknowledgeResult": _acknowledge_result,
     "RecordReview": _record_review,
     "AdvanceGoal": _advance_goal,
+    "PauseLoop": _pause_loop,
+    "ResumeLoop": _resume_loop,
     "PrepareFinalization": _prepare_finalization,
     "CloseExecution": _close_execution,
+    "StrengthenClosureAssurance": _strengthen_closure_assurance,
 }
 
 

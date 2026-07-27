@@ -2036,7 +2036,7 @@
       "rollback": "Imported v3 remains readable and the original policy source is unchanged.",
       "user_visible_change": "The entry shows the selected route and reason; minimal tasks need no policy-pack selection.",
       "rc_blocking": true,
-      "acceptance_evidence": "Normal, rejected, envelope-boundary, and zero-effect route-selection cases.",
+      "acceptance_evidence": "Normal, rejected, envelope-boundary, and zero-effect route-selection cases; v4 binding tests/test_v4_product_policy_operability.py.",
       "acceptance_case_ids": ["CAP-MODES-DIRECT","CAP-MODES-STANDARD","CAP-MODES-ADAPTIVE","CAP-MODES-REJECT","CAP-MODES-BOUNDARY","CAP-MODES-ZERO"],
       "covers": ["flow:FLOW-(?:STANDARD|ADAPTIVE)", "reference:codex-loop-prompt-architect/references/(?:adaptive-loop-contract|loop-contract)[.]md", "module:codex-loop-prompt-architect/scripts/loop_architect/goal_registry_rules[.]py", "test_file:tests/test_(?:adaptive_loop|adaptive_protocol_model)[.]py", "error_owner:PRES-MODES:.*"]
     },
@@ -2056,7 +2056,7 @@
       "rollback": "Legacy role registry remains read-only in the v3 source.",
       "user_visible_change": "Reviewer and Local Verifier remain just-in-time and exact-artifact bound.",
       "rc_blocking": true,
-      "acceptance_evidence": "JIT role creation, wrong-role rejection, changed-artifact invalidation, and pre-review zero-effect cases.",
+      "acceptance_evidence": "JIT role creation, wrong-role rejection, changed-artifact invalidation, and pre-review zero-effect cases; v4 binding tests/test_v4_product_policy_operability.py.",
       "acceptance_case_ids": ["CAP-ROLES-WORKER","CAP-ROLES-REVIEWER","CAP-ROLES-LOCAL-VERIFIER","CAP-ROLES-WRONG-ROLE","CAP-ROLES-STALE-ARTIFACT","CAP-ROLES-ZERO","R-001-a","R-002-a","R-003-a"],
       "covers": ["flow:FLOW-JIT-REVIEW", "module:codex-loop-prompt-architect/scripts/loop_architect/reviewer_envelope[.]py", "error_owner:PRES-ROLES:.*"]
     },
@@ -2076,7 +2076,7 @@
       "rollback": "Cancel leaves the v3 loop and its heartbeat state unchanged.",
       "user_visible_change": "Responses bind the current Goal, artifact, options, and context digest instead of a copied ID.",
       "rc_blocking": true,
-      "acceptance_evidence": "Fresh, stale, replayed, wrong-scope, and zero-effect Decision/Steering cases.",
+      "acceptance_evidence": "Fresh, stale, replayed, wrong-scope, and zero-effect Decision/Steering cases; v4 binding tests/test_v4_product_policy_operability.py.",
       "acceptance_case_ids": ["K-007-a","K-007-b","P-002-b","P-004-a","P-004-b","P-004-c","P-004-d","P-004-e","UX-013-a","UX-013-b","UX-013-c","UX-013-d","UX-014-a","UX-014-b"],
       "covers": ["flow:FLOW-PAUSE-RESUME-STATUS", "reference:codex-loop-prompt-architect/references/human-steering-and-convergence[.]md", "module:codex-loop-prompt-architect/scripts/loop_architect/human_control[.]py", "test_file:tests/test_human_steering_convergence[.]py", "error_owner:PRES-HUMAN:.*"]
     },
@@ -2096,7 +2096,7 @@
       "rollback": "A successor never rewrites its predecessor and the v3 source stays readable.",
       "user_visible_change": "Exhaustion yields wait, decision, or stop instead of Supervisor repair.",
       "rc_blocking": true,
-      "acceptance_evidence": "Normal repair, duplicate/same failure, boundary exhaustion, and zero-effect post-exhaustion cases.",
+      "acceptance_evidence": "Normal repair, duplicate/same failure, boundary exhaustion, and zero-effect post-exhaustion cases; v4 binding tests/test_v4_product_policy_operability.py.",
       "acceptance_case_ids": ["P-001-a","P-002-a","P-003-a","P-004-e"],
       "covers": ["invariant:INV-REPAIR-001", "flow:FLOW-BOUNDED-REPAIR", "schema:DEFECT-FAMILY-CATALOG-SCHEMA", "schema_symbol:codex-loop-prompt-architect/references/defect-family-catalog[.]schema[.]json/.*", "reference:codex-loop-prompt-architect/references/defect-family-catalog[.]schema[.]json", "module:codex-loop-prompt-architect/scripts/loop_architect/(?:defect_family|p1_runtime)[.]py", "test_file:tests/test_(?:p1_modules|p1_runtime|repair_exhaustion_protocol)[.]py", "error_owner:PRES-REPAIR:.*"]
     },
@@ -2256,7 +2256,7 @@
       "rollback": "Checks are read-only; failed checks create no loop or Host resource.",
       "user_visible_change": "Default output is concise; exact identity evidence is diagnostics-only.",
       "rc_blocking": true,
-      "acceptance_evidence": "Normal, dependency failure, source/install drift, and zero-side-effect command cases.",
+      "acceptance_evidence": "Normal, dependency failure, source/install drift, and zero-side-effect command cases; P7 Doctor projection binding tests/test_v4_product_policy_operability.py, distribution remains P8.",
       "acceptance_case_ids": ["CAP-OPERABILITY-DOCTOR-PASS","CAP-OPERABILITY-DOCTOR-DRIFT","CAP-OPERABILITY-COMPILE-PASS","CAP-OPERABILITY-COMPILE-REJECT","CAP-OPERABILITY-CANARY-PASS","CAP-OPERABILITY-CANARY-REJECT","CAP-OPERABILITY-LIFECYCLE-BOUNDARY","CAP-OPERABILITY-ZERO"],
       "covers": ["command:(?:doctor|compile|canary)", "module:codex-loop-prompt-architect/scripts/loop_architect/manifest_compiler[.]py", "test_file:tests/test_loopctl_p0[.]py", "error_owner:PRES-OPERABILITY:.*"]
     },
@@ -2276,7 +2276,7 @@
       "rollback": "Projection deletion or rebuild cannot change canonical truth.",
       "user_visible_change": "Normal status stays small; audit/archive remain explicit commands.",
       "rc_blocking": true,
-      "acceptance_evidence": "Normal rebuild, tamper rejection, legacy boundary, and zero-canonical-effect projection cases.",
+      "acceptance_evidence": "Normal rebuild, tamper rejection, legacy boundary, and zero-canonical-effect projection cases; v4 binding tests/test_v4_product_policy_operability.py.",
       "acceptance_case_ids": ["CAP-AUDIT-REJECTION","CAP-AUDIT-INDEX","CAP-AUDIT-STATUS","CAP-AUDIT-ARCHIVE","CAP-AUDIT-TAMPER","CAP-AUDIT-LEGACY-BOUNDARY","CAP-AUDIT-NEXT-ACTION","CAP-AUDIT-ZERO"],
       "covers": ["command:(?:audit|archive)", "module:codex-loop-prompt-architect/scripts/loop_architect/(?:active_policy|archive_manifest_v2|audit_views|rejection_journal)[.]py", "test_file:tests/test_p2_operability[.]py", "error_owner:PRES-AUDIT:.*"]
     },
@@ -2296,7 +2296,7 @@
       "rollback": "Scanning and export are read-only and preserve source bytes.",
       "user_visible_change": "Findings show category and action, never the secret value.",
       "rc_blocking": true,
-      "acceptance_evidence": "Normal fixture, real-secret reject, scope boundary, and zero-leakage cases.",
+      "acceptance_evidence": "Normal fixture, real-secret reject, scope boundary, and zero-leakage cases; v4 binding tests/test_v4_product_policy_operability.py.",
       "acceptance_case_ids": ["CAP-PRIVACY-SCAN-PASS","CAP-PRIVACY-EXPORT-PASS","CAP-PRIVACY-SECRET-REJECT","CAP-PRIVACY-PII-REJECT","CAP-PRIVACY-ALLOWLIST-STALE","CAP-PRIVACY-RAW-LOG-REJECT","CAP-PRIVACY-CATEGORY-BOUNDARY","CAP-PRIVACY-ZERO"],
       "covers": ["command:risk-scan", "module:codex-loop-prompt-architect/scripts/loop_architect/(?:privacy_export|risky_artifact_scanner)[.]py", "error_owner:PRES-PRIVACY:.*"]
     },
@@ -2316,7 +2316,7 @@
       "rollback": "Metrics are rebuildable and never affect routing or completion.",
       "user_visible_change": "Advanced diagnostics expose counts; default status does not.",
       "rc_blocking": true,
-      "acceptance_evidence": "Normal measurement, missing metadata, drift boundary, and zero-authority metrics cases.",
+      "acceptance_evidence": "Normal measurement, missing metadata, drift boundary, and zero-authority metrics cases; v4 binding tests/test_v4_product_policy_operability.py and tests/test_v4_beta_measurement.py.",
       "acceptance_case_ids": ["L-002-a","L-002-b","L-002-c","L-002-d","L-002-e","L-002-f"],
       "covers": ["command:metrics-export", "module:codex-loop-prompt-architect/scripts/loop_architect/(?:forecast|metrics_ledger)[.]py", "error_owner:PRES-METRICS:.*"]
     },

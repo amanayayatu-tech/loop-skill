@@ -13,6 +13,11 @@ SPEC = importlib.util.spec_from_file_location("measure_v4_beta", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 measurement = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(measurement)
+RUNNER_PATH = ROOT / "scripts" / "run_v4_beta_fixture.py"
+RUNNER_SPEC = importlib.util.spec_from_file_location("run_v4_beta_fixture", RUNNER_PATH)
+assert RUNNER_SPEC is not None and RUNNER_SPEC.loader is not None
+runner = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(runner)
 
 
 class V4BetaMeasurementTests(unittest.TestCase):
@@ -80,6 +85,28 @@ class V4BetaMeasurementTests(unittest.TestCase):
                     measurement.DEFAULT_SCENARIO, baseline_path, receipt_path
                 )
                 self.assertEqual(rejected["status"], "FAIL")
+
+    def test_real_local_v4_fixture_passes_frozen_comparator(self) -> None:
+        receipt = runner.run_fixture()
+        self.assertEqual(receipt["real_external_effects"], 0)
+        self.assertEqual(receipt["canonical_commits"], 11)
+        self.assertEqual(receipt["event_count"], 18)
+        self.assertEqual(receipt["execution_disposition"], "SUCCEEDED")
+        self.assertEqual(receipt["closure_assurance"], "STRICT")
+        self.assertEqual(receipt["metrics"]["protocol_calls"], 11)
+        self.assertEqual(receipt["metrics"]["host_interactions"], 3)
+        self.assertEqual(receipt["metrics"]["internal_control_interactions"], 3)
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt_path = Path(temporary) / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            result = measurement.compare_v4(
+                measurement.DEFAULT_SCENARIO,
+                runner.BASELINE,
+                receipt_path,
+            )
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["pack_gate"], "PASS")
+        self.assertEqual(result["internal_control_interaction_gate"], "PASS")
 
 
 if __name__ == "__main__":

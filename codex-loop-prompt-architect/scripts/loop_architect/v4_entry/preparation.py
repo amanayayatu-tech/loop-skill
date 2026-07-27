@@ -135,11 +135,19 @@ def intake(request: LoopIntakeInput) -> LoopIntakeDecision:
             reason="One or more safety-critical preparation fields are missing.",
             questions=tuple(questions[:3]),
         )
-    route = "ADAPTIVE_LOOP" if horizon in {"long", "adaptive"} else "STANDARD_LOOP"
+    route = "ADAPTIVE_LOOP" if horizon == "adaptive" else "STANDARD_LOOP"
+    selection = (
+        "Adaptive was explicitly requested for bounded roadmap revision."
+        if route == "ADAPTIVE_LOOP"
+        else "Standard is the default fixed, dependency-ordered Goal Queue."
+    )
     return LoopIntakeDecision(
         disposition="READY_FOR_LOOP",
         route=route,
-        reason="Goal, scope, budget, effects, acceptance, and stop boundaries are explicit.",
+        reason=(
+            "Goal, scope, budget, effects, acceptance, and stop boundaries are explicit. "
+            + selection
+        ),
         questions=(),
     )
 
@@ -249,7 +257,9 @@ def _boundary_value(manifest: PreparedLoopManifest) -> dict[str, Any]:
         "authorization_boundaries": list(manifest.authorization_boundaries),
         "budget": manifest.budget,
         "external_actions": list(manifest.external_actions),
+        "execution_mode": manifest.execution_mode,
         "goal": manifest.goal,
+        "selection_reason": manifest.selection_reason,
         "stop_conditions": list(manifest.stop_conditions),
         "write_scope": list(manifest.write_scope),
     }
@@ -274,6 +284,10 @@ This is a human review/export view. `loop-manifest.json` is the machine source.
 ## Budget
 
 {manifest.budget}
+
+## Execution mode
+
+- {manifest.execution_mode}: {manifest.selection_reason}
 
 ## External actions
 
@@ -354,6 +368,10 @@ def prepare(
         loop_ref=f"loop-{namespace}",
         goal=request.goal.strip(),
         task_horizon=request.task_horizon.strip().lower(),
+        execution_mode=(
+            "ADAPTIVE" if decision.route == "ADAPTIVE_LOOP" else "STANDARD"
+        ),
+        selection_reason=decision.reason,
         write_scope=tuple(request.write_scope),
         budget=request.budget.strip(),
         external_actions=tuple(request.external_actions),
@@ -642,7 +660,9 @@ def boundary_display(context: PreparedContext) -> Mapping[str, Any]:
         "authorization_boundaries": context.manifest.authorization_boundaries,
         "budget": context.manifest.budget,
         "external_actions": context.manifest.external_actions,
+        "execution_mode": context.manifest.execution_mode,
         "goal": context.manifest.goal,
+        "selection_reason": context.manifest.selection_reason,
         "stop_conditions": context.manifest.stop_conditions,
         "write_scope": context.manifest.write_scope,
     }

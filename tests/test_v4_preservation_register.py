@@ -295,6 +295,20 @@ class V4PreservationRegisterTests(unittest.TestCase):
             ):
                 validator._validate_architecture_fitness(ROOT, self.registry)
 
+    def test_policy_store_import_fails_closed(self) -> None:
+        graph, imports = validator._v4_import_graph(ROOT)
+        imports = copy.deepcopy(imports)
+        imports.setdefault("loop_architect.v4_policy.policy", set()).add(
+            "loop_architect.v4_persistence.sqlite_store"
+        )
+        with mock.patch.object(
+            validator, "_v4_import_graph", return_value=(graph, imports)
+        ):
+            with self.assertRaisesRegex(
+                validator.ValidationFailure, "anti-bloat dependency violation"
+            ):
+                validator._validate_architecture_fitness(ROOT, self.registry)
+
     def test_legacy_inventory_cannot_become_runtime_branches(self) -> None:
         registry = copy.deepcopy(self.registry)
         registry["anti_bloat_contract"]["legacy_inventory_runtime_branch_count"] = 1766

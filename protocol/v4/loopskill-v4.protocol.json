@@ -80,7 +80,6 @@
       }
     },
     "PauseLoop": {
-      "reserved_until": "full-alpha",
       "semantic_payload": {
         "reason": {
           "type": "string"
@@ -124,7 +123,6 @@
       }
     },
     "ResumeLoop": {
-      "reserved_until": "full-alpha",
       "semantic_payload": {}
     },
     "StageResult": {
@@ -141,7 +139,6 @@
       }
     },
     "StrengthenClosureAssurance": {
-      "reserved_until": "P4",
       "semantic_payload": {}
     }
   },
@@ -353,6 +350,8 @@
       ["loop_ref", "str", {"type": "string"}],
       ["goal", "str", {"type": "string"}],
       ["task_horizon", "str", {"type": "string"}],
+      ["execution_mode", "str", {"enum": ["STANDARD", "ADAPTIVE"], "type": "string"}],
+      ["selection_reason", "str", {"type": "string"}],
       ["write_scope", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["budget", "str", {"type": "string"}],
       ["external_actions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
