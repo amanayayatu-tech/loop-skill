@@ -105,6 +105,21 @@
       "status": "FAIL",
       "vertical_event_count_observed": 18,
       "vertical_operation_count_observed": 11
+    },
+    {
+      "provider_invocations": 0,
+      "candidate_sha": "68e43bbbd63b53ad89d87ce3c058a6e0505660a4",
+      "classification": "FULL_REPOSITORY_COMPATIBILITY_REGRESSION",
+      "host_task_create_count": 1,
+      "host_task_readback_count": 1,
+      "output_sha256": "582d680283509cbfb96e24922cca6c924fe5491bb6596ab6d31474b686711c33",
+      "provider_resend_count": 0,
+      "reason": "The exact-candidate App canary passed, but the single full-repository run failed 1 of 939 tests because the revised Skill frontmatter omitted the stable READY_FOR_LOOP and legacy mode trigger markers. The compatibility surface is restored without changing v4 native routing precedence.",
+      "retry_on_same_candidate": false,
+      "stage": "exact_candidate_full_repository_tests",
+      "status": "FAIL",
+      "vertical_event_count_observed": 18,
+      "vertical_operation_count_observed": 11
     }
   ],
   "public_release_effects": 0,

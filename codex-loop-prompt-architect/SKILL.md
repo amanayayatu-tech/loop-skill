@@ -1,6 +1,6 @@
 ---
 name: codex-loop-prompt-architect
-description: Use the native LoopSkill 4 intake, prepare, confirm, and start entry for v4 requests; retain one-major-cycle compatibility for v3 intake, Controller Pack generation/repair, and stalled-loop diagnosis.
+description: Route explicit LoopSkill 4 requests through native intake, prepare, confirm, and start; retain one-major-cycle v3 READY_FOR_LOOP, 需求质检, intake-only, loop化, Standard, Adaptive, Controller Pack generation/repair, and stalled-loop compatibility.
 ---
 
 # Codex Loop Prompt Architect

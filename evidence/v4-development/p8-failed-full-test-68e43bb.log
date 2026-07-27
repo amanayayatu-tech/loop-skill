@@ -1,0 +1,21 @@
+................................................................................................................................................................................................................................................................................................................................F.....................................................................................................................................................{"entry_count": 705, "ok": true, "path": "/private/tmp/loopskill4-rc-68e43bb.b3GWR3/source/codex-loop-prompt-architect/references/recovery-registry-v1.json", "status": "RECOVERY_REGISTRY_CURRENT"}
+.....................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+======================================================================
+FAIL: test_frontmatter_and_fast_invocation_cover_intake (test_loop_intake_gate.IntakeGateContractTests.test_frontmatter_and_fast_invocation_cover_intake)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/loopskill4-rc-68e43bb.b3GWR3/source/tests/test_loop_intake_gate.py", line 52, in test_frontmatter_and_fast_invocation_cover_intake
+    self.assertIn(marker, frontmatter)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'READY_FOR_LOOP' not found in '\nname: codex-loop-prompt-architect\ndescription: Use the native LoopSkill 4 intake, prepare, confirm, and start entry for v4 requests; retain one-major-cycle compatibility for v3 intake, Controller Pack generation/repair, and stalled-loop diagnosis.\n'
+
+----------------------------------------------------------------------
+Ran 939 tests in 671.823s
+
+FAILED (failures=1)
+{"entry_count": 705, "ok": true, "path": "/tmp/loopskill4-rc-68e43bb.b3GWR3/test-tmp/tmpqw6_tuod/registry.json", "status": "RECOVERY_REGISTRY_CURRENT"}
+{"entry_count": 705, "ok": true, "path": "/tmp/loopskill4-rc-68e43bb.b3GWR3/test-tmp/tmpqw6_tuod/registry.json", "status": "RECOVERY_REGISTRY_CURRENT"}
+RECOVERY_REGISTRY_STALE
+real 672.58
+user 533.80
+sys 89.38
