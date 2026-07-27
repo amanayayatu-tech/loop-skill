@@ -1039,16 +1039,26 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
 - stable/public release: always requires separate author approval and is not
   implied by an RC-ready result.
 
-32 KiB Pack and at least 50% control-interaction reduction are candidate beta
-targets, not alpha correctness gates.
+32 KiB Pack and at least 50% control-interaction reduction were candidate beta
+targets, not alpha correctness gates. The P7 pre-comparison freeze makes them
+blocking for beta and RC: the exact v3.3.8 compact Pack is 70,805 bytes and the
+same-scenario v3 internal-control ledger has 19 entries, so v4 must be at most
+32,768 Pack bytes and at most 9 comparable interactions.
 
 Before either target becomes blocking, the measurement receipt freezes the
 same user scenario, v3.3.8 SHA, measurement-code digest, and counting boundary.
 It reports user start actions and mandatory authorization confirmations
 separately from internal control interactions. Only then may Pack ≤32 KiB and
 internal control-interaction reduction ≥50% become beta/RC thresholds. No v4
-result may be read before that freeze, and no LOC/module/command ceiling is
-invented as a substitute.
+result may be consumed by the P7 comparator before that freeze, and no
+LOC/module/command ceiling is invented as a substitute. The frozen scenario
+and measurement code are
+`tests/fixtures/v4_beta/same-scenario.json` and
+`scripts/measure_v4_beta.py`, with digests
+`e6b5be9e97b42a47f17978c82fbe20725430042e0c66ae5a02e78a963798ecbe`
+and `c35a07740bed3ceafda49b40c646ab77eb2999763854a2a5b81c90a6f3870e5a`.
+The receipt explicitly discloses the earlier P5.1 nonblocking diagnostic; the
+author-fixed thresholds were not tuned from it.
 
 The P5.1/default-path anti-bloat receipt reports exact HEAD and document/code
 digests, loaded modules and dependency edges, manifest command/event/error

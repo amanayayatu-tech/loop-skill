@@ -36,6 +36,9 @@ ANTI_BLOAT_EVIDENCE_RELATIVE = Path(
 P6_EVIDENCE_RELATIVE = Path(
     "evidence/v4-development/p6-fixture-compatibility-evidence.json"
 )
+P7_BASELINE_RELATIVE = Path(
+    "evidence/v4-development/p7-v3-baseline-freeze.json"
+)
 
 ALLOWED_DISPOSITIONS = {
     "RETAIN_CORE",
@@ -997,6 +1000,32 @@ def _validate_p6_evidence(root: Path) -> None:
     _validate_p6_evidence_value(root, _strict_json(root / P6_EVIDENCE_RELATIVE))
 
 
+def _validate_p7_baseline_value(root: Path, evidence: dict[str, Any]) -> None:
+    if evidence.get("freeze_parent_commit") != "3deb786cb0666259785dc199f9d54818e60da1d9":
+        raise ValidationFailure("P7 baseline parent drift")
+    measured = json.loads(
+        _run(root, sys.executable, "scripts/measure_v4_beta.py", "freeze-v3")
+    )
+    expected = dict(evidence)
+    expected.pop("freeze_parent_commit", None)
+    if measured != expected:
+        raise ValidationFailure("P7 frozen baseline drift")
+    if measured.get("status") != "BASELINE_FROZEN_PRE_V4_COMPARISON":
+        raise ValidationFailure("P7 baseline status drift")
+    if measured.get("real_external_effects") != 0:
+        raise ValidationFailure("P7 baseline external effect drift")
+    if measured.get("blocking_thresholds") != {
+        "v4_pack_bytes_max": 32768,
+        "v4_internal_control_interactions_max": 9,
+        "internal_control_interaction_reduction_min": "1/2",
+    }:
+        raise ValidationFailure("P7 blocking threshold drift")
+
+
+def _validate_p7_baseline(root: Path) -> None:
+    _validate_p7_baseline_value(root, _strict_json(root / P7_BASELINE_RELATIVE))
+
+
 def _validate_case_bindings(root: Path, registry: dict[str, Any]) -> tuple[int, int]:
     bindings = registry.get("capability_case_bindings")
     requirements = registry.get("capability_acceptance_requirements")
@@ -1293,6 +1322,7 @@ def validate(root: Path) -> dict[str, Any]:
     family_count, instance_count = _validate_corpus(root, registry)
     _validate_anti_bloat_evidence(root)
     _validate_p6_evidence(root)
+    _validate_p7_baseline(root)
     _scan_stale(root)
     return {
         "status": "PASS",

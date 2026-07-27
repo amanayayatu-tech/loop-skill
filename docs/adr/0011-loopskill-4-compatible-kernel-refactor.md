@@ -183,12 +183,21 @@ deprecation with replacement.
   increases require a mapped capability plus an existing ADR decision.
 
 The 32 KiB Pack and at least 50% reduction in internal control interactions
-remain candidate targets. They become blocking only after the same user
-scenario, exact v3.3.8 SHA, measurement code/digest, and counting boundaries
-are frozen before observing the matching v4 result. Necessary human
-confirmation is reported separately from internal control interaction. If the
-units cannot be compared honestly, the result is a product decision, not a
-manufactured PASS.
+were candidate targets. P7 has now frozen them as beta/RC blocking thresholds
+before consuming a P7 v4 comparison receipt. The frozen scenario is one
+existing-Git passkey Goal through one Worker result, one artifact-bound review,
+and finalization acknowledgement or an honest terminal limitation. Its exact
+v3.3.8 (`843945d9d34e7f065b65d9172ea4a2df66c0f2e3`) compact Pack is 70,805 bytes
+and its enumerated model/process/Host-boundary control ledger has 19
+interactions. Therefore v4 must emit a Pack of at most 32,768 bytes and at most
+9 comparable internal control interactions. Necessary human confirmation is
+reported separately, as are in-process Kernel protocol calls. The frozen
+scenario digest is
+`e6b5be9e97b42a47f17978c82fbe20725430042e0c66ae5a02e78a963798ecbe` and
+measurement-code digest is
+`c35a07740bed3ceafda49b40c646ab77eb2999763854a2a5b81c90a6f3870e5a`.
+If the units cannot be compared honestly, the result is a product decision,
+not a manufactured PASS.
 
 The P5.1 minimal-profile observation freezes the metric names and counting
 boundary, not the beta performance thresholds. In the synthetic no-Host
@@ -201,7 +210,10 @@ are 0. The source entry is 11,125 bytes and the generated Controller Plan view
 is 627 bytes for the frozen synthetic request. One latency sample is recorded
 only as diagnostic evidence, never as a gate. P7 must freeze the same-scenario
 v3 baseline, measurement-code digest, units, and final thresholds before
-reading the comparison result.
+reading the comparison result. That freeze is now recorded in
+`evidence/v4-development/p7-v3-baseline-freeze.json`; the earlier P5.1 number
+remains explicitly disclosed as a nonblocking diagnostic and was not used to
+tune either author-fixed threshold.
 
 ## Product and dependency boundary
 
@@ -837,9 +849,10 @@ facade.
 ### Beta: local implementation authorized; gates remain blocking
 
 Policy/liveness/cost work follows in P7 after the fixture-only P6 import gate.
-Measurement definitions are accepted, while 32 KiB and 50% remain
-candidate targets until the same-scenario v3 baseline and final thresholds are
-frozen before observing corresponding v4 performance. Beta blocks on all
+Measurement definitions and the same-scenario v3 baseline are frozen. Pack
+size at most 32 KiB and at least 50% fewer comparable internal control
+interactions are now blocking; the exact baseline permits at most 9 v4
+interactions against 19 v3 interactions. Beta blocks on all
 remaining `UX-001..008`, `UX-010..016`, the preservation subset assigned to
 beta, and minimal-profile isolation.
 

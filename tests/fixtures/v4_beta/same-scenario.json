@@ -1,0 +1,65 @@
+{
+  "schema_version": "loopskill-v4-beta-same-scenario-v1",
+  "scenario_id": "one-goal-existing-git-passkey-closed-loop",
+  "description": "One existing-Git goal from intake through one Worker result, one review, and honest finalization; no commit, push, publish, deploy, credential, or real user data.",
+  "v3": {
+    "source_tag": "v3.3.8",
+    "source_commit": "843945d9d34e7f065b65d9172ea4a2df66c0f2e3",
+    "input_path": "examples/01-passkey-login-input.json",
+    "generator_path": "codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py",
+    "mode": "compact",
+    "user_start_actions": 2,
+    "authorization_confirmations": 1,
+    "internal_control_interactions": [
+      {"id": "V3-CTL-01", "kind": "model_control_handoff", "marker": "PACK_SHA256", "description": "Controller computes and carries Pack identity into bootstrap."},
+      {"id": "V3-CTL-02", "kind": "host_action_readback", "marker": "State-Writer", "description": "Session State-Writer task is created or recovered."},
+      {"id": "V3-CTL-03", "kind": "model_protocol_call", "marker": "LOOP_INITIALIZED", "description": "Controller asks State-Writer to initialize canonical state."},
+      {"id": "V3-CTL-04", "kind": "model_control_handoff", "marker": "STATE_WRITE_APPLIED", "description": "Controller waits for and interprets the initialization acknowledgement."},
+      {"id": "V3-CTL-05", "kind": "model_protocol_call", "marker": "THREAD_CREATE_PREPARED", "description": "Worker creation is prepared through the state writer."},
+      {"id": "V3-CTL-06", "kind": "host_action_readback", "marker": "create_thread", "description": "Worker task is created or reconciled and read back."},
+      {"id": "V3-CTL-07", "kind": "model_protocol_call", "marker": "THREAD_REGISTERED", "description": "Worker Host identity is returned to the state writer."},
+      {"id": "V3-CTL-08", "kind": "model_protocol_call", "marker": "AUTOMATION_CREATE_PREPARED", "description": "Heartbeat creation is prepared through the state writer."},
+      {"id": "V3-CTL-09", "kind": "host_action_readback", "marker": "automation_update(mode=\"create\"", "description": "Heartbeat is created or reconciled and read back."},
+      {"id": "V3-CTL-10", "kind": "model_protocol_call", "marker": "AUTOMATION_REGISTERED", "description": "Heartbeat Host identity is returned to the state writer."},
+      {"id": "V3-CTL-11", "kind": "model_protocol_call", "marker": "DISPATCH_PREPARED", "description": "Worker dispatch is prepared through the state writer."},
+      {"id": "V3-CTL-12", "kind": "host_action_readback", "marker": "send_message_to_thread", "description": "Worker dispatch is sent and reconciled."},
+      {"id": "V3-CTL-13", "kind": "model_protocol_call", "marker": "DISPATCH_SENT", "description": "Worker delivery is returned to the state writer."},
+      {"id": "V3-CTL-14", "kind": "model_protocol_call", "marker": "Worker report", "description": "Worker report is returned to and acknowledged by the state writer."},
+      {"id": "V3-CTL-15", "kind": "host_action_readback", "marker": "fork_thread", "description": "JIT Reviewer is created or reconciled and read back."},
+      {"id": "V3-CTL-16", "kind": "host_action_readback", "marker": "/review", "description": "Exact-artifact review is sent and reconciled."},
+      {"id": "V3-CTL-17", "kind": "model_protocol_call", "marker": "REVIEW_PASS", "description": "Review result is returned to and acknowledged by the state writer."},
+      {"id": "V3-CTL-18", "kind": "model_protocol_call", "marker": "terminal_status=LOOP_COMPLETE", "description": "Terminal evidence is committed by the state writer."},
+      {"id": "V3-CTL-19", "kind": "host_action_readback", "marker": "automation_update(mode=\"update\"", "description": "Heartbeat is paused after terminal state acknowledgement."}
+    ]
+  },
+  "v4_semantic_input": {
+    "goal": "Implement passkey-first login with email fallback",
+    "task_horizon": "long",
+    "write_scope": ["src/auth/**", "tests/auth/**"],
+    "budget": "45-90 minutes; one Worker result and one review",
+    "external_actions": [],
+    "acceptance_criteria": [
+      "Passkey-first login and email fallback follow the supplied auth specification",
+      "Auth-focused tests, lint, and typecheck pass",
+      "No billing, migration, secret, or deployment files change"
+    ],
+    "stop_conditions": ["stop on UNKNOWN or exhausted bounded repair"],
+    "authorization_boundaries": ["no commit, push, publish, deploy, credentials, or real user data"]
+  },
+  "counting_boundary": {
+    "start": "first public entry action for the supplied semantic goal",
+    "end": "one result, one artifact-bound review, and finalization acknowledgement or honest terminal limitation",
+    "internal_control_interaction": "a model-facing control handoff, Host action/readback, or model-issued protocol call across a process/tool boundary; in-process typed Kernel calls are reported separately as protocol_calls",
+    "user_start_actions": "public entry invocations, excluding the separately reported authorization confirmation",
+    "authorization_confirmations": "explicit or implicit human authorization boundaries, never counted as reducible internal control interactions",
+    "host_interactions": "Host create/read/send/pause/readback operations",
+    "protocol_calls": "accepted or rejected typed commands presented to the canonical writer",
+    "local_writes": "logical preparation files plus canonical commits, excluding SQLite page/WAL implementation writes",
+    "latency": "single-machine monotonic elapsed time; diagnostic distribution, not a correctness oracle"
+  },
+  "thresholds": {
+    "pack_bytes_max": 32768,
+    "internal_control_interaction_reduction_min_numerator": 1,
+    "internal_control_interaction_reduction_min_denominator": 2
+  }
+}
