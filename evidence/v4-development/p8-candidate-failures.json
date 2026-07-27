@@ -75,6 +75,21 @@
       "status": "FAIL",
       "vertical_event_count_observed": 0,
       "vertical_operation_count_observed": 0
+    },
+    {
+      "provider_invocations": 0,
+      "candidate_sha": "5c5e1aad0e209cc10a554554d76dae6ec29a41d3",
+      "classification": "APPARATUS_AUTHORITY_VISIBILITY_CONTRADICTION",
+      "host_task_create_count": 1,
+      "host_task_readback_count": 1,
+      "output_sha256": "de77448edeef5e506727d312470e16f4e42495bd2f519f22d297eea529cbfc79",
+      "provider_resend_count": 0,
+      "reason": "The canary prompt required inspection of the typed manifest while also forbidding any pre-start observation of machine-generated identity. Typed manifests necessarily contain non-user authoritative references, so the task stopped after PREPARE. The corrected apparatus checks manifest schema/digests without copying internal values and applies non-disclosure to ordinary human views.",
+      "retry_on_same_candidate": false,
+      "stage": "exact_candidate_disposable_app_canary",
+      "status": "FAIL",
+      "vertical_event_count_observed": 0,
+      "vertical_operation_count_observed": 0
     }
   ],
   "public_release_effects": 0,
