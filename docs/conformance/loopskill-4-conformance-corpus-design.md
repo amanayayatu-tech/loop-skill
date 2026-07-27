@@ -888,7 +888,7 @@ needed to eliminate the semantic contradiction; no hidden state is introduced.
 ### Fixed profile, actors, grants, and receipts
 
 - case: `K-001-a` / `K-001-VERTICAL-002`;
-- protocol: `4.0-draft.2`;
+- protocol: `4.0.0`;
 - synthetic time: step `N` uses `2026-07-27T00:00:(N-1)Z`, `00` through `10`;
 - provider/network/Git/filesystem calls: exactly `0`;
 - all “strict” receipts are `conformance-fixture` inputs and prove reducer logic
