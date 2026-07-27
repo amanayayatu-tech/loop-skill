@@ -149,7 +149,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
         "protocol_counts": {
             "capabilities": len(protocol["capability_names"]),
             "commands": len(protocol["commands"]),
-            "errors": len(protocol["error_codes"]),
+            "errors": len(protocol["errors"]),
             "events": len(protocol["events"]),
         },
         "public_effects": 0,

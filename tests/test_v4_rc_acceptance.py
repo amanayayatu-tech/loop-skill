@@ -96,7 +96,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
                     {
                         "capability_names": ["c"],
                         "commands": {"C": {}},
-                        "error_codes": ["E"],
+                        "errors": ["E"],
                         "events": {"V": {}},
                     }
                 ),
