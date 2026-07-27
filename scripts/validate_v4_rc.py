@@ -848,6 +848,10 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
             "status": item.get("status"),
             "target_test_id": item.get("target_test_id"),
             "tests_run": item.get("tests_run"),
+            "case_contract_digest": item.get("case_contract_digest"),
+            "expected_acceptance": item.get("expected_acceptance"),
+            "expected_effect_state": item.get("expected_effect_state"),
+            "fixture_selector": item.get("fixture_selector"),
         }
         if (
             not isinstance(test_id, str)
@@ -866,13 +870,7 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
         parameter = item.get("parameter")
         test_id = item.get("assertion_test_id")
         target_test_id = item.get("target_test_id")
-        contract = {
-            "case_id": case_id,
-            "corpus_sha256": corpus_digest,
-            "family": family,
-            "parameter": parameter,
-            "test_id": target_test_id,
-        }
+        contract = item.get("case_contract")
         if (
             item.get("status") != "PASS"
             or item.get("assertion_count") != 1
@@ -883,6 +881,15 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
             or tests_by_id[test_id].get("family") != family
             or tests_by_id[test_id].get("target_test_id") != target_test_id
             or item.get("test_result_digest") != tests_by_id[test_id]["result_digest"]
+            or not isinstance(contract, dict)
+            or contract.get("case_id") != case_id
+            or contract.get("family") != family
+            or contract.get("parameter") != parameter
+            or contract.get("target_test_id") != target_test_id
+            or contract.get("fixture_selector") != item.get("fixture_selector")
+            or contract.get("expected_acceptance") != item.get("expected_acceptance")
+            or contract.get("expected_effect_state") != item.get("expected_effect_state")
+            or contract.get("replay_expectation") != item.get("replay_expectation")
             or item.get("case_contract_digest") != hashlib.sha256(_canonical(contract)).hexdigest()
         ):
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")

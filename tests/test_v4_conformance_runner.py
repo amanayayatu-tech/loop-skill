@@ -66,6 +66,29 @@ def canary(candidate: str) -> dict:
     return value
 
 
+def mock_execution(case_id, family, test_id, contract):
+    deterministic = {
+        "assertion_test_id": f"{case_id}::{test_id}",
+        "case_id": case_id,
+        "family": family,
+        "status": "PASS",
+        "target_test_id": test_id,
+        "tests_run": 1,
+        "case_contract_digest": hashlib.sha256(
+            runner.rc._canonical(contract)
+        ).hexdigest(),
+        "expected_acceptance": contract["expected_acceptance"],
+        "expected_effect_state": contract["expected_effect_state"],
+        "fixture_selector": contract["fixture_selector"],
+    }
+    return {
+        **deterministic,
+        "result_digest": hashlib.sha256(
+            runner.rc._canonical(deterministic)
+        ).hexdigest(),
+    }
+
+
 class V4ConformanceRunnerTests(unittest.TestCase):
     def test_all_349_instances_bind_to_an_executed_gate(self) -> None:
         candidate = subprocess.check_output(
@@ -77,26 +100,7 @@ class V4ConformanceRunnerTests(unittest.TestCase):
             with mock.patch.object(
                 runner,
                 "_run_case",
-                side_effect=lambda case_id, family, test_id: {
-                    "assertion_test_id": f"{case_id}::{test_id}",
-                    "case_id": case_id,
-                    "family": family,
-                    "result_digest": hashlib.sha256(
-                        runner.rc._canonical(
-                            {
-                                "assertion_test_id": f"{case_id}::{test_id}",
-                                "case_id": case_id,
-                                "family": family,
-                                "status": "PASS",
-                                "target_test_id": test_id,
-                                "tests_run": 1,
-                            }
-                        )
-                    ).hexdigest(),
-                    "status": "PASS",
-                    "target_test_id": test_id,
-                    "tests_run": 1,
-                },
+                side_effect=mock_execution,
             ):
                 receipt = runner.run(ROOT, candidate, path)
         self.assertEqual(receipt["case_count"], 349)
@@ -125,9 +129,41 @@ class V4ConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(result["tests_run"], 1)
         with self.assertRaisesRegex(RuntimeError, "CONFORMANCE_TEST_(?:ID_INVALID|FAILED)"):
             runner._run_test("test_v4_preservation_register.DoesNotExist.test_missing")
-        atomic = runner._run_case("CAP-ARCHITECTURE-ONE-WRITER", "CAP-ARCHITECTURE", test_id)
+        candidate = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+        _, _, bindings = runner._catalog_and_bindings(ROOT, candidate)
+        family, bound_test, contract = bindings["CAP-ARCHITECTURE-ONE-WRITER"]
+        self.assertEqual(bound_test, test_id)
+        atomic = runner._run_case(
+            "CAP-ARCHITECTURE-ONE-WRITER", family, test_id, contract
+        )
         self.assertEqual(atomic["case_id"], "CAP-ARCHITECTURE-ONE-WRITER")
         self.assertEqual(atomic["target_test_id"], test_id)
+        with self.assertRaisesRegex(RuntimeError, "CONFORMANCE_CASE_CONTRACT_INVALID"):
+            runner._run_case(
+                "CAP-ARCHITECTURE-NOT-IN-CORPUS",
+                "CAP-ARCHITECTURE",
+                test_id,
+                None,
+            )
+        changed = dict(contract)
+        changed["expected_acceptance"] = (
+            "REJECT" if contract["expected_acceptance"] == "ACCEPT" else "ACCEPT"
+        )
+        with self.assertRaisesRegex(RuntimeError, "CONFORMANCE_CASE_CONTRACT_INVALID"):
+            runner._run_case(
+                "CAP-ARCHITECTURE-ONE-WRITER", family, test_id, changed
+            )
+        changed = dict(contract)
+        changed["expected_side_effect_counts"] = {
+            **contract["expected_side_effect_counts"],
+            "canonical_commits": 999,
+        }
+        with self.assertRaisesRegex(RuntimeError, "CONFORMANCE_CASE_CONTRACT_INVALID"):
+            runner._run_case(
+                "CAP-ARCHITECTURE-ONE-WRITER", family, test_id, changed
+            )
 
     def test_hosted_run_executes_all_bindings_without_faking_app_receipt(self) -> None:
         candidate = subprocess.check_output(
@@ -136,15 +172,7 @@ class V4ConformanceRunnerTests(unittest.TestCase):
         with mock.patch.object(
             runner,
             "_run_case",
-            side_effect=lambda case_id, family, test_id: {
-                "assertion_test_id": f"{case_id}::{test_id}",
-                "case_id": case_id,
-                "family": family,
-                "result_digest": "d" * 64,
-                "status": "PASS",
-                "target_test_id": test_id,
-                "tests_run": 1,
-            },
+            side_effect=mock_execution,
         ) as executed:
             receipt = runner.hosted_run(ROOT, candidate)
         self.assertEqual(receipt["case_count"], 349)

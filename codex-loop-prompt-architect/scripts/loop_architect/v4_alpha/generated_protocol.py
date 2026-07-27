@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-MANIFEST_SHA256 = 'c0ee416cbf2c1b2b9d89660ffdce74e50256c1f340b409eb49b07d9e47cf25b0'
+MANIFEST_SHA256 = 'f56e419b62ffb728eaf3ad2939293fa97175b83d027356429f48aff38deeb0f3'
 PROTOCOL_VERSION = '4.0.0'
 COMMAND_TYPES = (
     'AcknowledgeResult',
@@ -19,6 +19,7 @@ COMMAND_TYPES = (
     'PrepareRoute',
     'RecordEffectObservation',
     'RecordExternalEffectObservation',
+    'RecordPolicyDecision',
     'RecordReview',
     'ResumeLoop',
     'StopLoop',
@@ -47,10 +48,14 @@ EVENT_TYPES = (
     'ReportStaged',
     'ArtifactCaptured',
     'ArtifactVerified',
+    'ArtifactUnverifiable',
     'ArtifactStale',
     'ReportAccepted',
     'ResultAcknowledged',
     'ReviewRecorded',
+    'HumanDecisionRecorded',
+    'RepairAuthorized',
+    'RepairExhausted',
     'GoalAdvanced',
     'LoopPaused',
     'LoopResumed',
@@ -156,7 +161,7 @@ ASSURANCE_STRENGTHS = (
     'STRICT',
 )
 WRITE_CAS = 'per_loop_revision'
-SEMANTIC_PAYLOAD_SPECS = {'AcknowledgeResult': {'semantic_payload': {}}, 'AdvanceGoal': {'semantic_payload': {'disposition': {'enum': ['DONE', 'FAILED', 'LIMITATION'], 'type': 'string'}}}, 'BeginEffectDelivery': {'semantic_payload': {}}, 'BindHostResource': {'semantic_payload': {'role': {'type': 'string'}}}, 'CloseExecution': {'semantic_payload': {}}, 'CreateLoop': {'semantic_payload': {'acceptance_criteria': {'items': {'type': 'string'}, 'type': 'array'}, 'authorization_boundaries': {'items': {'type': 'string'}, 'type': 'array'}, 'budget': {'type': 'string'}, 'execution_mode': {'enum': ['STANDARD', 'ADAPTIVE'], 'type': 'string'}, 'external_actions': {'items': {'type': 'string'}, 'type': 'array'}, 'objective': {'type': 'string'}, 'stop_conditions': {'items': {'type': 'string'}, 'type': 'array'}, 'write_scope': {'items': {'type': 'string'}, 'type': 'array'}}}, 'PauseLoop': {'semantic_payload': {'reason': {'type': 'string'}}}, 'PrepareFinalization': {'semantic_payload': {'disposition': {'enum': ['SUCCEEDED', 'LIMITATION', 'FAILED'], 'type': 'string'}}}, 'PrepareRoute': {'semantic_payload': {'intent': {'type': 'string'}}}, 'RecordEffectObservation': {'semantic_payload': {}}, 'RecordExternalEffectObservation': {'semantic_payload': {}}, 'RecordReview': {'semantic_payload': {'verdict': {'enum': ['PASS', 'REPAIR', 'LIMITATION'], 'type': 'string'}}}, 'ResumeLoop': {'semantic_payload': {}}, 'StopLoop': {'semantic_payload': {'reason': {'type': 'string'}}}, 'StageExternalResult': {'semantic_payload': {'outcome': {'enum': ['PASS', 'FAILED', 'LIMITATION', 'UNVERIFIABLE'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StageResult': {'semantic_payload': {'outcome': {'enum': ['PASS', 'FAILED', 'LIMITATION', 'UNVERIFIABLE'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StrengthenClosureAssurance': {'semantic_payload': {}}}
+SEMANTIC_PAYLOAD_SPECS = {'AcknowledgeResult': {'semantic_payload': {}}, 'AdvanceGoal': {'semantic_payload': {'disposition': {'enum': ['DONE', 'FAILED', 'LIMITATION'], 'type': 'string'}}}, 'BeginEffectDelivery': {'semantic_payload': {}}, 'BindHostResource': {'semantic_payload': {'role': {'type': 'string'}}}, 'CloseExecution': {'semantic_payload': {}}, 'CreateLoop': {'semantic_payload': {'acceptance_criteria': {'items': {'type': 'string'}, 'type': 'array'}, 'authorization_boundaries': {'items': {'type': 'string'}, 'type': 'array'}, 'budget': {'type': 'string'}, 'execution_mode': {'enum': ['STANDARD', 'ADAPTIVE'], 'type': 'string'}, 'external_actions': {'items': {'type': 'string'}, 'type': 'array'}, 'objective': {'type': 'string'}, 'stop_conditions': {'items': {'type': 'string'}, 'type': 'array'}, 'write_scope': {'items': {'type': 'string'}, 'type': 'array'}}}, 'PauseLoop': {'semantic_payload': {'reason': {'type': 'string'}}}, 'PrepareFinalization': {'semantic_payload': {'disposition': {'enum': ['SUCCEEDED', 'LIMITATION', 'FAILED'], 'type': 'string'}}}, 'PrepareRoute': {'semantic_payload': {'intent': {'type': 'string'}}}, 'RecordEffectObservation': {'semantic_payload': {}}, 'RecordExternalEffectObservation': {'semantic_payload': {}}, 'RecordPolicyDecision': {'semantic_payload': {'decision': {'enum': ['CONTINUE_REPAIR', 'WAIT', 'STOP'], 'type': 'string'}, 'failure_fingerprint': {'type': 'string'}}}, 'RecordReview': {'semantic_payload': {'verdict': {'enum': ['PASS', 'REPAIR', 'LIMITATION'], 'type': 'string'}}}, 'ResumeLoop': {'semantic_payload': {}}, 'StopLoop': {'semantic_payload': {'reason': {'type': 'string'}}}, 'StageExternalResult': {'semantic_payload': {'outcome': {'enum': ['PASS', 'FAILED', 'LIMITATION', 'UNVERIFIABLE'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StageResult': {'semantic_payload': {'outcome': {'enum': ['PASS', 'FAILED', 'LIMITATION', 'UNVERIFIABLE'], 'type': 'string'}, 'summary': {'type': 'string'}}}, 'StrengthenClosureAssurance': {'semantic_payload': {}}}
 
 @dataclass(frozen=True)
 class ActorRef:
@@ -266,6 +271,8 @@ class PreparedLoopManifest:
     acceptance_criteria: tuple[str, ...]
     stop_conditions: tuple[str, ...]
     authorization_boundaries: tuple[str, ...]
+    artifact_profile: str
+    workspace_identity_digest: str
     prepared_at: str
 
 @dataclass(frozen=True)

@@ -59,15 +59,18 @@ def prepared_start(root: Path, goal: str, token: str):
         write_scope=("synthetic-workspace",),
         budget="10 minutes; one Host create attempt",
         external_actions=(),
-        acceptance_criteria=("one exact Host readback",),
+        acceptance_criteria=("no-file-change",),
         stop_conditions=("stop on UNKNOWN",),
         authorization_boundaries=("no publish",),
     )
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
     prepared = prepare_loop(
         request,
         root / "prepared",
         clock=lambda: NOW,
         token_factory=lambda: token,
+        workspace_root=workspace,
     )
     return confirm_loop(prepared.directory, confirmed=True, clock=lambda: NOW)
 
@@ -639,6 +642,7 @@ class V4CodexAdapterTests(unittest.TestCase):
                 host_provider=provider,
                 host_issuer_ref=ISSUER_REF,
                 host_issuer_trust=ISSUER_TRUST,
+                workspace_root=root / "workspace",
             )
             self.assertEqual(view.progress, "Active")
             path = data / STORE_FILENAME

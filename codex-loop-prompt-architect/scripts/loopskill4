@@ -15,11 +15,14 @@ from loop_architect.v4_adapters.codex import CodexAppServerProvider
 from loop_architect.v4_entry import (
     EntryError,
     confirm_loop,
+    control_loop,
     diagnostics,
     intake_report_loop,
     prepare_loop,
+    policy_view,
     review_prepared,
     start_loop,
+    steer_loop,
     status,
     sync_loop,
 )
@@ -65,10 +68,23 @@ def parser() -> PublicParser:
     show.add_argument("--root", type=Path, default=default_root())
     show.add_argument("--diagnostics", action="store_true")
     show.add_argument("--refresh", action="store_true")
+    for lifecycle_action in ("pause", "resume", "stop"):
+        lifecycle = subcommands.add_parser(lifecycle_action)
+        lifecycle.add_argument("--root", type=Path, default=default_root())
+        if lifecycle_action != "resume":
+            lifecycle.add_argument(
+                "--reason", default="User requested lifecycle control."
+            )
     doctor = subcommands.add_parser("doctor")
     doctor.add_argument("--diagnostics", action="store_true")
     compile_prepared = subcommands.add_parser("compile")
     compile_prepared.add_argument("prepared_directory", type=Path)
+    policy = subcommands.add_parser("policy")
+    policy.add_argument("--root", type=Path, default=default_root())
+    steer = subcommands.add_parser("steer")
+    steer.add_argument("choice", choices=("continue-repair", "wait", "stop"))
+    steer.add_argument("--failure-fingerprint", default="")
+    steer.add_argument("--root", type=Path, default=default_root())
     return result
 
 
@@ -295,6 +311,7 @@ def _interactive_start(args):
             subject,
             root=args.root,
             host_provider=CodexAppServerProvider(Path.cwd()),
+            workspace_root=Path.cwd(),
         )
     request = read_intake_input(args.goal_file_or_prepared_directory)
     report = intake_report_loop(request)
@@ -313,7 +330,7 @@ def _interactive_start(args):
             "Answer the listed intake questions; no loop was created.",
         )
     output = args.prepared_output or Path(str(args.root) + ".prepared")
-    prepared = prepare_loop(request, output)
+    prepared = prepare_loop(request, output, workspace_root=Path.cwd())
     print_boundary(prepared)
     if not sys.stdin.isatty():
         raise EntryError(
@@ -333,6 +350,7 @@ def _interactive_start(args):
         confirmed,
         root=args.root,
         host_provider=CodexAppServerProvider(Path.cwd()),
+        workspace_root=Path.cwd(),
     )
 
 
@@ -343,7 +361,11 @@ def main(argv=None) -> int:
             print_intake_report(intake_report_loop(read_intake_input(args.goal_or_file)))
             return 0
         if args.action == "prepare":
-            prepared = prepare_loop(read_intake_input(args.goal_or_file), args.output)
+            prepared = prepare_loop(
+                read_intake_input(args.goal_or_file),
+                args.output,
+                workspace_root=Path.cwd(),
+            )
             print_boundary(prepared)
             return 0
         if args.action == "confirm":
@@ -391,13 +413,36 @@ def main(argv=None) -> int:
                 )
             )
             return 0
+        if args.action == "policy":
+            print(
+                json.dumps(
+                    policy_view(root=args.root),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
         if args.action == "start":
             value = _interactive_start(args)
+        elif args.action in {"pause", "resume", "stop"}:
+            value = control_loop(
+                args.action,
+                root=args.root,
+                reason=getattr(args, "reason", "User requested lifecycle control."),
+            )
+        elif args.action == "steer":
+            value = steer_loop(
+                args.choice,
+                root=args.root,
+                failure_fingerprint=args.failure_fingerprint,
+            )
         else:
             value = (
                 sync_loop(
                     root=args.root,
                     host_provider=CodexAppServerProvider(Path.cwd()),
+                    workspace_root=Path.cwd(),
                 )
                 if args.refresh
                 else status(root=args.root)

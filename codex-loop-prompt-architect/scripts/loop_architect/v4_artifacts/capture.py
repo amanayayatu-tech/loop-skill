@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from loop_architect.v4_alpha.protocol import (
     canonical_bytes,
     domain_digest,
+    parse_json_bytes,
     raw_domain_digest,
 )
 
@@ -49,6 +50,19 @@ class ArtifactCapture:
 
 
 @dataclass(frozen=True)
+class ArtifactBaseline:
+    """Immutable pre-effect artifact identity stored by digest in the canonical store."""
+
+    profile: str
+    workspace_identity_digest: str
+    base_identity: str
+    entries: tuple[Mapping[str, Any], ...]
+    capture_digest: str
+    descriptor_blob: bytes
+    blobs: Mapping[str, bytes]
+
+
+@dataclass(frozen=True)
 class NewGitInitialization:
     baseline_digest: str
     base_commit: str
@@ -57,6 +71,38 @@ class NewGitInitialization:
 
 def _blob_digest(content: bytes) -> str:
     return raw_domain_digest("loopskill-blob-v1\n", content)
+
+
+def workspace_identity(root: Path | str, profile: str) -> str:
+    root_path = Path(root)
+    if root_path.is_symlink() or not root_path.is_dir():
+        raise ArtifactCaptureError("PATH_CONFINEMENT_VIOLATION", "invalid workspace root")
+    try:
+        resolved = root_path.resolve(strict=True)
+    except OSError as exc:
+        raise ArtifactCaptureError(
+            "PATH_CONFINEMENT_VIOLATION", "workspace root cannot be resolved"
+        ) from exc
+    return domain_digest(
+        "loopskill-workspace-identity-v1\n",
+        {"profile": profile, "resolved_root": str(resolved)},
+    )
+
+
+def detect_artifact_profile(root: Path | str) -> str:
+    """Select a read-only default profile; new-Git always needs explicit authority."""
+    root_path = Path(root)
+    if root_path.is_symlink() or not root_path.is_dir():
+        raise ArtifactCaptureError("PATH_CONFINEMENT_VIOLATION", "invalid workspace root")
+    try:
+        inside = _git(
+            root_path,
+            ["rev-parse", "--is-inside-work-tree"],
+            accepted=frozenset({0, 128}),
+        ).strip()
+    except ArtifactCaptureError:
+        inside = b""
+    return "existing_git" if inside == b"true" else "non_git"
 
 
 def _finalize_capture(
@@ -337,6 +383,196 @@ def capture_existing_git(
         blobs=blobs,
         identity=identity,
     )
+
+
+def capture_existing_git_state(
+    root: Path | str, *, base_ref: str = "HEAD"
+) -> ArtifactCapture:
+    """Capture one exact Git state while machine-owning the untracked boundary."""
+    root_path = Path(root)
+    return capture_existing_git(
+        root_path,
+        base_ref=base_ref,
+        allowed_untracked_paths=_git_untracked(root_path),
+    )
+
+
+def _transition_capture(
+    before: ArtifactCapture, after: ArtifactCapture
+) -> ArtifactCapture:
+    if before.profile != "existing_git" or after.profile != "existing_git":
+        raise ArtifactCaptureError(
+            "ARTIFACT_IDENTITY_MISMATCH", "Git transition profile mismatch"
+        )
+    if before.base_identity != after.base_identity:
+        raise ArtifactCaptureError(
+            "ARTIFACT_IDENTITY_MISMATCH", "Git transition base changed"
+        )
+    before_entries = {str(item["path"]): item for item in before.manifest}
+    after_entries = {str(item["path"]): item for item in after.manifest}
+    manifest = []
+    for path in reject_casefold_collisions(set(before_entries) | set(after_entries)):
+        old = before_entries.get(path)
+        new = after_entries.get(path)
+        if old == new:
+            continue
+        manifest.append(
+            {
+                "after_digest": None if new is None else new.get("blob_digest"),
+                "before_digest": None if old is None else old.get("blob_digest"),
+                "path": path,
+                "status": "A" if old is None else "D" if new is None else "M",
+            }
+        )
+    manifest_tuple = tuple(manifest)
+    identity = {
+        "after_capture_digest": after.artifact_digest,
+        "base_commit": before.base_identity,
+        "before_capture_digest": before.artifact_digest,
+        "manifest": manifest_tuple,
+        "profile": "existing_git",
+    }
+    return _finalize_capture(
+        profile="existing_git",
+        base_identity=before.artifact_digest,
+        manifest=manifest_tuple,
+        blobs=after.blobs,
+        identity=identity,
+    )
+
+
+def prepare_artifact_baseline(
+    root: Path | str,
+    *,
+    expected_profile: str,
+    expected_workspace_identity_digest: str,
+) -> ArtifactBaseline:
+    """Capture the pre-provider state without mutating the workspace."""
+    root_path = Path(root)
+    observed_profile = detect_artifact_profile(root_path)
+    observed_workspace = workspace_identity(root_path, observed_profile)
+    if (
+        observed_profile != expected_profile
+        or observed_workspace != expected_workspace_identity_digest
+    ):
+        raise ArtifactCaptureError(
+            "ARTIFACT_IDENTITY_MISMATCH", "prepared workspace binding changed"
+        )
+    blobs: dict[str, bytes]
+    if observed_profile == "existing_git":
+        capture = capture_existing_git_state(root_path)
+        base_identity = capture.base_identity
+        entries = capture.manifest
+        capture_digest = capture.artifact_digest
+        blobs = dict(capture.blobs)
+    elif observed_profile == "non_git":
+        baseline = capture_non_git_baseline(root_path)
+        base_identity = baseline.root_digest
+        entries = baseline.entries
+        capture_digest = baseline.root_digest
+        blobs = dict(baseline.blobs)
+    else:
+        raise ArtifactCaptureError(
+            "CAPABILITY_UNAVAILABLE", "explicit new-Git baseline is required"
+        )
+    descriptor = canonical_bytes(
+        {
+            "base_identity": base_identity,
+            "capture_digest": capture_digest,
+            "entries": list(entries),
+            "profile": observed_profile,
+            "workspace_identity_digest": observed_workspace,
+        }
+    )
+    blobs[_blob_digest(descriptor)] = descriptor
+    return ArtifactBaseline(
+        profile=observed_profile,
+        workspace_identity_digest=observed_workspace,
+        base_identity=base_identity,
+        entries=entries,
+        capture_digest=capture_digest,
+        descriptor_blob=descriptor,
+        blobs=blobs,
+    )
+
+
+def load_artifact_baseline(raw: bytes) -> ArtifactBaseline:
+    value = parse_json_bytes(raw)
+    if not isinstance(value, Mapping) or set(value) != {
+        "base_identity",
+        "capture_digest",
+        "entries",
+        "profile",
+        "workspace_identity_digest",
+    }:
+        raise ArtifactCaptureError(
+            "ARTIFACT_IDENTITY_MISMATCH", "invalid baseline descriptor"
+        )
+    if value["profile"] not in {"existing_git", "non_git"}:
+        raise ArtifactCaptureError(
+            "ARTIFACT_IDENTITY_MISMATCH", "unsupported baseline profile"
+        )
+    entries = value["entries"]
+    if not isinstance(entries, list) or not all(isinstance(item, Mapping) for item in entries):
+        raise ArtifactCaptureError(
+            "ARTIFACT_IDENTITY_MISMATCH", "invalid baseline entries"
+        )
+    return ArtifactBaseline(
+        profile=str(value["profile"]),
+        workspace_identity_digest=str(value["workspace_identity_digest"]),
+        base_identity=str(value["base_identity"]),
+        entries=tuple(entries),
+        capture_digest=str(value["capture_digest"]),
+        descriptor_blob=raw,
+        blobs={},
+    )
+
+
+def capture_artifact_transition(
+    root: Path | str, baseline: ArtifactBaseline
+) -> ArtifactCapture:
+    observed_workspace = workspace_identity(root, baseline.profile)
+    if observed_workspace != baseline.workspace_identity_digest:
+        raise ArtifactCaptureError(
+            "ARTIFACT_IDENTITY_MISMATCH", "workspace identity changed"
+        )
+    if baseline.profile == "non_git":
+        return capture_non_git_delta(
+            root,
+            NonGitBaseline(
+                root_digest=baseline.base_identity,
+                entries=baseline.entries,
+                blobs={},
+            ),
+        )
+    before = ArtifactCapture(
+        profile="existing_git",
+        base_identity=baseline.base_identity,
+        manifest=baseline.entries,
+        manifest_digest=domain_digest(
+            "loopskill-artifact-manifest-v1\n", baseline.entries
+        ),
+        artifact_digest=baseline.capture_digest,
+        bundle_blob_digest="",
+        blobs={},
+        empty=not baseline.entries,
+    )
+    after = capture_existing_git_state(root, base_ref=baseline.base_identity)
+    return _transition_capture(before, after)
+
+
+def persist_baseline_blobs(store: Any, baseline: ArtifactBaseline) -> str:
+    for digest, content in sorted(baseline.blobs.items()):
+        if store.put_blob(content) != digest:
+            raise ArtifactCaptureError(
+                "ARTIFACT_IDENTITY_MISMATCH", "baseline blob identity changed"
+            )
+    descriptor_digest = _blob_digest(baseline.descriptor_blob)
+    if store.get_blob(descriptor_digest) != baseline.descriptor_blob:
+        raise ArtifactCaptureError(
+            "ARTIFACT_IDENTITY_MISMATCH", "baseline descriptor was not persisted"
+        )
+    return descriptor_digest
 
 
 def initialize_new_git(

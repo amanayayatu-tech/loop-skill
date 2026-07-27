@@ -580,8 +580,15 @@ bounded normalized bytes/digest, and source receipt/provenance.
 
 ### Artifact
 
-State: `CAPTURED`, `VERIFIED`, `STALE`. Artifact binds exact Result, capture
+State: `CAPTURED`, `VERIFIED`, `UNVERIFIABLE`, `STALE`. Artifact binds exact Result, capture
 algorithm/capability, before/after identity, content digest, and receipt.
+Host result text is never an Artifact receipt. Before the one provider attempt,
+Entry binds the confirmed workspace identity/profile and persists an immutable
+pre-effect baseline in the same canonical store. After readback, the artifact
+library performs an exact existing-Git/non-Git/new-Git capability capture and
+the JIT Local Verifier issues the only `verify-artifact` receipt. Missing,
+drifted, or unsupported local evidence yields Artifact `UNVERIFIABLE` and can
+close as LIMITATION; it cannot produce Review PASS or execution SUCCEEDED.
 
 ### Review
 
@@ -629,7 +636,7 @@ from delivery observation.
 `CreateLoop`, `BindHostResource`, `PrepareRoute`, `BeginEffectDelivery`,
 `RecordEffectObservation`, `RecordExternalEffectObservation`, `StageResult`,
 `StageExternalResult`, `AcknowledgeResult`, `RecordReview`,
-`AdvanceGoal`, `PauseLoop`, `ResumeLoop`, `StopLoop`, `PrepareFinalization`,
+`AdvanceGoal`, `RecordPolicyDecision`, `PauseLoop`, `ResumeLoop`, `StopLoop`, `PrepareFinalization`,
 `CloseExecution`, and `StrengthenClosureAssurance`.
 
 Queries (`ReadStatus`, `ReadDelivery`, `ReadResult`, `ReadCapabilities`, export)
@@ -643,7 +650,8 @@ are read-only and have no operation/CAS side effects.
 `RoutePrepared`, `DeliveryAttemptCommitted`, `DeliveryObserved`,
 `DeliveryUnknown`, `DeliveryUnverifiable`, `LateDeliveryObserved`,
 `ResultStaged`, `ReportStaged`, `ArtifactCaptured`, `ArtifactVerified`,
-`ArtifactStale`, `ReportAccepted`, `ResultAcknowledged`, `ReviewRecorded`,
+`ArtifactUnverifiable`, `ArtifactStale`, `ReportAccepted`, `ResultAcknowledged`,
+`ReviewRecorded`, `HumanDecisionRecorded`, `RepairAuthorized`, `RepairExhausted`,
 `GoalAdvanced`, `LoopPaused`, `LoopResumed`, `LoopStopped`, `FinalizationPrepared`,
 `ExecutionFinalized`, `StrictFinalizationAcknowledged`,
 `ClosureAssuranceStrengthened`, and `OperationRejected`.
@@ -734,6 +742,22 @@ Result stores the authoritative Host-result digest, so a changed or regressed
 readback fails closed. Final lifecycle acknowledgement is a separate
 authoritative readback after `FinalizationPrepared` and may yield honest
 cooperative/limited closure instead of a strict success claim.
+
+`AcknowledgeResult` does not treat the Host Result as artifact proof. It
+consumes a Local-Verifier receipt bound to the exact capture digest, manifest
+digest, verification evidence and workspace profile. `RecordReview` uses a
+distinct JIT Reviewer Actor. Host PASS plus absent local capture/verifier is a
+tested LIMITATION path. Only Host PASS plus a captured Artifact and an
+independently verified local criterion can produce Review PASS and SUCCEEDED.
+
+The optional policy surface is reachable through Entry without becoming a
+writer. Standard/Adaptive projections remain removable from the minimal path;
+pause/resume/stop submit ordinary machine-authorized Kernel commands.
+`RecordPolicyDecision` records a digest-bound current-context choice and a
+bounded repair authorization/exhaustion fact. It never invokes Host, retries an
+Attempt, or manufactures a successor. A repair authorization explicitly
+requires a separately prepared and confirmed successor, preserving predecessor
+evidence and the no-blind-resend rule.
 | readback inconclusive/unavailable | typed subject/Attempt `UNKNOWN` | close with limitation/block, or await a late exact readback; no resend |
 | cooperative response only | typed subject/Attempt `UNVERIFIABLE` | limited closure or later strict readback |
 | late authoritative readback | exact UNKNOWN/UNVERIFIABLE Attempt becomes `OBSERVED` | optionally strengthen assurance; no new Attempt/result/reexecution |
@@ -991,7 +1015,11 @@ always records `publication_ready=false`; it cannot satisfy the publication
 candidate gate. `scripts/run_v4_conformance.py`
 expands the frozen exact catalog, executes every bound module, emits one result
 record for each of the 349 canonical case IDs, and additionally binds the two
-real-App cases to the exact canary receipt.
+real-App cases to the exact canary receipt. Each local record must first consume
+a machine-derived per-case contract covering precondition, stimulus,
+acceptance, effect state, event order, side-effect count, replay, capability,
+selector, and target assertion. Unknown IDs and mutated contracts fail closed;
+a repeated family-level unittest result is not per-instance evidence.
 
 ## Non-goals and safeguards
 

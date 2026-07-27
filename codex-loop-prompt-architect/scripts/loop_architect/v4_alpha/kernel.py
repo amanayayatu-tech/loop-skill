@@ -274,6 +274,46 @@ def _result_chain(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     return chain
 
 
+def policy_context(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Canonical freshness surface for optional human-policy decisions."""
+    goals = sorted(snapshot.get("goals", {}).items())
+    artifacts = sorted(snapshot.get("artifacts", {}).items())
+    reviews = sorted(snapshot.get("reviews", {}).items())
+    return {
+        "artifact": None
+        if not artifacts
+        else {
+            "ref": artifacts[-1][0],
+            "revision": artifacts[-1][1]["revision"],
+            "state": artifacts[-1][1]["state"],
+        },
+        "execution": {
+            "revision": snapshot["execution"]["revision"],
+            "state": snapshot["execution"]["state"],
+        },
+        "goal": None
+        if not goals
+        else {
+            "ref": goals[-1][0],
+            "revision": goals[-1][1]["revision"],
+            "state": goals[-1][1]["state"],
+        },
+        "loop_ref": snapshot["loop_ref"],
+        "loop_revision": snapshot["loop_revision"],
+        "review": None
+        if not reviews
+        else {
+            "ref": reviews[-1][0],
+            "revision": reviews[-1][1]["revision"],
+            "state": reviews[-1][1]["state"],
+        },
+    }
+
+
+def policy_context_digest(snapshot: Mapping[str, Any]) -> str:
+    return domain_digest("loopskill-human-context-v1\n", policy_context(snapshot))
+
+
 def _final_chain(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     chain = _result_chain(snapshot)
     review_ref, review = _only_record(snapshot, "reviews")
@@ -412,6 +452,24 @@ def _create_loop(
         provider_key = allocate["provider_idempotency_key"]
         action = resolved["provider_action"]
         target_ref = resolved["target_ref"]
+        artifact_binding_names = {
+            "artifact_baseline_blob_digest",
+            "artifact_profile",
+            "workspace_identity_digest",
+        }
+        artifact_binding_present = bool(artifact_binding_names & set(resolved))
+        if artifact_binding_present and not artifact_binding_names <= set(resolved):
+            raise ProtocolRejection(
+                "INVALID_COMMAND", "incomplete startup artifact binding"
+            )
+        if artifact_binding_present and resolved["artifact_profile"] not in {
+            "existing_git",
+            "non_git",
+            "new_git",
+        }:
+            raise ProtocolRejection(
+                "INVALID_COMMAND", "invalid startup artifact profile"
+            )
         if not all(
             (
                 external_effect_ref,
@@ -442,6 +500,19 @@ def _create_loop(
         state["external_effects"] = {
             external_effect_ref: {
                 "action": action,
+                **(
+                    {
+                        "artifact_baseline_blob_digest": resolved[
+                            "artifact_baseline_blob_digest"
+                        ],
+                        "artifact_profile": resolved["artifact_profile"],
+                        "workspace_identity_digest": resolved[
+                            "workspace_identity_digest"
+                        ],
+                    }
+                    if artifact_binding_present
+                    else {}
+                ),
                 "attempt_ref": attempt_ref,
                 "host_resource_ref": host_resource_ref,
                 "revision": 1,
@@ -837,18 +908,54 @@ def _acknowledge_result(
     if result["state"] != "STAGED" or report["state"] != "STAGED":
         raise ProtocolRejection("INVALID_TRANSITION", "Result not staged")
     artifact_ref = _binding(command, "allocate_refs", "new_artifact_ref")
+    artifact_digest = _binding(command, "resolved_refs", "artifact_digest")
+    capture_state = _binding(command, "resolved_refs", "capture_state")
+    artifact_profile = _binding(command, "resolved_refs", "artifact_profile")
+    manifest_digest = _binding(command, "resolved_refs", "manifest_digest")
+    verification_digest = _binding(
+        command, "resolved_refs", "verification_digest"
+    )
+    verification_state = _binding(command, "resolved_refs", "verification_state")
     receipt = _receipt(
         command,
         context,
         action="verify-artifact",
         subject_ref=artifact_ref,
+        request_digest=verification_digest,
     )
+    if receipt.evidence_digest != artifact_digest:
+        raise ProtocolRejection(
+            "RECEIPT_IDENTITY_MISMATCH", "artifact receipt evidence"
+        )
+    if capture_state not in {"CAPTURED", "UNAVAILABLE"}:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid artifact capture state")
+    if verification_state not in {"VERIFIED", "FAILED", "UNVERIFIABLE"}:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid local verification state")
+    if receipt.trust_class == "strict" and receipt.outcome == "observed":
+        artifact_state = "VERIFIED"
+        verification_event = "ArtifactVerified"
+    elif receipt.trust_class == "cooperative" and receipt.outcome == "unverifiable":
+        artifact_state = "UNVERIFIABLE"
+        verification_event = "ArtifactUnverifiable"
+    else:
+        raise ProtocolRejection(
+            "RECEIPT_IDENTITY_MISMATCH", "artifact receipt assurance"
+        )
+    if artifact_state == "VERIFIED" and capture_state != "CAPTURED":
+        raise ProtocolRejection(
+            "RECEIPT_IDENTITY_MISMATCH", "verified artifact was not captured"
+        )
     snapshot["artifacts"][artifact_ref] = {
-        "content_digest": receipt.evidence_digest,
+        "content_digest": artifact_digest,
+        "capture_state": capture_state,
+        "manifest_digest": manifest_digest,
+        "profile": artifact_profile,
         "receipt_ref": receipt.receipt_ref,
         "result_ref": result_ref,
         "revision": 1,
-        "state": "VERIFIED",
+        "state": artifact_state,
+        "verification_digest": verification_digest,
+        "verification_state": verification_state,
     }
     report.update({"revision": report["revision"] + 1, "state": "ACCEPTED"})
     result.update(
@@ -858,9 +965,11 @@ def _acknowledge_result(
             "state": "ACKNOWLEDGED",
         }
     )
-    return snapshot, [
-        _event("ArtifactCaptured", artifact_ref=artifact_ref),
-        _event("ArtifactVerified", artifact_ref=artifact_ref),
+    artifact_events = []
+    if capture_state == "CAPTURED":
+        artifact_events.append(_event("ArtifactCaptured", artifact_ref=artifact_ref))
+    artifact_events.append(_event(verification_event, artifact_ref=artifact_ref))
+    return snapshot, artifact_events + [
         _event("ReportAccepted", report_ref=result["report_ref"]),
         _event("ResultAcknowledged", result_ref=result_ref),
     ], {"artifact_ref": artifact_ref, "result_ref": result_ref}
@@ -913,8 +1022,7 @@ def _advance_goal(
         and snapshot["reviews"][review_ref]["state"] == "PASS",
         "FAILED": result["outcome"] == "FAILED"
         and snapshot["reviews"][review_ref]["state"] in {"PASS", "LIMITATION"},
-        "LIMITATION": result["outcome"] in {"LIMITATION", "UNVERIFIABLE"}
-        and snapshot["reviews"][review_ref]["state"] == "LIMITATION",
+        "LIMITATION": snapshot["reviews"][review_ref]["state"] == "LIMITATION",
     }
     if disposition not in allowed or not allowed[disposition]:
         raise ProtocolRejection("INVALID_TRANSITION", "Goal cannot advance")
@@ -923,6 +1031,95 @@ def _advance_goal(
     return snapshot, [_event("GoalAdvanced", goal_ref=goal_ref)], {
         "goal_state": disposition
     }
+
+
+def _record_policy_decision(
+    snapshot: dict[str, Any] | None,
+    command: CommandEnvelope,
+    _: AuthorityContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    assert snapshot is not None
+    decision = command.semantic_payload.get("decision")
+    fingerprint = command.semantic_payload.get("failure_fingerprint")
+    if decision not in {"CONTINUE_REPAIR", "WAIT", "STOP"}:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid policy decision")
+    if not isinstance(fingerprint, str) or len(fingerprint) > 512:
+        raise ProtocolRejection("INVALID_COMMAND", "invalid failure fingerprint")
+    context_digest = _binding(command, "resolved_refs", "context_digest")
+    card_digest = _binding(command, "resolved_refs", "decision_card_digest")
+    if context_digest != policy_context_digest(snapshot) or not card_digest:
+        raise ProtocolRejection("STALE_SUBJECT_REVISION", "policy context changed")
+    policy = snapshot.setdefault(
+        "policy",
+        {
+            "decision_revision": 0,
+            "repair_attempts": 0,
+            "same_failure_count": 0,
+            "state": "IDLE",
+        },
+    )
+    events = [
+        _event(
+            "HumanDecisionRecorded",
+            decision=decision,
+            decision_card_digest=card_digest,
+        )
+    ]
+    response: dict[str, Any] = {"decision": decision}
+    if decision == "CONTINUE_REPAIR":
+        reviews = list(snapshot.get("reviews", {}).values())
+        if not reviews or reviews[-1].get("state") != "REPAIR" or not fingerprint:
+            raise ProtocolRejection(
+                "INVALID_TRANSITION", "repair requires the current REPAIR review"
+            )
+        try:
+            repair_budget = int(_binding(command, "resolved_refs", "repair_budget"))
+            same_budget = int(
+                _binding(command, "resolved_refs", "same_failure_budget")
+            )
+        except ValueError as exc:
+            raise ProtocolRejection("INVALID_COMMAND", "invalid repair budget") from exc
+        if not (1 <= repair_budget <= 3 and 1 <= same_budget <= 2):
+            raise ProtocolRejection("INVALID_COMMAND", "repair budget exceeds Core cap")
+        failure_digest = domain_digest("loopskill-failure-fingerprint-v1\n", fingerprint)
+        same_count = (
+            int(policy.get("same_failure_count", 0)) + 1
+            if policy.get("last_failure_digest") == failure_digest
+            else 1
+        )
+        attempts = int(policy.get("repair_attempts", 0))
+        exhausted = attempts >= repair_budget or same_count >= same_budget
+        policy.update(
+            {
+                "decision_card_digest": card_digest,
+                "decision_revision": int(policy.get("decision_revision", 0)) + 1,
+                "last_decision": decision,
+                "last_failure_digest": failure_digest,
+                "same_failure_count": same_count,
+                "state": "EXHAUSTED" if exhausted else "AUTHORIZED",
+            }
+        )
+        if not exhausted:
+            policy["repair_attempts"] = attempts + 1
+            events.append(_event("RepairAuthorized", attempt_ordinal=attempts + 1))
+        else:
+            events.append(_event("RepairExhausted"))
+        response.update(
+            {
+                "repair_authorized": not exhausted,
+                "repair_state": policy["state"],
+            }
+        )
+    else:
+        policy.update(
+            {
+                "decision_card_digest": card_digest,
+                "decision_revision": int(policy.get("decision_revision", 0)) + 1,
+                "last_decision": decision,
+                "state": "EXECUTION_PENDING",
+            }
+        )
+    return snapshot, events, response
 
 
 def _pause_loop(
@@ -1215,6 +1412,7 @@ _REDUCERS = {
     "StageExternalResult": _stage_external_result,
     "AcknowledgeResult": _acknowledge_result,
     "RecordReview": _record_review,
+    "RecordPolicyDecision": _record_policy_decision,
     "AdvanceGoal": _advance_goal,
     "PauseLoop": _pause_loop,
     "ResumeLoop": _resume_loop,

@@ -125,6 +125,21 @@
     "RecordExternalEffectObservation": {
       "semantic_payload": {}
     },
+    "RecordPolicyDecision": {
+      "semantic_payload": {
+        "decision": {
+          "enum": [
+            "CONTINUE_REPAIR",
+            "WAIT",
+            "STOP"
+          ],
+          "type": "string"
+        },
+        "failure_fingerprint": {
+          "type": "string"
+        }
+      }
+    },
     "RecordReview": {
       "semantic_payload": {
         "verdict": {
@@ -245,10 +260,14 @@
     "ReportStaged",
     "ArtifactCaptured",
     "ArtifactVerified",
+    "ArtifactUnverifiable",
     "ArtifactStale",
     "ReportAccepted",
     "ResultAcknowledged",
     "ReviewRecorded",
+    "HumanDecisionRecorded",
+    "RepairAuthorized",
+    "RepairExhausted",
     "GoalAdvanced",
     "LoopPaused",
     "LoopResumed",
@@ -259,7 +278,7 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "manifest_sha256": "c0ee416cbf2c1b2b9d89660ffdce74e50256c1f340b409eb49b07d9e47cf25b0",
+  "manifest_sha256": "f56e419b62ffb728eaf3ad2939293fa97175b83d027356429f48aff38deeb0f3",
   "protocol_version": "4.0.0",
   "reference_kinds": [
     "LoopRef",
@@ -384,6 +403,8 @@
       "acceptance_criteria",
       "stop_conditions",
       "authorization_boundaries",
+      "artifact_profile",
+      "workspace_identity_digest",
       "prepared_at"
     ],
     "Receipt": [

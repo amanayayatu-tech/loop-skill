@@ -9,9 +9,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from loop_architect.v4_alpha.kernel import AuthorityContext
+from loop_architect.v4_alpha.kernel import AuthorityContext, policy_context
 from loop_architect.v4_adapters.codex import CodexHostAdapter, HostUnavailable
 from loop_architect.v4_adapters.codex.contract import CodexProviderPort
+from loop_architect.v4_artifacts import (
+    ArtifactCaptureError,
+    capture_artifact_transition,
+    load_artifact_baseline,
+    persist_baseline_blobs,
+    persist_capture_blobs,
+    prepare_artifact_baseline,
+    verify_artifact,
+    workspace_identity,
+)
 from loop_architect.v4_alpha.protocol import (
     ActorRef,
     AuthorityGrant,
@@ -51,6 +61,8 @@ LOCAL_AUTHORITY_ISSUER = "loopskill-local-authority-v1"
 LOCAL_AUTHORITY_TRUST = "local-machine"
 DEFAULT_CODEX_RECEIPT_ISSUER = "loopskill-codex-adapter-v1"
 DEFAULT_CODEX_RECEIPT_TRUST = "local-codex-adapter"
+LOCAL_ARTIFACT_ISSUER = "loopskill-local-artifact-verifier-v1"
+LOCAL_ARTIFACT_TRUST = "local-artifact-capability"
 STORE_FILENAME = "loopskill-v4.sqlite3"
 
 
@@ -104,6 +116,9 @@ def _machine_bootstrap(
     *,
     now: datetime,
     receipt_trust_roots: Mapping[str, str],
+    artifact_profile: str | None = None,
+    artifact_baseline_blob_digest: str | None = None,
+    workspace_identity_digest: str | None = None,
 ) -> tuple[str, AuthorityContext, CommandEnvelope]:
     namespace = prepared.manifest.control_namespace
     if len(namespace) != 24 or any(
@@ -130,6 +145,8 @@ def _machine_bootstrap(
     goal_ref = f"goal-{identity('goal')}"
     author_ref = f"actor-author-{identity('author')}"
     system_ref = f"actor-system-{identity('system')}"
+    verifier_ref = f"actor-verifier-{identity('verifier')}"
+    reviewer_ref = f"actor-reviewer-{identity('reviewer')}"
     create_grant_ref = f"grant-create-{identity('create-grant')}"
     observe_grant_ref = f"grant-observe-{identity('observe-grant')}"
     worker_grant_ref = f"grant-worker-{identity('worker-grant')}"
@@ -165,6 +182,28 @@ def _machine_bootstrap(
             identity_digest=domain_digest(
                 "loopskill-local-actor-v1\n",
                 {"actor_ref": system_ref, "loop_ref": loop_ref},
+            ),
+            issuer_ref=LOCAL_AUTHORITY_ISSUER,
+            issuer_trust=LOCAL_AUTHORITY_TRUST,
+        ),
+        verifier_ref: ActorRef(
+            actor_ref=verifier_ref,
+            loop_namespace=loop_ref,
+            actor_kind="local_verifier",
+            identity_digest=domain_digest(
+                "loopskill-local-actor-v1\n",
+                {"actor_ref": verifier_ref, "loop_ref": loop_ref},
+            ),
+            issuer_ref=LOCAL_AUTHORITY_ISSUER,
+            issuer_trust=LOCAL_AUTHORITY_TRUST,
+        ),
+        reviewer_ref: ActorRef(
+            actor_ref=reviewer_ref,
+            loop_namespace=loop_ref,
+            actor_kind="reviewer",
+            identity_digest=domain_digest(
+                "loopskill-local-actor-v1\n",
+                {"actor_ref": reviewer_ref, "loop_ref": loop_ref},
             ),
             issuer_ref=LOCAL_AUTHORITY_ISSUER,
             issuer_trust=LOCAL_AUTHORITY_TRUST,
@@ -222,7 +261,7 @@ def _machine_bootstrap(
     reviewer_grant = _with_digest(
         AuthorityGrant(
             grant_ref=reviewer_grant_ref,
-            actor_ref=system_ref,
+            actor_ref=reviewer_ref,
             issuer_actor_ref=system_ref,
             issuer_trust=LOCAL_AUTHORITY_TRUST,
             allowed_commands=("RecordReview",),
@@ -235,6 +274,23 @@ def _machine_bootstrap(
             canonical_digest="",
         )
     )
+    artifact_grant_ref = f"grant-artifact-{identity('artifact-grant')}"
+    artifact_grant = _with_digest(
+        AuthorityGrant(
+            grant_ref=artifact_grant_ref,
+            actor_ref=verifier_ref,
+            issuer_actor_ref=system_ref,
+            issuer_trust=LOCAL_AUTHORITY_TRUST,
+            allowed_commands=("AcknowledgeResult",),
+            loop_scope=loop_ref,
+            subject_kinds=("ResultRef",),
+            exact_subjects=(result_ref,),
+            not_before=issued_at,
+            expires_at=_iso(now + timedelta(days=30)),
+            nonce=f"nonce-{identity('artifact-nonce')}",
+            canonical_digest="",
+        )
+    )
     lifecycle_grant = _with_digest(
         AuthorityGrant(
             grant_ref=lifecycle_grant_ref,
@@ -242,9 +298,11 @@ def _machine_bootstrap(
             issuer_actor_ref=system_ref,
             issuer_trust=LOCAL_AUTHORITY_TRUST,
             allowed_commands=(
-                "AcknowledgeResult",
                 "AdvanceGoal",
+                "PauseLoop",
                 "PrepareFinalization",
+                "RecordPolicyDecision",
+                "ResumeLoop",
                 "StopLoop",
             ),
             loop_scope=loop_ref,
@@ -289,6 +347,14 @@ def _machine_bootstrap(
             "Preserve the preparation and inspect the local runtime.",
         )
     trusted_receipts[CONFIRMATION_ISSUER] = CONFIRMATION_TRUST
+    existing_artifact_trust = trusted_receipts.get(LOCAL_ARTIFACT_ISSUER)
+    if existing_artifact_trust not in (None, LOCAL_ARTIFACT_TRUST):
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "The local artifact verifier trust root conflicts with this start.",
+            "Preserve the preparation and inspect the local runtime.",
+        )
+    trusted_receipts[LOCAL_ARTIFACT_ISSUER] = LOCAL_ARTIFACT_TRUST
     authority = AuthorityContext(
         actors=actors,
         grants={
@@ -296,6 +362,7 @@ def _machine_bootstrap(
             observe_grant_ref: observe_grant,
             worker_grant_ref: worker_grant,
             reviewer_grant_ref: reviewer_grant,
+            artifact_grant_ref: artifact_grant,
             lifecycle_grant_ref: lifecycle_grant,
             close_grant_ref: close_grant,
         },
@@ -332,6 +399,17 @@ def _machine_bootstrap(
                 "prepared_manifest_digest": prepared.bundle.manifest_digest,
                 "provider_action": "create_task",
                 "target_ref": provider_target,
+                **(
+                    {
+                        "artifact_baseline_blob_digest": artifact_baseline_blob_digest,
+                        "artifact_profile": artifact_profile,
+                        "workspace_identity_digest": workspace_identity_digest,
+                    }
+                    if artifact_profile
+                    and artifact_baseline_blob_digest
+                    and workspace_identity_digest
+                    else {}
+                ),
             },
         },
         semantic_payload={
@@ -366,6 +444,7 @@ def prepare_loop(
     *,
     clock: Callable[[], datetime] = _now,
     token_factory: Callable[[], str] = _token,
+    workspace_root: Path | str | None = None,
 ) -> PreparedContext:
     try:
         return prepare(
@@ -373,6 +452,7 @@ def prepare_loop(
             output_directory,
             clock=clock,
             token_factory=token_factory,
+            workspace_root=workspace_root,
         )
     except PreparationError as exc:
         _raise_preparation_error(exc)
@@ -480,6 +560,7 @@ def start_loop(
     host_provider: CodexProviderPort | None = None,
     host_issuer_ref: str = DEFAULT_CODEX_RECEIPT_ISSUER,
     host_issuer_trust: str = DEFAULT_CODEX_RECEIPT_TRUST,
+    workspace_root: Path | str | None = None,
 ) -> UserFacingStatus:
     prepared_directory = prepared.directory if isinstance(prepared, PreparedContext) else prepared
     try:
@@ -494,14 +575,17 @@ def start_loop(
     if receipt_trust_roots is None:
         receipt_trust_roots = {host_issuer_ref: host_issuer_trust}
     start_time = clock()
-    loop_ref, authority, command = _machine_bootstrap(
-        prepared_context,
-        now=start_time,
-        receipt_trust_roots=receipt_trust_roots,
-    )
+    if host_provider is not None and (
+        workspace_root is None or prepared_context.manifest.artifact_profile == "UNBOUND"
+    ):
+        raise EntryError(
+            "USER_PREPARATION_INVALID",
+            "The prepared loop does not bind one artifact workspace.",
+            "Prepare again from the intended workspace before starting.",
+        )
     path = _store_path(root)
     try:
-        with SQLiteStore(path, authority) as store:
+        with SQLiteStore(path) as store:
             descriptors = store.loop_descriptors()
             if descriptors:
                 if len(descriptors) != 1 or descriptors[0]["goal"] != goal:
@@ -512,6 +596,28 @@ def start_loop(
                     )
                 loop_ref = descriptors[0]["loop_ref"]
             else:
+                baseline = None
+                baseline_digest = None
+                if workspace_root is not None:
+                    baseline = prepare_artifact_baseline(
+                        workspace_root,
+                        expected_profile=prepared_context.manifest.artifact_profile,
+                        expected_workspace_identity_digest=(
+                            prepared_context.manifest.workspace_identity_digest
+                        ),
+                    )
+                    baseline_digest = persist_baseline_blobs(store, baseline)
+                loop_ref, authority, command = _machine_bootstrap(
+                    prepared_context,
+                    now=start_time,
+                    receipt_trust_roots=receipt_trust_roots,
+                    artifact_profile=(None if baseline is None else baseline.profile),
+                    artifact_baseline_blob_digest=baseline_digest,
+                    workspace_identity_digest=(
+                        None if baseline is None else baseline.workspace_identity_digest
+                    ),
+                )
+                store.authority = authority
                 store.apply(command)
                 store.verify_integrity()
         if host_provider is not None:
@@ -521,11 +627,12 @@ def start_loop(
                 issuer_ref=host_issuer_ref,
                 issuer_trust=host_issuer_trust,
                 clock=clock,
+                workspace_root=workspace_root,
             )
         return status(root=root)
     except EntryError:
         raise
-    except (OSError, PersistenceError, ProtocolRejection) as exc:
+    except (ArtifactCaptureError, OSError, PersistenceError, ProtocolRejection) as exc:
         raise EntryError(
             "USER_STORE_UNAVAILABLE",
             "LoopSkill could not safely start the loop.",
@@ -540,6 +647,7 @@ def _run_startup_provider(
     issuer_ref: str,
     issuer_trust: str,
     clock: Callable[[], datetime],
+    workspace_root: Path | str | None,
 ) -> UserFacingStatus:
     with SQLiteStore(path) as store:
         descriptors = store.loop_descriptors()
@@ -565,6 +673,20 @@ def _run_startup_provider(
                 "Inspect diagnostics and preserve the store.",
             )
         effect_ref, effect = next(iter(effects.items()))
+        expected_workspace = effect.get("workspace_identity_digest")
+        expected_profile = effect.get("artifact_profile")
+        if (
+            workspace_root is None
+            or not isinstance(expected_workspace, str)
+            or not isinstance(expected_profile, str)
+            or workspace_identity(workspace_root, expected_profile) != expected_workspace
+            or store.get_blob(str(effect.get("artifact_baseline_blob_digest"))) is None
+        ):
+            raise EntryError(
+                "USER_STORE_UNAVAILABLE",
+                "The startup artifact workspace no longer matches the confirmed boundary.",
+                "Preserve the store and inspect the prepared workspace binding.",
+            )
         if effect["state"] == "OBSERVED":
             return _status_from_store(store, loop_ref)
         attempt = store.effect_attempt(effect["attempt_ref"])
@@ -614,6 +736,9 @@ def _status_from_store(store: SQLiteStore, loop_ref: str) -> UserFacingStatus:
     )
     progress = "Starting" if "ATTEMPT_COMMITTED" in external_effect_states else "Active"
     result = "Pending"
+    if snapshot["execution"]["state"] == "PAUSED":
+        progress = "Paused"
+        next_actions = ("Resume or stop the loop after reviewing its boundary.",)
     if "UNKNOWN" in delivery_states or "UNKNOWN" in external_effect_states:
         progress = "Needs attention"
         limitations = ("An external outcome is unknown.",)
@@ -625,6 +750,14 @@ def _status_from_store(store: SQLiteStore, loop_ref: str) -> UserFacingStatus:
         limitations = ("An external outcome cannot be verified.",)
         next_actions = (
             "Wait for authoritative readback or close with a limitation.",
+        )
+    reviews = list(snapshot.get("reviews", {}).values())
+    if reviews and reviews[-1].get("state") == "REPAIR":
+        progress = "Needs attention"
+        result = "Repair required"
+        limitations = ("The verified acceptance criterion was not satisfied.",)
+        next_actions = (
+            "Choose a bounded repair successor, wait, or stop.",
         )
     if snapshot["execution"]["state"] == "TERMINAL":
         progress = "Finished"
@@ -664,6 +797,290 @@ def status(*, root: Path | str) -> UserFacingStatus:
             "USER_STORE_UNAVAILABLE",
             "The LoopSkill state could not be read safely.",
             "Use diagnostics or restore a verified backup.",
+        ) from exc
+
+
+def control_loop(
+    action: str,
+    *,
+    root: Path | str,
+    reason: str = "User requested lifecycle control.",
+    clock: Callable[[], datetime] = _now,
+) -> UserFacingStatus:
+    """Submit one machine-authorized lifecycle command; the user supplies semantics only."""
+    command_type = {
+        "pause": "PauseLoop",
+        "resume": "ResumeLoop",
+        "stop": "StopLoop",
+    }.get(action)
+    if command_type is None:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The lifecycle action is unsupported.",
+            "Choose pause, resume, or stop.",
+        )
+    path = _existing_store_path(root)
+    try:
+        with SQLiteStore(path) as store:
+            descriptors = store.loop_descriptors()
+            if len(descriptors) != 1:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The LoopSkill data location is not a single-loop store.",
+                    "Preserve the store and inspect diagnostics.",
+                )
+            loop_ref = descriptors[0]["loop_ref"]
+            snapshot = store.snapshot(loop_ref)
+            if snapshot is None:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The loop state is unavailable.",
+                    "Preserve the store and inspect diagnostics.",
+                )
+            execution_state = snapshot["execution"]["state"]
+            if (
+                (command_type == "PauseLoop" and execution_state == "PAUSED")
+                or (command_type == "ResumeLoop" and execution_state == "ACTIVE")
+                or (command_type == "StopLoop" and execution_state == "TERMINAL")
+            ):
+                return _status_from_store(store, loop_ref)
+            semantic_payload = {"reason": reason.strip()} if command_type != "ResumeLoop" else {}
+            store.apply(
+                _machine_command(
+                    store,
+                    snapshot,
+                    command_type=command_type,
+                    operation_label=f"{action}-{snapshot['loop_revision']}",
+                    subject_kind="LoopRef",
+                    subject_ref=loop_ref,
+                    expected_subject_revisions={},
+                    machine_bindings={
+                        "allocate_refs": {},
+                        "receipt_refs": {},
+                        "resolved_refs": {},
+                    },
+                    semantic_payload=semantic_payload,
+                    clock=clock,
+                )
+            )
+            store.verify_integrity()
+            return _status_from_store(store, loop_ref)
+    except EntryError:
+        raise
+    except (OSError, PersistenceError, ProtocolRejection) as exc:
+        raise EntryError(
+            "USER_STORE_UNAVAILABLE",
+            "LoopSkill could not safely apply the lifecycle action.",
+            "Preserve the store and inspect diagnostics.",
+        ) from exc
+
+
+def policy_view(*, root: Path | str) -> Mapping[str, Any]:
+    """Read the optional policy projection without granting it write authority."""
+    from loop_architect.v4_policy import (
+        AdaptiveRoadmap,
+        GoalSpec,
+        PolicyEnvelope,
+        build_adaptive_roadmap,
+        build_standard_queue,
+        next_action,
+        role_requirements,
+    )
+
+    path = _existing_store_path(root)
+    with SQLiteStore(path) as store:
+        descriptors = store.loop_descriptors()
+        if len(descriptors) != 1:
+            raise EntryError(
+                "USER_STORE_UNAVAILABLE",
+                "The LoopSkill data location is not a single-loop store.",
+                "Preserve the store and inspect diagnostics.",
+            )
+        descriptor = descriptors[0]
+        snapshot = store.snapshot(descriptor["loop_ref"])
+        if snapshot is None:
+            raise EntryError(
+                "USER_STORE_UNAVAILABLE",
+                "The loop state is unavailable.",
+                "Preserve the store and inspect diagnostics.",
+            )
+        goal_ref = next(iter(snapshot["goals"]))
+        goals = (GoalSpec(goal_ref, descriptor["goal"]),)
+        envelope = PolicyEnvelope(allowed_goal_ids=(goal_ref,))
+        attempt = next(iter(snapshot.get("attempts", {}).values()), None)
+        mode = (
+            "STANDARD"
+            if attempt is None
+            else str(attempt.get("provider_request", {}).get("execution_mode", "STANDARD"))
+        )
+        if mode == "ADAPTIVE":
+            roadmap: AdaptiveRoadmap = build_adaptive_roadmap(
+                goals,
+                envelope,
+                revision=1,
+                active_goal_id=goal_ref,
+            )
+            policy_shape = {
+                "active_goal_count": 1,
+                "kind": "ADAPTIVE",
+                "revision": roadmap.revision,
+            }
+        else:
+            queue = build_standard_queue(goals, envelope)
+            policy_shape = {"goal_count": len(queue), "kind": "STANDARD"}
+        action = next_action(snapshot)
+        roles = role_requirements(
+            snapshot,
+            local_verification_required=any(
+                artifact.get("state") != "VERIFIED"
+                for artifact in snapshot.get("artifacts", {}).values()
+            ),
+        )
+        return {
+            "decision_options": _policy_options(snapshot),
+            "next_action": {"kind": action.kind, "reason": action.reason},
+            "policy": policy_shape,
+            "repair": dict(snapshot.get("policy", {})),
+            "roles": tuple(requirement.role for requirement in roles),
+        }
+
+
+def _policy_options(snapshot: Mapping[str, Any]) -> tuple[str, ...]:
+    state = snapshot["execution"]["state"]
+    if state == "TERMINAL":
+        return ()
+    options = ["STOP"]
+    if state == "ACTIVE":
+        options.insert(0, "WAIT")
+    reviews = list(snapshot.get("reviews", {}).values())
+    if (
+        reviews
+        and reviews[-1].get("state") == "REPAIR"
+        and snapshot.get("policy", {}).get("state") != "EXHAUSTED"
+    ):
+        options.insert(0, "CONTINUE_REPAIR")
+    return tuple(options)
+
+
+def steer_loop(
+    choice: str,
+    *,
+    root: Path | str,
+    failure_fingerprint: str = "",
+    clock: Callable[[], datetime] = _now,
+) -> UserFacingStatus:
+    """Bind one human choice to the current context without exposing control refs."""
+    from loop_architect.v4_policy import (
+        DecisionResponse,
+        apply_decision_response,
+        build_decision_card,
+    )
+
+    normalized = choice.strip().upper().replace("-", "_")
+    path = _existing_store_path(root)
+    try:
+        with SQLiteStore(path) as store:
+            descriptor = store.loop_descriptors()
+            if len(descriptor) != 1:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The LoopSkill data location is not a single-loop store.",
+                    "Preserve the store and inspect diagnostics.",
+                )
+            loop_ref = descriptor[0]["loop_ref"]
+            snapshot = store.snapshot(loop_ref)
+            if snapshot is None or normalized not in _policy_options(snapshot):
+                raise EntryError(
+                    "USER_INPUT_INVALID",
+                    "The steering choice is not valid for the current loop state.",
+                    "Run policy status and choose one currently offered action.",
+                )
+            current = policy_context(snapshot)
+            now = clock()
+            goal_ref = next(iter(snapshot["goals"]))
+            artifacts = tuple(snapshot.get("artifacts", {}))
+            card_ref = "decision-" + domain_digest(
+                "loopskill-decision-ref-v1\n", current
+            )[:24]
+            card = build_decision_card(
+                card_ref=card_ref,
+                goal_ref=goal_ref,
+                artifact_ref=artifacts[-1] if artifacts else None,
+                options=_policy_options(snapshot),
+                current_context=current,
+                expires_at=_iso(now + timedelta(minutes=5)),
+            )
+            response = DecisionResponse(
+                card_ref=card.card_ref,
+                selected_option=normalized,
+                context_digest=card.context_digest,
+                card_digest=card.card_digest,
+                responded_at=_iso(now),
+            )
+            apply_decision_response(
+                card,
+                response,
+                current_context=current,
+                now=_iso(now),
+            )
+            result = store.apply(
+                _machine_command(
+                    store,
+                    snapshot,
+                    command_type="RecordPolicyDecision",
+                    operation_label="decision-" + card.card_digest[:12],
+                    subject_kind="LoopRef",
+                    subject_ref=loop_ref,
+                    expected_subject_revisions={
+                        "execution": snapshot["execution"]["revision"]
+                    },
+                    machine_bindings={
+                        "allocate_refs": {},
+                        "receipt_refs": {},
+                        "resolved_refs": {
+                            "context_digest": card.context_digest,
+                            "decision_card_digest": card.card_digest,
+                            "repair_budget": "3",
+                            "same_failure_budget": "2",
+                        },
+                    },
+                    semantic_payload={
+                        "decision": normalized,
+                        "failure_fingerprint": failure_fingerprint.strip(),
+                    },
+                    clock=clock,
+                )
+            )
+            store.verify_integrity()
+            if normalized == "CONTINUE_REPAIR":
+                authorized = bool(result.response.get("repair_authorized"))
+                base = _status_from_store(store, loop_ref)
+                return UserFacingStatus(
+                    goal=base.goal,
+                    progress="Needs attention",
+                    result="Repair authorized" if authorized else "Repair exhausted",
+                    limitations=(
+                        "No automatic retry was sent; a separately confirmed successor is required.",
+                    ),
+                    next_actions=(
+                        "Prepare a scoped successor or stop the loop."
+                        if authorized
+                        else "Wait for a user decision or stop the loop."
+                    ,),
+                )
+        return control_loop(
+            "pause" if normalized == "WAIT" else "stop",
+            root=root,
+            reason="Human steering decision.",
+            clock=clock,
+        )
+    except EntryError:
+        raise
+    except (OSError, PersistenceError, ProtocolRejection) as exc:
+        raise EntryError(
+            "USER_STORE_UNAVAILABLE",
+            "LoopSkill could not safely apply the human steering decision.",
+            "Preserve the store and inspect diagnostics.",
         ) from exc
 
 
@@ -859,6 +1276,95 @@ def _with_receipt(store: SQLiteStore, receipt: Receipt) -> None:
     )
 
 
+def _local_artifact_receipt(
+    store: SQLiteStore,
+    *,
+    effect: Mapping[str, Any],
+    artifact_ref: str,
+    loop_ref: str,
+    provider_id: str,
+    workspace_root: Path | str | None,
+    acceptance_criteria: tuple[str, ...],
+    clock: Callable[[], datetime],
+) -> tuple[Receipt, Mapping[str, str], str]:
+    """Capture independently of Host text and issue one artifact-bound receipt."""
+    profile = str(effect.get("artifact_profile", "UNAVAILABLE"))
+    baseline_digest = effect.get("artifact_baseline_blob_digest")
+    capture_state = "UNAVAILABLE"
+    artifact_digest = domain_digest(
+        "loopskill-artifact-unavailable-v1\n",
+        {"effect_ref": effect["attempt_ref"], "profile": profile},
+    )
+    manifest_digest = domain_digest("loopskill-artifact-manifest-v1\n", [])
+    verification_digest = domain_digest(
+        "loopskill-local-verification-v1\n",
+        {"artifact_digest": artifact_digest, "state": "UNVERIFIABLE"},
+    )
+    verification_state = "UNVERIFIABLE"
+    if workspace_root is not None and isinstance(baseline_digest, str):
+        try:
+            raw = store.get_blob(baseline_digest)
+            if raw is None:
+                raise ArtifactCaptureError(
+                    "ARTIFACT_IDENTITY_MISMATCH", "baseline descriptor is absent"
+                )
+            baseline = load_artifact_baseline(raw)
+            if (
+                baseline.profile != profile
+                or baseline.workspace_identity_digest
+                != effect.get("workspace_identity_digest")
+            ):
+                raise ArtifactCaptureError(
+                    "ARTIFACT_IDENTITY_MISMATCH", "baseline binding mismatch"
+                )
+            capture = capture_artifact_transition(workspace_root, baseline)
+            persist_capture_blobs(store, capture)
+            verification = verify_artifact(store, capture, acceptance_criteria)
+            capture_state = "CAPTURED"
+            artifact_digest = capture.artifact_digest
+            manifest_digest = capture.manifest_digest
+            verification_digest = verification.evidence_digest
+            verification_state = verification.state
+        except ArtifactCaptureError:
+            # Absence or drift is retained as explicit UNVERIFIABLE evidence.
+            pass
+    strict = capture_state == "CAPTURED" and verification_state == "VERIFIED"
+    now = clock()
+    receipt = Receipt(
+        receipt_ref="receipt-artifact-" + domain_digest(
+            "loopskill-artifact-receipt-ref-v1\n",
+            {
+                "artifact_digest": artifact_digest,
+                "artifact_ref": artifact_ref,
+                "verification_digest": verification_digest,
+            },
+        )[:24],
+        issuer_ref=LOCAL_ARTIFACT_ISSUER,
+        issuer_trust=LOCAL_ARTIFACT_TRUST,
+        trust_class="strict" if strict else "cooperative",
+        action="verify-artifact",
+        loop_ref=loop_ref,
+        subject_ref=artifact_ref,
+        attempt_ref=str(effect["attempt_ref"]),
+        target_ref=str(effect["target_ref"]),
+        request_digest=verification_digest,
+        provider_idempotency_key=None,
+        provider_resource_ref=provider_id,
+        outcome="observed" if strict else "unverifiable",
+        issued_at=_iso(now),
+        expires_at=_iso(now + timedelta(minutes=5)),
+        evidence_digest=artifact_digest,
+    )
+    return receipt, {
+        "artifact_digest": artifact_digest,
+        "artifact_profile": profile,
+        "capture_state": capture_state,
+        "manifest_digest": manifest_digest,
+        "verification_digest": verification_digest,
+        "verification_state": verification_state,
+    }, verification_state
+
+
 def sync_loop(
     *,
     root: Path | str,
@@ -866,6 +1372,7 @@ def sync_loop(
     host_issuer_ref: str = DEFAULT_CODEX_RECEIPT_ISSUER,
     host_issuer_trust: str = DEFAULT_CODEX_RECEIPT_TRUST,
     clock: Callable[[], datetime] = _now,
+    workspace_root: Path | str | None = None,
 ) -> UserFacingStatus:
     """Advance the exact Host-result chain; every local step is replay-safe."""
     path = _existing_store_path(root)
@@ -970,25 +1477,17 @@ def sync_loop(
             result = snapshot["results"][result_ref]
             outcome = result["outcome"]
             if result["state"] == "STAGED":
-                assert observation is not None
-                now = clock()
-                artifact_receipt = Receipt(
-                    receipt_ref="receipt-artifact-" + observation["result_digest"][:24],
-                    issuer_ref=host_issuer_ref,
-                    issuer_trust=host_issuer_trust,
-                    trust_class="strict",
-                    action="verify-artifact",
+                attempt = snapshot["attempts"][effect["attempt_ref"]]
+                criteria = tuple(attempt["provider_request"]["acceptance_criteria"])
+                artifact_receipt, artifact_bindings, _ = _local_artifact_receipt(
+                    store,
+                    effect=effect,
+                    artifact_ref=artifact_ref,
                     loop_ref=loop_ref,
-                    subject_ref=artifact_ref,
-                    attempt_ref=effect["attempt_ref"],
-                    target_ref=effect["target_ref"],
-                    request_digest=observation["result_digest"],
-                    provider_idempotency_key=None,
-                    provider_resource_ref=provider_id,
-                    outcome="observed",
-                    issued_at=_iso(now),
-                    expires_at=_iso(now + timedelta(minutes=5)),
-                    evidence_digest=observation["result_digest"],
+                    provider_id=provider_id,
+                    workspace_root=workspace_root,
+                    acceptance_criteria=criteria,
+                    clock=clock,
                 )
                 _with_receipt(store, artifact_receipt)
                 store.apply(
@@ -1006,7 +1505,7 @@ def sync_loop(
                         machine_bindings={
                             "allocate_refs": {"new_artifact_ref": artifact_ref},
                             "receipt_refs": {"receipt": artifact_receipt.receipt_ref},
-                            "resolved_refs": {},
+                            "resolved_refs": dict(artifact_bindings),
                         },
                         semantic_payload={},
                         clock=clock,
@@ -1016,7 +1515,15 @@ def sync_loop(
                 assert snapshot is not None
 
             if not snapshot["reviews"]:
-                verdict = "PASS" if outcome == "PASS" else "LIMITATION"
+                artifact = snapshot["artifacts"][artifact_ref]
+                verdict = (
+                    "PASS"
+                    if outcome == "PASS" and artifact["state"] == "VERIFIED"
+                    else "REPAIR"
+                    if outcome == "PASS"
+                    and artifact.get("verification_state") == "FAILED"
+                    else "LIMITATION"
+                )
                 store.apply(
                     _machine_command(
                         store,
@@ -1041,15 +1548,19 @@ def sync_loop(
                 )
                 snapshot = store.snapshot(loop_ref)
                 assert snapshot is not None
+                if verdict == "REPAIR":
+                    return _status_from_store(store, loop_ref)
 
             goal_ref = next(iter(snapshot["goals"]))
             if snapshot["goals"][goal_ref]["state"] == "ACTIVE":
-                goal_disposition = {
-                    "PASS": "DONE",
-                    "FAILED": "FAILED",
-                    "LIMITATION": "LIMITATION",
-                    "UNVERIFIABLE": "LIMITATION",
-                }[outcome]
+                review_state = snapshot["reviews"][review_ref]["state"]
+                goal_disposition = (
+                    "DONE"
+                    if outcome == "PASS" and review_state == "PASS"
+                    else "FAILED"
+                    if outcome == "FAILED"
+                    else "LIMITATION"
+                )
                 store.apply(
                     _machine_command(
                         store,
@@ -1074,8 +1585,13 @@ def sync_loop(
                 snapshot = store.snapshot(loop_ref)
                 assert snapshot is not None
 
-            final_disposition = {"PASS": "SUCCEEDED", "FAILED": "FAILED"}.get(
-                outcome, "LIMITATION"
+            review_state = snapshot["reviews"][review_ref]["state"]
+            final_disposition = (
+                "SUCCEEDED"
+                if outcome == "PASS" and review_state == "PASS"
+                else "FAILED"
+                if outcome == "FAILED"
+                else "LIMITATION"
             )
             if not snapshot["finalizations"]:
                 store.apply(

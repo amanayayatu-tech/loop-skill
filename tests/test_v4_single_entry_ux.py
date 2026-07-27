@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import hashlib
 import importlib.machinery
 import importlib.util
 import io
@@ -39,11 +40,14 @@ from loop_architect.v4_alpha.vertical import (  # noqa: E402
 from loop_architect.v4_entry import (  # noqa: E402
     EntryError,
     confirm_loop,
+    control_loop,
     diagnostics,
     intake_report_loop,
     prepare_loop,
+    policy_view,
     record_external_observation,
     start_loop,
+    steer_loop,
     status,
     sync_loop,
 )
@@ -165,18 +169,21 @@ def ready_request(goal="Ship a bounded public change", *, horizon="long"):
         write_scope=("synthetic-workspace",),
         budget="10 minutes; 1 Host create attempt",
         external_actions=(),
-        acceptance_criteria=("one canonical startup Attempt",),
+        acceptance_criteria=("no-file-change",),
         stop_conditions=("stop on UNKNOWN",),
         authorization_boundaries=("no commit, push, publish, or deploy",),
     )
 
 
 def prepare_confirm(root, goal="Ship a bounded public change", *, token="000000000000000000000001"):
+    workspace = Path(root) / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
     prepared = prepare_loop(
         ready_request(goal),
         Path(root) / "prepared",
         clock=lambda: NOW,
         token_factory=lambda: token,
+        workspace_root=workspace,
     )
     return confirm_loop(prepared.directory, confirmed=True, clock=lambda: NOW)
 
@@ -506,8 +513,8 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 loop_ref = descriptors[0]["loop_ref"]
                 self.assertEqual(store.snapshot(loop_ref)["execution"]["state"], "ACTIVE")
                 self.assertEqual(store.commit_count, 1)
-                self.assertEqual(len(store.authority.actors), 2)
-                self.assertEqual(len(store.authority.grants), 6)
+                self.assertEqual(len(store.authority.actors), 4)
+                self.assertEqual(len(store.authority.grants), 7)
                 self.assertEqual(len(store.ready_effect_attempts()), 1)
                 self.assertEqual(store.ready_effect_attempts()[0].action, "create_task")
                 self.assertNotIn("Ship a bounded public change", store.authority.actors)
@@ -573,12 +580,14 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 root=data,
                 host_provider=provider,
                 clock=lambda: NOW,
+                workspace_root=root / "workspace",
             )
             self.assertEqual(started.progress, "Active")
             closed = sync_loop(
                 root=data,
                 host_provider=provider,
                 clock=lambda: NOW,
+                workspace_root=root / "workspace",
             )
             self.assertEqual(closed.progress, "Finished")
             self.assertEqual(closed.result, "SUCCEEDED")
@@ -593,13 +602,87 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 self.assertEqual(result["outcome"], "PASS")
                 self.assertEqual(finalization["disposition"], "SUCCEEDED")
                 self.assertEqual(snapshot["closure_assurance"]["strength"], "STRICT")
+                artifact = next(iter(snapshot["artifacts"].values()))
+                review = next(iter(snapshot["reviews"].values()))
+                receipt = store.authority.receipts[artifact["receipt_ref"]]
+                self.assertEqual(receipt.issuer_ref, "loopskill-local-artifact-verifier-v1")
+                self.assertNotEqual(receipt.issuer_ref, "loopskill-codex-adapter-v1")
+                self.assertEqual(artifact["capture_state"], "CAPTURED")
+                self.assertTrue(review["reviewer_actor_ref"].startswith("actor-reviewer-"))
             replay = sync_loop(
                 root=data,
                 host_provider=provider,
                 clock=lambda: NOW,
+                workspace_root=root / "workspace",
             )
             self.assertEqual(replay.result, "SUCCEEDED")
             self.assertEqual(provider.result_read_count, 1)
+
+    def test_host_pass_without_artifact_capability_cannot_succeed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared = prepare_confirm(
+                root,
+                "Do not trust Host PASS as artifact proof",
+                token="898989898989898989898989",
+            )
+            provider = EntryProviderFixture(now=NOW)
+            data = root / "data"
+            start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                workspace_root=root / "workspace",
+                clock=lambda: NOW,
+            )
+            closed = sync_loop(root=data, host_provider=provider, clock=lambda: NOW)
+            self.assertEqual(closed.result, "LIMITATION")
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                artifact = next(iter(snapshot["artifacts"].values()))
+                review = next(iter(snapshot["reviews"].values()))
+                self.assertEqual(artifact["capture_state"], "UNAVAILABLE")
+                self.assertEqual(artifact["state"], "UNVERIFIABLE")
+                self.assertEqual(review["state"], "LIMITATION")
+                self.assertEqual(snapshot["execution"]["disposition"], "LIMITATION")
+
+    def test_explicit_local_artifact_criterion_can_support_strict_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            content = b"verified artifact\n"
+            request = replace(
+                ready_request("Create one verifiable artifact"),
+                acceptance_criteria=(
+                    "file-sha256:result.txt=" + hashlib.sha256(content).hexdigest(),
+                ),
+            )
+            prepared = prepare_loop(
+                request,
+                root / "prepared",
+                clock=lambda: NOW,
+                token_factory=lambda: "878787878787878787878787",
+                workspace_root=workspace,
+            )
+            prepared = confirm_loop(prepared.directory, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(now=NOW)
+            data = root / "data"
+            start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                workspace_root=workspace,
+                clock=lambda: NOW,
+            )
+            (workspace / "result.txt").write_bytes(content)
+            closed = sync_loop(
+                root=data,
+                host_provider=provider,
+                workspace_root=workspace,
+                clock=lambda: NOW,
+            )
+            self.assertEqual(closed.result, "SUCCEEDED")
 
     def test_host_result_refresh_recovers_every_local_durable_boundary(self):
         operation_types = (
@@ -628,6 +711,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
                             root=data,
                             host_provider=provider,
                             clock=lambda: NOW,
+                            workspace_root=root / "workspace",
                         )
                         injected = {"value": False}
 
@@ -650,12 +734,14 @@ class V4SingleEntryUXTests(unittest.TestCase):
                                     root=data,
                                     host_provider=provider,
                                     clock=lambda: NOW,
+                                    workspace_root=root / "workspace",
                                 )
                         self.assertTrue(injected["value"])
                         closed = sync_loop(
                             root=data,
                             host_provider=provider,
                             clock=lambda: NOW,
+                            workspace_root=root / "workspace",
                         )
                         self.assertEqual(closed.result, "SUCCEEDED")
                         self.assertEqual(provider.invoke_count, 1)
@@ -696,11 +782,13 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 root=data,
                 host_provider=provider,
                 clock=lambda: NOW,
+                workspace_root=root / "workspace",
             )
             closed = sync_loop(
                 root=data,
                 host_provider=provider,
                 clock=lambda: NOW,
+                workspace_root=root / "workspace",
             )
             self.assertEqual(closed.result, expected_disposition)
             self.assertTrue(closed.limitations)
@@ -828,6 +916,92 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertIn('"loop_ref":"loop-', diagnostic.stdout)
             self.assertIn('"snapshot_digest":', diagnostic.stdout)
 
+    def test_public_lifecycle_and_optional_mode_projection_are_reachable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared = prepare_confirm(
+                root,
+                "Exercise public lifecycle controls",
+                token="818181818181818181818181",
+            )
+            data = root / "data"
+            start_loop(prepared, root=data, clock=lambda: NOW)
+            self.assertEqual(policy_view(root=data)["policy"]["kind"], "STANDARD")
+            self.assertEqual(control_loop("pause", root=data, clock=lambda: NOW).progress, "Paused")
+            self.assertEqual(control_loop("resume", root=data, clock=lambda: NOW).progress, "Starting")
+            self.assertEqual(steer_loop("wait", root=data, clock=lambda: NOW).progress, "Paused")
+            self.assertEqual(control_loop("resume", root=data, clock=lambda: NOW).progress, "Starting")
+            self.assertEqual(steer_loop("stop", root=data, clock=lambda: NOW).result, "STOPPED")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = ready_request("Adaptive single-goal roadmap", horizon="adaptive")
+            prepared = prepare_loop(
+                request,
+                root / "prepared",
+                clock=lambda: NOW,
+                token_factory=lambda: "828282828282828282828282",
+                workspace_root=workspace,
+            )
+            prepared = confirm_loop(prepared.directory, confirmed=True, clock=lambda: NOW)
+            data = root / "data"
+            start_loop(prepared, root=data, clock=lambda: NOW)
+            projection = policy_view(root=data)
+            self.assertEqual(projection["policy"]["kind"], "ADAPTIVE")
+            self.assertEqual(projection["policy"]["active_goal_count"], 1)
+
+    def test_bounded_repair_decision_exhausts_without_automatic_resend(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = replace(
+                ready_request("Require a changed artifact"),
+                acceptance_criteria=("artifact-changed",),
+            )
+            prepared = prepare_loop(
+                request,
+                root / "prepared",
+                clock=lambda: NOW,
+                token_factory=lambda: "838383838383838383838383",
+                workspace_root=workspace,
+            )
+            prepared = confirm_loop(prepared.directory, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(now=NOW)
+            data = root / "data"
+            start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                workspace_root=workspace,
+                clock=lambda: NOW,
+            )
+            repair = sync_loop(
+                root=data,
+                host_provider=provider,
+                workspace_root=workspace,
+                clock=lambda: NOW,
+            )
+            self.assertEqual(repair.result, "Repair required")
+            first = steer_loop(
+                "continue-repair",
+                root=data,
+                failure_fingerprint="artifact criterion failed",
+                clock=lambda: NOW,
+            )
+            self.assertEqual(first.result, "Repair authorized")
+            second = steer_loop(
+                "continue-repair",
+                root=data,
+                failure_fingerprint="artifact criterion failed",
+                clock=lambda: NOW,
+            )
+            self.assertEqual(second.result, "Repair exhausted")
+            self.assertEqual(provider.invoke_count, 1)
+            self.assertNotIn("CONTINUE_REPAIR", policy_view(root=data)["decision_options"])
+
     def test_unknown_and_unverifiable_are_visible_without_resend_controls(self):
         for outcome, trust_class, word in (
             ("unknown", "cooperative", "unknown"),
@@ -949,7 +1123,6 @@ class V4SingleEntryUXTests(unittest.TestCase):
             "requests",
             "subprocess",
             "loop_architect.state_runtime",
-            "loop_architect.v4_artifacts",
         }
         for path in files:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

@@ -21,6 +21,11 @@ from loop_architect.v4_alpha.protocol import (
     domain_digest,
     raw_domain_digest,
 )
+from loop_architect.v4_artifacts import (
+    ArtifactCaptureError,
+    detect_artifact_profile,
+    workspace_identity,
+)
 
 
 MANIFEST_FILENAME = "loop-manifest.json"
@@ -255,6 +260,7 @@ def _boundary_value(manifest: PreparedLoopManifest) -> dict[str, Any]:
     return {
         "acceptance_criteria": list(manifest.acceptance_criteria),
         "authorization_boundaries": list(manifest.authorization_boundaries),
+        "artifact_profile": manifest.artifact_profile,
         "budget": manifest.budget,
         "external_actions": list(manifest.external_actions),
         "execution_mode": manifest.execution_mode,
@@ -330,6 +336,7 @@ def prepare(
     *,
     clock: Callable[[], datetime] = _now,
     token_factory: Callable[[], str] = _token,
+    workspace_root: Path | str | None = None,
 ) -> PreparedContext:
     decision = intake(request)
     if decision.disposition == "DIRECT_TASK_RECOMMENDED":
@@ -362,6 +369,23 @@ def prepare(
         )
     output = Path(output_directory)
     _ensure_output_directory(output)
+    if workspace_root is None:
+        artifact_profile = "UNBOUND"
+        workspace_identity_digest = domain_digest(
+            "loopskill-workspace-identity-v1\n", {"profile": "UNBOUND"}
+        )
+    else:
+        try:
+            artifact_profile = detect_artifact_profile(workspace_root)
+            workspace_identity_digest = workspace_identity(
+                workspace_root, artifact_profile
+            )
+        except ArtifactCaptureError as exc:
+            raise PreparationError(
+                "USER_PREPARATION_INVALID",
+                "The selected workspace cannot be safely bound for artifact capture.",
+                "Choose one confined regular workspace and prepare again.",
+            ) from exc
     manifest = PreparedLoopManifest(
         manifest_version=MANIFEST_VERSION,
         control_namespace=namespace,
@@ -378,6 +402,8 @@ def prepare(
         acceptance_criteria=tuple(request.acceptance_criteria),
         stop_conditions=tuple(request.stop_conditions),
         authorization_boundaries=tuple(request.authorization_boundaries),
+        artifact_profile=artifact_profile,
+        workspace_identity_digest=workspace_identity_digest,
         prepared_at=_iso(clock()),
     )
     manifest_value = _manifest_value(manifest)

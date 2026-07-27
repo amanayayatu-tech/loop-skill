@@ -428,6 +428,15 @@
           },
           "type": "array"
         },
+        "artifact_profile": {
+          "enum": [
+            "existing_git",
+            "non_git",
+            "new_git",
+            "UNBOUND"
+          ],
+          "type": "string"
+        },
         "authorization_boundaries": {
           "items": {
             "type": "string"
@@ -477,6 +486,9 @@
         "task_horizon": {
           "type": "string"
         },
+        "workspace_identity_digest": {
+          "type": "string"
+        },
         "write_scope": {
           "items": {
             "type": "string"
@@ -498,6 +510,8 @@
         "acceptance_criteria",
         "stop_conditions",
         "authorization_boundaries",
+        "artifact_profile",
+        "workspace_identity_digest",
         "prepared_at"
       ],
       "type": "object"
@@ -666,6 +680,6 @@
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "c0ee416cbf2c1b2b9d89660ffdce74e50256c1f340b409eb49b07d9e47cf25b0",
+  "manifest_sha256": "f56e419b62ffb728eaf3ad2939293fa97175b83d027356429f48aff38deeb0f3",
   "title": "LoopSkill 4 protocol wire shapes"
 }

@@ -20,9 +20,9 @@ from .protocol import (
 LOOP_REF = "loop-0001"
 FIXTURE_NOT_BEFORE = "2026-07-27T00:00:00Z"
 FIXTURE_EXPIRES_AT = "2026-07-27T00:01:00Z"
-EXPECTED_SNAPSHOT_BYTES = 2715
+EXPECTED_SNAPSHOT_BYTES = 2890
 EXPECTED_SNAPSHOT_DIGEST = (
-    "8037bcb1cddd1686869c4743e6210e6f2d99e8120b1197b863fa38a5f241bd3f"
+    "c9be6833249f3538bf379c7ed7c5ba564ffe97a87f239e861a715d167189a9a9"
 )
 EXPECTED_EVENT_TYPES = (
     "LoopCreated",
@@ -48,6 +48,10 @@ EXPECTED_EVENT_TYPES = (
 # One line, no trailing newline. This is deliberately independent from reducer
 # construction so the fixture detects omitted bindings and accidental state.
 EXPECTED_CANONICAL_SNAPSHOT = b'{"artifacts":{"artifact-0001":{"content_digest":"52f71f6c1d592908c2902907fc674a225f3d04030ef6d9b4dedd9ede4b677fe7","receipt_ref":"receipt-artifact-0001","result_ref":"result-0001","revision":1,"state":"VERIFIED"}},"attempts":{"attempt-0001":{"automatic_budget_consumed":true,"delivery_ref":"delivery-0001","executor_actor_ref":"actor-executor-0001","executor_grant_ref":"grant-executor-0001","observation_receipt_ref":"receipt-delivery-0001","ordinal":1,"provider_idempotency_key":"effect-0001","provider_request_digest":"fce45c1a21cfc670d0007e468a04d665c96620e2027208fcaa70061c9544663d","revision":2,"state":"OBSERVED","target_ref":"host-target-0001"}},"closure_assurance":{"finalization_ref":"finalization-0001","receipt_ref":"receipt-finalize-0001","revision":1,"strength":"STRICT"},"deliveries":{"delivery-0001":{"attempt_ref":"attempt-0001","automatic_attempt_budget":1,"automatic_attempts_consumed":1,"revision":3,"route_ref":"route-0001","state":"OBSERVED","target_ref":"host-target-0001"}},"execution":{"disposition":"SUCCEEDED","revision":3,"state":"TERMINAL"},"finalizations":{"finalization-0001":{"artifact_ref":"artifact-0001","assurance_strength":"STRICT","attempt_ref":"attempt-0001","delivery_ref":"delivery-0001","disposition":"SUCCEEDED","goal_ref":"goal-0001","report_ref":"report-0001","result_ref":"result-0001","review_ref":"review-0001","revision":2,"route_ref":"route-0001","state":"EXECUTION_CLOSED","subject_chain_digest":"ff690e9ec52836b8c5d657fc0d5c71d94a83498a20ee4f10f354f34c4e907062"}},"goals":{"goal-0001":{"objective_digest":"353bd5cb07f8fc0496eace49934e6b13238fb34cd287c31a04897b9d22a5f8ec","revision":2,"state":"DONE"}},"host_resources":{"host-target-0001":{"receipt_ref":"receipt-bind-0001","revision":1,"state":"BOUND"}},"loop_ref":"loop-0001","loop_revision":11,"reports":{"report-0001":{"author_actor_ref":"actor-worker-0001","content_digest":"261f2ba50f8d3a03e41d86837f4dcba8b580b2629bd2e9726c641ed50c8ec74a","result_ref":"result-0001","revision":2,"state":"ACCEPTED"}},"results":{"result-0001":{"artifact_ref":"artifact-0001","attempt_ref":"attempt-0001","delivery_ref":"delivery-0001","outcome":"PASS","report_ref":"report-0001","revision":2,"route_ref":"route-0001","state":"ACKNOWLEDGED"}},"reviews":{"review-0001":{"artifact_ref":"artifact-0001","report_ref":"report-0001","result_ref":"result-0001","reviewer_actor_ref":"actor-reviewer-0001","revision":1,"state":"PASS","subject_chain_digest":"c8a7794089c17bfbacb33ea413bc3f22bb81c7646336bf5bec8dddd05303b94b"}},"routes":{"route-0001":{"delivery_ref":"delivery-0001","goal_ref":"goal-0001","intent_digest":"4f8294df9f9485909e7d478819bcfb0aae91c3685864946c1bdea3c0451148b3","revision":1,"target_ref":"host-target-0001"}}}'
+EXPECTED_CANONICAL_SNAPSHOT = EXPECTED_CANONICAL_SNAPSHOT.replace(
+    b'{"artifacts":{"artifact-0001":{"content_digest":"52f71f6c1d592908c2902907fc674a225f3d04030ef6d9b4dedd9ede4b677fe7","receipt_ref":"receipt-artifact-0001","result_ref":"result-0001","revision":1,"state":"VERIFIED"}}',
+    b'{"artifacts":{"artifact-0001":{"capture_state":"CAPTURED","content_digest":"52f71f6c1d592908c2902907fc674a225f3d04030ef6d9b4dedd9ede4b677fe7","manifest_digest":"fixture-manifest-digest","profile":"non_git","receipt_ref":"receipt-artifact-0001","result_ref":"result-0001","revision":1,"state":"VERIFIED","verification_digest":"fixture-verification-digest","verification_state":"VERIFIED"}}',
+)
 
 
 def _grant(
@@ -92,10 +96,11 @@ def _receipt(
     outcome: str = "acknowledged",
     trust_class: str = "strict",
     evidence_digest: str = "fixture-evidence",
+    issuer_ref: str = "actor-system-0001",
 ) -> Receipt:
     return Receipt(
         receipt_ref=receipt_ref,
-        issuer_ref="actor-system-0001",
+        issuer_ref=issuer_ref,
         issuer_trust="trusted-fixture",
         trust_class=trust_class,
         action=action,
@@ -128,6 +133,7 @@ def fixture_authority() -> AuthorityContext:
             "actor-executor-0001",
             "actor-reviewer-0001",
             "actor-system-0001",
+            "actor-verifier-0001",
             "actor-worker-0001",
         )
     }
@@ -151,7 +157,6 @@ def fixture_authority() -> AuthorityContext:
             "actor-author-0001",
             (
                 "PrepareRoute",
-                "AcknowledgeResult",
                 "AdvanceGoal",
                 "PrepareFinalization",
                 "StopLoop",
@@ -180,6 +185,13 @@ def fixture_authority() -> AuthorityContext:
             ("ResultRef",),
             ("result-0001",),
         ),
+        "grant-verifier-0001": _grant(
+            "grant-verifier-0001",
+            "actor-verifier-0001",
+            ("AcknowledgeResult",),
+            ("ResultRef",),
+            ("result-0001",),
+        ),
     }
     receipts = {
         "receipt-bind-0001": _receipt(
@@ -201,7 +213,10 @@ def fixture_authority() -> AuthorityContext:
             "receipt-artifact-0001",
             action="verify-artifact",
             subject_ref="artifact-0001",
+            request_digest="fixture-verification-digest",
+            outcome="observed",
             evidence_digest=artifact_fixture_digest(),
+            issuer_ref="actor-verifier-0001",
         ),
         "receipt-finalize-0001": _receipt(
             "receipt-finalize-0001",
@@ -218,7 +233,10 @@ def fixture_authority() -> AuthorityContext:
         receipts=receipts,
         trusted_actor_issuers={"conformance-fixture": "trusted-fixture"},
         trusted_grant_issuers={"actor-system-0001": "trusted-fixture"},
-        trusted_receipt_issuers={"actor-system-0001": "trusted-fixture"},
+        trusted_receipt_issuers={
+            "actor-system-0001": "trusted-fixture",
+            "actor-verifier-0001": "trusted-fixture",
+        },
     )
 
 
@@ -377,8 +395,8 @@ def vertical_commands() -> tuple[CommandEnvelope, ...]:
         _command(
             7,
             "AcknowledgeResult",
-            "actor-author-0001",
-            "grant-author-0001",
+            "actor-verifier-0001",
+            "grant-verifier-0001",
             _subject("ResultRef", "result-0001"),
             {
                 "attempt-0001": 2,
@@ -389,6 +407,14 @@ def vertical_commands() -> tuple[CommandEnvelope, ...]:
             _bindings(
                 allocate={"new_artifact_ref": "artifact-0001"},
                 receipts={"receipt": "receipt-artifact-0001"},
+                resolved={
+                    "artifact_digest": artifact_fixture_digest(),
+                    "artifact_profile": "non_git",
+                    "capture_state": "CAPTURED",
+                    "manifest_digest": "fixture-manifest-digest",
+                    "verification_digest": "fixture-verification-digest",
+                    "verification_state": "VERIFIED",
+                },
             ),
             {},
         ),

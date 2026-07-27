@@ -17,8 +17,11 @@ from typing import Any, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_ROOT = ROOT / "tests"
+SCRIPTS_ROOT = ROOT / "codex-loop-prompt-architect" / "scripts"
 if str(TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(TEST_ROOT))
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
 
 
 def _load(name: str, path: Path):
@@ -51,6 +54,217 @@ RD = "test_v4_rc_distribution"
 UX = "test_v4_single_entry_ux"
 DOC = "test_v4_docs"
 APP = "test_v4_app_server_provider"
+
+CASE_CONTRACT_VERSION = "loopskill-v4-executable-case-contract-v1"
+CASE_CONTRACT_FIELDS = {
+    "capability_profile",
+    "case_id",
+    "expected_acceptance",
+    "expected_effect_state",
+    "expected_ordered_events",
+    "expected_side_effect_counts",
+    "family",
+    "family_spec_digest",
+    "fixture_selector",
+    "parameter",
+    "precondition",
+    "replay_expectation",
+    "schema_version",
+    "stimulus",
+    "target_test_id",
+}
+_ACTIVE_CASE_CONTRACTS: dict[str, dict[str, Any]] = {}
+
+
+def _family_specs(corpus: str) -> dict[str, str]:
+    specs: dict[str, str] = {}
+    for line in corpus.splitlines():
+        match = preservation.CORPUS_ROW.fullmatch(line)
+        if match is None:
+            continue
+        family = match.group("case")
+        body = " ".join(match.group("body").split())
+        stage = " ".join(match.group("stage").split())
+        count = int(match.group("count"))
+        value = json.dumps(
+            {"body": body, "count": count, "stage": stage},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        previous = specs.get(family)
+        if previous is not None and previous != value:
+            raise RuntimeError(f"CONFORMANCE_FAMILY_SPEC_DUPLICATE: {family}")
+        specs[family] = value
+    return specs
+
+
+def _expected_acceptance(case_id: str, family: str, parameter: str) -> str:
+    reject_families = {
+        "A-001",
+        "A-PATH-001",
+        "AUTH-001",
+        "AUTH-002",
+        "AUTH-003",
+        "AUTH-004",
+        "AUTH-005",
+        "AUTH-006",
+        "K-002",
+        "K-004",
+        "K-005",
+        "K-006",
+        "K-008",
+        "M-001",
+        "M-002",
+        "M-004",
+        "M-005",
+        "RES-001",
+        "UX-004",
+        "UX-006",
+        "UX-013",
+        "UX-016",
+    }
+    if family in reject_families:
+        return "REJECT"
+    if family == "ENC-001" and parameter in {"g", "h", "i", "j"}:
+        return "REJECT"
+    if family == "H-004" and parameter == "b":
+        return "REJECT"
+    if family == "H-005" and parameter == "b":
+        return "REJECT"
+    if family == "H-007" and parameter in {"b", "c"}:
+        return "REJECT"
+    if family == "F-002" and parameter == "b":
+        return "REJECT"
+    if family == "F-004" and parameter == "b":
+        return "REJECT"
+    if family == "XFX-005" and parameter == "b":
+        return "REJECT"
+    negative_markers = (
+        "-REJECT",
+        "-DRIFT",
+        "-CONFLICT",
+        "-TAMPER",
+        "-SECRET",
+        "-PII",
+        "-RAW-LOG",
+        "-WRONG-ROLE",
+        "-STALE-ARTIFACT",
+        "-FAILURE",
+    )
+    if family.startswith("CAP-") and any(marker in case_id for marker in negative_markers):
+        return "REJECT"
+    if family == "UX-015" and parameter == "b":
+        return "REJECT"
+    return "ACCEPT"
+
+
+def _expected_effect_state(family: str, parameter: str) -> str:
+    exact = {
+        ("H-002", "a"): "UNKNOWN",
+        ("H-003", "b"): "UNKNOWN",
+        ("H-005", "a"): "UNVERIFIABLE",
+        ("H-008", "b"): "UNVERIFIABLE",
+        ("H-011", "c"): "UNKNOWN",
+        ("H-011", "d"): "OBSERVED",
+        ("UX-005", "a"): "UNKNOWN",
+        ("UX-005", "b"): "UNVERIFIABLE",
+        ("UX-014", "c"): "OBSERVED",
+        ("UX-014", "d"): "UNKNOWN",
+        ("XFX-003", "a"): "OBSERVED",
+        ("XFX-004", "a"): "OBSERVED",
+        ("XFX-005", "a"): "OBSERVED",
+        ("XFX-006", "a"): "UNVERIFIABLE",
+        ("XFX-006", "b"): "OBSERVED",
+        ("XFX-008", "a"): "UNKNOWN",
+        ("XFX-008", "b"): "UNKNOWN",
+        ("XFX-008", "c"): "UNVERIFIABLE",
+    }
+    return exact.get((family, parameter), "NOT_APPLICABLE")
+
+
+def _replay_expectation(family: str, parameter: str) -> str:
+    if family == "K-003" or (family == "REJ-001" and parameter == "a"):
+        return "EXACT_REPLAY_NO_SECOND_COMMIT"
+    if family in {"K-004", "REJ-001"}:
+        return "IDEMPOTENCY_CONFLICT_ON_CHANGED_REQUEST"
+    if family == "F-002" and parameter == "a":
+        return "EXACT_REPLAY_NO_SECOND_COMMIT"
+    if family == "P-004" and parameter == "b":
+        return "EXACT_REPLAY_NO_SECOND_COMMIT"
+    if family == "UX-014" and parameter == "b":
+        return "EXACT_REPLAY_NO_SECOND_COMMIT"
+    return "NOT_APPLICABLE"
+
+
+def _side_effect_counts(family: str, parameter: str) -> dict[str, int | None]:
+    exact = {
+        ("UX-011", "a"): (0, 0, 0),
+        ("UX-012", "a"): (0, 5, 0),
+        ("UX-012", "b"): (0, 0, 0),
+        ("UX-012", "c"): (0, 1, 0),
+        ("UX-014", "a"): (1, 0, 0),
+        ("UX-014", "b"): (0, 0, 0),
+        ("UX-014", "c"): (1, 0, 1),
+        ("UX-014", "d"): (1, 0, 1),
+    }
+    commits, files, provider = exact.get((family, parameter), (None, None, None))
+    return {
+        "canonical_commits": commits,
+        "local_filesystem_writes": files,
+        "provider_invocations": provider,
+    }
+
+
+def _expected_events(family: str, parameter: str) -> list[str] | None:
+    if family == "K-001":
+        from loop_architect.v4_alpha.vertical import EXPECTED_EVENT_TYPES
+
+        return list(EXPECTED_EVENT_TYPES)
+    exact = {
+        ("UX-011", "a"): [],
+        ("UX-012", "a"): [],
+        ("UX-012", "b"): [],
+        ("UX-012", "c"): [],
+        ("UX-014", "a"): [
+            "LoopCreated",
+            "GoalRegistered",
+            "GoalActivated",
+            "StartAuthorized",
+            "ExternalEffectPrepared",
+        ],
+        ("UX-014", "b"): [],
+        ("UX-014", "c"): ["ExternalEffectObserved", "HostResourceBound"],
+        ("UX-014", "d"): ["ExternalEffectUnknown"],
+    }
+    return exact.get((family, parameter))
+
+
+def _case_contract(
+    *, case_id: str, family: str, target_test_id: str, family_spec: str
+) -> dict[str, Any]:
+    parameter = case_id[len(family) + 1 :]
+    spec_value = json.loads(family_spec)
+    contract = {
+        "capability_profile": family.split("-", 1)[0],
+        "case_id": case_id,
+        "expected_acceptance": _expected_acceptance(case_id, family, parameter),
+        "expected_effect_state": _expected_effect_state(family, parameter),
+        "expected_ordered_events": _expected_events(family, parameter),
+        "expected_side_effect_counts": _side_effect_counts(family, parameter),
+        "family": family,
+        "family_spec_digest": hashlib.sha256(family_spec.encode()).hexdigest(),
+        "fixture_selector": parameter,
+        "parameter": parameter,
+        "precondition": spec_value["body"],
+        "replay_expectation": _replay_expectation(family, parameter),
+        "schema_version": CASE_CONTRACT_VERSION,
+        "stimulus": f"{family}:{parameter}",
+        "target_test_id": target_test_id,
+    }
+    if set(contract) != CASE_CONTRACT_FIELDS:
+        raise RuntimeError("CONFORMANCE_CASE_CONTRACT_SHAPE")
+    return contract
 
 
 # Every exact catalog family binds to one concrete unittest method whose
@@ -231,7 +445,24 @@ def _run_test(test_id: str) -> dict[str, Any]:
     }
 
 
-def _run_case(case_id: str, family: str, target_test_id: str) -> dict[str, Any]:
+def _run_case(
+    case_id: str,
+    family: str,
+    target_test_id: str,
+    contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if (
+        contract is None
+        or set(contract) != CASE_CONTRACT_FIELDS
+        or contract.get("case_id") != case_id
+        or contract.get("family") != family
+        or contract.get("target_test_id") != target_test_id
+        or contract.get("parameter") != case_id[len(family) + 1 :]
+        or _ACTIVE_CASE_CONTRACTS.get(case_id) != contract
+    ):
+        raise RuntimeError(f"CONFORMANCE_CASE_CONTRACT_INVALID: {case_id}")
+    contract_bytes = rc._canonical(contract)
+    contract_digest = hashlib.sha256(contract_bytes).hexdigest()
     wrapper = _test(
         "test_v4_atomic_conformance",
         "V4AtomicConformanceTests",
@@ -243,6 +474,8 @@ def _run_case(case_id: str, family: str, target_test_id: str) -> dict[str, Any]:
             "LOOPSKILL4_CONFORMANCE_CASE_ID",
             "LOOPSKILL4_CONFORMANCE_FAMILY",
             "LOOPSKILL4_CONFORMANCE_TARGET",
+            "LOOPSKILL4_CONFORMANCE_CONTRACT",
+            "LOOPSKILL4_CONFORMANCE_CONTRACT_DIGEST",
         )
     }
     os.environ.update(
@@ -250,6 +483,8 @@ def _run_case(case_id: str, family: str, target_test_id: str) -> dict[str, Any]:
             "LOOPSKILL4_CONFORMANCE_CASE_ID": case_id,
             "LOOPSKILL4_CONFORMANCE_FAMILY": family,
             "LOOPSKILL4_CONFORMANCE_TARGET": target_test_id,
+            "LOOPSKILL4_CONFORMANCE_CONTRACT": contract_bytes.decode("utf-8"),
+            "LOOPSKILL4_CONFORMANCE_CONTRACT_DIGEST": contract_digest,
         }
     )
     try:
@@ -272,6 +507,10 @@ def _run_case(case_id: str, family: str, target_test_id: str) -> dict[str, Any]:
         "status": "PASS",
         "target_test_id": target_test_id,
         "tests_run": 1,
+        "case_contract_digest": contract_digest,
+        "expected_acceptance": contract["expected_acceptance"],
+        "expected_effect_state": contract["expected_effect_state"],
+        "fixture_selector": contract["fixture_selector"],
     }
     return {
         **deterministic,
@@ -284,6 +523,7 @@ def _catalog_and_bindings(root: Path, candidate: str):
         root, "git", "show", f"{candidate}:{preservation.CORPUS_RELATIVE}"
     ).decode("utf-8", "strict")
     catalog, by_family = preservation._exact_case_catalog(corpus)
+    family_specs = _family_specs(corpus)
     if len(catalog) != 349:
         raise RuntimeError("CONFORMANCE_CASE_COUNT_DRIFT")
     concrete_families = {family for family, cases in by_family.items() if cases}
@@ -291,16 +531,28 @@ def _catalog_and_bindings(root: Path, candidate: str):
         raise RuntimeError("CONFORMANCE_FAMILY_BINDING_DRIFT")
     if not set(CASE_TEST_OVERRIDES) <= catalog:
         raise RuntimeError("CONFORMANCE_CASE_OVERRIDE_DRIFT")
-    bindings = {
-        case_id: (
-            _family(case_id, by_family),
-            CASE_TEST_OVERRIDES.get(
-                case_id,
-                FAMILY_TEST_BINDINGS[_family(case_id, by_family)],
+    bindings = {}
+    for case_id in catalog:
+        family = _family(case_id, by_family)
+        test_id = CASE_TEST_OVERRIDES.get(
+            case_id, FAMILY_TEST_BINDINGS[family]
+        )
+        if family not in family_specs:
+            raise RuntimeError(f"CONFORMANCE_FAMILY_SPEC_MISSING: {family}")
+        bindings[case_id] = (
+            family,
+            test_id,
+            _case_contract(
+                case_id=case_id,
+                family=family,
+                target_test_id=test_id,
+                family_spec=family_specs[family],
             ),
         )
-        for case_id in catalog
-    }
+    _ACTIVE_CASE_CONTRACTS.clear()
+    _ACTIVE_CASE_CONTRACTS.update(
+        {case_id: value[2] for case_id, value in bindings.items()}
+    )
     return corpus, catalog, bindings
 
 
@@ -313,21 +565,16 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
     results = []
     case_executions = []
     for case_id in sorted(catalog):
-        family, test_id = bindings[case_id]
-        execution = _run_case(case_id, family, test_id)
+        family, test_id, contract = bindings[case_id]
+        execution = _run_case(case_id, family, test_id, contract)
         parameter = case_id[len(family) + 1 :]
-        contract = {
-            "case_id": case_id,
-            "corpus_sha256": corpus_digest,
-            "family": family,
-            "parameter": parameter,
-            "test_id": test_id,
-        }
+        receipt_contract = {**contract, "corpus_sha256": corpus_digest}
         result = {
             "assertion_count": 1,
             "assertion_test_id": execution["assertion_test_id"],
             "case_id": case_id,
-            "case_contract_digest": hashlib.sha256(rc._canonical(contract)).hexdigest(),
+            "case_contract_digest": execution["case_contract_digest"],
+            "case_contract": contract,
             "evidence_kind": (
                 "REAL_APP_RECEIPT+PARAMETERIZED_UNITTEST_CASE"
                 if case_id in real_canary_cases
@@ -338,6 +585,10 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
             "status": "PASS",
             "target_test_id": test_id,
             "test_result_digest": execution["result_digest"],
+            "expected_acceptance": receipt_contract["expected_acceptance"],
+            "expected_effect_state": receipt_contract["expected_effect_state"],
+            "fixture_selector": receipt_contract["fixture_selector"],
+            "replay_expectation": receipt_contract["replay_expectation"],
         }
         if case_id in real_canary_cases:
             result["canary_receipt_sha256"] = hashlib.sha256(
@@ -381,7 +632,12 @@ def hosted_run(root: Path, candidate: str) -> dict[str, Any]:
 
     corpus, catalog, bindings = _catalog_and_bindings(root, candidate)
     test_results = [
-        _run_case(case_id, bindings[case_id][0], bindings[case_id][1])
+        _run_case(
+            case_id,
+            bindings[case_id][0],
+            bindings[case_id][1],
+            bindings[case_id][2],
+        )
         for case_id in sorted(catalog)
     ]
     return {

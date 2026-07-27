@@ -941,7 +941,7 @@ payload. IDs/times/revisions/references/allocations/receipts are machine fields.
 | 4 | `op-0004 BeginEffectDelivery`; executor/executor | Delivery; loop `3`; Route `1`, Delivery `1`, HostResource `1` | none; allocate Attempt `attempt-0001`, consume ordinal/budget `1` |
 | 5 | `op-0005 RecordEffectObservation`; executor/executor | Attempt; loop `4`; Delivery `2`, Attempt `1` | none; machine receipt delivery |
 | 6 | `op-0006 StageResult`; worker/worker | Route; loop `5`; Route `1`, Delivery `3`, Attempt `2` | outcome `PASS`, summary `bounded result complete`; allocate Result `result-0001`, Report `report-0001` |
-| 7 | `op-0007 AcknowledgeResult`; author/author | Result; loop `6`; Result `1`, Report `1`, Delivery `3`, Attempt `2` | none; allocate Artifact `artifact-0001`; machine Artifact receipt |
+| 7 | `op-0007 AcknowledgeResult`; local-verifier/verifier | Result; loop `6`; Result `1`, Report `1`, Delivery `3`, Attempt `2` | none; allocate Artifact `artifact-0001`; machine Artifact receipt bound to capture manifest and verifier evidence |
 | 8 | `op-0008 RecordReview`; reviewer/reviewer | Result; loop `7`; Result `2`, Report `2`, Artifact `1` | verdict `PASS`; allocate Review `review-0001` |
 | 9 | `op-0009 AdvanceGoal`; author/author | Goal; loop `8`; Goal `1`, Review `1` | disposition `DONE` |
 | 10 | `op-0010 PrepareFinalization`; author/author | loop; loop `9`; exact Goal/Route/Delivery/Attempt/Result/Report/Artifact/Review revisions | disposition `SUCCEEDED`; allocate `finalization-0001` |
@@ -968,12 +968,12 @@ payload. IDs/times/revisions/references/allocations/receipts are machine fields.
 The following is one UTF-8 line with no trailing newline:
 
 ```json
-{"artifacts":{"artifact-0001":{"content_digest":"52f71f6c1d592908c2902907fc674a225f3d04030ef6d9b4dedd9ede4b677fe7","receipt_ref":"receipt-artifact-0001","result_ref":"result-0001","revision":1,"state":"VERIFIED"}},"attempts":{"attempt-0001":{"automatic_budget_consumed":true,"delivery_ref":"delivery-0001","executor_actor_ref":"actor-executor-0001","executor_grant_ref":"grant-executor-0001","observation_receipt_ref":"receipt-delivery-0001","ordinal":1,"provider_idempotency_key":"effect-0001","provider_request_digest":"fce45c1a21cfc670d0007e468a04d665c96620e2027208fcaa70061c9544663d","revision":2,"state":"OBSERVED","target_ref":"host-target-0001"}},"closure_assurance":{"finalization_ref":"finalization-0001","receipt_ref":"receipt-finalize-0001","revision":1,"strength":"STRICT"},"deliveries":{"delivery-0001":{"attempt_ref":"attempt-0001","automatic_attempt_budget":1,"automatic_attempts_consumed":1,"revision":3,"route_ref":"route-0001","state":"OBSERVED","target_ref":"host-target-0001"}},"execution":{"disposition":"SUCCEEDED","revision":3,"state":"TERMINAL"},"finalizations":{"finalization-0001":{"artifact_ref":"artifact-0001","assurance_strength":"STRICT","attempt_ref":"attempt-0001","delivery_ref":"delivery-0001","disposition":"SUCCEEDED","goal_ref":"goal-0001","report_ref":"report-0001","result_ref":"result-0001","review_ref":"review-0001","revision":2,"route_ref":"route-0001","state":"EXECUTION_CLOSED","subject_chain_digest":"ff690e9ec52836b8c5d657fc0d5c71d94a83498a20ee4f10f354f34c4e907062"}},"goals":{"goal-0001":{"objective_digest":"353bd5cb07f8fc0496eace49934e6b13238fb34cd287c31a04897b9d22a5f8ec","revision":2,"state":"DONE"}},"host_resources":{"host-target-0001":{"receipt_ref":"receipt-bind-0001","revision":1,"state":"BOUND"}},"loop_ref":"loop-0001","loop_revision":11,"reports":{"report-0001":{"author_actor_ref":"actor-worker-0001","content_digest":"261f2ba50f8d3a03e41d86837f4dcba8b580b2629bd2e9726c641ed50c8ec74a","result_ref":"result-0001","revision":2,"state":"ACCEPTED"}},"results":{"result-0001":{"artifact_ref":"artifact-0001","attempt_ref":"attempt-0001","delivery_ref":"delivery-0001","outcome":"PASS","report_ref":"report-0001","revision":2,"route_ref":"route-0001","state":"ACKNOWLEDGED"}},"reviews":{"review-0001":{"artifact_ref":"artifact-0001","report_ref":"report-0001","result_ref":"result-0001","reviewer_actor_ref":"actor-reviewer-0001","revision":1,"state":"PASS","subject_chain_digest":"c8a7794089c17bfbacb33ea413bc3f22bb81c7646336bf5bec8dddd05303b94b"}},"routes":{"route-0001":{"delivery_ref":"delivery-0001","goal_ref":"goal-0001","intent_digest":"4f8294df9f9485909e7d478819bcfb0aae91c3685864946c1bdea3c0451148b3","revision":1,"target_ref":"host-target-0001"}}}
+{"artifacts":{"artifact-0001":{"capture_state":"CAPTURED","content_digest":"52f71f6c1d592908c2902907fc674a225f3d04030ef6d9b4dedd9ede4b677fe7","manifest_digest":"fixture-manifest-digest","profile":"non_git","receipt_ref":"receipt-artifact-0001","result_ref":"result-0001","revision":1,"state":"VERIFIED","verification_digest":"fixture-verification-digest","verification_state":"VERIFIED"}},"attempts":{"attempt-0001":{"automatic_budget_consumed":true,"delivery_ref":"delivery-0001","executor_actor_ref":"actor-executor-0001","executor_grant_ref":"grant-executor-0001","observation_receipt_ref":"receipt-delivery-0001","ordinal":1,"provider_idempotency_key":"effect-0001","provider_request_digest":"fce45c1a21cfc670d0007e468a04d665c96620e2027208fcaa70061c9544663d","revision":2,"state":"OBSERVED","target_ref":"host-target-0001"}},"closure_assurance":{"finalization_ref":"finalization-0001","receipt_ref":"receipt-finalize-0001","revision":1,"strength":"STRICT"},"deliveries":{"delivery-0001":{"attempt_ref":"attempt-0001","automatic_attempt_budget":1,"automatic_attempts_consumed":1,"revision":3,"route_ref":"route-0001","state":"OBSERVED","target_ref":"host-target-0001"}},"execution":{"disposition":"SUCCEEDED","revision":3,"state":"TERMINAL"},"finalizations":{"finalization-0001":{"artifact_ref":"artifact-0001","assurance_strength":"STRICT","attempt_ref":"attempt-0001","delivery_ref":"delivery-0001","disposition":"SUCCEEDED","goal_ref":"goal-0001","report_ref":"report-0001","result_ref":"result-0001","review_ref":"review-0001","revision":2,"route_ref":"route-0001","state":"EXECUTION_CLOSED","subject_chain_digest":"ff690e9ec52836b8c5d657fc0d5c71d94a83498a20ee4f10f354f34c4e907062"}},"goals":{"goal-0001":{"objective_digest":"353bd5cb07f8fc0496eace49934e6b13238fb34cd287c31a04897b9d22a5f8ec","revision":2,"state":"DONE"}},"host_resources":{"host-target-0001":{"receipt_ref":"receipt-bind-0001","revision":1,"state":"BOUND"}},"loop_ref":"loop-0001","loop_revision":11,"reports":{"report-0001":{"author_actor_ref":"actor-worker-0001","content_digest":"261f2ba50f8d3a03e41d86837f4dcba8b580b2629bd2e9726c641ed50c8ec74a","result_ref":"result-0001","revision":2,"state":"ACCEPTED"}},"results":{"result-0001":{"artifact_ref":"artifact-0001","attempt_ref":"attempt-0001","delivery_ref":"delivery-0001","outcome":"PASS","report_ref":"report-0001","revision":2,"route_ref":"route-0001","state":"ACKNOWLEDGED"}},"reviews":{"review-0001":{"artifact_ref":"artifact-0001","report_ref":"report-0001","result_ref":"result-0001","reviewer_actor_ref":"actor-reviewer-0001","revision":1,"state":"PASS","subject_chain_digest":"c8a7794089c17bfbacb33ea413bc3f22bb81c7646336bf5bec8dddd05303b94b"}},"routes":{"route-0001":{"delivery_ref":"delivery-0001","goal_ref":"goal-0001","intent_digest":"4f8294df9f9485909e7d478819bcfb0aae91c3685864946c1bdea3c0451148b3","revision":1,"target_ref":"host-target-0001"}}}
 ```
 
-- canonical snapshot bytes: `2715`;
+- canonical snapshot bytes: `2890`;
 - domain-separated snapshot digest:
-  `8037bcb1cddd1686869c4743e6210e6f2d99e8120b1197b863fa38a5f241bd3f`;
+  `c9be6833249f3538bf379c7ed7c5ba564ffe97a87f239e861a715d167189a9a9`;
 - accepted mutations/atomic commits: `11`;
 - ordered events: `18`;
 - real provider/network/Git/artifact filesystem/Host effects: `0`.
@@ -986,7 +986,7 @@ the final snapshot. There is no `store_version`; loop CAS is revision `11`.
 
 The slice passes only if:
 
-1. all 11 exact envelopes produce the stated revisions, 18 event order, 2715
+1. all 11 exact envelopes produce the stated revisions, 18 event order, 2890
    bytes, and exact digest;
 2. replay of every operation produces no second commit/event/handle/effect;
 3. same operation ID with changed request conflicts;
@@ -1075,11 +1075,20 @@ store bytes, Host identity, and transcripts remain local and unpublished.
 than retyping IDs. It maps every case to the responsible Kernel, Store,
 Artifact library, Codex Adapter, Entry, Policy/projection, compatibility, or RC
 gate module; every mapped module must run successfully in the same invocation.
-The output contains 349 sorted unique per-instance records and a canonical
-digest. `UX-009-a` and `CAP-RELEASE-CANARY` additionally require the real App
-receipt. One passing module may cover multiple explicitly parameterized atomic
-instances, but no family row alone produces PASS and no unbound instance may be
-omitted.
+For each case it derives a closed executable contract from the exact family row
+and parameter: provenance, precondition, stimulus, expected acceptance,
+expected effect state, ordered events, side-effect counts, replay expectation,
+capability profile, selector, and target assertion. The atomic wrapper consumes
+every field and its domain-separated contract digest before invoking the bound
+assertion. A bogus case ID or any mutation of acceptance, effect state, event
+order, count, replay, selector, or target fails closed; repeating a family test
+without the exact contract cannot mint a per-case PASS. The output contains 349
+sorted unique per-instance records, their assertion identities and contract
+digests, plus a canonical aggregate digest. `UX-009-a` and
+`CAP-RELEASE-CANARY` additionally require the real App receipt. One bound
+assertion may cover multiple explicitly parameterized atomic instances only
+when each instance independently consumes and validates its own contract; no
+family row alone produces PASS and no unbound instance may be omitted.
 
 32 KiB Pack and at least 50% control-interaction reduction were candidate beta
 targets, not alpha correctness gates. The P7 pre-comparison freeze makes them
@@ -1158,7 +1167,7 @@ pause/resume and late assurance strengthening bind `P-004`, `F-003`, and
 | A4 liveness/assurance | TERMINAL disposition is independent from assurance; cooperative limited closure is legal; strict claim still requires authoritative readback |
 | A5 CAS unit | per-loop revision is sole write CAS; subject revisions are guards; no store version in snapshot |
 | A6 executable corpus | acceptance and subject state separated; 101 families expand to 349 instances; 15 preservation mapping families bind 317 unique exact case IDs without duplicating fake snapshots; bounds/rejection/authority/encoder/UX/preservation windows explicit |
-| A7 vertical trace | 11 operations, 18 events, full subject bindings, loop/aggregate revisions, 2715 bytes, exact domain digest |
+| A7 vertical trace | 11 operations, 18 events, full subject bindings, loop/aggregate revisions, 2890 bytes, exact domain digest |
 
 There is no unresolved semantic decision that blocks the bounded pure-kernel
 slice. Any implementation need for an unlisted command, hidden state, second

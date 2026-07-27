@@ -110,6 +110,15 @@
     "RecordExternalEffectObservation": {
       "semantic_payload": {}
     },
+    "RecordPolicyDecision": {
+      "semantic_payload": {
+        "decision": {
+          "enum": ["CONTINUE_REPAIR", "WAIT", "STOP"],
+          "type": "string"
+        },
+        "failure_fingerprint": {"type": "string"}
+      }
+    },
     "RecordReview": {
       "semantic_payload": {
         "verdict": {
@@ -228,10 +237,14 @@
     "ReportStaged",
     "ArtifactCaptured",
     "ArtifactVerified",
+    "ArtifactUnverifiable",
     "ArtifactStale",
     "ReportAccepted",
     "ResultAcknowledged",
     "ReviewRecorded",
+    "HumanDecisionRecorded",
+    "RepairAuthorized",
+    "RepairExhausted",
     "GoalAdvanced",
     "LoopPaused",
     "LoopResumed",
@@ -371,6 +384,8 @@
       ["acceptance_criteria", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["stop_conditions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["authorization_boundaries", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["artifact_profile", "str", {"enum": ["existing_git", "non_git", "new_git", "UNBOUND"], "type": "string"}],
+      ["workspace_identity_digest", "str", {"type": "string"}],
       ["prepared_at", "str", {"type": "string"}]
     ],
     "PreparedLoopBundle": [
