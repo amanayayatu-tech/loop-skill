@@ -37,6 +37,29 @@ REQUIRED_DISTRIBUTIONS = ("jsonschema", "coverage", "PyYAML")
 CANARY_ISSUER = "codex-app-task-readback-v1"
 CANARY_TRUST = "host-tool-observed"
 CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.app-canary.provenance.v1\0"
+RETIRED_PRODUCTION_PATHS = (
+    "codex-loop-prompt-architect/scripts/adaptive_state_mcp.py",
+    "codex-loop-prompt-architect/scripts/adaptive_state_runtime.py",
+    "codex-loop-prompt-architect/scripts/configure_mcp.py",
+    "codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_compat/",
+    "codex-loop-prompt-architect/scripts/loopctl",
+)
+RETIRED_RUNTIME_LITERALS = (
+    b"ImportV3Snapshot",
+    b"V3SnapshotImported",
+    b"MIGRATION_",
+    b"[mcp_servers.",
+    b"adaptive_state_mcp",
+    b"codex-loop-state",
+    b"loop_architect.v4_compat",
+    b"MCP_CANONICAL_WRITER",
+    b"State-Writer",
+)
+RETIRED_LITERAL_ALLOWLIST = {
+    "codex-loop-prompt-architect/scripts/validate_skill.py",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_entry/legacy_boundary.py",
+}
 
 
 class RcValidationError(ValueError):
@@ -256,6 +279,119 @@ def _evidence_privacy_findings(entries: list[dict[str, Any]], root: Path, candid
     return findings
 
 
+def _stale_production_findings(
+    entries: list[dict[str, Any]], root: Path, candidate: str
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for entry in entries:
+        path = entry["path"]
+        if any(
+            path == retired or (retired.endswith("/") and path.startswith(retired))
+            for retired in RETIRED_PRODUCTION_PATHS
+        ):
+            findings.append(
+                {
+                    "path_digest": hashlib.sha256(path.encode()).hexdigest(),
+                    "rule": "retired_production_path",
+                }
+            )
+            continue
+        is_runtime = (
+            path.startswith("codex-loop-prompt-architect/scripts/")
+            or path in {"scripts/install.sh", "scripts/uninstall_v4.py"}
+        )
+        if not is_runtime or path in RETIRED_LITERAL_ALLOWLIST:
+            continue
+        payload = _run(root, "git", "show", f"{candidate}:{path}")
+        for literal in RETIRED_RUNTIME_LITERALS:
+            if literal in payload:
+                findings.append(
+                    {
+                        "path_digest": hashlib.sha256(path.encode()).hexdigest(),
+                        "rule": "retired_runtime_literal",
+                    }
+                )
+                break
+    return findings
+
+
+def _spdx_sbom(
+    root: Path,
+    candidate: str,
+    dependencies: list[dict[str, Any]],
+) -> dict[str, Any]:
+    timestamp = _run(root, "git", "show", "-s", "--format=%cI", candidate).decode(
+        "ascii", "strict"
+    ).strip()
+    try:
+        created = (
+            datetime.fromisoformat(timestamp)
+            .astimezone(timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
+    except ValueError as exc:
+        raise RcValidationError("RC_SBOM_COMMIT_TIME_INVALID") from exc
+    packages = [
+        {
+            "SPDXID": "SPDXRef-Package-LoopSkill-4",
+            "copyrightText": "NOASSERTION",
+            "downloadLocation": "https://github.com/amanayayatu-tech/loop-skill",
+            "filesAnalyzed": False,
+            "licenseConcluded": "MIT",
+            "licenseDeclared": "MIT",
+            "name": "LoopSkill",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "4.0.0",
+        }
+    ]
+    relationships = [
+        {
+            "relatedSpdxElement": "SPDXRef-Package-LoopSkill-4",
+            "relationshipType": "DESCRIBES",
+            "spdxElementId": "SPDXRef-DOCUMENT",
+        }
+    ]
+    for index, item in enumerate(dependencies, 1):
+        spdx_id = f"SPDXRef-ValidationDependency-{index}"
+        packages.append(
+            {
+                "SPDXID": spdx_id,
+                "copyrightText": "NOASSERTION",
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "licenseConcluded": item["license"],
+                "licenseDeclared": item["license"],
+                "name": item["distribution"],
+                "primaryPackagePurpose": "LIBRARY",
+                "versionInfo": item["version"],
+            }
+        )
+        relationships.append(
+            {
+                "comment": "test and release-validation environment only; v4 runtime is standard-library-only",
+                "relatedSpdxElement": "SPDXRef-Package-LoopSkill-4",
+                "relationshipType": "BUILD_DEPENDENCY_OF",
+                "spdxElementId": spdx_id,
+            }
+        )
+    return {
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "creationInfo": {
+            "created": created,
+            "creators": ["Tool: LoopSkill-v4-release-gate"],
+        },
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": (
+            "https://github.com/amanayayatu-tech/loop-skill/sbom/v4.0.0/"
+            + candidate
+        ),
+        "name": f"LoopSkill-4.0.0-{candidate[:12]}",
+        "packages": packages,
+        "relationships": relationships,
+        "spdxVersion": "SPDX-2.3",
+    }
+
+
 def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = True) -> dict[str, Any]:
     root = root.resolve()
     if not SHA_RE.fullmatch(candidate):
@@ -293,12 +429,25 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
     evidence_privacy = _evidence_privacy_findings(entries, root, candidate)
     if evidence_privacy:
         raise RcValidationError("RC_EVIDENCE_PRIVACY_SCAN_FAILED")
-    license_payload = (root / "LICENSE").read_bytes()
+    stale_production = _stale_production_findings(entries, root, candidate)
+    if stale_production:
+        raise RcValidationError("RC_STALE_V3_PRODUCTION_SCAN_FAILED")
+    license_payload = _run(root, "git", "show", f"{candidate}:LICENSE")
     if b"MIT License" not in license_payload:
         raise RcValidationError("RC_PROJECT_LICENSE_INVALID")
+    version = _run(root, "git", "show", f"{candidate}:VERSION").decode(
+        "utf-8", "strict"
+    ).strip()
+    if version != "4.0.0":
+        raise RcValidationError("RC_VERSION_INVALID")
     dependencies = _dependency_inventory()
     runtime_identity = _runtime_identity(dependencies)
-    protocol = json.loads((root / "protocol/v4/loopskill-v4.protocol.json").read_text(encoding="utf-8"))
+    protocol = json.loads(
+        _run(root, "git", "show", f"{candidate}:protocol/v4/loopskill-v4.protocol.json").decode(
+            "utf-8", "strict"
+        )
+    )
+    sbom = _spdx_sbom(root, candidate, dependencies)
     body = {
         "artifact": "loopskill-v4-rc-static-receipt-v1",
         "candidate_sha": candidate,
@@ -316,8 +465,11 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
         },
         "public_effects": 0,
         "runtime_identity": runtime_identity,
+        "sbom": sbom,
+        "sbom_sha256": hashlib.sha256(_canonical(sbom)).hexdigest(),
         "rc_ready": False,
         "secret_findings": findings,
+        "stale_production_findings": stale_production,
         "tracked_blob_count": len(entries),
         "tracked_tree_digest": hashlib.sha256(_canonical(entries)).hexdigest(),
     }

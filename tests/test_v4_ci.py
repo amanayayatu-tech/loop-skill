@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+import importlib.util
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts/check_v4_ci.py"
+SPEC = importlib.util.spec_from_file_location("check_v4_ci", SCRIPT)
+assert SPEC and SPEC.loader
+ci = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(ci)
+
+
+class V4CiTests(unittest.TestCase):
+    def test_v4_release_workflow_is_the_only_ci_and_passes_contract(self) -> None:
+        result = ci.validate(ROOT)
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["job_count"], 5)
+        self.assertGreaterEqual(result["action_pin_count"], 10)
+
+    def test_unpinned_action_and_legacy_workflow_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/v4-release.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_bytes((ROOT / ".github/workflows/v4-release.yml").read_bytes())
+            workflow.write_text(
+                workflow.read_text(encoding="utf-8").replace(ci.CHECKOUT, "actions/checkout@v7"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ci.CiError, "CI_REQUIRED_LITERAL_MISSING"):
+                ci.validate(root)
+            workflow.write_bytes((ROOT / ".github/workflows/v4-release.yml").read_bytes())
+            legacy = root / ".github/workflows/compatibility.yml"
+            legacy.write_text("name: Compatibility CI\n", encoding="utf-8")
+            with self.assertRaisesRegex(ci.CiError, "CI_WORKFLOW_SET_INVALID"):
+                ci.validate(root)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,181 @@
+name: LoopSkill 4 Release CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: [v4.0.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v4-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  TESTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+# The real Codex App canary is an exact-SHA local release gate. GitHub-hosted
+# runners validate its receipt contract but never fake or invoke the App.
+jobs:
+  protocol-architecture-docs:
+    name: Protocol, architecture, docs, and stale-runtime gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ env.TESTED_SHA }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Bind checkout to the tested SHA
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+      - name: Install test-only dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+      - name: Compile shipped Python and tests
+        run: python -W error -m compileall -q codex-loop-prompt-architect/scripts scripts tests
+      - name: Check the single typed protocol authority
+        run: python scripts/generate_v4_protocol.py --check
+      - name: Validate v4 SPEC and preservation-by-redesign
+        run: |
+          python scripts/validate_spec.py --root .
+          python scripts/validate_v4_preservation.py --root . --json
+      - name: Validate public docs and release workflow contract
+        run: |
+          python scripts/check_v4_docs.py
+          python scripts/check_v4_ci.py
+      - name: Validate the installed Skill source
+        run: python codex-loop-prompt-architect/scripts/validate_skill.py codex-loop-prompt-architect
+      - name: Run architecture, protocol, hard-break, and docs tests
+        run: >-
+          python -B -W error -m unittest -v
+          tests.test_v4_protocol_authority
+          tests.test_v4_preservation_register
+          tests.test_v4_legacy_boundary
+          tests.test_v4_docs
+          tests.test_v4_ci
+      - name: Execute every hosted conformance binding without faking App
+        run: >-
+          python scripts/run_v4_conformance.py --candidate "$TESTED_SHA"
+          --hosted-unit-only --output hosted-conformance.json
+
+  unit:
+    name: v4 unit and vertical suite (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          ref: ${{ env.TESTED_SHA }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Bind checkout to the tested SHA
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+      - name: Install test-only dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+      - name: Run every active v4 test
+        run: python -B -W error -m unittest discover -s tests -p 'test_v4*.py' -v
+
+  coverage:
+    name: v4 branch coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          ref: ${{ env.TESTED_SHA }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Bind checkout to the tested SHA
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+      - name: Install test-only dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+      - name: Run branch coverage once
+        run: |
+          coverage run -m unittest discover -s tests -p 'test_v4*.py'
+          coverage report --fail-under=80
+          coverage xml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v4-coverage-${{ env.TESTED_SHA }}
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  distribution:
+    name: v4-only install/uninstall (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          ref: ${{ env.TESTED_SHA }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+      - name: Bind checkout to the tested SHA
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+      - name: Check installer syntax
+        run: bash -n scripts/install.sh
+      - name: Run isolated v4-only distribution contract
+        run: python -B -W error -m unittest -v tests.test_v4_rc_distribution
+
+  release-hygiene:
+    name: Exact tree, privacy, license, dependency, and SBOM receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ env.TESTED_SHA }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+      - name: Bind checkout to the tested SHA
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+      - name: Build isolated validation runtime
+        run: |
+          python -m venv "$RUNNER_TEMP/v4-release-venv"
+          "$RUNNER_TEMP/v4-release-venv/bin/python" -m pip install --disable-pip-version-check -r requirements-test.txt
+      - name: Validate exact tracked tree and emit minimized receipt
+        run: >-
+          "$RUNNER_TEMP/v4-release-venv/bin/python" scripts/validate_v4_rc.py
+          --candidate "$TESTED_SHA" --static-only --output v4-static-receipt.json
+      - name: Enforce release wording on the exact release tag
+        if: github.ref == 'refs/tags/v4.0.0'
+        run: python scripts/check_v4_docs.py --release
+      - name: Bind the annotated release tag to verified main
+        if: github.ref == 'refs/tags/v4.0.0'
+        run: >-
+          python scripts/check_release_identity.py
+          --expected-sha "$TESTED_SHA" --tag v4.0.0 --main-ref origin/main
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v4-static-receipt-${{ env.TESTED_SHA }}
+          path: v4-static-receipt.json
+          if-no-files-found: error
+          retention-days: 7

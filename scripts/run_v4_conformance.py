@@ -199,15 +199,13 @@ def _run_test(test_id: str) -> dict[str, Any]:
     }
 
 
-def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
+def _catalog_and_bindings(root: Path, candidate: str):
     corpus = rc._run(
         root, "git", "show", f"{candidate}:{preservation.CORPUS_RELATIVE}"
     ).decode("utf-8", "strict")
     catalog, by_family = preservation._exact_case_catalog(corpus)
     if len(catalog) != 343:
         raise RuntimeError("CONFORMANCE_CASE_COUNT_DRIFT")
-    canary = json.loads(canary_path.read_text(encoding="utf-8"))
-    rc.validate_canary_receipt(canary, candidate)
     concrete_families = {family for family, cases in by_family.items() if cases}
     if set(FAMILY_TEST_BINDINGS) != concrete_families:
         raise RuntimeError("CONFORMANCE_FAMILY_BINDING_DRIFT")
@@ -217,11 +215,19 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
         case_id: (
             _family(case_id, by_family),
             CASE_TEST_OVERRIDES.get(
-                case_id, FAMILY_TEST_BINDINGS[_family(case_id, by_family)]
+                case_id,
+                FAMILY_TEST_BINDINGS[_family(case_id, by_family)],
             ),
         )
         for case_id in catalog
     }
+    return corpus, catalog, bindings
+
+
+def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
+    corpus, catalog, bindings = _catalog_and_bindings(root, candidate)
+    canary = json.loads(canary_path.read_text(encoding="utf-8"))
+    rc.validate_canary_receipt(canary, candidate)
     test_ids = sorted({test_id for _, test_id in bindings.values()})
     test_results = {test_id: _run_test(test_id) for test_id in test_ids}
     real_canary_cases = {"UX-009-a", "CAP-RELEASE-CANARY"}
@@ -288,17 +294,51 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
     return body
 
 
+def hosted_run(root: Path, candidate: str) -> dict[str, Any]:
+    """Run every bound deterministic assertion without pretending to run App."""
+
+    corpus, catalog, bindings = _catalog_and_bindings(root, candidate)
+    test_ids = sorted({test_id for _, test_id in bindings.values()})
+    test_results = [_run_test(test_id) for test_id in test_ids]
+    return {
+        "artifact": "loopskill-v4-hosted-conformance-v1",
+        "candidate_sha": candidate,
+        "case_catalog_digest": preservation.EXACT_CASE_CATALOG_SHA256,
+        "case_count": len(catalog),
+        "corpus_sha256": hashlib.sha256(corpus.encode("utf-8")).hexdigest(),
+        "deterministic_assertion_method_count": len(test_results),
+        "deterministic_assertion_results_digest": hashlib.sha256(
+            rc._canonical(test_results)
+        ).hexdigest(),
+        "local_exact_sha_app_case_ids": ["CAP-RELEASE-CANARY", "UX-009-a"],
+        "real_external_effects": 0,
+        "status": "PASS_LOCAL_APP_GATE_REQUIRED",
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--candidate", required=True)
-    parser.add_argument("--canary-receipt", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--canary-receipt", type=Path)
+    parser.add_argument("--hosted-unit-only", action="store_true")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        value = run(args.root.resolve(), args.candidate, args.canary_receipt)
-        args.output.write_bytes(rc._canonical(value) + b"\n")
-        print(json.dumps({"status": "PASS", "case_count": value["case_count"], "case_results_digest": value["case_results_digest"]}, sort_keys=True))
+        if args.hosted_unit_only:
+            if args.canary_receipt:
+                raise RuntimeError("CONFORMANCE_HOSTED_CANARY_FORBIDDEN")
+            value = hosted_run(args.root.resolve(), args.candidate)
+        else:
+            if not args.canary_receipt or not args.output:
+                raise RuntimeError("CONFORMANCE_FINAL_RECEIPTS_REQUIRED")
+            value = run(args.root.resolve(), args.candidate, args.canary_receipt)
+        if args.output:
+            args.output.write_bytes(rc._canonical(value) + b"\n")
+        summary = {"status": value["status"], "case_count": value["case_count"]}
+        if "case_results_digest" in value:
+            summary["case_results_digest"] = value["case_results_digest"]
+        print(json.dumps(summary, sort_keys=True))
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError, rc.RcValidationError) as exc:
         print(f"CONFORMANCE_FAILED: {exc}", file=sys.stderr)
         return 1

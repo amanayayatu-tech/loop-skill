@@ -103,6 +103,30 @@ class V4ConformanceRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "CONFORMANCE_TEST_(?:ID_INVALID|FAILED)"):
             runner._run_test("test_v4_preservation_register.DoesNotExist.test_missing")
 
+    def test_hosted_run_executes_all_bindings_without_faking_app_receipt(self) -> None:
+        candidate = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+        with mock.patch.object(
+            runner,
+            "_run_test",
+            side_effect=lambda test_id: {
+                "assertion_test_id": test_id,
+                "result_digest": "d" * 64,
+                "status": "PASS",
+                "tests_run": 1,
+            },
+        ) as executed:
+            receipt = runner.hosted_run(ROOT, candidate)
+        self.assertEqual(receipt["case_count"], 343)
+        self.assertEqual(receipt["real_external_effects"], 0)
+        self.assertEqual(receipt["status"], "PASS_LOCAL_APP_GATE_REQUIRED")
+        self.assertEqual(
+            receipt["local_exact_sha_app_case_ids"],
+            ["CAP-RELEASE-CANARY", "UX-009-a"],
+        )
+        self.assertEqual(executed.call_count, receipt["deterministic_assertion_method_count"])
+
 
 if __name__ == "__main__":
     unittest.main()

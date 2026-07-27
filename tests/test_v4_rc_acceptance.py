@@ -173,6 +173,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (repo / "LICENSE").write_text("MIT License\n", encoding="utf-8")
+            (repo / "VERSION").write_text("4.0.0\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=repo, check=True)
             subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True)
             sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
@@ -190,12 +191,39 @@ class V4RcAcceptanceTests(unittest.TestCase):
             self.assertEqual(receipt["candidate_sha"], sha)
             self.assertEqual(receipt["dependency_inventory"], dependencies)
             self.assertEqual(receipt["secret_findings"], [])
+            self.assertEqual(receipt["stale_production_findings"], [])
+            self.assertEqual(receipt["sbom"]["spdxVersion"], "SPDX-2.3")
+            self.assertEqual(receipt["sbom"]["packages"][0]["versionInfo"], "4.0.0")
+            self.assertEqual(
+                receipt["sbom_sha256"],
+                hashlib.sha256(validator._canonical(receipt["sbom"])).hexdigest(),
+            )
             self.assertEqual(receipt["public_effects"], 0)
             (repo / "dirty").write_text("x", encoding="utf-8")
             with self.assertRaisesRegex(
                 validator.RcValidationError, "NOT_EXACT_CLEAN_HEAD"
             ):
                 validator.static_receipt(repo, sha)
+
+            (repo / "dirty").unlink()
+            retired = repo / "codex-loop-prompt-architect/scripts/runtime.py"
+            retired.parent.mkdir(parents=True)
+            retired.write_text("COMMAND = 'ImportV3Snapshot'\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "retired runtime"], cwd=repo, check=True)
+            stale_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+            with mock.patch.object(
+                validator, "_dependency_inventory", return_value=dependencies
+            ), mock.patch.object(
+                validator,
+                "_runtime_identity",
+                return_value={"runtime_identity_digest": "d" * 64},
+            ), self.assertRaisesRegex(
+                validator.RcValidationError, "STALE_V3_PRODUCTION_SCAN_FAILED"
+            ):
+                validator.static_receipt(repo, stale_sha)
 
 
 if __name__ == "__main__":
