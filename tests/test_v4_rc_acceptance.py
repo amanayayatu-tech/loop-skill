@@ -19,19 +19,31 @@ assert SPEC and SPEC.loader
 validator = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validator)
 
+RUNNER_PATH = ROOT / "scripts/run_v4_conformance.py"
+RUNNER_SPEC = importlib.util.spec_from_file_location("run_v4_conformance_for_rc_test", RUNNER_PATH)
+assert RUNNER_SPEC and RUNNER_SPEC.loader
+runner = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(runner)
+
 
 def canary(candidate: str) -> dict:
-    return {
+    value = {
         "artifact": "loopskill-v4-disposable-app-canary-v1",
         "candidate_sha": candidate,
+        "canary_output_sha256": "b" * 64,
         "confirmation_count": 1,
         "finalization": "ACKNOWLEDGED",
-        "host_receipt_digest": "a" * 64,
+        "fresh_until": "2026-07-27T13:22:46Z",
+        "host_receipt_issuer": validator.CANARY_ISSUER,
+        "host_receipt_trust": validator.CANARY_TRUST,
         "host_task_create_count": 1,
+        "host_task_identity_digest": "c" * 64,
         "host_task_readback_count": 1,
         "intake_external_effects": 0,
+        "issued_at": "2026-07-27T13:12:46Z",
         "machine_owned_identity": True,
         "manual_control_identity_count": 0,
+        "observed_at": "2026-07-27T13:12:46Z",
         "prepare_host_effects": 0,
         "private_data_used": False,
         "provider_resend_count": 0,
@@ -42,6 +54,11 @@ def canary(candidate: str) -> dict:
         "thread_content_retained": False,
         "unknown_preserved": True,
     }
+    value["provenance_digest"] = validator._domain_digest(
+        validator.CANARY_PROVENANCE_DOMAIN, value
+    )
+    value["host_receipt_digest"] = value["provenance_digest"]
+    return value
 
 
 class V4RcAcceptanceTests(unittest.TestCase):
@@ -85,6 +102,9 @@ class V4RcAcceptanceTests(unittest.TestCase):
             ("private_data_used", True),
             ("provider_resend_count", 1),
             ("finalization", "UNKNOWN"),
+            ("host_receipt_issuer", "self-asserted"),
+            ("host_receipt_trust", "untrusted"),
+            ("fresh_until", "2026-07-27T14:12:46Z"),
         ):
             with self.subTest(field=field):
                 value = canary(candidate)
@@ -101,30 +121,37 @@ class V4RcAcceptanceTests(unittest.TestCase):
             validator.validate_canary_receipt(value, candidate)
 
     def test_conformance_receipt_requires_all_343_canonical_results(self) -> None:
-        results = [
-            {"case_id": f"CASE-{number:03d}", "status": "PASS"}
-            for number in range(343)
-        ]
-        value = {
-            "artifact": "loopskill-v4-conformance-execution-v1",
-            "candidate_sha": "a" * 40,
-            "canonical_case_ids": True,
-            "case_count": 343,
-            "case_results": results,
-            "case_results_digest": hashlib.sha256(
-                validator._canonical(results)
-            ).hexdigest(),
-            "failed": 0,
-            "passed": 343,
-            "real_external_effects": 1,
-            "status": "PASS",
-        }
-        validator.validate_conformance_receipt(value, "a" * 40)
+        candidate = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "canary.json"
+            path.write_text(json.dumps(canary(candidate)), encoding="utf-8")
+            with mock.patch.object(
+                runner,
+                "_run_test",
+                side_effect=lambda test_id: {
+                    "assertion_test_id": test_id,
+                    "result_digest": hashlib.sha256(
+                        validator._canonical(
+                            {"assertion_test_id": test_id, "status": "PASS", "tests_run": 1}
+                        )
+                    ).hexdigest(),
+                    "status": "PASS",
+                    "tests_run": 1,
+                },
+            ):
+                value = runner.run(ROOT, candidate, path)
+        validator.validate_conformance_receipt(value, candidate, ROOT)
+        value["case_results"][0]["case_id"] = "CASE-NOT-IN-FROZEN-CATALOG"
+        value["case_results_digest"] = hashlib.sha256(
+            validator._canonical(value["case_results"])
+        ).hexdigest()
         value["case_results"][0]["status"] = "FAIL"
         with self.assertRaisesRegex(
             validator.RcValidationError, "RC_CONFORMANCE_RECEIPT_INVALID"
         ):
-            validator.validate_conformance_receipt(value, "a" * 40)
+            validator.validate_conformance_receipt(value, candidate, ROOT)
 
     def test_static_gate_binds_exact_clean_sha_tree_sbom_and_scans(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -151,7 +178,13 @@ class V4RcAcceptanceTests(unittest.TestCase):
             dependencies = [
                 {"distribution": "fixture", "license": "MIT", "version": "1"}
             ]
-            with mock.patch.object(validator, "_dependency_inventory", return_value=dependencies):
+            with mock.patch.object(
+                validator, "_dependency_inventory", return_value=dependencies
+            ), mock.patch.object(
+                validator,
+                "_runtime_identity",
+                return_value={"runtime_identity_digest": "d" * 64},
+            ):
                 receipt = validator.static_receipt(repo, sha)
             self.assertEqual(receipt["candidate_sha"], sha)
             self.assertEqual(receipt["dependency_inventory"], dependencies)

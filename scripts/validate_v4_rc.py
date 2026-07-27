@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import importlib.metadata
 import json
 import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -32,6 +34,9 @@ FORBIDDEN_EVIDENCE_KEYS = {
     "worktree",
 }
 REQUIRED_DISTRIBUTIONS = ("jsonschema", "coverage", "PyYAML")
+CANARY_ISSUER = "codex-app-task-readback-v1"
+CANARY_TRUST = "host-tool-observed"
+CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.app-canary.provenance.v1\0"
 
 
 class RcValidationError(ValueError):
@@ -62,6 +67,35 @@ def _canonical(value: Any) -> bytes:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _domain_digest(domain: bytes, value: Any) -> str:
+    return hashlib.sha256(domain + _canonical(value)).hexdigest()
+
+
+def _load_preservation(root: Path):
+    path = root / "scripts/validate_v4_preservation.py"
+    spec = importlib.util.spec_from_file_location("v4_preservation_for_rc", path)
+    if spec is None or spec.loader is None:
+        raise RcValidationError("RC_CASE_CATALOG_VALIDATOR_UNAVAILABLE")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _exact_case_catalog(root: Path, candidate: str) -> tuple[list[str], str, str]:
+    preservation = _load_preservation(root)
+    corpus_path = "docs/conformance/loopskill-4-conformance-corpus-design.md"
+    corpus = _run(root, "git", "show", f"{candidate}:{corpus_path}").decode("utf-8", "strict")
+    try:
+        catalog, _ = preservation._exact_case_catalog(corpus)
+    except preservation.ValidationFailure as exc:
+        raise RcValidationError(f"RC_CASE_CATALOG_INVALID: {exc}") from exc
+    return (
+        sorted(catalog),
+        preservation.EXACT_CASE_CATALOG_SHA256,
+        hashlib.sha256(corpus.encode("utf-8")).hexdigest(),
+    )
 
 
 def _tree_entries(root: Path, candidate: str) -> list[dict[str, Any]]:
@@ -121,6 +155,74 @@ def _dependency_inventory() -> list[dict[str, Any]]:
             }
         )
     return sorted(rows, key=lambda item: item["distribution"].lower())
+
+
+def _runtime_identity(dependencies: list[dict[str, Any]]) -> dict[str, Any]:
+    launcher = Path(sys.executable)
+    resolved = launcher.resolve(strict=True)
+    if not resolved.is_file():
+        raise RcValidationError("RC_RUNTIME_EXECUTABLE_INVALID")
+    script = (
+        "import importlib.metadata as m,json,sys;"
+        "names=('jsonschema','coverage','PyYAML');"
+        "print(json.dumps({'isolated_environment':sys.prefix!=sys.base_prefix,"
+        "'python':[sys.version_info.major,sys.version_info.minor,sys.version_info.micro],"
+        "'required_distributions':{n:m.version(n) for n in names}},"
+        "sort_keys=True,separators=(',',':')))"
+    )
+    try:
+        completed = subprocess.run(
+            [str(launcher), "-I", "-c", script],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        readback = json.loads(completed.stdout.decode("utf-8", "strict"))
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RcValidationError("RC_RUNTIME_INDEPENDENT_READBACK_FAILED") from exc
+    expected_versions = {
+        row["distribution"]: row["version"]
+        for row in dependencies
+        if row["distribution"].lower() in {name.lower() for name in REQUIRED_DISTRIBUTIONS}
+    }
+    if (
+        readback.get("isolated_environment") is not True
+        or readback.get("required_distributions") != expected_versions
+    ):
+        raise RcValidationError("RC_RUNTIME_INDEPENDENT_READBACK_MISMATCH")
+    distribution_roots = sorted(
+        {
+            _domain_digest(
+                b"loopskill.v4.runtime.distribution-root.v1\0",
+                str(Path(distribution.locate_file("")).resolve()),
+            )
+            for distribution in importlib.metadata.distributions()
+        }
+    )
+    body = {
+        "base_prefix_identity_digest": _domain_digest(
+            b"loopskill.v4.runtime.base-prefix.v1\0", sys.base_prefix
+        ),
+        "distribution_root_count": len(distribution_roots),
+        "distribution_root_identity_digests": distribution_roots,
+        "isolated_environment": sys.prefix != sys.base_prefix,
+        "launcher_identity_digest": _domain_digest(
+            b"loopskill.v4.runtime.launcher.v1\0", str(launcher)
+        ),
+        "prefix_identity_digest": _domain_digest(
+            b"loopskill.v4.runtime.prefix.v1\0", sys.prefix
+        ),
+        "resolved_executable_file_sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+        "runtime_readback": readback,
+        "sys_path_identity_digest": _domain_digest(
+            b"loopskill.v4.runtime.sys-path.v1\0", sys.path
+        ),
+    }
+    body["runtime_identity_digest"] = _domain_digest(
+        b"loopskill.v4.runtime.identity.v1\0", body
+    )
+    return body
 
 
 def _evidence_privacy_findings(entries: list[dict[str, Any]], root: Path, candidate: str) -> list[dict[str, str]]:
@@ -195,6 +297,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
     if b"MIT License" not in license_payload:
         raise RcValidationError("RC_PROJECT_LICENSE_INVALID")
     dependencies = _dependency_inventory()
+    runtime_identity = _runtime_identity(dependencies)
     protocol = json.loads((root / "protocol/v4/loopskill-v4.protocol.json").read_text(encoding="utf-8"))
     body = {
         "artifact": "loopskill-v4-rc-static-receipt-v1",
@@ -212,7 +315,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
             "events": len(protocol["events"]),
         },
         "public_effects": 0,
-        "python_executable": str(Path(sys.executable).resolve()),
+        "runtime_identity": runtime_identity,
         "rc_ready": False,
         "secret_findings": findings,
         "tracked_blob_count": len(entries),
@@ -229,6 +332,9 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "confirmation_count",
         "finalization",
         "host_receipt_digest",
+        "host_receipt_issuer",
+        "host_receipt_trust",
+        "host_task_identity_digest",
         "host_task_create_count",
         "host_task_readback_count",
         "intake_external_effects",
@@ -236,11 +342,16 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "manual_control_identity_count",
         "prepare_host_effects",
         "private_data_used",
+        "provenance_digest",
         "provider_resend_count",
         "research_scored",
         "result",
         "review",
         "status",
+        "canary_output_sha256",
+        "issued_at",
+        "observed_at",
+        "fresh_until",
         "thread_content_retained",
         "unknown_preserved",
     }
@@ -253,6 +364,8 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "finalization": "ACKNOWLEDGED",
         "host_task_create_count": 1,
         "host_task_readback_count": 1,
+        "host_receipt_issuer": CANARY_ISSUER,
+        "host_receipt_trust": CANARY_TRUST,
         "intake_external_effects": 0,
         "machine_owned_identity": True,
         "manual_control_identity_count": 0,
@@ -272,9 +385,33 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
     digest = value.get("host_receipt_digest")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: host_receipt_digest")
+    for field in ("host_task_identity_digest", "canary_output_sha256"):
+        if not isinstance(value.get(field), str) or not re.fullmatch(r"[0-9a-f]{64}", value[field]):
+            raise RcValidationError(f"RC_CANARY_RECEIPT_INVALID: {field}")
+    try:
+        observed = datetime.fromisoformat(value["observed_at"].replace("Z", "+00:00"))
+        issued = datetime.fromisoformat(value["issued_at"].replace("Z", "+00:00"))
+        fresh_until = datetime.fromisoformat(value["fresh_until"].replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RcValidationError("RC_CANARY_RECEIPT_INVALID: freshness") from exc
+    if (
+        observed.tzinfo is None
+        or issued.tzinfo is None
+        or fresh_until.tzinfo is None
+        or observed.astimezone(timezone.utc) != issued.astimezone(timezone.utc)
+        or not issued < fresh_until
+        or (fresh_until - issued).total_seconds() > 600
+    ):
+        raise RcValidationError("RC_CANARY_RECEIPT_INVALID: freshness")
+    provenance = dict(value)
+    claimed_provenance = provenance.pop("provenance_digest", None)
+    claimed_host = provenance.pop("host_receipt_digest", None)
+    expected_provenance = _domain_digest(CANARY_PROVENANCE_DOMAIN, provenance)
+    if claimed_provenance != expected_provenance or claimed_host != expected_provenance:
+        raise RcValidationError("RC_CANARY_RECEIPT_INVALID: provenance_digest")
 
 
-def validate_conformance_receipt(value: dict[str, Any], candidate: str) -> None:
+def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Path) -> None:
     if (
         value.get("artifact") != "loopskill-v4-conformance-execution-v1"
         or value.get("candidate_sha") != candidate
@@ -290,9 +427,82 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str) -> None:
     if not isinstance(results, list) or len(results) != 343:
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
     ids = [item.get("case_id") for item in results if isinstance(item, dict)]
-    if len(ids) != 343 or ids != sorted(set(ids)):
+    exact_ids, exact_digest, corpus_digest = _exact_case_catalog(root, candidate)
+    if (
+        len(ids) != 343
+        or ids != exact_ids
+        or value.get("case_catalog_digest") != exact_digest
+        or value.get("corpus_sha256") != corpus_digest
+    ):
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
-    if any(item.get("status") != "PASS" for item in results):
+    test_results = value.get("test_method_results")
+    if not isinstance(test_results, list) or value.get("test_method_count") != len(test_results):
+        raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+    tests_by_id: dict[str, dict[str, Any]] = {}
+    for item in test_results:
+        if not isinstance(item, dict):
+            raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+        test_id = item.get("assertion_test_id")
+        deterministic = {
+            "assertion_test_id": test_id,
+            "status": item.get("status"),
+            "tests_run": item.get("tests_run"),
+        }
+        if (
+            not isinstance(test_id, str)
+            or test_id in tests_by_id
+            or deterministic["status"] != "PASS"
+            or deterministic["tests_run"] != 1
+            or item.get("result_digest") != hashlib.sha256(_canonical(deterministic)).hexdigest()
+        ):
+            raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+        tests_by_id[test_id] = item
+    canary_sha = None
+    binding_rows = []
+    for item in results:
+        case_id = item.get("case_id")
+        family = item.get("family")
+        parameter = item.get("parameter")
+        test_id = item.get("assertion_test_id")
+        contract = {
+            "case_id": case_id,
+            "corpus_sha256": corpus_digest,
+            "family": family,
+            "parameter": parameter,
+            "test_id": test_id,
+        }
+        if (
+            item.get("status") != "PASS"
+            or item.get("assertion_count") != 1
+            or not isinstance(family, str)
+            or case_id != f"{family}-{parameter}"
+            or test_id not in tests_by_id
+            or item.get("test_result_digest") != tests_by_id[test_id]["result_digest"]
+            or item.get("case_contract_digest") != hashlib.sha256(_canonical(contract)).hexdigest()
+        ):
+            raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+        expected_kind = (
+            "REAL_APP_RECEIPT+UNITTEST_METHOD_PARAMETER"
+            if case_id in {"UX-009-a", "CAP-RELEASE-CANARY"}
+            else "UNITTEST_METHOD_PARAMETER"
+        )
+        if item.get("evidence_kind") != expected_kind:
+            raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+        if expected_kind.startswith("REAL_APP"):
+            current = item.get("canary_receipt_sha256")
+            if not isinstance(current, str) or not re.fullmatch(r"[0-9a-f]{64}", current):
+                raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+            if canary_sha is not None and current != canary_sha:
+                raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+            canary_sha = current
+        elif "canary_receipt_sha256" in item:
+            raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+        binding_rows.append(
+            {"case_id": case_id, "case_contract_digest": item["case_contract_digest"], "test_id": test_id}
+        )
+    if set(tests_by_id) != {item["assertion_test_id"] for item in results}:
+        raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
+    if value.get("binding_manifest_digest") != hashlib.sha256(_canonical(binding_rows)).hexdigest():
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
     claimed = value.get("case_results_digest")
     if claimed != hashlib.sha256(_canonical(results)).hexdigest():
@@ -353,7 +563,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _canonical(canary)
             ).hexdigest()
             conformance = json.loads(args.conformance_receipt.read_text(encoding="utf-8"))
-            validate_conformance_receipt(conformance, args.candidate)
+            validate_conformance_receipt(conformance, args.candidate, args.root)
             receipt["conformance_receipt_digest"] = hashlib.sha256(
                 _canonical(conformance)
             ).hexdigest()

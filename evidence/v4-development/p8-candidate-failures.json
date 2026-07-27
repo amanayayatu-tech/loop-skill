@@ -30,6 +30,21 @@
       "status": "FAIL",
       "vertical_event_count_observed": 18,
       "vertical_operation_count_observed": 11
+    },
+    {
+      "provider_invocations": 0,
+      "candidate_sha": "b5e475c6a442ae53be0b82f0187db60038ac6c12",
+      "classification": "INDEPENDENT_REVIEW_EVIDENCE_GATE_FAILURE",
+      "host_task_create_count": 1,
+      "host_task_readback_count": 1,
+      "output_sha256": "563c7831e96be9880dc1ddb248908a69d8dc4dbd3493f495b8e030a653fb9974",
+      "provider_resend_count": 0,
+      "reason": "The product canary passed, but independent review rejected the RC evidence: module-level unittest success was projected to 343 cases, the validator did not bind the exact frozen catalog, full test log bytes were absent, runtime identity was not independently reproducible, and canary provenance was insufficiently bound.",
+      "retry_on_same_candidate": false,
+      "stage": "independent_rc_review",
+      "status": "FAIL",
+      "vertical_event_count_observed": 18,
+      "vertical_operation_count_observed": 11
     }
   ],
   "public_release_effects": 0,
