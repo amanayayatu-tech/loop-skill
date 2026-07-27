@@ -1,0 +1,47 @@
+{
+  "artifact": "loopskill-v4-p3-artifact-capabilities-evidence-v1",
+  "checks": {
+    "casefold_collision": "FAIL_CLOSED",
+    "existing_git_binary": "PASS",
+    "existing_git_empty_diff": "PASS",
+    "existing_git_untracked_boundary": "PASS",
+    "immutable_blob_and_bundle": "PASS",
+    "new_git_full_vertical": "PASS",
+    "non_git_add_modify_delete": "PASS",
+    "path_traversal": "FAIL_CLOSED",
+    "read_race": "ARTIFACT_STALE",
+    "resource_bounds": "FAIL_CLOSED",
+    "special_file": "FAIL_CLOSED",
+    "symlink": "FAIL_CLOSED",
+    "test_methods_p3": 9,
+    "test_methods_total_v4": 41
+  },
+  "implementation_sha256": {
+    "architecture": "12639749230804a4341355c08521cb06da9c0c3dcde6932fed900c401e72e739",
+    "capture": "d5498bf2ceb7815ce17e59428f9dbdfb409bcdf3cc4dee6cad22ae474d3312db",
+    "init": "f16f916ce2ddee6a7aeb28eb687792c69860ea11afa5cbd34994e2f1f3a89962",
+    "paths": "e3385d4e823fff22d1e4493d6d799e6b9347f42c40566e1a19cdf80556cedad1",
+    "tests": "8bf2fdb1b52073cf263e74fd9d125f8bd42957c2c0944bae50f79c56485bd535"
+  },
+  "profiles": [
+    "existing_git",
+    "non_git",
+    "new_git"
+  ],
+  "provenance": {
+    "public_commit": "843945d9d34e7f065b65d9172ea4a2df66c0f2e3",
+    "state_runtime_git_object": "450375ada1a28125143bda2084ccc11419453182",
+    "test_git_object": "8c168394b23d7be92d04792fdd41bf87f8996270",
+    "v3_selected_tests": 4,
+    "v3_selected_tests_status": "PASS"
+  },
+  "retained_failure": {
+    "classification": "test invocation apparatus",
+    "first_attempt": "4 import errors because legacy test module requires PYTHONPATH=tests",
+    "product_code_changed": false,
+    "resolved_invocation": "PYTHONPATH=tests with the same four exact public tests",
+    "resolved_status": "PASS"
+  },
+  "scope": "public and synthetic temporary roots only",
+  "status": "PASS"
+}
