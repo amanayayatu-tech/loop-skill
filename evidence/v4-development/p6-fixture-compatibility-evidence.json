@@ -1,0 +1,96 @@
+{
+  "artifact": "loopskill-v4-p6-fixture-compatibility-evidence-v1",
+  "checkpoint_commit": "d3d459c0dda80a995d6508d12c0373b20bd8f2ab",
+  "checkpoint_parent": "a00f9e627bcec506b9046cc746337a8a1f9074a0",
+  "status": "PASS",
+  "branch": "codex/loopskill-4-alpha-pure-kernel",
+  "scope": "copied and synthetic public v3.3.8 fixtures only; no real loop migration",
+  "runtime_authority": false,
+  "real_external_effects": 0,
+  "v3_provenance": {
+    "public_tag": "v3.3.8",
+    "public_commit": "843945d9d34e7f065b65d9172ea4a2df66c0f2e3",
+    "state_runtime_blob": "450375ada1a28125143bda2084ccc11419453182",
+    "state_schema_blob": "96540acf071b2fa3bd0926b34622340777fba501",
+    "mutation_schema_blob": "8bb328582226270e697632850d7b09c901360e13"
+  },
+  "architecture_gates": {
+    "typed_protocol_generation": "PASS",
+    "typed_protocol_manifest_sha256": "0eeef00bf9d35633fc13859db323c223beee4108f49df33795720dd8ddfcf8c2",
+    "canonical_writer_count": 1,
+    "full_v4_module_count": 22,
+    "full_v4_dependency_edge_count": 34,
+    "full_v4_import_graph_acyclic": true,
+    "kernel_forbidden_import_scan": "PASS",
+    "compatibility_outside_kernel": true,
+    "dual_write": false,
+    "reverse_conversion": false
+  },
+  "protocol_counts": {
+    "commands": 16,
+    "events": 33,
+    "errors": 44
+  },
+  "compatibility_contract": {
+    "accepted_source": "schema-v3 MCP_CANONICAL_WRITER, PAUSED_AT_SAFE_POINT, lease-free, outbox-quiescent, exactly one READY goal",
+    "shadow_read_writes": 0,
+    "cancel_writes": 0,
+    "import_canonical_commits": 1,
+    "import_events": 4,
+    "import_attempts": 0,
+    "host_calls": 0,
+    "provider_calls": 0,
+    "source_bytes_unchanged": true,
+    "destination_must_be_disjoint_and_empty": true,
+    "terminal_revival": "FAIL_CLOSED_FROM_REDUCER_ACCEPTED_V3.3.8_TERMINAL_FIXTURE",
+    "changed_source_after_preview": "FAIL_CLOSED",
+    "replay": "EXACT_EXISTING_RESULT",
+    "compatibility_sunset": "one major cycle"
+  },
+  "tests": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 python3 -B -W error -m unittest discover -s tests -p 'test_v4_*.py'",
+    "total_at_checkpoint": 109,
+    "passed_at_checkpoint": 109,
+    "failed": 0,
+    "errors": 0,
+    "p6_test_methods": 13,
+    "sqlite_durable_boundary_subcases": 9
+  },
+  "conformance_bindings": [
+    "M-001",
+    "M-002",
+    "M-003",
+    "M-004",
+    "M-005",
+    "UX-006",
+    "CAP-COMPAT"
+  ],
+  "preservation_gate": {
+    "capability_groups": 24,
+    "mapped_v3_identities": 1766,
+    "mapping_semantics": "semantic disposition and conformance mapping; not legacy mechanism replication",
+    "corpus_families": 101,
+    "corpus_instances": 343
+  },
+  "file_sha256": {
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_alpha/kernel.py": "76f10b633b33b8833e49e260624dfb7ff5e838dccba5363ad2ab5a1effa010da",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_compat/__init__.py": "2a5f33f684b69d8a23679a759dfa0401d506179f069ea0e4dc7643858395075a",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_compat/importer.py": "7cb167b34e07a89f514de7722aa89c5fecb2fb25c5e5270313c3875b53cb8943",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_compat/legacy_entry.py": "545b5aebf771e7448aa8556d7ba72e3d5f364a98578a70d7ef529253bfee1a6c",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_persistence/sqlite_store.py": "22d919bd830e0fe0a04387ce20eb83dc245e8f6f7ac8a3661171fdc3df418966",
+    "docs/adr/0011-loopskill-4-compatible-kernel-refactor.md": "1b84ec3bf5a567ea7552edfff09f9de25bb23f9448adbbe4c1d0f24f9cbfb11f",
+    "docs/architecture/loopskill-v4-single-entry-ux.md": "02847fbb2c172974ccda109a075648920957e3583fc50eb3816ceec7eeaa0bd4",
+    "docs/architecture/v3-to-v4-capability-preservation-register.md": "33d06fc89c37708cb8f3b0031aed9ddff99dcfe19a578958c5075926d05e0862",
+    "docs/conformance/loopskill-4-conformance-corpus-design.md": "1040d46758e8cae1fda2d65d8f7e6b311fe417752db865ef477a3d0a5d73b088",
+    "protocol/v4/loopskill-v4.protocol.json": "f204b9dc7e1120387a7cce63ba8e4039ba342efed84fd808321ef599e76b3eab",
+    "tests/test_v4_compatibility_import.py": "92e6e43314d3046d977dff6d7aa3d18859716e61a908208f9cc23f6cc8382e8d"
+  },
+  "claims_excluded": [
+    "migration of any real user loop",
+    "installed compatibility facade",
+    "Standard or Adaptive policy execution",
+    "real Host conformance",
+    "reverse conversion",
+    "RC or stable readiness"
+  ]
+}

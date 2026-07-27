@@ -315,6 +315,16 @@ class V4PreservationRegisterTests(unittest.TestCase):
         ):
             validator._validate_anti_bloat_evidence_value(ROOT, evidence)
 
+    def test_p6_evidence_safety_mutation_fails_closed(self) -> None:
+        evidence = json.loads(
+            (ROOT / validator.P6_EVIDENCE_RELATIVE).read_text(encoding="utf-8")
+        )
+        evidence["compatibility_contract"]["source_bytes_unchanged"] = False
+        with self.assertRaisesRegex(
+            validator.ValidationFailure, "P6 compatibility evidence drift"
+        ):
+            validator._validate_p6_evidence_value(ROOT, evidence)
+
 
 if __name__ == "__main__":
     unittest.main()

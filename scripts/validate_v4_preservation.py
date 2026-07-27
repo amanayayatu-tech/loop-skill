@@ -33,6 +33,9 @@ PROTOCOL_MANIFEST_RELATIVE = Path("protocol/v4/loopskill-v4.protocol.json")
 ANTI_BLOAT_EVIDENCE_RELATIVE = Path(
     "evidence/v4-development/p5.1-native-entry-and-anti-bloat-evidence.json"
 )
+P6_EVIDENCE_RELATIVE = Path(
+    "evidence/v4-development/p6-fixture-compatibility-evidence.json"
+)
 
 ALLOWED_DISPOSITIONS = {
     "RETAIN_CORE",
@@ -861,6 +864,139 @@ def _validate_anti_bloat_evidence(root: Path) -> None:
     )
 
 
+def _validate_p6_evidence_value(root: Path, evidence: dict[str, Any]) -> None:
+    if evidence.get("artifact") != "loopskill-v4-p6-fixture-compatibility-evidence-v1":
+        raise ValidationFailure("P6 evidence artifact drift")
+    if (
+        evidence.get("status") != "PASS"
+        or evidence.get("runtime_authority") is not False
+        or evidence.get("real_external_effects") != 0
+    ):
+        raise ValidationFailure("P6 evidence status/authority drift")
+    checkpoint = evidence.get("checkpoint_commit")
+    parent = evidence.get("checkpoint_parent")
+    if not isinstance(checkpoint, str) or not isinstance(parent, str):
+        raise ValidationFailure("P6 evidence checkpoint missing")
+    resolved_checkpoint = _run(
+        root, "git", "rev-parse", f"{checkpoint}^{{commit}}"
+    ).decode("ascii").strip()
+    resolved_parent = _run(
+        root, "git", "rev-parse", f"{checkpoint}^"
+    ).decode("ascii").strip()
+    if resolved_checkpoint != checkpoint or resolved_parent != parent:
+        raise ValidationFailure("P6 evidence checkpoint provenance drift")
+    provenance = evidence.get("v3_provenance", {})
+    if provenance != {
+        "public_tag": "v3.3.8",
+        "public_commit": "843945d9d34e7f065b65d9172ea4a2df66c0f2e3",
+        "state_runtime_blob": "450375ada1a28125143bda2084ccc11419453182",
+        "state_schema_blob": "96540acf071b2fa3bd0926b34622340777fba501",
+        "mutation_schema_blob": "8bb328582226270e697632850d7b09c901360e13",
+    }:
+        raise ValidationFailure("P6 v3 provenance drift")
+    architecture = evidence.get("architecture_gates", {})
+    expected_architecture = {
+        "typed_protocol_generation": "PASS",
+        "canonical_writer_count": 1,
+        "full_v4_module_count": 22,
+        "full_v4_dependency_edge_count": 34,
+        "full_v4_import_graph_acyclic": True,
+        "kernel_forbidden_import_scan": "PASS",
+        "compatibility_outside_kernel": True,
+        "dual_write": False,
+        "reverse_conversion": False,
+    }
+    if any(
+        architecture.get(key) != value
+        for key, value in expected_architecture.items()
+    ):
+        raise ValidationFailure("P6 architecture evidence drift")
+    if evidence.get("protocol_counts") != {
+        "commands": 16,
+        "events": 33,
+        "errors": 44,
+    }:
+        raise ValidationFailure("P6 protocol count evidence drift")
+    contract = evidence.get("compatibility_contract", {})
+    expected_contract = {
+        "shadow_read_writes": 0,
+        "cancel_writes": 0,
+        "import_canonical_commits": 1,
+        "import_events": 4,
+        "import_attempts": 0,
+        "host_calls": 0,
+        "provider_calls": 0,
+        "source_bytes_unchanged": True,
+        "destination_must_be_disjoint_and_empty": True,
+        "terminal_revival": "FAIL_CLOSED_FROM_REDUCER_ACCEPTED_V3.3.8_TERMINAL_FIXTURE",
+        "changed_source_after_preview": "FAIL_CLOSED",
+        "replay": "EXACT_EXISTING_RESULT",
+        "compatibility_sunset": "one major cycle",
+    }
+    if any(contract.get(key) != value for key, value in expected_contract.items()):
+        raise ValidationFailure("P6 compatibility evidence drift")
+    tests = evidence.get("tests", {})
+    if {
+        key: tests.get(key)
+        for key in (
+            "total_at_checkpoint",
+            "passed_at_checkpoint",
+            "failed",
+            "errors",
+            "p6_test_methods",
+            "sqlite_durable_boundary_subcases",
+        )
+    } != {
+        "total_at_checkpoint": 109,
+        "passed_at_checkpoint": 109,
+        "failed": 0,
+        "errors": 0,
+        "p6_test_methods": 13,
+        "sqlite_durable_boundary_subcases": 9,
+    }:
+        raise ValidationFailure("P6 test evidence drift")
+    if evidence.get("conformance_bindings") != [
+        "M-001",
+        "M-002",
+        "M-003",
+        "M-004",
+        "M-005",
+        "UX-006",
+        "CAP-COMPAT",
+    ]:
+        raise ValidationFailure("P6 conformance binding drift")
+    preservation = evidence.get("preservation_gate", {})
+    if {
+        key: preservation.get(key)
+        for key in (
+            "capability_groups",
+            "mapped_v3_identities",
+            "corpus_families",
+            "corpus_instances",
+        )
+    } != {
+        "capability_groups": 24,
+        "mapped_v3_identities": 1766,
+        "corpus_families": 101,
+        "corpus_instances": 343,
+    }:
+        raise ValidationFailure("P6 preservation evidence drift")
+    digests = evidence.get("file_sha256")
+    if not isinstance(digests, dict) or not digests:
+        raise ValidationFailure("P6 file digest evidence missing")
+    for relative, expected in digests.items():
+        try:
+            checkpoint_bytes = _run(root, "git", "show", f"{checkpoint}:{relative}")
+        except subprocess.CalledProcessError as exc:
+            raise ValidationFailure(f"P6 checkpoint file missing: {relative}") from exc
+        if hashlib.sha256(checkpoint_bytes).hexdigest() != expected:
+            raise ValidationFailure(f"P6 file digest drift: {relative}")
+
+
+def _validate_p6_evidence(root: Path) -> None:
+    _validate_p6_evidence_value(root, _strict_json(root / P6_EVIDENCE_RELATIVE))
+
+
 def _validate_case_bindings(root: Path, registry: dict[str, Any]) -> tuple[int, int]:
     bindings = registry.get("capability_case_bindings")
     requirements = registry.get("capability_acceptance_requirements")
@@ -1156,6 +1292,7 @@ def validate(root: Path) -> dict[str, Any]:
     )
     family_count, instance_count = _validate_corpus(root, registry)
     _validate_anti_bloat_evidence(root)
+    _validate_p6_evidence(root)
     _scan_stale(root)
     return {
         "status": "PASS",
