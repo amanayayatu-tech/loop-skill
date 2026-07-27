@@ -161,7 +161,6 @@ class V4ProtocolAuthorityTests(unittest.TestCase):
         self.assertEqual(
             reserved,
             {
-                "ImportV3Snapshot",
                 "PauseLoop",
                 "ResumeLoop",
                 "StrengthenClosureAssurance",

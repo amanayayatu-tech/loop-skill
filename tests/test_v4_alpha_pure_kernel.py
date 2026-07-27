@@ -88,7 +88,7 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             ].items()
             if "reserved_until" in specification
         }
-        self.assertEqual(len(set(PROTOCOL_MANIFEST["commands"]) - reserved), 12)
+        self.assertEqual(len(set(PROTOCOL_MANIFEST["commands"]) - reserved), 13)
         self.assertIn("UNKNOWN", PROTOCOL_MANIFEST["delivery_states"])
         self.assertIn("UNVERIFIABLE", PROTOCOL_MANIFEST["delivery_states"])
         self.assertNotIn("store_version", PROTOCOL_MANIFEST)

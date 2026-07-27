@@ -759,9 +759,18 @@ def _validate_anti_bloat_evidence_value(root: Path, evidence: dict[str, Any]) ->
         or evidence.get("real_external_effects") != 0
     ):
         raise ValidationFailure("anti-bloat evidence status/authority drift")
-    head = _run(root, "git", "rev-parse", "HEAD").decode("ascii").strip()
-    if evidence.get("source_head") != head:
-        raise ValidationFailure("anti-bloat evidence HEAD drift")
+    checkpoint = evidence.get("checkpoint_commit")
+    source_head = evidence.get("source_head")
+    if not isinstance(checkpoint, str) or not isinstance(source_head, str):
+        raise ValidationFailure("anti-bloat evidence checkpoint missing")
+    resolved_checkpoint = _run(
+        root, "git", "rev-parse", f"{checkpoint}^{{commit}}"
+    ).decode("ascii").strip()
+    resolved_parent = _run(
+        root, "git", "rev-parse", f"{checkpoint}^"
+    ).decode("ascii").strip()
+    if resolved_checkpoint != checkpoint or resolved_parent != source_head:
+        raise ValidationFailure("anti-bloat evidence checkpoint provenance drift")
     preservation = evidence.get("preservation_gate", {})
     if {
         "reviewer_verdict": preservation.get("reviewer_verdict"),
@@ -836,8 +845,13 @@ def _validate_anti_bloat_evidence_value(root: Path, evidence: dict[str, Any]) ->
     if not isinstance(digests, dict) or not digests:
         raise ValidationFailure("anti-bloat file digest evidence missing")
     for relative, expected in digests.items():
-        path = root / relative
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        try:
+            checkpoint_bytes = _run(root, "git", "show", f"{checkpoint}:{relative}")
+        except subprocess.CalledProcessError as exc:
+            raise ValidationFailure(
+                f"anti-bloat checkpoint file missing: {relative}"
+            ) from exc
+        if hashlib.sha256(checkpoint_bytes).hexdigest() != expected:
             raise ValidationFailure(f"anti-bloat file digest drift: {relative}")
 
 

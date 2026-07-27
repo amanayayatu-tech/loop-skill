@@ -52,8 +52,32 @@
       }
     },
     "ImportV3Snapshot": {
-      "reserved_until": "P6",
-      "semantic_payload": {}
+      "semantic_payload": {
+        "objective": {
+          "type": "string"
+        },
+        "source_goal_id": {
+          "type": "string"
+        },
+        "source_loop_id": {
+          "type": "string"
+        },
+        "source_product_version": {
+          "enum": [
+            "v3.3.8"
+          ],
+          "type": "string"
+        },
+        "source_schema_version": {
+          "type": "integer"
+        },
+        "source_state_digest": {
+          "type": "string"
+        },
+        "source_state_version": {
+          "type": "integer"
+        }
+      }
     },
     "PauseLoop": {
       "reserved_until": "full-alpha",
@@ -150,6 +174,10 @@
     "PATH_CONFINEMENT_VIOLATION",
     "FINALIZATION_PRECONDITION_FAILED",
     "MIGRATION_NOT_QUIESCENT",
+    "MIGRATION_SOURCE_INVALID",
+    "MIGRATION_SOURCE_CHANGED",
+    "MIGRATION_DESTINATION_NOT_EMPTY",
+    "MIGRATION_TERMINAL_REVIVAL_FORBIDDEN",
     "DUAL_WRITE_FORBIDDEN",
     "STORE_RECOVERY_REQUIRED",
     "INTERNAL_INVARIANT_VIOLATION",
@@ -198,7 +226,7 @@
     "V3SnapshotImported",
     "OperationRejected"
   ],
-  "manifest_sha256": "4dc81a9e09a8c0c2190e4f02b593d237bfaa75ad9fca9609f279a27bbcf34b4b",
+  "manifest_sha256": "0eeef00bf9d35633fc13859db323c223beee4108f49df33795720dd8ddfcf8c2",
   "protocol_version": "4.0-draft.2",
   "reference_kinds": [
     "LoopRef",
@@ -356,6 +384,20 @@
       "result",
       "limitations",
       "next_actions"
+    ],
+    "V3ImportPreview": [
+      "source_loop_id",
+      "source_schema_version",
+      "source_state_version",
+      "source_state_digest",
+      "goal",
+      "preview_digest"
+    ],
+    "V3ImportResult": [
+      "loop_ref",
+      "source_state_digest",
+      "snapshot_digest",
+      "replayed"
     ]
   },
   "write_cas": "per_loop_revision"

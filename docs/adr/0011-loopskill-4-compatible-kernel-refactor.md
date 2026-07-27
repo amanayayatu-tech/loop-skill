@@ -758,7 +758,7 @@ Compatibility decisions:
 | `OD-4` | Measurement definitions are approved; 32 KiB Pack and at least 50% interaction reduction remain candidate beta targets. Same-scenario v3 baseline and final thresholds must be frozen before observing v4 performance; they are not alpha correctness gates |
 | `OD-5` | First release supports only a Codex Adapter; kernel remains Host-neutral; no multi-host claim before a second real Adapter passes conformance |
 
-No unresolved product semantic blocks the current local P5 single-entry slice.
+No unresolved product semantic blocks the fixture-only P6 compatibility slice.
 
 ## Phases and gates
 
@@ -797,10 +797,47 @@ and outbox record; only the Adapter may execute that machine-owned request.
 Direct start without the bound confirmation is forbidden. The facade is not a
 Supervisor or retry layer.
 
+### P6: fixture-only compatibility and one-way import
+
+P6 implements compatibility only at the anti-corruption boundary. The reader
+is bound to public `v3.3.8` commit
+`843945d9d34e7f065b65d9172ea4a2df66c0f2e3` and exact Git objects for the v3
+runtime and state/mutation schemas. It does not import v3 code into Kernel and
+does not accept paper-treatment or private fixtures as migration authority.
+
+The stateful import slice accepts only a copied/synthetic public schema-v3
+Adaptive fixture with exactly one READY Goal at a paused, lease-free,
+outbox-empty safe point. This intentionally narrow first importer proves the
+one-way boundary; it is not evidence that arbitrary historical state can be
+imported. Running, leased, pending-outbox, terminal, changed-source,
+noncanonical, unsafe-path, overlapping-root, and nonempty-destination inputs
+fail closed. In particular, terminal v3 loops remain readable by v3 and cannot
+be revived in v4.
+
+`shadow_read` and preview are read-only. Cancel leaves both source and
+destination unchanged. Confirm holds the same advisory root lock used by v3,
+revalidates the exact source digest, then commits one `ImportV3Snapshot`
+operation into a disjoint owner-only v4 root. Exact replay returns the original
+result. The import creates a paused Goal and four events, zero Attempts/outbox
+records, and zero Host/provider/Git effects. Rollback is the unchanged v3
+source; there is no reverse conversion or canonical dual write.
+
+Standard/Adaptive selection, old intake/generate entry, compact/full export,
+and existing-Pack `minimal_patch` review behavior are retained through an
+optional compatibility facade. That facade produces the same typed PREPARE
+bundle used by the native entry and a human export view; it never makes Pack
+Markdown machine truth and never starts a loop. Policy execution semantics
+remain P7-owned.
+
+The P6 checkpoint is blocked by `M-001..005`, `UX-006`, and `CAP-COMPAT`
+fixture evidence plus all prior v4 regressions. It does not authorize real-loop
+migration, installed compatibility, or the removal of the one-major-cycle
+facade.
+
 ### Beta: local implementation authorized; gates remain blocking
 
-Safe-point fixture-only import/shadow read and policy/liveness/cost work follow
-in P6/P7. Measurement definitions are accepted, while 32 KiB and 50% remain
+Policy/liveness/cost work follows in P7 after the fixture-only P6 import gate.
+Measurement definitions are accepted, while 32 KiB and 50% remain
 candidate targets until the same-scenario v3 baseline and final thresholds are
 frozen before observing corresponding v4 performance. Beta blocks on all
 remaining `UX-001..008`, `UX-010..016`, the preservation subset assigned to

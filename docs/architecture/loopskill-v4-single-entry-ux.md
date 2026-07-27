@@ -113,10 +113,20 @@ and no implicit v3 migration.
 Intentional major-version improvements are visible UNKNOWN/UNVERIFIABLE,
 machine-bound identity, an owner-only new v4 store/root, stable recovery text,
 and diagnostics that are opt-in. v4 does not promise byte-identical Controller
-Packs, old Pack identity, every v3 CLI flag, or identical wording. The v3
-compatibility facade and explicit preview/confirm/cancel import remain P6 gates;
-entry-byte and action-count budgets remain P7 gates; installation and a real
+Packs, old Pack identity, every v3 CLI flag, or identical wording. The P6 v3
+compatibility facade preserves intake/generate, Standard/Adaptive selection,
+compact/full export, and existing-Pack `minimal_patch` as optional human views.
+Its state importer requires explicit preview then confirm/cancel, writes only a
+new disjoint v4 root, and never starts or resumes the imported paused loop.
+Entry-byte and action-count budgets remain P7 gates; installation and a real
 new-user canary remain P8 gates.
+
+The compatibility facade does not ask for a v3 loop ID, thread/task ID, SHA,
+receipt, schema, or Host enum. It extracts legacy identity from source bytes and
+keeps it machine-held. A Standard input is mapped to the Standard route and an
+Adaptive input to the Adaptive route, but actual policy execution remains P7.
+Terminal v3 loops are shown as non-importable rather than silently revived;
+the original v3 runtime and bytes remain the rollback path.
 
 ## P5.1 evidence boundary
 

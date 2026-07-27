@@ -661,7 +661,7 @@ class SQLiteStore:
                 raise InjectedCrash(fault_at)
 
             self._sync_outbox(loop_ref, candidate)
-            if command.command_type == "CreateLoop":
+            if command.command_type in {"CreateLoop", "ImportV3Snapshot"}:
                 self._sync_loop_identity(command)
             self._sync_receipts(command)
             if fault_at == "after_outbox_write":

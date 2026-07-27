@@ -1,5 +1,6 @@
 {
   "artifact": "loopskill-v4-p5.1-native-entry-and-anti-bloat-evidence-v1",
+  "checkpoint_commit": "a00f9e627bcec506b9046cc746337a8a1f9074a0",
   "status": "PASS",
   "source_head": "48c960c0be437c12dc48c0eff2b049ea8385c18e",
   "branch": "codex/loopskill-4-alpha-pure-kernel",

@@ -257,11 +257,11 @@ is normative and expands before execution.
 
 | Family | Atomic/parameterized instances | Gate | Count |
 | --- | --- | --- | ---: |
-| `M-001` | `a` safe-point dry run, no write | beta | 1 |
-| `M-002` | `a` import new store; `b` exact replay | beta | 2 |
-| `M-003` | `a` rollback readability without reverse conversion | beta | 1 |
-| `M-004` | reject `a` active lease; `b` live outbox; `c` non-paused source; `d` nonempty destination | beta | 4 |
-| `M-005` | `a` dual write forbidden | beta | 1 |
+| `M-001` | `a` safe-point dry run, no write | P6/beta | 1 |
+| `M-002` | `a` import new store; `b` exact replay | P6/beta | 2 |
+| `M-003` | `a` rollback readability without reverse conversion | P6/beta | 1 |
+| `M-004` | reject `a` active lease; `b` live outbox; `c` non-paused source; `d` nonempty destination | P6/beta | 4 |
+| `M-005` | `a` dual write forbidden | P6/beta | 1 |
 | `P-001` | `a` REPAIR policy proposes one authorized new route | beta | 1 |
 | `P-002` | explicit BLOCKED by `a` repair exhaustion; `b` user stop | beta | 2 |
 | `P-003` | `a` explicit SUPERSEDED preserves predecessor | beta | 1 |
@@ -339,7 +339,7 @@ instance.
 | `CAP-OPERABILITY` | new: doctor pass/drift, compile pass/reject, canary pass/reject, lifecycle boundary, and zero-effect check under exact `CAP-OPERABILITY-*` IDs | rc | 8 |
 | `CAP-AUDIT` | new: rejection, index, status, archive, tamper, legacy-boundary, next-action, and zero-writer projection under exact `CAP-AUDIT-*` IDs | beta | 8 |
 | `CAP-PRIVACY` | new: scan/export pass, secret/PII/raw-log reject, stale allowlist, category boundary, and zero-effect under exact `CAP-PRIVACY-*` IDs | beta | 8 |
-| `CAP-COMPAT` | new: legacy intake/generate/Pack-repair, compact/full/minimal-patch, sunset, and zero-effect under exact `CAP-COMPAT-*` IDs; alias: `UX-015-b` | beta | 8 |
+| `CAP-COMPAT` | new: legacy intake/generate/Pack-repair, compact/full/minimal-patch, sunset, and zero-effect under exact `CAP-COMPAT-*` IDs; alias: `UX-015-b` | P6/beta | 8 |
 | `CAP-DISTRIBUTION` | new: install, conflict, rollback, runtime identity, MCP, uninstall, drift, and zero-effect under exact `CAP-DISTRIBUTION-*` IDs | rc | 8 |
 | `CAP-DOCS` | new: Chinese/English/minimal/Standard/Adaptive/migration, stale reject, and zero-effect under exact `CAP-DOCS-*` IDs | rc | 8 |
 | `CAP-RELEASE` | new: SHA, manifest, compatibility CI, canary, SBOM, license, secret, artifact, failure, candidate drift, no-public-effect, and author packet under exact `CAP-RELEASE-*` IDs; aliases: `UX-009-a`, `F-001-a` | rc | 12 |
@@ -1023,6 +1023,11 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
 - P5.1-before-P6: all `UX-001`, `UX-010..016`, `CAP-INTAKE`, `CAP-ENTRY`,
   and `CAP-ARCHITECTURE` instances, including minimal-profile isolation with
   optional policy and v3 compatibility modules unavailable;
+- P6: `M-001..005`, `UX-006-a..b`, and all `CAP-COMPAT` instances against
+  public/synthetic v3.3.8 fixtures; nine SQLite durable-boundary subcases;
+  exact source-byte preservation; terminal revival, non-quiescence,
+  destination collision, and dual-write rejection; the default path must
+  remain compat-unavailable and unchanged;
 - beta: all migration/policy/liveness/cost instances, same-scenario v3 baseline,
   all remaining `UX-001..008`, `UX-010..016`, `CAP-MODES`, `CAP-ROLES`,
   `CAP-HUMAN`, `CAP-REPAIR`, `CAP-AUDIT`, `CAP-PRIVACY`, and `CAP-ARTIFACT`,
@@ -1064,6 +1069,20 @@ sample; the isolation case separately forces exact UNKNOWN with no resend.
 Latency is a nonblocking single-sample diagnostic until the P7 measurement
 fixture and v3 baseline are frozen. Any later default-path increase must cite a
 registry capability and an already accepted ADR decision.
+
+The P6 implementation binding is
+`tests/test_v4_compatibility_import.py`. `M-001-a` and `UX-006-a..b` bind
+shadow/preview/cancel; `M-002-a..b` bind one accepted import and exact replay;
+`M-003-a` binds unchanged v3 bytes plus v3-runtime readability; `M-004-a..d`
+bind non-paused/lease/outbox and destination rejection; `M-005-a` binds
+disjoint-root enforcement. `CAP-COMPAT-INTAKE`, `-GENERATE`, `-PACK-REPAIR`,
+`-COMPACT`, `-FULL`, `-MINIMAL-PATCH`, and `-ZERO` bind the public v3 Standard
+and Adaptive examples and the optional facade. `-SUNSET` binds the explicit
+one-major-cycle contract; actual removal remains a later separately approved
+major-version decision. Each SQLite durable fault boundary is a separate
+subcase; an import recovers to exact pre-state or the single committed
+post-state and creates no external Attempt. These bindings do not change the
+independent 101-family/343-instance catalog count.
 
 ## Implementation-readiness checklist
 

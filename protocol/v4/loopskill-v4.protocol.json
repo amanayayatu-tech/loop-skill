@@ -52,8 +52,32 @@
       }
     },
     "ImportV3Snapshot": {
-      "reserved_until": "P6",
-      "semantic_payload": {}
+      "semantic_payload": {
+        "objective": {
+          "type": "string"
+        },
+        "source_goal_id": {
+          "type": "string"
+        },
+        "source_loop_id": {
+          "type": "string"
+        },
+        "source_product_version": {
+          "enum": [
+            "v3.3.8"
+          ],
+          "type": "string"
+        },
+        "source_schema_version": {
+          "type": "integer"
+        },
+        "source_state_digest": {
+          "type": "string"
+        },
+        "source_state_version": {
+          "type": "integer"
+        }
+      }
     },
     "PauseLoop": {
       "reserved_until": "full-alpha",
@@ -157,6 +181,10 @@
     "PATH_CONFINEMENT_VIOLATION",
     "FINALIZATION_PRECONDITION_FAILED",
     "MIGRATION_NOT_QUIESCENT",
+    "MIGRATION_SOURCE_INVALID",
+    "MIGRATION_SOURCE_CHANGED",
+    "MIGRATION_DESTINATION_NOT_EMPTY",
+    "MIGRATION_TERMINAL_REVIVAL_FORBIDDEN",
     "DUAL_WRITE_FORBIDDEN",
     "STORE_RECOVERY_REQUIRED",
     "INTERNAL_INVARIANT_VIOLATION",
@@ -351,6 +379,20 @@
       ["code", "str", {"type": "string"}],
       ["message", "str", {"type": "string"}],
       ["next_action", "str", {"type": "string"}]
+    ],
+    "V3ImportPreview": [
+      ["source_loop_id", "str", {"type": "string"}],
+      ["source_schema_version", "int", {"type": "integer"}],
+      ["source_state_version", "int", {"type": "integer"}],
+      ["source_state_digest", "str", {"type": "string"}],
+      ["goal", "str", {"type": "string"}],
+      ["preview_digest", "str", {"type": "string"}]
+    ],
+    "V3ImportResult": [
+      ["loop_ref", "str", {"type": "string"}],
+      ["source_state_digest", "str", {"type": "string"}],
+      ["snapshot_digest", "str", {"type": "string"}],
+      ["replayed", "bool", {"type": "boolean"}, false]
     ],
     "Reference": [
       ["kind", "str", {"type": "string"}],

@@ -150,6 +150,16 @@ PASS. P6/P7 may add default-path cost only for a mapped capability and existing
 ADR decision; the two candidate beta thresholds remain locked only after the
 pre-observation v3 baseline procedure.
 
+P6 binds `PRES-COMPAT` and `PRES-MIGRATION` to
+`tests/test_v4_compatibility_import.py`. The compatibility facade consumes the
+exact public Standard/Adaptive example inputs but emits a typed v4 PREPARE
+bundle plus optional human view; it never loads on the default path. The
+stateful importer is deliberately narrower: public v3.3.8 schema-v3, one READY
+Goal, paused/lease-free/outbox-empty, copied or synthetic fixtures only. It
+uses a disjoint new v4 root, preserves source bytes, rejects terminal revival,
+and maps the source to one paused v4 Goal without copying the v3 state shape.
+This is fixture conformance, not authorization to migrate real loops.
+
 ## Deprecation replacements
 
 | Deprecated v3 mechanism | v4 replacement | Preserved user value |
