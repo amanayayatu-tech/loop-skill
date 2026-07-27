@@ -2,7 +2,7 @@
   "artifact": "loopskill-v4-p8-candidate-failures-v1",
   "failures": [
     {
-      "automatic_provider_attempts": 1,
+      "provider_invocations": 0,
       "candidate_sha": "5c9a2c44b1ff95e2194ec0da4fd290be65f8e7d0",
       "classification": "APPARATUS_CONTRACT_ERROR",
       "host_task_create_count": 1,
@@ -10,6 +10,21 @@
       "output_sha256": "4c2b5504140ad02a5e78aa327da1d6db91e26a3df5b0026a6d712ca19329a648",
       "provider_resend_count": 0,
       "reason": "The canary instruction named a nonexistent canonical helper module instead of the typed protocol authority. Start succeeded exactly once, but snapshot bytes and digest could not be computed.",
+      "retry_on_same_candidate": false,
+      "stage": "exact_candidate_disposable_app_canary",
+      "status": "FAIL",
+      "vertical_event_count_observed": 18,
+      "vertical_operation_count_observed": 11
+    },
+    {
+      "provider_invocations": 0,
+      "candidate_sha": "e87a6f4daa851b52efd064c0d9d1dbbd922fe865",
+      "classification": "APPARATUS_CONTRACT_ERROR",
+      "host_task_create_count": 1,
+      "host_task_readback_count": 1,
+      "output_sha256": "2806461e081be9343006d653a2028144ebfbc00cf2aa9da9827524f321161624",
+      "provider_resend_count": 0,
+      "reason": "All product checks passed, but the temporary harness restated a generic finalization alias instead of consuming the frozen typed vertical event sequence. The authoritative terminal event is StrictFinalizationAcknowledged.",
       "retry_on_same_candidate": false,
       "stage": "exact_candidate_disposable_app_canary",
       "status": "FAIL",

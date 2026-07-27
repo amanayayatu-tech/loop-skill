@@ -34,6 +34,10 @@ protocol authority (`loop_architect.v4_alpha.protocol.canonical_bytes`). A
 canary instruction that names an unbound helper module is apparatus failure,
 not product PASS: preserve the failed receipt, do not retry that candidate, and
 fix the instruction contract before creating a new exact candidate.
+The harness must consume the frozen vertical event sequence from the typed
+fixture authority; it must not restate a generic finalization event alias. The
+authoritative strict terminal event is validated through that generated/frozen
+sequence, keeping canary apparatus from becoming another wire-literal source.
 
 Any code change creates a new candidate SHA and reruns affected gates. Failure
 and `UNKNOWN` evidence stays in the packet. The author alone decides whether a
