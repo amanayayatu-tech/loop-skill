@@ -27,7 +27,9 @@ Use `scripts/validate_v4_rc.py --static-only` only before the App canary; it
 always emits `rc_ready=false`. Final invocation omits that flag and must provide
 `--canary-receipt`, `--conformance-receipt`, and `--author-packet`; any missing
 receipt is a hard failure. `scripts/run_v4_conformance.py` emits one result for
-each of the 343 frozen case IDs after running every bound test module.
+each of the 343 frozen case IDs after running each bound concrete unittest
+method exactly once and binding its frozen case parameter; zero-test loads,
+skips, foreign case IDs, changed catalog digests, and unbound results fail.
 
 The disposable canary must import the canonical encoder from the typed
 protocol authority (`loop_architect.v4_alpha.protocol.canonical_bytes`). A

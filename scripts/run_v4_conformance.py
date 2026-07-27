@@ -153,6 +153,17 @@ FAMILY_TEST_BINDINGS = {
     "XFX-008": _test(A, "V4AlphaPureKernelTests", "test_unknown_and_unverifiable_allow_exact_late_observation_only"),
 }
 
+# Case-level overrides are reserved for a branch whose exact regression is
+# narrower than the rest of its family. They are still frozen test identities,
+# not runtime inference or a second schema.
+CASE_TEST_OVERRIDES = {
+    "CAP-COMPAT-SUNSET": _test(
+        UX,
+        "V4SingleEntryUXTests",
+        "test_installed_skill_routes_explicit_v4_before_legacy_doctor",
+    ),
+}
+
 
 def _family(case_id: str, by_family: dict[str, set[str]]) -> str:
     owners = [family for family, cases in by_family.items() if case_id in cases]
@@ -178,7 +189,9 @@ def _run_test(test_id: str) -> dict[str, Any]:
 
 
 def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
-    corpus = (root / preservation.CORPUS_RELATIVE).read_text(encoding="utf-8")
+    corpus = rc._run(
+        root, "git", "show", f"{candidate}:{preservation.CORPUS_RELATIVE}"
+    ).decode("utf-8", "strict")
     catalog, by_family = preservation._exact_case_catalog(corpus)
     if len(catalog) != 343:
         raise RuntimeError("CONFORMANCE_CASE_COUNT_DRIFT")
@@ -187,8 +200,15 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
     concrete_families = {family for family, cases in by_family.items() if cases}
     if set(FAMILY_TEST_BINDINGS) != concrete_families:
         raise RuntimeError("CONFORMANCE_FAMILY_BINDING_DRIFT")
+    if not set(CASE_TEST_OVERRIDES) <= catalog:
+        raise RuntimeError("CONFORMANCE_CASE_OVERRIDE_DRIFT")
     bindings = {
-        case_id: (_family(case_id, by_family), FAMILY_TEST_BINDINGS[_family(case_id, by_family)])
+        case_id: (
+            _family(case_id, by_family),
+            CASE_TEST_OVERRIDES.get(
+                case_id, FAMILY_TEST_BINDINGS[_family(case_id, by_family)]
+            ),
+        )
         for case_id in catalog
     }
     test_ids = sorted({test_id for _, test_id in bindings.values()})

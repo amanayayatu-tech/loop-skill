@@ -1122,7 +1122,10 @@ disjoint-root enforcement. `CAP-COMPAT-INTAKE`, `-GENERATE`, `-PACK-REPAIR`,
 `-COMPACT`, `-FULL`, `-MINIMAL-PATCH`, and `-ZERO` bind the public v3 Standard
 and Adaptive examples and the optional facade. `-SUNSET` binds the explicit
 one-major-cycle contract; actual removal remains a later separately approved
-major-version decision. Each SQLite durable fault boundary is a separate
+major-version decision. It also runs the installed-Skill routing regression:
+an explicit v4 request reaches native INTAKE before any legacy Doctor or v3
+control-plane load, while an explicit legacy request keeps the compatibility
+facade. Each SQLite durable fault boundary is a separate
 subcase; an import recovers to exact pre-state or the single committed
 post-state and creates no external Attempt. These bindings do not change the
 independent 101-family/343-instance catalog count.

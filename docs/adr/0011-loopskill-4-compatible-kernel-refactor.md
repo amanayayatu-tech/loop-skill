@@ -325,6 +325,12 @@ The future public entry is a composition facade over Kernel/Adapter machine
 authority, not a Supervisor, second writer, or second control plane. The
 four-phase authorization contract is P5.1-blocking before P6; broader UX cost,
 documentation, migration, and usability gates remain beta/RC gates.
+An explicit v4 or `loopskill4` invocation must route to this native entry before
+the one-major-cycle legacy Skill facade. It must not run the legacy v3 Doctor,
+scaffold, Pack, State-Writer, Gateway, heartbeat, policy, or importer before v4
+INTAKE/PREPARE. Legacy natural-language intake/generate and repair remain
+explicit compatibility modes; merely invoking the installed Skill does not
+select them.
 
 ### Native four-phase entry contract
 

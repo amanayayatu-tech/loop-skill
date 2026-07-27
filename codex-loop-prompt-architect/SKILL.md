@@ -1,6 +1,6 @@
 ---
 name: codex-loop-prompt-architect
-description: Quality-gate rough ideas or PRDs, then turn only READY_FOR_LOOP requirements into validated Standard or Adaptive Codex macOS App Controller Pack Markdown files. Use for 需求质检, READY_FOR_LOOP checks, intake-only review, loop化, long-running/adaptive loops, Controller/Worker/Reviewer/State-Writer orchestration, or stalled-loop diagnosis.
+description: Use the native LoopSkill 4 intake, prepare, confirm, and start entry for v4 requests; retain one-major-cycle compatibility for v3 intake, Controller Pack generation/repair, and stalled-loop diagnosis.
 ---
 
 # Codex Loop Prompt Architect
@@ -10,7 +10,12 @@ description: Quality-gate rough ideas or PRDs, then turn only READY_FOR_LOOP req
 Design, diagnose, and rewrite loop prompt systems for the Codex macOS App. Generate prompts; do not execute the engineering mission or operate its threads
 unless the user separately asks for live execution.
 
-## Mandatory First-Invocation Doctor
+## LoopSkill 4 Native Entry Routing
+An explicit LoopSkill 4, v4, or `loopskill4` request uses installed `scripts/loopskill4` before the legacy rules below. Before v4 INTAKE/PREPARE it must not run legacy `loopctl doctor`, scaffold/Pack, State-Writer, Gateway, heartbeat, importer, or policy; native `loopskill4 doctor` is explicit-only, not a first-invocation gate.
+The v4 sequence is `INTAKE → PREPARE → CONFIRM → START`: INTAKE is read-only; PREPARE writes only declared review artifacts with zero Host/execution effect; CONFIRM is explicit and digest-bound; only START may create the canonical loop and machine-owned Host Attempt. The user supplies zero control identities; never bypass confirmation or treat a Pack as machine truth.
+Natural-language v3 `intake-only`, `generate`, existing-Pack repair, and stalled-loop diagnosis remain one-major-cycle compatibility modes under the legacy Doctor below. Never infer legacy mode merely because this Skill was invoked.
+
+## Legacy v3 Mandatory First-Invocation Doctor
 On first use in each Codex session, before Intake or Generate, run `"${CODEX_HOME:-$HOME/.codex}/skills/codex-loop-prompt-architect/scripts/loopctl" doctor --check --json`; formal/high-risk Loops add `--target formal --host-receipt <fresh-receipt.json>`. Add `--model-identity-requirement REQUIRED` only when the manifest or a Goal explicitly declares `required_model` or `required_reasoning`; the default is `NOT_REQUIRED` and records model/reasoning as `UNSPECIFIED` without claiming verification. Reuse cache only at the same source/install/Python/config/App/MCP identity; on failure return its remediation and stop before canonical, role, task, or heartbeat creation. Never use model self-attestation. After install and App restart, call the read-only MCP `host_lifecycle_readback` before creating a formal or disposable-canary canonical. Use its exact five lifecycle lanes and receipt digests; never type active-call counts or host identities into a receipt. Any non-SUPPORTED lane stops initialization.
 In `generate` mode, default deliverables are:
 1. one self-contained `<project>-codex-loop-controller-pack.md` file for the
@@ -430,9 +435,7 @@ python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold
   --controller-pack-output ./project-codex-loop-controller-pack.md
 ```
 
-Use JSON arrays for workers, goals, validation, acceptance, and source paths.
-Adaptive also requires `milestones` and bootstrap `role_kind`; runtime supplies
-the deterministic formal role.
+Use JSON arrays for workers, goals, validation, acceptance, and source paths. Adaptive also requires `milestones` and bootstrap `role_kind`; runtime supplies the deterministic formal role.
 Print the supported schema with:
 
 ```bash
@@ -440,10 +443,8 @@ python3 ~/.codex/skills/codex-loop-prompt-architect/scripts/loop_prompt_scaffold
   --print-schema
 ```
 
-The script refuses invalid output by default. Use `--allow-draft` only when the
-user explicitly wants a clearly non-dispatchable draft.
-Reject duplicate JSON keys at any nesting depth; never let a later value
-silently replace scope, permission, review, or budget policy.
+The script refuses invalid output by default. Use `--allow-draft` only when the user explicitly wants a clearly non-dispatchable draft.
+Reject duplicate JSON keys at any nesting depth; never let a later value silently replace scope, permission, review, or budget policy.
 
 `--mode full` must emit the actual L1-L12 diagnosis, score, changelog, flow map,
 test goals, and final step.
@@ -487,8 +488,7 @@ Keep these outside the Controller Pack and explain them in Chinese:
 - every status that requires user intervention
 - manual fallback only when real thread/automation tools are unavailable
 
-Do not call `OBSERVABILITY_GAP` a default human approval. Controller should
-reconcile it automatically unless state conflict cannot be resolved.
+Do not call `OBSERVABILITY_GAP` a default human approval. Controller should reconcile it automatically unless state conflict cannot be resolved.
 
 ## Full Mode
 

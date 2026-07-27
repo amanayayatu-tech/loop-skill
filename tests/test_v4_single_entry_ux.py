@@ -123,6 +123,21 @@ def changed_authority_with_delivery(*, outcome, trust_class):
 
 
 class V4SingleEntryUXTests(unittest.TestCase):
+    def test_installed_skill_routes_explicit_v4_before_legacy_doctor(self) -> None:
+        skill = (ROOT / "codex-loop-prompt-architect/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        native = skill.index("## LoopSkill 4 Native Entry Routing")
+        legacy = skill.index("## Legacy v3 Mandatory First-Invocation Doctor")
+        self.assertLess(native, legacy)
+        native_contract = skill[native:legacy]
+        self.assertIn("before the legacy", native_contract)
+        self.assertIn("rules below", native_contract)
+        self.assertIn("must not run legacy `loopctl doctor`", native_contract)
+        self.assertIn("not a first-invocation gate", native_contract)
+        self.assertIn("INTAKE → PREPARE → CONFIRM → START", native_contract)
+        self.assertIn("supplies zero control identities", native_contract)
+
     def run_entry(self, *arguments):
         return subprocess.run(
             [str(ENTRY), *map(str, arguments)],
