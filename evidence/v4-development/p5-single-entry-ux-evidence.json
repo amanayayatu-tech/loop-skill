@@ -1,5 +1,6 @@
 {
   "artifact": "loopskill-v4-p5-single-entry-ux-evidence-v1",
+  "checkpoint_commit": "4d0857020a7bd296db56dad3d8283c68ea696828",
   "checks": {
     "all_v4_test_methods": 67,
     "all_v4_tests": "PASS",
