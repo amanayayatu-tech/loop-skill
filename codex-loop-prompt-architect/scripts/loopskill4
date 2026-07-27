@@ -21,6 +21,7 @@ from loop_architect.v4_entry import (
     prepare_loop,
     policy_view,
     review_prepared,
+    revise_goal_plan,
     start_loop,
     steer_loop,
     status,
@@ -81,6 +82,10 @@ def parser() -> PublicParser:
     compile_prepared.add_argument("prepared_directory", type=Path)
     policy = subcommands.add_parser("policy")
     policy.add_argument("--root", type=Path, default=default_root())
+    revise = subcommands.add_parser("roadmap-revise")
+    revise.add_argument("objectives", nargs="+")
+    revise.add_argument("--reason", required=True)
+    revise.add_argument("--root", type=Path, default=default_root())
     steer = subcommands.add_parser("steer")
     steer.add_argument("choice", choices=("continue-repair", "wait", "stop"))
     steer.add_argument("--failure-fingerprint", default="")
@@ -94,6 +99,7 @@ _INTAKE_FIELDS = {
     "budget",
     "external_actions",
     "goal",
+    "goal_plan",
     "stop_conditions",
     "task_horizon",
     "write_scope",
@@ -102,6 +108,7 @@ _SEQUENCE_FIELDS = {
     "acceptance_criteria",
     "authorization_boundaries",
     "external_actions",
+    "goal_plan",
     "stop_conditions",
     "write_scope",
 }
@@ -116,6 +123,7 @@ def _intake_value(document) -> LoopIntakeInput:
         )
     values = {
         "goal": "",
+        "goal_plan": (),
         "task_horizon": "unspecified",
         "write_scope": (),
         "budget": "",
@@ -125,6 +133,8 @@ def _intake_value(document) -> LoopIntakeInput:
         "authorization_boundaries": (),
     }
     values.update(document)
+    if not values["goal_plan"] and isinstance(values["goal"], str):
+        values["goal_plan"] = (values["goal"],)
     if not isinstance(values["goal"], str) or not isinstance(values["task_horizon"], str) or not isinstance(values["budget"], str):
         raise EntryError(
             "USER_INPUT_INVALID",
@@ -417,6 +427,20 @@ def main(argv=None) -> int:
             print(
                 json.dumps(
                     policy_view(root=args.root),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        if args.action == "roadmap-revise":
+            print(
+                json.dumps(
+                    revise_goal_plan(
+                        tuple(args.objectives),
+                        root=args.root,
+                        reason=args.reason,
+                    ),
                     ensure_ascii=False,
                     sort_keys=True,
                     separators=(",", ":"),

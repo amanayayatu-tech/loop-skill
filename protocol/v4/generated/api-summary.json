@@ -152,8 +152,38 @@
         }
       }
     },
+    "RegisterGoalPlan": {
+      "semantic_payload": {
+        "execution_mode": {
+          "enum": [
+            "STANDARD",
+            "ADAPTIVE"
+          ],
+          "type": "string"
+        },
+        "objectives": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      }
+    },
     "ResumeLoop": {
       "semantic_payload": {}
+    },
+    "ReviseGoalPlan": {
+      "semantic_payload": {
+        "objective_order": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
     },
     "StageExternalResult": {
       "semantic_payload": {
@@ -243,6 +273,7 @@
     "LoopCreated",
     "GoalRegistered",
     "GoalActivated",
+    "GoalPlanRegistered",
     "StartAuthorized",
     "HostResourceBound",
     "ExternalEffectPrepared",
@@ -268,6 +299,7 @@
     "HumanDecisionRecorded",
     "RepairAuthorized",
     "RepairExhausted",
+    "RoadmapRevised",
     "GoalAdvanced",
     "LoopPaused",
     "LoopResumed",
@@ -278,7 +310,7 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "manifest_sha256": "f56e419b62ffb728eaf3ad2939293fa97175b83d027356429f48aff38deeb0f3",
+  "manifest_sha256": "e09551c3c61868caf58dd95b1d4bfcf0a741b713a84b132b71d426f3219bd9b1",
   "protocol_version": "4.0.0",
   "reference_kinds": [
     "LoopRef",
@@ -371,6 +403,7 @@
     ],
     "LoopIntakeInput": [
       "goal",
+      "goal_plan",
       "task_horizon",
       "write_scope",
       "budget",
@@ -394,6 +427,7 @@
       "control_namespace",
       "loop_ref",
       "goal",
+      "goal_plan",
       "task_horizon",
       "execution_mode",
       "selection_reason",

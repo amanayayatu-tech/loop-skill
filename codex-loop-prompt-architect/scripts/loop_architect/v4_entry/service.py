@@ -302,7 +302,9 @@ def _machine_bootstrap(
                 "PauseLoop",
                 "PrepareFinalization",
                 "RecordPolicyDecision",
+                "RegisterGoalPlan",
                 "ResumeLoop",
+                "ReviseGoalPlan",
                 "StopLoop",
             ),
             loop_scope=loop_ref,
@@ -619,6 +621,40 @@ def start_loop(
                 )
                 store.authority = authority
                 store.apply(command)
+                if len(prepared_context.manifest.goal_plan) > 1:
+                    snapshot = store.snapshot(loop_ref)
+                    assert snapshot is not None
+                    allocations = {
+                        f"new_goal_ref_{index:03d}": "goal-"
+                        + domain_digest(
+                            "loopskill-goal-plan-ref-v1\n",
+                            {"index": index, "loop_ref": loop_ref},
+                        )[:24]
+                        for index in range(
+                            1, len(prepared_context.manifest.goal_plan)
+                        )
+                    }
+                    store.apply(
+                        _machine_command(
+                            store,
+                            snapshot,
+                            command_type="RegisterGoalPlan",
+                            operation_label="register-goal-plan",
+                            subject_kind="LoopRef",
+                            subject_ref=loop_ref,
+                            expected_subject_revisions={},
+                            machine_bindings={
+                                "allocate_refs": allocations,
+                                "receipt_refs": {},
+                                "resolved_refs": {},
+                            },
+                            semantic_payload={
+                                "execution_mode": prepared_context.manifest.execution_mode,
+                                "objectives": list(prepared_context.manifest.goal_plan),
+                            },
+                            clock=clock,
+                        )
+                    )
                 store.verify_integrity()
         if host_provider is not None:
             return _run_startup_provider(
@@ -904,12 +940,28 @@ def policy_view(*, root: Path | str) -> Mapping[str, Any]:
                 "The loop state is unavailable.",
                 "Preserve the store and inspect diagnostics.",
             )
-        goal_ref = next(iter(snapshot["goals"]))
-        goals = (GoalSpec(goal_ref, descriptor["goal"]),)
-        envelope = PolicyEnvelope(allowed_goal_ids=(goal_ref,))
+        plan = snapshot.get("goal_plan")
+        ordered_refs = (
+            tuple(plan["ordered_goal_refs"])
+            if isinstance(plan, Mapping)
+            else tuple(snapshot["goals"])
+        )
+        goals = tuple(
+            GoalSpec(
+                goal_ref,
+                snapshot["goals"][goal_ref]["objective_digest"],
+                (() if snapshot["goals"][goal_ref].get("depends_on") is None else (
+                    snapshot["goals"][goal_ref]["depends_on"],
+                )),
+            )
+            for goal_ref in ordered_refs
+        )
+        envelope = PolicyEnvelope(allowed_goal_ids=ordered_refs)
         attempt = next(iter(snapshot.get("attempts", {}).values()), None)
         mode = (
-            "STANDARD"
+            str(plan["mode"])
+            if isinstance(plan, Mapping)
+            else "STANDARD"
             if attempt is None
             else str(attempt.get("provider_request", {}).get("execution_mode", "STANDARD"))
         )
@@ -917,17 +969,28 @@ def policy_view(*, root: Path | str) -> Mapping[str, Any]:
             roadmap: AdaptiveRoadmap = build_adaptive_roadmap(
                 goals,
                 envelope,
-                revision=1,
-                active_goal_id=goal_ref,
+                revision=(1 if not isinstance(plan, Mapping) else int(plan["revision"])),
+                active_goal_id=(
+                    ordered_refs[0]
+                    if not isinstance(plan, Mapping)
+                    else str(plan["active_goal_ref"])
+                ),
             )
             policy_shape = {
                 "active_goal_count": 1,
+                "goal_count": len(roadmap.goals),
                 "kind": "ADAPTIVE",
                 "revision": roadmap.revision,
             }
         else:
             queue = build_standard_queue(goals, envelope)
-            policy_shape = {"goal_count": len(queue), "kind": "STANDARD"}
+            policy_shape = {
+                "goal_count": len(queue),
+                "kind": "STANDARD",
+                "ordered_states": tuple(
+                    snapshot["goals"][goal.goal_id]["state"] for goal in queue
+                ),
+            }
         action = next_action(snapshot)
         roles = role_requirements(
             snapshot,
@@ -943,6 +1006,73 @@ def policy_view(*, root: Path | str) -> Mapping[str, Any]:
             "repair": dict(snapshot.get("policy", {})),
             "roles": tuple(requirement.role for requirement in roles),
         }
+
+
+def revise_goal_plan(
+    objective_order: tuple[str, ...],
+    *,
+    root: Path | str,
+    reason: str,
+    clock: Callable[[], datetime] = _now,
+) -> Mapping[str, Any]:
+    """Submit one bounded Adaptive revision without exposing Goal identities."""
+    normalized = tuple(item.strip() for item in objective_order if item.strip())
+    if not normalized or not reason.strip():
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The roadmap revision requires an ordered Goal list and reason.",
+            "Provide the complete prepared Goal envelope in the intended order.",
+        )
+    path = _existing_store_path(root)
+    try:
+        with SQLiteStore(path) as store:
+            descriptors = store.loop_descriptors()
+            if len(descriptors) != 1:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The LoopSkill data location is not a single-loop store.",
+                    "Preserve the store and inspect diagnostics.",
+                )
+            loop_ref = descriptors[0]["loop_ref"]
+            snapshot = store.snapshot(loop_ref)
+            if snapshot is None or not isinstance(snapshot.get("goal_plan"), Mapping):
+                raise EntryError(
+                    "USER_INPUT_INVALID",
+                    "This loop has no revisable Adaptive roadmap.",
+                    "Use policy status to inspect the current mode.",
+                )
+            plan = snapshot["goal_plan"]
+            store.apply(
+                _machine_command(
+                    store,
+                    snapshot,
+                    command_type="ReviseGoalPlan",
+                    operation_label=f"revise-goal-plan-{plan['revision']}",
+                    subject_kind="LoopRef",
+                    subject_ref=loop_ref,
+                    expected_subject_revisions={"goal_plan": int(plan["revision"])},
+                    machine_bindings={
+                        "allocate_refs": {},
+                        "receipt_refs": {},
+                        "resolved_refs": {},
+                    },
+                    semantic_payload={
+                        "objective_order": list(normalized),
+                        "reason": reason.strip(),
+                    },
+                    clock=clock,
+                )
+            )
+            store.verify_integrity()
+        return policy_view(root=root)
+    except EntryError:
+        raise
+    except (OSError, PersistenceError, ProtocolRejection) as exc:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The roadmap revision is outside the confirmed policy envelope.",
+            "Keep the active Goal first and reorder only prepared pending Goals.",
+        ) from exc
 
 
 def _policy_options(snapshot: Mapping[str, Any]) -> tuple[str, ...]:
@@ -1584,6 +1714,12 @@ def sync_loop(
                 )
                 snapshot = store.snapshot(loop_ref)
                 assert snapshot is not None
+
+            if any(
+                goal.get("state") == "ACTIVE"
+                for goal in snapshot["goals"].values()
+            ):
+                return _status_from_store(store, loop_ref)
 
             review_state = snapshot["reviews"][review_ref]["state"]
             final_disposition = (

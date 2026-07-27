@@ -55,6 +55,7 @@ ISSUER_TRUST = "trusted-adapter"
 def prepared_start(root: Path, goal: str, token: str):
     request = LoopIntakeInput(
         goal=goal,
+        goal_plan=(goal,),
         task_horizon="long",
         write_scope=("synthetic-workspace",),
         budget="10 minutes; one Host create attempt",

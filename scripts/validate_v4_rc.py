@@ -852,12 +852,20 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
             "expected_acceptance": item.get("expected_acceptance"),
             "expected_effect_state": item.get("expected_effect_state"),
             "fixture_selector": item.get("fixture_selector"),
+            "observed_acceptance": item.get("observed_acceptance"),
+            "observed_effect_state": item.get("observed_effect_state"),
+            "observed_result_digest": item.get("observed_result_digest"),
+            "selector_consumed": item.get("selector_consumed"),
         }
         if (
             not isinstance(test_id, str)
             or test_id in tests_by_id
             or deterministic["status"] != "PASS"
             or deterministic["tests_run"] != 1
+            or deterministic["selector_consumed"] is not True
+            or deterministic["observed_acceptance"] != deterministic["expected_acceptance"]
+            or deterministic["observed_effect_state"] != deterministic["expected_effect_state"]
+            or not isinstance(deterministic["observed_result_digest"], str)
             or item.get("result_digest") != hashlib.sha256(_canonical(deterministic)).hexdigest()
         ):
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
@@ -889,6 +897,9 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
             or contract.get("fixture_selector") != item.get("fixture_selector")
             or contract.get("expected_acceptance") != item.get("expected_acceptance")
             or contract.get("expected_effect_state") != item.get("expected_effect_state")
+            or item.get("observed_acceptance") != item.get("expected_acceptance")
+            or item.get("observed_effect_state") != item.get("expected_effect_state")
+            or item.get("selector_consumed") is not True
             or contract.get("replay_expectation") != item.get("replay_expectation")
             or item.get("case_contract_digest") != hashlib.sha256(_canonical(contract)).hexdigest()
         ):

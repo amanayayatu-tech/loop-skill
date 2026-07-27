@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import importlib.util
 import json
 import os
@@ -488,6 +489,8 @@ def _run_case(
         }
     )
     try:
+        atomic_module = importlib.import_module("test_v4_atomic_conformance")
+        atomic_module.LAST_OBSERVATION = None
         suite = unittest.defaultTestLoader.loadTestsFromName(wrapper)
         stream = StringIO()
         result = unittest.TextTestRunner(stream=stream, verbosity=0).run(suite)
@@ -500,6 +503,24 @@ def _run_case(
     if not result.wasSuccessful() or result.testsRun != 1 or result.skipped:
         digest = hashlib.sha256(stream.getvalue().encode()).hexdigest()
         raise RuntimeError(f"CONFORMANCE_CASE_FAILED: {case_id}: {digest}")
+    observation = atomic_module.LAST_OBSERVATION
+    expected_observation = {
+        "case_id": case_id,
+        "family": family,
+        "fixture_selector": contract["fixture_selector"],
+        "observed_acceptance": contract["expected_acceptance"],
+        "observed_effect_state": contract["expected_effect_state"],
+        "observed_ordered_events": contract["expected_ordered_events"],
+        "observed_side_effect_counts": contract["expected_side_effect_counts"],
+        "observed_replay": contract["replay_expectation"],
+        "selector_consumed": True,
+        "target_test_id": target_test_id,
+        "target_test_passed": True,
+    }
+    if observation != expected_observation:
+        digest = hashlib.sha256(rc._canonical(observation)).hexdigest()
+        raise RuntimeError(f"CONFORMANCE_CASE_OBSERVATION_MISMATCH: {case_id}: {digest}")
+    observation_digest = hashlib.sha256(rc._canonical(observation)).hexdigest()
     deterministic = {
         "assertion_test_id": f"{case_id}::{target_test_id}",
         "case_id": case_id,
@@ -511,6 +532,10 @@ def _run_case(
         "expected_acceptance": contract["expected_acceptance"],
         "expected_effect_state": contract["expected_effect_state"],
         "fixture_selector": contract["fixture_selector"],
+        "observed_acceptance": observation["observed_acceptance"],
+        "observed_effect_state": observation["observed_effect_state"],
+        "observed_result_digest": observation_digest,
+        "selector_consumed": True,
     }
     return {
         **deterministic,
@@ -588,7 +613,11 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
             "expected_acceptance": receipt_contract["expected_acceptance"],
             "expected_effect_state": receipt_contract["expected_effect_state"],
             "fixture_selector": receipt_contract["fixture_selector"],
+            "observed_acceptance": execution["observed_acceptance"],
+            "observed_effect_state": execution["observed_effect_state"],
+            "observed_result_digest": execution["observed_result_digest"],
             "replay_expectation": receipt_contract["replay_expectation"],
+            "selector_consumed": execution["selector_consumed"],
         }
         if case_id in real_canary_cases:
             result["canary_receipt_sha256"] = hashlib.sha256(

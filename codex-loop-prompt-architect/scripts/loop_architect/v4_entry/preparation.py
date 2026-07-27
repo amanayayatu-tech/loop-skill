@@ -39,6 +39,7 @@ CONFIRMATION_ISSUER = "loopskill-local-confirmation-v1"
 CONFIRMATION_TRUST = "local-explicit-confirmation"
 _MAX_PREPARED_FILE_BYTES = 64 * 1024
 _TUPLE_FIELDS = (
+    "goal_plan",
     "write_scope",
     "external_actions",
     "acceptance_criteria",
@@ -98,6 +99,19 @@ def intake(request: LoopIntakeInput) -> LoopIntakeDecision:
             route="UNDETERMINED",
             reason="The intended outcome is missing.",
             questions=("What observable outcome should the work produce?",),
+        )
+    plan = tuple(item.strip() for item in request.goal_plan if item.strip())
+    if (
+        not plan
+        or plan[0] != goal
+        or len(plan) > 16
+        or len(set(plan)) != len(plan)
+    ):
+        return LoopIntakeDecision(
+            disposition="NEEDS_CLARIFICATION",
+            route="UNDETERMINED",
+            reason="The Goal plan must contain 1–16 unique objectives and start with the primary Goal.",
+            questions=("Provide an ordered Goal plan whose first item is the primary Goal.",),
         )
     horizon = request.task_horizon.strip().lower()
     if horizon in {"one_off", "short", "single_step"} and not request.external_actions:
@@ -189,6 +203,7 @@ def intake_report(request: LoopIntakeInput) -> Mapping[str, Any]:
             "budget": request.budget.strip(),
             "external_actions": tuple(request.external_actions),
             "goal": request.goal.strip(),
+            "goal_plan": tuple(item.strip() for item in request.goal_plan),
             "stop_conditions": tuple(request.stop_conditions),
             "write_scope": tuple(request.write_scope),
         },
@@ -265,6 +280,7 @@ def _boundary_value(manifest: PreparedLoopManifest) -> dict[str, Any]:
         "external_actions": list(manifest.external_actions),
         "execution_mode": manifest.execution_mode,
         "goal": manifest.goal,
+        "goal_plan": list(manifest.goal_plan),
         "selection_reason": manifest.selection_reason,
         "stop_conditions": list(manifest.stop_conditions),
         "write_scope": list(manifest.write_scope),
@@ -282,6 +298,10 @@ This is a human review/export view. `loop-manifest.json` is the machine source.
 ## Goal
 
 {manifest.goal}
+
+## Goal plan
+
+{lines(manifest.goal_plan)}
 
 ## Write scope
 
@@ -391,6 +411,7 @@ def prepare(
         control_namespace=namespace,
         loop_ref=f"loop-{namespace}",
         goal=request.goal.strip(),
+        goal_plan=tuple(item.strip() for item in request.goal_plan),
         task_horizon=request.task_horizon.strip().lower(),
         execution_mode=(
             "ADAPTIVE" if decision.route == "ADAPTIVE_LOOP" else "STANDARD"

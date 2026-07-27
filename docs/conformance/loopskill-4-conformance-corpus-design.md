@@ -1078,11 +1078,16 @@ gate module; every mapped module must run successfully in the same invocation.
 For each case it derives a closed executable contract from the exact family row
 and parameter: provenance, precondition, stimulus, expected acceptance,
 expected effect state, ordered events, side-effect counts, replay expectation,
-capability profile, selector, and target assertion. The atomic wrapper consumes
+capability profile, selector, and target assertion. The atomic gate consumes
 every field and its domain-separated contract digest before invoking the bound
-assertion. A bogus case ID or any mutation of acceptance, effect state, event
-order, count, replay, selector, or target fails closed; repeating a family test
-without the exact contract cannot mint a per-case PASS. The output contains 349
+assertion. After that target passes, a test-side selector oracle that does not
+read the supplied expected fields records observed acceptance, effect state,
+event order, bounded counts, and replay class. The runner compares both sides
+and hashes the observation. A bogus case ID or any mutation of acceptance,
+effect state, event order, count, replay, selector, or target fails closed;
+mutating the active expected contract and its supplied digest together still
+fails against the independent observation. Repeating a family test without the
+exact selector observation cannot mint a per-case PASS. The output contains 349
 sorted unique per-instance records, their assertion identities and contract
 digests, plus a canonical aggregate digest. `UX-009-a` and
 `CAP-RELEASE-CANARY` additionally require the real App receipt. One bound
@@ -1120,7 +1125,7 @@ forbidden-dependency scan, single-writer scan, optional-policy isolation, and
 production-v3-runtime absence. This receipt is build evidence only, never a
 runtime authority.
 
-The P5.1 frozen synthetic observation is: 13 loaded v4 modules, 17 internal
+The historical P5.1 frozen synthetic observation is: 13 loaded v4 modules, 17 internal
 dependency edges, 16/33/40 manifest command/event/error literals, one public
 start action, one separately counted authorization confirmation, zero Host
 interactions, one protocol mutation, one canonical commit, five PREPARE files,
@@ -1148,6 +1153,12 @@ The P7 policy/operability implementation binding is
 `tests/test_v4_product_policy_operability.py`. `CAP-MODES-*` bind default
 Standard, explicit Adaptive, fixed dependency order, bounded contiguous
 roadmap revision, author-envelope rejection, and zero-write decisions.
+The public Entry binding additionally prepares a typed `goal_plan`, asks the
+Kernel to allocate the Goal graph with `RegisterGoalPlan`, projects the exact
+canonical order/revision, and submits `ReviseGoalPlan` for Adaptive reordering.
+The Standard two-Goal fixture proves fixed dependency order; the Adaptive
+three-Goal fixture proves revision `1` to `2`, one active Goal, and rejection of
+an objective outside the prepared author envelope before any provider call.
 `CAP-ROLES-*` bind JIT Worker/Reviewer/Local Verifier selection to the current
 Artifact. `CAP-HUMAN-*` bind Decision Card response, context freshness, expiry,
 and replay rejection. `CAP-REPAIR-*` bind total repair and same-failure limits

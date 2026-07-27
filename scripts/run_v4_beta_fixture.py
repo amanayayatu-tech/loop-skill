@@ -98,6 +98,7 @@ def run_fixture() -> dict[str, Any]:
     semantic = scenario["v4_semantic_input"]
     request = LoopIntakeInput(
         goal=semantic["goal"],
+        goal_plan=(semantic["goal"],),
         task_horizon=semantic["task_horizon"],
         write_scope=tuple(semantic["write_scope"]),
         budget=semantic["budget"],

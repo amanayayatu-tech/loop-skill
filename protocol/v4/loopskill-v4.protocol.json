@@ -78,6 +78,18 @@
         }
       }
     },
+    "RegisterGoalPlan": {
+      "semantic_payload": {
+        "execution_mode": {
+          "enum": ["STANDARD", "ADAPTIVE"],
+          "type": "string"
+        },
+        "objectives": {
+          "items": {"type": "string"},
+          "type": "array"
+        }
+      }
+    },
     "PauseLoop": {
       "semantic_payload": {
         "reason": {
@@ -133,6 +145,15 @@
     },
     "ResumeLoop": {
       "semantic_payload": {}
+    },
+    "ReviseGoalPlan": {
+      "semantic_payload": {
+        "objective_order": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "reason": {"type": "string"}
+      }
     },
     "StopLoop": {
       "semantic_payload": {
@@ -220,6 +241,7 @@
     "LoopCreated",
     "GoalRegistered",
     "GoalActivated",
+    "GoalPlanRegistered",
     "StartAuthorized",
     "HostResourceBound",
     "ExternalEffectPrepared",
@@ -245,6 +267,7 @@
     "HumanDecisionRecorded",
     "RepairAuthorized",
     "RepairExhausted",
+    "RoadmapRevised",
     "GoalAdvanced",
     "LoopPaused",
     "LoopResumed",
@@ -356,6 +379,7 @@
     ],
     "LoopIntakeInput": [
       ["goal", "str", {"type": "string"}],
+      ["goal_plan", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["task_horizon", "str", {"type": "string"}],
       ["write_scope", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["budget", "str", {"type": "string"}],
@@ -375,6 +399,7 @@
       ["control_namespace", "str", {"type": "string"}],
       ["loop_ref", "str", {"type": "string"}],
       ["goal", "str", {"type": "string"}],
+      ["goal_plan", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["task_horizon", "str", {"type": "string"}],
       ["execution_mode", "str", {"enum": ["STANDARD", "ADAPTIVE"], "type": "string"}],
       ["selection_reason", "str", {"type": "string"}],

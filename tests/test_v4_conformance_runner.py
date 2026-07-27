@@ -80,6 +80,24 @@ def mock_execution(case_id, family, test_id, contract):
         "expected_acceptance": contract["expected_acceptance"],
         "expected_effect_state": contract["expected_effect_state"],
         "fixture_selector": contract["fixture_selector"],
+        "observed_acceptance": contract["expected_acceptance"],
+        "observed_effect_state": contract["expected_effect_state"],
+        "observed_result_digest": hashlib.sha256(
+            runner.rc._canonical({
+                "case_id": case_id,
+                "family": family,
+                "fixture_selector": contract["fixture_selector"],
+                "observed_acceptance": contract["expected_acceptance"],
+                "observed_effect_state": contract["expected_effect_state"],
+                "observed_ordered_events": contract["expected_ordered_events"],
+                "observed_side_effect_counts": contract["expected_side_effect_counts"],
+                "observed_replay": contract["replay_expectation"],
+                "selector_consumed": True,
+                "target_test_id": test_id,
+                "target_test_passed": True,
+            })
+        ).hexdigest(),
+        "selector_consumed": True,
     }
     return {
         **deterministic,
@@ -155,6 +173,23 @@ class V4ConformanceRunnerTests(unittest.TestCase):
             runner._run_case(
                 "CAP-ARCHITECTURE-ONE-WRITER", family, test_id, changed
             )
+        intake_family, intake_test, intake_contract = bindings["CAP-INTAKE-G01"]
+        self_consistent_wrong = dict(intake_contract)
+        self_consistent_wrong["expected_acceptance"] = "REJECT"
+        original = runner._ACTIVE_CASE_CONTRACTS["CAP-INTAKE-G01"]
+        runner._ACTIVE_CASE_CONTRACTS["CAP-INTAKE-G01"] = self_consistent_wrong
+        try:
+            with self.assertRaisesRegex(
+                RuntimeError, "CONFORMANCE_CASE_OBSERVATION_MISMATCH"
+            ):
+                runner._run_case(
+                    "CAP-INTAKE-G01",
+                    intake_family,
+                    intake_test,
+                    self_consistent_wrong,
+                )
+        finally:
+            runner._ACTIVE_CASE_CONTRACTS["CAP-INTAKE-G01"] = original
         changed = dict(contract)
         changed["expected_side_effect_counts"] = {
             **contract["expected_side_effect_counts"],

@@ -351,6 +351,12 @@
         "goal": {
           "type": "string"
         },
+        "goal_plan": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "stop_conditions": {
           "items": {
             "type": "string"
@@ -369,6 +375,7 @@
       },
       "required": [
         "goal",
+        "goal_plan",
         "task_horizon",
         "write_scope",
         "budget",
@@ -465,6 +472,12 @@
         "goal": {
           "type": "string"
         },
+        "goal_plan": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "loop_ref": {
           "type": "string"
         },
@@ -501,6 +514,7 @@
         "control_namespace",
         "loop_ref",
         "goal",
+        "goal_plan",
         "task_horizon",
         "execution_mode",
         "selection_reason",
@@ -680,6 +694,6 @@
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "f56e419b62ffb728eaf3ad2939293fa97175b83d027356429f48aff38deeb0f3",
+  "manifest_sha256": "e09551c3c61868caf58dd95b1d4bfcf0a741b713a84b132b71d426f3219bd9b1",
   "title": "LoopSkill 4 protocol wire shapes"
 }

@@ -240,10 +240,10 @@ measurement-code digest is
 If the units cannot be compared honestly, the result is a product decision,
 not a manufactured PASS.
 
-The P5.1 minimal-profile observation freezes the metric names and counting
+The historical P5.1 minimal-profile observation freezes the metric names and counting
 boundary, not the beta performance thresholds. In the synthetic no-Host
 scenario it loads 13 `loop_architect.v4_*` modules over 17 internal dependency
-edges; the manifest declares 16 commands, 33 events, and 40 errors. One public
+edges; its then-current manifest declared 16 commands, 33 events, and 40 errors. One public
 start action contains one separately reported human confirmation, then one
 Kernel mutation/canonical commit emitting five events and one startup Attempt;
 INTAKE writes 0 files, PREPARE writes 5, CONFIRM writes 1, and Host interactions
@@ -633,7 +633,7 @@ from delivery observation.
 
 ### Mutation commands
 
-`CreateLoop`, `BindHostResource`, `PrepareRoute`, `BeginEffectDelivery`,
+`CreateLoop`, `RegisterGoalPlan`, `ReviseGoalPlan`, `BindHostResource`, `PrepareRoute`, `BeginEffectDelivery`,
 `RecordEffectObservation`, `RecordExternalEffectObservation`, `StageResult`,
 `StageExternalResult`, `AcknowledgeResult`, `RecordReview`,
 `AdvanceGoal`, `RecordPolicyDecision`, `PauseLoop`, `ResumeLoop`, `StopLoop`, `PrepareFinalization`,
@@ -644,7 +644,7 @@ are read-only and have no operation/CAS side effects.
 
 ### Events
 
-`LoopCreated`, `GoalRegistered`, `GoalActivated`, `StartAuthorized`, `HostResourceBound`,
+`LoopCreated`, `GoalRegistered`, `GoalPlanRegistered`, `RoadmapRevised`, `GoalActivated`, `StartAuthorized`, `HostResourceBound`,
 `ExternalEffectPrepared`, `ExternalEffectObserved`, `ExternalEffectUnknown`,
 `ExternalEffectUnverifiable`, `LateExternalEffectObserved`,
 `RoutePrepared`, `DeliveryAttemptCommitted`, `DeliveryObserved`,
@@ -753,6 +753,14 @@ independently verified local criterion can produce Review PASS and SUCCEEDED.
 The optional policy surface is reachable through Entry without becoming a
 writer. Standard/Adaptive projections remain removable from the minimal path;
 pause/resume/stop submit ordinary machine-authorized Kernel commands.
+For a multi-Goal prepared manifest, Entry submits `RegisterGoalPlan` before any
+provider call. The Kernel alone allocates Goal references, stores a fixed
+dependency order, and activates exactly one Goal. `ReviseGoalPlan` accepts only
+an Adaptive semantic reordering of already-authorized pending objectives,
+requires the current plan revision, preserves the active Goal first, and emits
+one contiguous `RoadmapRevised`; an objective outside the prepared author
+envelope fails closed. Neither command creates a Host task or gives policy
+writer authority.
 `RecordPolicyDecision` records a digest-bound current-context choice and a
 bounded repair authorization/exhaustion fact. It never invokes Host, retries an
 Attempt, or manufactures a successor. A repair authorization explicitly
@@ -1018,8 +1026,13 @@ record for each of the 349 canonical case IDs, and additionally binds the two
 real-App cases to the exact canary receipt. Each local record must first consume
 a machine-derived per-case contract covering precondition, stimulus,
 acceptance, effect state, event order, side-effect count, replay, capability,
-selector, and target assertion. Unknown IDs and mutated contracts fail closed;
-a repeated family-level unittest result is not per-instance evidence.
+selector, and target assertion. After the concrete target passes, a test-side
+observation oracle that is independent of the supplied expected contract emits
+the observed acceptance, effect state, event order, bounded side-effect counts,
+and replay class for that selector. The runner compares observed and expected
+values and binds the observed-result digest. Unknown IDs, a self-consistent
+mutation of the active expected contract, or a repeated family-level unittest
+result without the selector-specific observation fails closed.
 
 ## Non-goals and safeguards
 

@@ -146,7 +146,7 @@ command/event/error counts, user start actions and confirmation count, Host and
 protocol calls, local writes, bytes, latency, UNKNOWN, and human intervention.
 No arbitrary LOC ceiling is used.
 
-The P5.1 no-Host synthetic receipt records 13 loaded v4 modules/17 dependency
+The historical P5.1 no-Host synthetic receipt records 13 loaded v4 modules/17 dependency
 edges, 16 commands/33 events/40 errors, one start action plus one confirmation,
 zero Host interactions, one protocol mutation and canonical commit, 5+1 local
 preparation/confirmation writes, 11,125 entry bytes, and a 627-byte human Plan.
@@ -154,6 +154,15 @@ These are regression observations, not new size ceilings or beta performance
 PASS. Later v4-only work may add default-path cost only for a mapped capability and existing
 ADR decision; the two candidate beta thresholds remain locked only after the
 pre-observation v3 baseline procedure.
+
+The later `PRES-MODES` implementation adds typed `goal_plan`,
+`RegisterGoalPlan`, and `ReviseGoalPlan` to make the retained Standard/Adaptive
+semantics publicly reachable without importing optional policy into Kernel.
+Entry supplies semantic objectives from the prepared author envelope; Kernel
+allocates references, owns the canonical dependency graph and revision, and
+rejects out-of-envelope or stale revisions before Host execution. The earlier
+16/33/40 receipt remains immutable predecessor evidence rather than a claim
+about the later manifest.
 
 The former P6 importer/facade implementation and evidence are immutable
 predecessor history only. They are excluded from v4-only acceptance. New

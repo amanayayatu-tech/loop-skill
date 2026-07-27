@@ -46,6 +46,7 @@ from loop_architect.v4_entry import (  # noqa: E402
     prepare_loop,
     policy_view,
     record_external_observation,
+    revise_goal_plan,
     start_loop,
     steer_loop,
     status,
@@ -165,6 +166,7 @@ def fixed_tokens():
 def ready_request(goal="Ship a bounded public change", *, horizon="long"):
     return LoopIntakeInput(
         goal=goal,
+        goal_plan=(goal,),
         task_horizon=horizon,
         write_scope=("synthetic-workspace",),
         budget="10 minutes; 1 Host create attempt",
@@ -937,7 +939,10 @@ class V4SingleEntryUXTests(unittest.TestCase):
             root = Path(temporary)
             workspace = root / "workspace"
             workspace.mkdir()
-            request = ready_request("Adaptive single-goal roadmap", horizon="adaptive")
+            request = replace(
+                ready_request("Adaptive primary", horizon="adaptive"),
+                goal_plan=("Adaptive primary", "Adaptive verify", "Adaptive publish boundary"),
+            )
             prepared = prepare_loop(
                 request,
                 root / "prepared",
@@ -951,6 +956,55 @@ class V4SingleEntryUXTests(unittest.TestCase):
             projection = policy_view(root=data)
             self.assertEqual(projection["policy"]["kind"], "ADAPTIVE")
             self.assertEqual(projection["policy"]["active_goal_count"], 1)
+            self.assertEqual(projection["policy"]["goal_count"], 3)
+            self.assertEqual(projection["policy"]["revision"], 1)
+            revised = revise_goal_plan(
+                (
+                    "Adaptive primary",
+                    "Adaptive publish boundary",
+                    "Adaptive verify",
+                ),
+                root=data,
+                reason="Reorder only pending milestones.",
+                clock=lambda: NOW,
+            )
+            self.assertEqual(revised["policy"]["revision"], 2)
+            with self.assertRaises(EntryError):
+                revise_goal_plan(
+                    ("Adaptive primary", "Outside author envelope", "Adaptive verify"),
+                    root=data,
+                    reason="Attempt scope expansion.",
+                    clock=lambda: NOW,
+                )
+            self.assertEqual(policy_view(root=data)["policy"]["revision"], 2)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = replace(
+                ready_request("Standard primary"),
+                goal_plan=("Standard primary", "Standard dependent"),
+            )
+            prepared = prepare_loop(
+                request,
+                root / "prepared",
+                clock=lambda: NOW,
+                token_factory=lambda: "829292929292929292929292",
+                workspace_root=workspace,
+            )
+            prepared = confirm_loop(prepared.directory, confirmed=True, clock=lambda: NOW)
+            data = root / "data"
+            start_loop(prepared, root=data, clock=lambda: NOW)
+            projection = policy_view(root=data)
+            self.assertEqual(projection["policy"]["kind"], "STANDARD")
+            self.assertEqual(projection["policy"]["goal_count"], 2)
+            self.assertEqual(projection["policy"]["ordered_states"], ("ACTIVE", "PENDING"))
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                self.assertIsNotNone(snapshot)
+                ordered = snapshot["goal_plan"]["ordered_goal_refs"]
+                self.assertEqual(snapshot["goals"][ordered[1]]["depends_on"], ordered[0])
 
     def test_bounded_repair_decision_exhausts_without_automatic_resend(self):
         with tempfile.TemporaryDirectory() as temporary:

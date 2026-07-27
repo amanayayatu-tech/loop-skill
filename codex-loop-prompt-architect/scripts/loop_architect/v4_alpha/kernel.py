@@ -82,6 +82,11 @@ def _subject_record(snapshot: Mapping[str, Any], reference: str) -> Mapping[str,
         return snapshot["execution"]
     if reference == "closure_assurance":
         return snapshot["closure_assurance"]
+    if reference == "goal_plan":
+        plan = snapshot.get("goal_plan")
+        if not isinstance(plan, Mapping):
+            raise ProtocolRejection("FOREIGN_REFERENCE", reference)
+        return plan
     if reference == snapshot.get("loop_ref"):
         return {"revision": snapshot["loop_revision"]}
     for collection in _COLLECTIONS.values():
@@ -259,7 +264,9 @@ def _result_chain(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     else:
         external_effect_ref = result["external_effect_ref"]
         effect = snapshot["external_effects"][external_effect_ref]
-        goal_ref, _ = _only_record(snapshot, "goals")
+        goal_ref = result.get("goal_ref")
+        if goal_ref not in snapshot["goals"]:
+            goal_ref, _ = _only_record(snapshot, "goals")
         chain.update(
             {
                 "external_effect_ref": external_effect_ref,
@@ -541,6 +548,135 @@ def _create_loop(
         )
         response["external_effect_ref"] = external_effect_ref
     return state, events, response
+
+
+def _register_goal_plan(
+    snapshot: dict[str, Any] | None,
+    command: CommandEnvelope,
+    _: AuthorityContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """Register one machine-identified, dependency-ordered policy plan."""
+    assert snapshot is not None
+    if "goal_plan" in snapshot or snapshot.get("routes") or snapshot.get("results"):
+        raise ProtocolRejection("INVALID_TRANSITION", "Goal plan is already fixed")
+    objectives = command.semantic_payload.get("objectives")
+    mode = command.semantic_payload.get("execution_mode")
+    if (
+        not isinstance(objectives, list)
+        or not 2 <= len(objectives) <= 16
+        or not all(isinstance(item, str) and item.strip() for item in objectives)
+        or len(set(item.strip() for item in objectives)) != len(objectives)
+        or mode not in {"STANDARD", "ADAPTIVE"}
+    ):
+        raise ProtocolRejection("INVALID_COMMAND", "invalid Goal plan")
+    existing_ref, existing = _only_record(snapshot, "goals")
+    if existing["objective_digest"] != domain_digest(
+        "loopskill-goal-objective-v1\n", objectives[0].strip()
+    ):
+        raise ProtocolRejection("AUTHORITY_SCOPE_MISMATCH", "primary Goal changed")
+    allocated = {
+        key: value
+        for key, value in command.machine_bindings["allocate_refs"].items()
+        if key.startswith("new_goal_ref_")
+    }
+    expected_keys = {f"new_goal_ref_{index:03d}" for index in range(1, len(objectives))}
+    if set(allocated) != expected_keys or len(set(allocated.values())) != len(allocated):
+        raise ProtocolRejection("INVALID_COMMAND", "Goal allocation drift")
+    ordered = [existing_ref]
+    existing.update({"depends_on": None, "order": 0})
+    events = []
+    previous = existing_ref
+    for index, objective in enumerate(objectives[1:], 1):
+        goal_ref = allocated[f"new_goal_ref_{index:03d}"]
+        if _kind_for_ref(goal_ref) != "GoalRef" or goal_ref in snapshot["goals"]:
+            raise ProtocolRejection("FOREIGN_REFERENCE", goal_ref)
+        snapshot["goals"][goal_ref] = {
+            "depends_on": previous,
+            "objective_digest": domain_digest(
+                "loopskill-goal-objective-v1\n", objective.strip()
+            ),
+            "order": index,
+            "revision": 1,
+            "state": "PENDING",
+        }
+        ordered.append(goal_ref)
+        previous = goal_ref
+        events.append(_event("GoalRegistered", goal_ref=goal_ref))
+    plan_digest = domain_digest(
+        "loopskill-goal-plan-v1\n",
+        {"mode": mode, "objectives": [item.strip() for item in objectives]},
+    )
+    snapshot["goal_plan"] = {
+        "active_goal_ref": existing_ref,
+        "mode": mode,
+        "ordered_goal_refs": ordered,
+        "plan_digest": plan_digest,
+        "revision": 1,
+    }
+    events.append(_event("GoalPlanRegistered", mode=mode, plan_digest=plan_digest))
+    return snapshot, events, {"goal_count": len(ordered), "plan_revision": 1}
+
+
+def _revise_goal_plan(
+    snapshot: dict[str, Any] | None,
+    command: CommandEnvelope,
+    _: AuthorityContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """Reorder only the existing Adaptive author envelope; never mint a Goal."""
+    assert snapshot is not None
+    plan = snapshot.get("goal_plan")
+    order = command.semantic_payload.get("objective_order")
+    reason = command.semantic_payload.get("reason")
+    if not isinstance(plan, dict) or plan.get("mode") != "ADAPTIVE":
+        raise ProtocolRejection("INVALID_TRANSITION", "Adaptive plan is unavailable")
+    if (
+        not isinstance(order, list)
+        or not all(isinstance(item, str) and item.strip() for item in order)
+        or len(order) != len(plan["ordered_goal_refs"])
+        or len(set(item.strip() for item in order)) != len(order)
+        or not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > 512
+    ):
+        raise ProtocolRejection("INVALID_COMMAND", "invalid roadmap revision")
+    by_digest = {
+        goal["objective_digest"]: goal_ref
+        for goal_ref, goal in snapshot["goals"].items()
+    }
+    digests = [
+        domain_digest("loopskill-goal-objective-v1\n", item.strip()) for item in order
+    ]
+    if set(digests) != set(by_digest) or len(digests) != len(by_digest):
+        raise ProtocolRejection("AUTHORITY_SCOPE_MISMATCH", "roadmap left author envelope")
+    refs = [by_digest[digest] for digest in digests]
+    if refs[0] != plan["active_goal_ref"]:
+        raise ProtocolRejection("INVALID_TRANSITION", "active Goal cannot be reordered")
+    previous = None
+    for index, goal_ref in enumerate(refs):
+        goal = snapshot["goals"][goal_ref]
+        goal.update({"depends_on": previous, "order": index})
+        previous = goal_ref
+    revision = int(plan["revision"]) + 1
+    plan_digest = domain_digest(
+        "loopskill-goal-plan-v1\n",
+        {"mode": "ADAPTIVE", "objectives": [item.strip() for item in order]},
+    )
+    plan.update(
+        {
+            "ordered_goal_refs": refs,
+            "plan_digest": plan_digest,
+            "revision": revision,
+        }
+    )
+    reason_digest = domain_digest("loopskill-roadmap-reason-v1\n", reason.strip())
+    return snapshot, [
+        _event(
+            "RoadmapRevised",
+            plan_digest=plan_digest,
+            reason_digest=reason_digest,
+            revision=revision,
+        )
+    ], {"plan_revision": revision}
 
 
 def _bind_host_resource(
@@ -874,9 +1010,17 @@ def _stage_external_result(
     report_digest = domain_digest(
         "loopskill-report-v1\n", {"outcome": outcome, "summary": summary}
     )
+    active_goals = [
+        goal_ref
+        for goal_ref, goal in snapshot["goals"].items()
+        if goal.get("state") == "ACTIVE"
+    ]
+    if len(active_goals) != 1:
+        raise ProtocolRejection("INVALID_TRANSITION", "active Goal is unavailable")
     snapshot["results"][result_ref] = {
         "attempt_ref": effect["attempt_ref"],
         "external_effect_ref": external_effect_ref,
+        "goal_ref": active_goals[0],
         "outcome": outcome,
         "report_ref": report_ref,
         "revision": 1,
@@ -1028,8 +1172,28 @@ def _advance_goal(
         raise ProtocolRejection("INVALID_TRANSITION", "Goal cannot advance")
     goal = snapshot["goals"][goal_ref]
     goal.update({"revision": goal["revision"] + 1, "state": disposition})
-    return snapshot, [_event("GoalAdvanced", goal_ref=goal_ref)], {
-        "goal_state": disposition
+    events = [_event("GoalAdvanced", goal_ref=goal_ref)]
+    plan = snapshot.get("goal_plan")
+    next_goal_ref = None
+    if disposition == "DONE" and isinstance(plan, dict):
+        ordered = list(plan["ordered_goal_refs"])
+        position = ordered.index(goal_ref)
+        if position + 1 < len(ordered):
+            candidate = ordered[position + 1]
+            next_goal = snapshot["goals"][candidate]
+            if next_goal.get("depends_on") != goal_ref or next_goal["state"] != "PENDING":
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION", "Goal dependency order drift"
+                )
+            next_goal.update(
+                {"revision": next_goal["revision"] + 1, "state": "ACTIVE"}
+            )
+            plan["active_goal_ref"] = candidate
+            next_goal_ref = candidate
+            events.append(_event("GoalActivated", goal_ref=candidate))
+    return snapshot, events, {
+        "goal_state": disposition,
+        "next_goal_ref": next_goal_ref,
     }
 
 
@@ -1175,7 +1339,14 @@ def _stop_loop(
     reason = command.semantic_payload.get("reason")
     if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
         raise ProtocolRejection("INVALID_COMMAND", "stop reason is invalid")
-    goal_ref, goal = _only_record(snapshot, "goals")
+    active = [
+        (goal_ref, goal)
+        for goal_ref, goal in snapshot["goals"].items()
+        if goal.get("state") == "ACTIVE"
+    ]
+    if len(active) != 1:
+        raise ProtocolRejection("INVALID_TRANSITION", "active Goal is unavailable")
+    goal_ref, goal = active[0]
     if goal["state"] != "ACTIVE":
         raise ProtocolRejection("INVALID_TRANSITION", "active Goal is unavailable")
     reason_digest = domain_digest("loopskill-stop-reason-v1\n", reason)
@@ -1208,6 +1379,15 @@ def _prepare_finalization(
     review = snapshot["reviews"][chain["review_ref"]]
     disposition = command.semantic_payload.get("disposition")
     goal_state = snapshot["goals"][chain["goal_ref"]]["state"]
+    unfinished = [
+        goal_ref
+        for goal_ref, goal in snapshot["goals"].items()
+        if goal.get("state") not in {"DONE", "FAILED", "LIMITATION", "STOPPED"}
+    ]
+    if unfinished:
+        raise ProtocolRejection(
+            "FINALIZATION_PRECONDITION_FAILED", "Goal plan is not terminal"
+        )
     result_outcome = snapshot["results"][chain["result_ref"]]["outcome"]
     if goal_state not in {"DONE", "FAILED", "LIMITATION"}:
         raise ProtocolRejection(
@@ -1403,6 +1583,7 @@ def _strengthen_closure_assurance(
 
 _REDUCERS = {
     "CreateLoop": _create_loop,
+    "RegisterGoalPlan": _register_goal_plan,
     "BindHostResource": _bind_host_resource,
     "RecordExternalEffectObservation": _observe_external_effect,
     "PrepareRoute": _prepare_route,
@@ -1416,6 +1597,7 @@ _REDUCERS = {
     "AdvanceGoal": _advance_goal,
     "PauseLoop": _pause_loop,
     "ResumeLoop": _resume_loop,
+    "ReviseGoalPlan": _revise_goal_plan,
     "StopLoop": _stop_loop,
     "PrepareFinalization": _prepare_finalization,
     "CloseExecution": _close_execution,
