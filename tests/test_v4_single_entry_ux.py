@@ -438,7 +438,9 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 steered.assert_called_once()
             with mock.patch.object(cli, "status", return_value=visible):
                 self.assertEqual(invoke(["status", "--root", str(root)])[0], 0)
-            with mock.patch.object(cli, "sync_loop", return_value=visible), mock.patch.object(
+            with mock.patch.object(
+                cli, "_refresh_with_owned_provider", return_value=visible
+            ) as refreshed, mock.patch.object(
                 cli, "diagnostics", return_value={"internal": "opt-in"}
             ):
                 code, output, _ = invoke(
@@ -446,6 +448,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 )
                 self.assertEqual(code, 0)
                 self.assertIn("Diagnostics:", output)
+                refreshed.assert_called_once_with(root=root)
             with mock.patch.object(
                 cli,
                 "status",
