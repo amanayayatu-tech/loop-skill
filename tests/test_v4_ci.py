@@ -87,6 +87,13 @@ class V4CiTests(unittest.TestCase):
             with self.assertRaisesRegex(ci.CiError, "CI_TAG_CONDITION_INVALID"):
                 ci.validate(root)
 
+            workflow.write_text(
+                source.replace("fetch-depth: 0", "fetch-depth: 1", 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ci.CiError, "CI_PROVENANCE_HISTORY_UNAVAILABLE"):
+                ci.validate(root)
+
 
 if __name__ == "__main__":
     unittest.main()
