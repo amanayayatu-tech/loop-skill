@@ -100,7 +100,7 @@ def _safe_extract(archive: bytes, destination: Path) -> None:
                 raise MeasurementFailure("unsafe path in v3 archive")
             if member.issym() or member.islnk() or member.isdev():
                 raise MeasurementFailure("unsupported entry in v3 archive")
-        bundle.extractall(destination, members=members)
+        bundle.extractall(destination, members=members, filter="data")
 
 
 def freeze_v3(scenario_path: Path) -> dict[str, Any]:

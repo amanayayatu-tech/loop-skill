@@ -54,7 +54,7 @@
       "strict delivery send/readback receipt",
       "strict final lifecycle readback receipt"
     ],
-    "measurement_code_sha256": "c35a07740bed3ceafda49b40c646ab77eb2999763854a2a5b81c90a6f3870e5a",
+    "measurement_code_sha256": "43bcecb5213d00403e1480db986bc55b1189446cf22a4fa8f5fcfad92928667c",
     "metrics": {
       "authorization_confirmations": 1,
       "host_interactions": 3,
@@ -85,9 +85,9 @@
   },
   "comparison_result": {
     "artifact": "loopskill-v4-p7-comparison-result-v1",
-    "baseline_sha256": "478302dda6d96336963baf491370ca947f09fa1111a224779efe58fe096b26e7",
+    "baseline_sha256": "0b32780e2428ef6debd7331681d1078187fda2771e186b16551495f25f71227a",
     "internal_control_interaction_gate": "PASS",
-    "measurement_code_sha256": "c35a07740bed3ceafda49b40c646ab77eb2999763854a2a5b81c90a6f3870e5a",
+    "measurement_code_sha256": "43bcecb5213d00403e1480db986bc55b1189446cf22a4fa8f5fcfad92928667c",
     "metrics": {
       "authorization_confirmations": 1,
       "host_interactions": 3,
@@ -108,7 +108,7 @@
       "v4_internal_control_interactions_max": 9,
       "v4_pack_bytes_max": 32768
     },
-    "v4_receipt_sha256": "54be48ba3980454356ac7de0f10af7f78de68d77f38349c84caef0088d4ebd69"
+    "v4_receipt_sha256": "38078268d07eef9437d78f8602409f321ea7f52b8dbc55bf947785067927476d"
   },
   "tests": {
     "total_at_checkpoint": 129,

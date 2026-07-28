@@ -16,8 +16,8 @@
     "start": "first public entry action for the supplied semantic goal",
     "user_start_actions": "public entry invocations, excluding the separately reported authorization confirmation"
   },
-  "freeze_parent_commit": "3deb786cb0666259785dc199f9d54818e60da1d9",
-  "measurement_code_sha256": "c35a07740bed3ceafda49b40c646ab77eb2999763854a2a5b81c90a6f3870e5a",
+  "freeze_parent_commit": "0bc87d90ddab76b1ad7f9cb12c468db6433f4069",
+  "measurement_code_sha256": "43bcecb5213d00403e1480db986bc55b1189446cf22a4fa8f5fcfad92928667c",
   "prior_v4_diagnostic_disclosure": "P5.1 recorded a nonblocking default-path diagnostic before this freeze; the two threshold values were author-fixed before both that diagnostic and this P7 comparison, and no P7 v4 comparison receipt has been consumed.",
   "real_external_effects": 0,
   "scenario_id": "one-goal-existing-git-passkey-closed-loop",
