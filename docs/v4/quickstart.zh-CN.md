@@ -4,7 +4,9 @@
 
 ## 安装
 
-要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。
+要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。4.0.0 只有在
+Linux/macOS × Python 3.11、3.12、3.13、3.14 的八个 release-CI
+runtime/distribution lane 全部通过后才能发布。
 
 ```bash
 git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
@@ -14,8 +16,9 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 "$LOOPSKILL4" --help
 ```
 
-安装器只写 `$CODEX_HOME/skills/loopskill4` 及其 v4 receipt/staging 路径；不读写
-`config.toml`，不注册 MCP，不覆盖独立 v3 安装，也不要求为了 LoopSkill 4 重启 Codex。
+安装器只写 `$CODEX_HOME/skills/loopskill4` 及其 v4 receipt/staging 路径；只读取
+`config.toml` 以核验安装前后字节哈希，不修改它，不注册 MCP，不覆盖独立 v3 安装，
+也不要求为了 LoopSkill 4 重启 Codex。
 
 ## 一个目标，一个入口，四个可见阶段
 
@@ -41,6 +44,18 @@ UTF-8 JSON。用户提供的 control identity 数量必须为 0。
 单入口不等于静默授权。非交互 session 在 PREPARE 后停止。边界变化、过期确认或模糊
 “继续”都会 fail closed。
 
+若本次普通 `start` 确实创建了一个 task，它会在前台等待终态权威 readback，最长
+300 秒，并在成功、错误或超时路径的 `finally` 中关闭 provider/app-server session。
+这是当前前台观察窗口，不是任务预算。超时会诚实显示限制，不断言 Host task 已完成、
+失败或仍在继续；机器绑定的 Attempt 可供 `status --refresh` 权威回读，但绝不 resend。
+4.0.0 的普通入口只支持预期能在此窗口内结束的单个 Host task；更长的单次 Host 执行
+不在本版公开支持范围内。
+
+Codex Desktop 的 folder-open → `list_projects` → `projectId` → `create_thread`
+路线已有 23/23 provisioning receipts。当前 v4.0 app-server 0.144.4 Provider
+没有 project 方法，因此普通入口使用 cwd-bound thread/start；saved-project convenience
+延后到 4.0.x/4.1，不属于 4.0.0 承诺。
+
 ## 分阶段使用
 
 ```bash
@@ -52,9 +67,10 @@ UTF-8 JSON。用户提供的 control identity 数量必须为 0。
 "$LOOPSKILL4" status --refresh --root ./loopskill4-data
 ```
 
-`confirm` 需要交互式精确确认。普通 `status` 只读本地状态；`status --refresh`
-对唯一既有 Host task 做权威 readback，并通过可重放的本地结果/Finalization 链继续推进，
-不会创建或重发任务。普通状态隐藏内部 identity；添加 `--diagnostics` 才显示诊断证据。
+`confirm` 需要交互式精确确认。普通 `status` 只读本地状态。若崩溃发生在本地 Attempt
+提交后、首次 provider 调用前，`status --refresh` 可执行该 Attempt 的唯一首次调用；否则只对
+唯一既有 Host task 做权威 readback，并推进可重放的本地结果/Finalization 链。它绝不第二次
+create 或 resend。普通状态隐藏内部 identity；添加 `--diagnostics` 才显示诊断证据。
 `UNKNOWN`/`UNVERIFIABLE` 是有意的可见限制，不是成功，也不触发盲重发。
 
 ## v3
@@ -62,3 +78,15 @@ UTF-8 JSON。用户提供的 control identity 数量必须为 0。
 v4 不打开、导入、修复或运行 v3 loop/Pack/state。遇到 v3 输入时零写入，并指向
 [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)。
 没有自动迁移；若需旧数据，继续独立使用 v3.3.8。
+
+## 卸载
+
+卸载器机器解析安装时绑定的 active receipt；普通用户不填写 receipt：
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py" --codex-home "${CODEX_HOME:-$HOME/.codex}"
+```
+
+digest 绑定的管理入口位于被移除的安装目标之外，因此同一命令重放会安全返回
+`ALREADY_UNINSTALLED`。receipt 缺失或漂移会 fail closed；`config.toml`、v3
+安装和真实 loop 都不会被修改。

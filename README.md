@@ -33,7 +33,7 @@ LoopSkill 4 是 **v4-only hard break**。它保留 v3 已验证的安全原则�
 <!-- parity: install -->
 ## 30 秒安装
 
-要求：macOS 或 Linux、Git、Python 3.11–3.14。LoopSkill 4 runtime 只使用 Python 标准库。
+要求：macOS 或 Linux、Git、Python 3.11–3.14。LoopSkill 4 runtime 只使用 Python 标准库。4.0.0 只有在 Linux/macOS × Python 3.11、3.12、3.13、3.14 的八个 release-CI runtime/distribution lane 全部通过后才能发布。
 
 ```bash
 git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
@@ -55,7 +55,7 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
   "goal": "在 disposable 示例目录中完成并验证一个小改动",
   "task_horizon": "long",
   "write_scope": ["disposable-example"],
-  "budget": "20 minutes; no network or publish",
+  "budget": "up to 4 minutes; no network or publish",
   "external_actions": [],
   "acceptance_criteria": ["focused tests pass", "result is reviewed"],
   "stop_conditions": ["stop on unknown external state"],
@@ -73,6 +73,10 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 同一交互会先只读质检，再写本地准备产物并展示 Goal、写入范围、预算、外部动作、验收标准、停止条件和发布边界。只有精确的显式确认才能启动。非交互环境会停在 PREPARE；`DIRECT_TASK_RECOMMENDED` 不创建 loop。
 
 确认后，公开入口通过本机 Codex `app-server` 创建至多一个 task 并执行权威 readback；它不注册 LoopSkill MCP，也不要求用户复制 Host identity。若 create 响应丢失且无法用机器 request marker 唯一回读，状态为 `UNKNOWN`，不会再次 create。
+
+若本次普通 `start` 确实创建了一个 task，它会在前台等待终态权威 readback，最长 300 秒，并在成功、错误或超时路径的 `finally` 中关闭 provider/app-server session。300 秒是当前前台观察窗口，不是任务预算。超时会诚实显示限制，不断言 Host task 已完成、失败或仍在继续；机器绑定的 Attempt 可供后续 `status --refresh` 权威回读，但绝不 resend。
+
+因此 4.0.0 的普通入口只支持预期能在该观察窗口内完成的单个 Host task；更长的单次 Host 执行不在本版公开支持范围内。
 
 也可以显式执行四个阶段：
 
@@ -97,7 +101,7 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 "$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
 ```
 
-普通 `status` 只读本地状态；`status --refresh` 回读唯一既有 Host task，并通过可重放的本地 Result/Review/Finalization 链继续推进，绝不创建或重发任务。默认状态只展示目标、进度、结果、限制和可行动的下一步。内部 identity 与 receipt 只在显式 diagnostics 中出现。`UNKNOWN` 表示外部动作可能已经发生但无法权威确认；`UNVERIFIABLE` 表示 Host 不能提供所需证明。两者都不是成功，也不会触发盲重发。
+普通 `status` 只读本地状态。若崩溃发生在本地 Attempt 提交后、首次 provider 调用前，`status --refresh` 可以取得该 Attempt 的执行权并完成唯一首次调用；否则它只回读唯一既有 Host task，并推进可重放的本地 Result/Review/Finalization 链。它绝不执行第二次 create 或 resend。默认状态只展示目标、进度、结果、限制和可行动的下一步。内部 identity 与 receipt 只在显式 diagnostics 中出现。`UNKNOWN` 表示外部动作可能已经发生但无法权威确认；`UNVERIFIABLE` 表示 Host 不能提供所需证明。两者都不是成功，也不会触发盲重发。
 
 <!-- parity: policy -->
 ## 可选策略
@@ -142,18 +146,23 @@ v4 遇到 v3 root、state 或 Controller Pack 时零写入，并返回稳定的 
 <!-- parity: uninstall -->
 ## 卸载与回退
 
-安装器会输出 receipt 路径。使用同一 receipt 卸载：
+安装器会机器绑定唯一 active receipt；普通用户无需复制或填写 receipt：
 
 ```bash
-python3 scripts/uninstall_v4.py --codex-home "${CODEX_HOME:-$HOME/.codex}" --receipt "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/<receipt>.json"
+python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py" --codex-home "${CODEX_HOME:-$HOME/.codex}"
 ```
 
-卸载只移除 receipt 绑定的 v4 安装，保持 `config.toml` 和独立 v3 安装字节不变。回退意味着卸载 v4 后继续使用单独的 v3.3.8；v4 不恢复、转换或迁移 v3 数据。
+这个 digest 绑定的管理入口位于安装目标之外，因此同一命令可安全重跑并返回 `ALREADY_UNINSTALLED`。卸载器自动解析并验证机器绑定的 receipt；缺失、漂移或歧义都会 fail closed。它只移除 receipt 绑定的 v4 安装，保持 `config.toml` 和独立 v3 安装字节不变。回退意味着卸载 v4 后继续使用单独的 v3.3.8；v4 不恢复、转换或迁移 v3 数据。
 
 <!-- parity: limitations -->
 ## 已知限制
 
 - 首发只支持 Codex Host Adapter；Kernel host-neutral 不等于 multi-host 支持。
+- 已验证的 Codex Desktop folder-open → `list_projects` → `projectId` →
+  `create_thread` 路线有 23/23 provisioning receipts；当前 v4.0 使用的
+  app-server 0.144.4 Provider 不提供 project 方法，因此默认入口采用
+  cwd-bound thread/start。saved-project convenience 延后到 4.0.x/4.1，不是
+  4.0.0 的功能或发布声明。
 - 不承诺 SQLite/Codex/Git/network 的跨系统 exactly-once。
 - 不承诺实证 patch-success 提升或长期任务优越性。
 - memory isolation 只报告 Host 实际可证明的能力，可能是 unavailable 或 unverifiable。
@@ -165,21 +174,23 @@ python3 scripts/uninstall_v4.py --codex-home "${CODEX_HOME:-$HOME/.codex}" --rec
 ## 开发与验证
 
 ```bash
-python3 scripts/generate_v4_protocol.py --check
-python3 scripts/validate_v4_preservation.py --root . --json
-PYTHONDONTWRITEBYTECODE=1 python3 -B -W error -m unittest discover -s tests -p 'test_v4*.py' -v
-coverage run -m unittest discover -s tests -p 'test_v4*.py'
-coverage report
-python3 scripts/check_v4_docs.py
+python3 -m venv .venv
+.venv/bin/python -m pip install --disable-pip-version-check -r requirements-test.txt
+.venv/bin/python scripts/generate_v4_protocol.py --check
+.venv/bin/python scripts/validate_v4_preservation.py --root . --json
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -W error -m unittest discover -s tests -p 'test_v4*.py' -v
+.venv/bin/python -m coverage run -m unittest discover -s tests -p 'test_v4*.py'
+.venv/bin/python -m coverage report --fail-under=80
+.venv/bin/python scripts/check_v4_docs.py --smoke
 ```
 
-CI 还执行 Linux/macOS 隔离安装、dependency/import graph、stale legacy runtime、privacy/secret/large artifact、SBOM/license 和 release identity 门禁。真实 Codex App canary 只在本地 exact-SHA release gate 运行，不在 GitHub-hosted runner 中伪造。
+CI 还执行 Linux/macOS × Python 3.11–3.14 的八个 runtime/distribution lane、隔离安装、dependency/import graph、stale legacy runtime、privacy/secret/large artifact、SBOM/license 和 release identity 门禁。单一本地 Python 结果不能替代该矩阵。真实 Codex App canary 只在本地 exact-SHA release gate 运行，不在 GitHub-hosted runner 中伪造。
 
 <!-- parity: release -->
 ## 发布、安全与历史版本
 
 - [v4 发布流程](docs/RELEASING.md)
-- [4.0 release notes](docs/v4/release-notes.md)
+- [4.0.0 release notes](docs/v4/release-notes.md)
 - [Security policy](SECURITY.md)
 - [MIT License](LICENSE)
 - [v3.3.8 historical release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)

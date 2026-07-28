@@ -1186,7 +1186,7 @@ pause/resume and late assurance strengthening bind `P-004`, `F-003`, and
 | A3 effect executor | commit-before-call contract, AttemptRef/budget/executor ownership, all crash windows, no resend, exact late readback |
 | A4 liveness/assurance | TERMINAL disposition is independent from assurance; cooperative limited closure is legal; strict claim still requires authoritative readback |
 | A5 CAS unit | per-loop revision is sole write CAS; subject revisions are guards; no store version in snapshot |
-| A6 executable corpus | acceptance and subject state separated; 101 families expand to 349 instances; 15 preservation mapping families bind 317 unique exact case IDs without duplicating fake snapshots; bounds/rejection/authority/encoder/UX/preservation windows explicit |
+| A6 executable corpus | acceptance and subject state separated; 101 families expand to 349 semantic mappings; 15 preservation mapping families bind 317 unique exact case IDs without duplicating fake snapshots; bounds/rejection/authority/encoder/UX/preservation windows explicit |
 | A7 vertical trace | 11 operations, 18 events, full subject bindings, loop/aggregate revisions, 2890 bytes, exact domain digest |
 
 There is no unresolved semantic decision that blocks the bounded pure-kernel

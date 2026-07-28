@@ -41,7 +41,8 @@ All notable changes to this project are documented here. The project follows
   Supervisor or second writer.
 - Added v4-only transactional install/uninstall with byte-identical Codex
   config, no MCP registration, no LoopSkill-required App restart, exact
-  receipt binding, independent v3 preservation, and fault-window rollback.
+  receipt binding, independent v3 preservation, and fail-closed crash recovery
+  on the next invocation.
 
 ### Safety and evidence boundary
 

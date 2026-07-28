@@ -13,7 +13,7 @@ Entry / composition root
   ├─ Artifact / review / finalization libraries
   │    └─ existing-Git, non-Git, new-Git capability implementations
   ├─ Codex Host Adapter
-  │    └─ local Codex app-server task/create/read/send/readback and capability receipts
+  │    └─ local Codex app-server composite task create, readback, and honest capability rows
   ├─ optional Policy
   │    └─ Standard, Adaptive, roles, decisions, bounded repair
   └─ rebuildable projections
@@ -51,13 +51,30 @@ user/model control identity. The Host provider exposes no create idempotency
 key; after a crash it may perform only exact machine-marker readback. Missing or
 ambiguous readback becomes `UNKNOWN`, never another create.
 
+When an ordinary `start` invocation itself creates the one task, Entry performs
+bounded foreground terminal readback for at most 300 seconds. The provider and
+its temporary `app-server` session close in a `finally` path on success, error,
+or timeout. This is an observation window, not the task budget. Timeout is an
+honest user-visible limitation and makes no claim that the Host task completed,
+failed, or continues running. The machine-bound Attempt remains available to
+`status --refresh`, and Entry does not resend. This does not change refresh
+semantics or grant refresh another attempt budget.
+
+Codex Desktop's folder-open → `list_projects` → `projectId` → `create_thread`
+route has 23/23 verified provisioning receipts. That evidence establishes the
+Desktop provisioning route, not a capability in the v4.0 Provider: app-server
+0.144.4 exposes no project methods. The 4.0 default therefore uses a cwd-bound
+thread/start. Optional saved-project convenience is deferred to 4.0.x/4.1.
+
 After exact task readback, Entry submits the generated
 `StageExternalResult` command and the existing Result/Artifact/Review/
 Finalization commands. Each local operation is independently transactional and
 replay-safe; every committed intermediate state has one deterministic successor.
-`status --refresh` may continue that chain after a crash, but it cannot create
-or resend the Host task. The Host-result digest remains in the canonical Result
-binding so changed readback fails closed.
+If a crash follows the local Attempt commit but precedes its provider call,
+`status --refresh` may claim that Attempt and execute its one first call.
+Otherwise refresh only reads the existing Host task and continues the local
+chain. It can never perform a second create or resend. The Host-result digest
+remains in the canonical Result binding so changed readback fails closed.
 
 ## State and evidence
 
@@ -66,3 +83,7 @@ request bytes. Per-loop CAS rejects stale revisions. Snapshot, events,
 operation receipt, outbox, and current Result/Report/finalization bindings
 commit atomically. Artifact correctness, workflow terminality, Host assurance,
 and public release are distinct claims with distinct evidence.
+
+The 4.0.0 release support claim is gated by the eight-lane Linux/macOS × Python
+3.11, 3.12, 3.13, and 3.14 runtime/distribution matrix. A local result from one
+Python runtime is useful focused evidence, not a substitute for that matrix.

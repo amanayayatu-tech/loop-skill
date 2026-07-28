@@ -8,10 +8,11 @@ import hashlib
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from loop_architect.v4_alpha.protocol import LoopIntakeInput
-from loop_architect.v4_adapters.codex import CodexAppServerProvider
+from loop_architect.v4_adapters.codex import CodexAppServerProvider, HostUnavailable
 from loop_architect.v4_entry import (
     EntryError,
     confirm_loop,
@@ -78,6 +79,10 @@ def parser() -> PublicParser:
             )
     doctor = subcommands.add_parser("doctor")
     doctor.add_argument("--diagnostics", action="store_true")
+    canary = subcommands.add_parser("canary")
+    canary.add_argument("--candidate", required=True)
+    canary.add_argument("--evidence-root", type=Path, required=True)
+    canary.add_argument("--diagnostics", action="store_true")
     compile_prepared = subcommands.add_parser("compile")
     compile_prepared.add_argument("prepared_directory", type=Path)
     policy = subcommands.add_parser("policy")
@@ -267,10 +272,27 @@ def _doctor_view(*, include_diagnostics: bool):
     codex_home = os.environ.get("CODEX_HOME")
     if codex_home:
         receipt_root = Path(codex_home) / "install-receipts/loopskill4"
-        receipts = sorted(receipt_root.glob("*.json")) if receipt_root.is_dir() else []
-        if receipts:
+        pointer = receipt_root / "active-receipt"
+        if receipt_root.is_dir() and pointer.is_file() and not pointer.is_symlink():
             try:
-                receipt = json.loads(receipts[-1].read_text(encoding="utf-8"))
+                active = json.loads(pointer.read_text(encoding="utf-8"))
+                if not isinstance(active, dict) or set(active) != {"receipt", "sha256"}:
+                    raise ValueError("invalid active receipt pointer")
+                receipt_name = active["receipt"]
+                if (
+                    not isinstance(receipt_name, str)
+                    or Path(receipt_name).name != receipt_name
+                    or not receipt_name.endswith(".json")
+                ):
+                    raise ValueError("invalid active receipt name")
+                receipt_path = receipt_root / receipt_name
+                receipt_raw = receipt_path.read_bytes()
+                if (
+                    receipt_path.is_symlink()
+                    or hashlib.sha256(receipt_raw).hexdigest() != active["sha256"]
+                ):
+                    raise ValueError("active receipt drift")
+                receipt = json.loads(receipt_raw.decode("utf-8", "strict"))
                 expected = receipt["files"]
                 current = []
                 for path in sorted(skill_root.rglob("*")):
@@ -317,12 +339,7 @@ def _interactive_start(args):
     if subject.is_dir():
         if is_legacy_input(subject):
             raise EntryError(*unsupported_legacy_error())
-        return start_loop(
-            subject,
-            root=args.root,
-            host_provider=CodexAppServerProvider(Path.cwd()),
-            workspace_root=Path.cwd(),
-        )
+        return _start_with_owned_provider(subject, root=args.root)
     request = read_intake_input(args.goal_file_or_prepared_directory)
     report = intake_report_loop(request)
     print_intake_report(report)
@@ -356,12 +373,113 @@ def _interactive_start(args):
             "Review the prepared artifacts and confirm them explicitly.",
         )
     confirmed = confirm_loop(output, confirmed=True)
-    return start_loop(
-        confirmed,
-        root=args.root,
-        host_provider=CodexAppServerProvider(Path.cwd()),
-        workspace_root=Path.cwd(),
-    )
+    return _start_with_owned_provider(confirmed, root=args.root)
+
+
+def _close_provider(provider) -> None:
+    close = getattr(provider, "close", None)
+    if callable(close):
+        close()
+
+
+def _finish_owned_provider_task(value, provider, *, root: Path):
+    """Finish this process's one created task without a daemon or resend."""
+
+    metrics = getattr(provider, "metrics", None)
+    if callable(metrics):
+        metrics = metrics()
+    if not isinstance(metrics, Mapping):
+        return value
+    created = metrics.get("task_create_count")
+    if created == 0:
+        return value
+    if created != 1:
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "The Codex task creation boundary was not singular.",
+            "Preserve the local state and inspect diagnostics; do not repeat start.",
+        )
+    waiter = getattr(provider, "wait_for_terminal", None)
+    if not callable(waiter):
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "The created Codex task has no bounded terminal readback.",
+            "Preserve the local state and inspect diagnostics; do not repeat start.",
+        )
+    try:
+        waiter(timeout_seconds=300.0)
+        return sync_loop(
+            root=root,
+            host_provider=provider,
+            workspace_root=Path.cwd(),
+        )
+    except (HostUnavailable, ValueError) as exc:
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "LoopSkill could not confirm whether the one created Codex task reached a terminal state. The task was not resent.",
+            "Use status --refresh to read back the existing task; do not run start again.",
+        ) from exc
+
+
+def _start_with_owned_provider(prepared, *, root: Path):
+    provider = CodexAppServerProvider(Path.cwd())
+    try:
+        value = start_loop(
+            prepared,
+            root=root,
+            host_provider=provider,
+            workspace_root=Path.cwd(),
+        )
+        return _finish_owned_provider_task(value, provider, root=root)
+    finally:
+        _close_provider(provider)
+
+
+def _refresh_with_owned_provider(*, root: Path):
+    provider = CodexAppServerProvider(Path.cwd())
+    try:
+        value = sync_loop(
+            root=root,
+            host_provider=provider,
+            workspace_root=Path.cwd(),
+        )
+        return _finish_owned_provider_task(value, provider, root=root)
+    finally:
+        _close_provider(provider)
+
+
+def _interactive_canary(args):
+    from loop_architect.v4_entry.canary import CanaryError, run_canary
+
+    def confirm(boundary):
+        print("Disposable canary boundary:")
+        print(
+            json.dumps(
+                boundary,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        if not sys.stdin.isatty():
+            return False
+        answer = input('Type "RUN THIS CANARY" to authorize one disposable App task: ')
+        return answer == "RUN THIS CANARY"
+
+    try:
+        return run_canary(
+            args.candidate,
+            args.evidence_root,
+            confirmation_callback=confirm,
+        )
+    except CanaryError as exc:
+        if args.diagnostics:
+            print(f"Canary gate: {exc.code}", file=sys.stderr)
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "The disposable App canary did not pass its exact boundary.",
+            "Preserve the private evidence root and inspect diagnostics; do not resend the task.",
+        ) from exc
 
 
 def main(argv=None) -> int:
@@ -423,6 +541,16 @@ def main(argv=None) -> int:
                 )
             )
             return 0
+        if args.action == "canary":
+            print(
+                json.dumps(
+                    _interactive_canary(args),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
         if args.action == "policy":
             print(
                 json.dumps(
@@ -463,11 +591,7 @@ def main(argv=None) -> int:
             )
         else:
             value = (
-                sync_loop(
-                    root=args.root,
-                    host_provider=CodexAppServerProvider(Path.cwd()),
-                    workspace_root=Path.cwd(),
-                )
+                _refresh_with_owned_provider(root=args.root)
                 if args.refresh
                 else status(root=args.root)
             )
@@ -493,7 +617,7 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         print(
-            "Next action: Retry once, then use diagnostics or restore a verified backup.",
+            "Next action: Preserve the current state and use status/readback or diagnostics; do not repeat start blindly.",
             file=sys.stderr,
         )
         return 70

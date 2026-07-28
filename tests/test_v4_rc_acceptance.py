@@ -7,9 +7,12 @@ import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from unittest import mock
+
+from tests.test_v4_author_packet import receipt_for
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +33,7 @@ def live_observation(candidate: str) -> dict:
     return {
         "artifact_state": "VERIFIED",
         "assurance": "STRICT",
+        "canary_output_sha256": validator.CANARY_OUTPUT_SHA256,
         "candidate_goal_digest": "e" * 64,
         "candidate_sha": candidate,
         "execution_disposition": "SUCCEEDED",
@@ -40,6 +44,7 @@ def live_observation(candidate: str) -> dict:
         "result_digest": "b" * 64,
         "result_outcome": "PASS",
         "result_state": "ACKNOWLEDGED",
+        "report_state": "ACCEPTED",
         "review_state": "PASS",
         "snapshot_digest": "d" * 64,
     }
@@ -47,31 +52,40 @@ def live_observation(candidate: str) -> dict:
 
 def canary(candidate: str) -> dict:
     live = live_observation(candidate)
+    issued = datetime.now(timezone.utc).replace(microsecond=0)
+    fresh_until = issued + timedelta(minutes=5)
+    issued_text = issued.isoformat().replace("+00:00", "Z")
+    fresh_text = fresh_until.isoformat().replace("+00:00", "Z")
     value = {
         "artifact": "loopskill-v4-disposable-app-canary-v1",
         "candidate_sha": candidate,
         "candidate_goal_digest": live["candidate_goal_digest"],
-        "canary_output_sha256": live["result_digest"],
+        "canary_output_sha256": live["canary_output_sha256"],
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
         "config_bytes_changed": 0,
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
-        "fresh_until": "2026-07-27T13:22:46Z",
+        "fresh_until": fresh_text,
         "host_receipt_issuer": validator.CANARY_ISSUER,
         "host_receipt_trust": validator.CANARY_TRUST,
+        "host_create_readback_count": 1,
+        "host_lifecycle_readback_count": 1,
+        "host_result_digest": live["result_digest"],
         "host_task_create_count": 1,
         "host_task_identity_digest": live["host_task_identity_digest"],
         "host_task_readback_count": 1,
+        "host_terminal_wait_readback_count": 1,
+        "host_total_read_count": 4,
         "intake_external_effects": 0,
         "intake_heartbeat_count": 0,
         "intake_host_task_count": 0,
         "intake_loop_count": 0,
-        "issued_at": "2026-07-27T13:12:46Z",
+        "issued_at": issued_text,
         "loopskill_mcp_registration_count": 0,
         "machine_owned_identity": True,
         "manual_control_identity_count": 0,
-        "observed_at": "2026-07-27T13:12:46Z",
+        "observed_at": issued_text,
         "app_restart_count": 0,
         "prepare_delivery_count": 0,
         "prepare_heartbeat_count": 0,
@@ -104,9 +118,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
             "static_receipt",
             return_value={"artifact": "loopskill-v4-publication-static-receipt-v1"},
         ), redirect_stderr(stream):
-            result = validator.main(
-                ["--root", str(ROOT), "--candidate", "a" * 40, "--allow-non-head"]
-            )
+            result = validator.main(["--root", str(ROOT), "--candidate", "a" * 40])
         self.assertEqual(result, 1)
         self.assertIn("RC_FINAL_RECEIPTS_REQUIRED", stream.getvalue())
 
@@ -137,7 +149,6 @@ class V4RcAcceptanceTests(unittest.TestCase):
                         str(ROOT),
                         "--candidate",
                         candidate,
-                        "--allow-non-head",
                         "--canary-receipt",
                         str(paths[0]),
                         "--conformance-receipt",
@@ -175,6 +186,10 @@ class V4RcAcceptanceTests(unittest.TestCase):
             ("confirmation_digest_bound", False),
             ("config_bytes_changed", 1),
             ("host_task_create_count", 2),
+            ("host_create_readback_count", 4),
+            ("host_lifecycle_readback_count", 2),
+            ("host_terminal_wait_readback_count", 0),
+            ("host_total_read_count", 5),
             ("intake_loop_count", 1),
             ("loopskill_mcp_registration_count", 1),
             ("manual_control_identity_count", 1),
@@ -186,7 +201,13 @@ class V4RcAcceptanceTests(unittest.TestCase):
             ("finalization", "UNKNOWN"),
             ("host_receipt_issuer", "self-asserted"),
             ("host_receipt_trust", "untrusted"),
-            ("fresh_until", "2026-07-27T14:12:46Z"),
+            (
+                "fresh_until",
+                (datetime.now(timezone.utc) + timedelta(hours=1))
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            ),
         ):
             with self.subTest(field=field):
                 value = canary(candidate)
@@ -201,6 +222,25 @@ class V4RcAcceptanceTests(unittest.TestCase):
             validator.RcValidationError, "RC_CANARY_RECEIPT_SHAPE_INVALID"
         ):
             validator.validate_canary_receipt(value, candidate)
+        for offset in (timedelta(days=-1), timedelta(minutes=2)):
+            with self.subTest(freshness_offset=offset):
+                value = canary(candidate)
+                observed = datetime.now(timezone.utc).replace(microsecond=0) + offset
+                value["issued_at"] = observed.isoformat().replace("+00:00", "Z")
+                value["observed_at"] = value["issued_at"]
+                value["fresh_until"] = (observed + timedelta(minutes=5)).isoformat().replace(
+                    "+00:00", "Z"
+                )
+                provenance = dict(value)
+                provenance.pop("provenance_digest")
+                provenance.pop("host_receipt_digest")
+                value["provenance_digest"] = validator._domain_digest(
+                    validator.CANARY_PROVENANCE_DOMAIN, provenance
+                )
+                with self.assertRaisesRegex(
+                    validator.RcValidationError, "RC_CANARY_RECEIPT_INVALID: freshness"
+                ):
+                    validator.validate_canary_receipt(value, candidate)
 
     def test_live_canary_requires_current_host_readback_and_exact_bindings(self) -> None:
         candidate = "a" * 40
@@ -226,7 +266,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
         for field in (
             "host_receipt_digest",
             "host_task_identity_digest",
-            "canary_output_sha256",
+            "host_result_digest",
             "candidate_goal_digest",
         ):
             with self.subTest(field=field), mock.patch.object(
@@ -254,31 +294,103 @@ class V4RcAcceptanceTests(unittest.TestCase):
                         Path("synthetic-live-store"),
                     )
 
-    def test_publication_packet_requires_exact_files_and_zero_prior_release_effects(self) -> None:
-        candidate = "a" * 40
-        with tempfile.TemporaryDirectory() as directory:
+    def test_publication_packet_requires_exact_files_evidence_and_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as evidence_directory:
             root = Path(directory)
-            files = {}
-            for index in range(12):
-                relative = f"safe/file-{index}.txt"
+            evidence_root = Path(evidence_directory)
+            subprocess.run(("git", "init", "--quiet"), cwd=root, check=True)
+            builder_path = root / "scripts/build_v4_author_packet.py"
+            builder_path.parent.mkdir(parents=True)
+            builder_path.write_bytes(
+                (ROOT / "scripts/build_v4_author_packet.py").read_bytes()
+            )
+            builder = validator._load_author_packet_builder(root)
+            for index, relative in enumerate(builder.REQUIRED_TRACKED_FILES):
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(f"safe-{index}\n", encoding="utf-8")
-                files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-            packet = {
-                "artifact": "loopskill-v4-publication-packet-v1",
-                "candidate_sha": candidate,
-                "files": files,
-                "public_release_effects": 0,
-                "real_v3_loop_migrations": 0,
-                "status": "PUBLICATION_CANDIDATE_VALIDATED",
-            }
-            validator.validate_author_packet(packet, candidate, root)
-            packet["public_release_effects"] = 1
+                path.write_text(f"public fixture {index}: {relative}\n", encoding="utf-8")
+            subprocess.run(("git", "add", "."), cwd=root, check=True)
+            subprocess.run(
+                (
+                    "git",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "user.name=LoopSkill Test",
+                    "-c",
+                    "user.email=loopskill-test@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "fixture",
+                ),
+                cwd=root,
+                check=True,
+            )
+            candidate = subprocess.check_output(
+                ("git", "rev-parse", "HEAD"), cwd=root, text=True
+            ).strip()
+            subprocess.run(
+                ("git", "update-ref", "refs/remotes/origin/main", candidate),
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(("git", "tag", "v3.3.8", candidate), cwd=root, check=True)
+            subprocess.run(
+                ("git", "tag", "paper-treatment-v3.3.12", candidate),
+                cwd=root,
+                check=True,
+            )
+            evidence = {}
+            for index, key in enumerate(builder.REQUIRED_EVIDENCE_RECEIPTS):
+                path = evidence_root / f"receipt-{index}.json"
+                receipt = receipt_for(key, candidate)
+                if key == "release_identity_preflight":
+                    receipt.update(
+                        {
+                            "origin_main_commit": candidate,
+                            "paper_reference_commit": candidate,
+                            "v3_baseline_commit": candidate,
+                        }
+                    )
+                path.write_text(
+                    json.dumps(receipt),
+                    encoding="utf-8",
+                )
+                evidence[key] = path
+            packet = builder.build_packet(root, candidate, evidence)
+            fault_contract = mock.patch.object(
+                validator, "_fault_contract_counts", return_value=(3, 9, 11)
+            )
+            fault_contract.start()
+            self.addCleanup(fault_contract.stop)
+            validator.validate_author_packet(packet, candidate, root, evidence)
+            changed = dict(packet)
+            changed["public_release_effects"] = 1
             with self.assertRaisesRegex(
                 validator.RcValidationError, "RC_AUTHOR_PACKET_INVALID"
             ):
-                validator.validate_author_packet(packet, candidate, root)
+                validator.validate_author_packet(changed, candidate, root, evidence)
+            changed = dict(packet)
+            changed["evidence_receipts"] = dict(packet["evidence_receipts"])
+            changed["evidence_receipts"].pop("coverage")
+            with self.assertRaisesRegex(
+                validator.RcValidationError, "RC_AUTHOR_PACKET_EVIDENCE_INVALID"
+            ):
+                validator.validate_author_packet(changed, candidate, root, evidence)
+            forged = dict(packet)
+            forged["evidence_receipts"] = {
+                key: "f" * 64 for key in packet["evidence_receipts"]
+            }
+            forged_body = {
+                key: item for key, item in forged.items() if key != "packet_digest"
+            }
+            forged["packet_digest"] = builder._packet_digest(forged_body)
+            with self.assertRaisesRegex(
+                validator.RcValidationError,
+                "RC_AUTHOR_PACKET_EVIDENCE_DIGEST_MISMATCH",
+            ):
+                validator.validate_author_packet(forged, candidate, root, evidence)
 
     def test_conformance_receipt_requires_all_349_canonical_results(self) -> None:
         candidate = subprocess.check_output(
@@ -286,7 +398,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
         ).strip()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "canary.json"
-            path.write_text(json.dumps(canary(candidate)), encoding="utf-8")
+            path.write_bytes(validator._canonical(canary(candidate)))
             with mock.patch.object(
                 runner,
                 "_run_test",
@@ -411,6 +523,25 @@ class V4RcAcceptanceTests(unittest.TestCase):
                 validator.RcValidationError, "STALE_V3_PRODUCTION_SCAN_FAILED"
             ):
                 validator.static_receipt(repo, stale_sha)
+
+            retired.unlink()
+            retired_doc = repo / "P0-CLOSURE.md"
+            retired_doc.write_text("retired v3 current-product narrative\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "retired docs"], cwd=repo, check=True)
+            stale_doc_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+            with mock.patch.object(
+                validator, "_dependency_inventory", return_value=dependencies
+            ), mock.patch.object(
+                validator,
+                "_runtime_identity",
+                return_value={"runtime_identity_digest": "d" * 64},
+            ), self.assertRaisesRegex(
+                validator.RcValidationError, "STALE_V3_PRODUCTION_SCAN_FAILED"
+            ):
+                validator.static_receipt(repo, stale_doc_sha)
 
     def test_distribution_archive_rejects_unsafe_members(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -282,7 +282,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertIn("status", view)
             receipt_root = root / "codex" / "install-receipts" / "loopskill4"
             receipt_root.mkdir(parents=True)
-            (receipt_root / "broken.json").write_text("{", encoding="utf-8")
+            (receipt_root / "active-receipt").write_text("{", encoding="utf-8")
             with mock.patch.dict(os.environ, {"CODEX_HOME": str(root / "codex")}, clear=False):
                 diagnostic = cli._doctor_view(include_diagnostics=True)
             self.assertEqual(diagnostic["status"], "BLOCKED")
@@ -369,6 +369,25 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 code, output, _ = invoke(["doctor", "--diagnostics"])
                 self.assertEqual(code, 0)
                 self.assertIn('"status":"READY"', output)
+            canary_receipt = {
+                "artifact": "loopskill-v4-disposable-app-canary-v1",
+                "status": "PASS",
+            }
+            with mock.patch.object(
+                cli, "_interactive_canary", return_value=canary_receipt
+            ) as canary_entry:
+                code, output, _ = invoke(
+                    [
+                        "canary",
+                        "--candidate",
+                        "a" * 40,
+                        "--evidence-root",
+                        str(root / "canary"),
+                    ]
+                )
+                self.assertEqual(code, 0)
+                self.assertIn('"status":"PASS"', output)
+                canary_entry.assert_called_once()
             with mock.patch.object(cli, "policy_view", return_value={"policy": "STANDARD"}):
                 self.assertEqual(invoke(["policy", "--root", str(root)])[0], 0)
             with mock.patch.object(
@@ -438,6 +457,8 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 self.assertEqual(code, 70)
                 self.assertIn("USER_INTERNAL_ERROR", error)
                 self.assertNotIn("private", error)
+                self.assertIn("do not repeat start blindly", error)
+                self.assertNotIn("Retry once", error)
 
     def test_installed_skill_is_v4_only_and_preserves_four_phase_boundary(self) -> None:
         skill = (ROOT / "codex-loop-prompt-architect/SKILL.md").read_text(
@@ -1029,7 +1050,10 @@ class V4SingleEntryUXTests(unittest.TestCase):
     def test_host_failed_result_closes_failed(self):
         self.assert_host_result_closure(
             result_status="FAILED",
-            result_text="",
+            result_text=(
+                'LOOPSKILL4_RESULT={"outcome":"PASS",'
+                '"summary":"text cannot override failed Host status"}'
+            ),
             expected_outcome="FAILED",
             expected_disposition="FAILED",
         )

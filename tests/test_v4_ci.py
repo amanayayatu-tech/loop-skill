@@ -54,12 +54,37 @@ class V4CiTests(unittest.TestCase):
                 workflow.read_text(encoding="utf-8").replace(ci.CHECKOUT, "actions/checkout@v7"),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ci.CiError, "CI_REQUIRED_LITERAL_MISSING"):
+            with self.assertRaisesRegex(ci.CiError, "CI_ACTION_NOT_FULL_SHA_PINNED"):
                 ci.validate(root)
             workflow.write_bytes((ROOT / ".github/workflows/v4-release.yml").read_bytes())
             legacy = root / ".github/workflows/compatibility.yml"
             legacy.write_text("name: Compatibility CI\n", encoding="utf-8")
             with self.assertRaisesRegex(ci.CiError, "CI_WORKFLOW_SET_INVALID"):
+                ci.validate(root)
+
+    def test_structural_scope_and_tag_conditions_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/v4-release.yml"
+            workflow.parent.mkdir(parents=True)
+            source = (ROOT / ".github/workflows/v4-release.yml").read_text(
+                encoding="utf-8"
+            )
+            workflow.write_text(
+                source.replace("tags: [v4.0.0]", "tags: [v4.0.1]"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ci.CiError, "CI_PUSH_SCOPE_INVALID"):
+                ci.validate(root)
+            workflow.write_text(
+                source.replace(
+                    "if: github.ref == 'refs/tags/v4.0.0'",
+                    "if: always()",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ci.CiError, "CI_TAG_CONDITION_INVALID"):
                 ci.validate(root)
 
 

@@ -8,9 +8,10 @@ No multi-host claim is permitted before a second real Adapter passes the same
 conformance corpus. This checkpoint does not authorize installation, release,
 real-loop migration, or a stable claim.
 
-The Adapter owns Codex project/task/thread creation, message send, heartbeat,
-resource readback, eventual indexing, Host schema/enums, and the declared
-sandbox/trust/model/memory capabilities. Core sees only manifest-generated
+The generic Adapter boundary owns Codex project/task/thread creation, message
+send, heartbeat, resource readback, eventual indexing, Host schema/enums, and
+the declared sandbox/trust/model/memory capabilities when a Provider exposes
+them; the narrower production 4.0 subset is stated below. Core sees only manifest-generated
 `EffectAttempt`, `CapabilityRecord`, and `Receipt` values. Core contains no
 Codex resource identifier or App enum.
 
@@ -45,9 +46,26 @@ UNKNOWN`. End-to-end exactly-once is never claimed.
 
 ## Closed Host contract
 
-The current action catalog is `register_project`, `create_task`,
-`create_thread`, `send`, and `heartbeat`. The read-only resource catalog is
-`project`, `task`, `thread`, `message`, and `lifecycle`. Responses are closed:
+The typed Adapter contract can represent `register_project`, `create_task`,
+`create_thread`, `send`, and `heartbeat`, but the production 4.0 app-server
+Provider exposes only the composite `create_task` action. That action uses
+cwd-bound `thread/start` plus `turn/start`; `thread/read` and bounded,
+cursor-complete `thread/list` provide its readback. Independent
+`register_project`, `create_thread`, `send`, and `heartbeat` actions are
+reported unavailable by this Provider rather than inferred from the wider
+contract. Sandbox, trust, model, and memory receipts remain UNVERIFIABLE unless
+the Host supplies authoritative evidence.
+
+Codex Desktop folder-open plus exact-path project listing and project-bound
+thread creation has separately been verified in 23/23 historical provisioning
+receipts. Current app-server 0.144.4 exposes no saved-project registration API,
+so that verified Desktop route is not wired into 4.0.0; optional saved-project
+convenience is deferred to 4.0.x/4.1 and is not a startup prerequisite.
+
+The typed read-only resource catalog can represent `project`, `task`, `thread`,
+`message`, and `lifecycle`; the production Provider exposes only
+`task`/`thread`/`lifecycle` readback backed by `thread/read`. Project and message
+readback fail before a Host request. Responses are closed:
 unknown fields, missing fields, schema-version changes, and unknown enums are
 `ADAPTER_SCHEMA_DRIFT`; action/idempotency/provider-subject conflicts are
 `RECEIPT_IDENTITY_MISMATCH`.

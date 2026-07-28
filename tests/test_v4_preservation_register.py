@@ -38,7 +38,7 @@ class V4PreservationRegisterTests(unittest.TestCase):
         self.assertEqual(result["capability_count"], 24)
         self.assertEqual(result["mapped_required_items"], 1766)
         self.assertEqual(result["corpus_family_count"], 101)
-        self.assertEqual(result["corpus_instance_count"], 349)
+        self.assertEqual(result["corpus_mapping_count"], 349)
         self.assertEqual(result["preservation_family_count"], 15)
         self.assertEqual(result["preservation_case_binding_count"], 317)
 

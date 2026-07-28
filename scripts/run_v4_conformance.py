@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute every frozen v4 corpus instance through its bound gate."""
+"""Map every frozen corpus case to one of 74 actually executed assertions."""
 
 from __future__ import annotations
 
@@ -544,8 +544,12 @@ def _catalog_and_bindings(root: Path, candidate: str):
 
 def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
     corpus, catalog, bindings = _catalog_and_bindings(root, candidate)
-    canary = json.loads(canary_path.read_text(encoding="utf-8"))
+    canary_raw = canary_path.read_bytes()
+    canary = json.loads(canary_raw.decode("utf-8", "strict"))
+    if canary_raw != rc._canonical(canary):
+        raise RuntimeError("CONFORMANCE_CANARY_RECEIPT_NOT_CANONICAL")
     rc.validate_canary_receipt(canary, candidate)
+    canary_sha256 = hashlib.sha256(canary_raw).hexdigest()
     real_canary_cases = {"UX-009-a", "CAP-RELEASE-CANARY"}
     corpus_digest = hashlib.sha256(corpus.encode("utf-8")).hexdigest()
     results = []
@@ -585,9 +589,7 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
             "replay_expectation": receipt_contract["replay_expectation"],
         }
         if case_id in real_canary_cases:
-            result["canary_receipt_sha256"] = hashlib.sha256(
-                rc._canonical(canary)
-            ).hexdigest()
+            result["canary_receipt_sha256"] = canary_sha256
         results.append(result)
     test_method_results = [target_executions[key] for key in sorted(target_executions)]
     if len(test_method_results) != EXPECTED_EXECUTED_ASSERTION_METHOD_COUNT:

@@ -49,7 +49,7 @@ jobs:
           python scripts/validate_v4_preservation.py --root . --json
       - name: Validate public docs and release workflow contract
         run: |
-          python scripts/check_v4_docs.py
+          python scripts/check_v4_docs.py --smoke
           python scripts/check_v4_ci.py
       - name: Validate the installed Skill source
         run: python codex-loop-prompt-architect/scripts/validate_skill.py codex-loop-prompt-architect
@@ -120,13 +120,14 @@ jobs:
           retention-days: 7
 
   distribution:
-    name: v4-only install/uninstall (${{ matrix.os }})
+    name: v4-only install/uninstall (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -134,7 +135,7 @@ jobs:
           ref: ${{ env.TESTED_SHA }}
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       - name: Bind checkout to the tested SHA
         run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
       - name: Check installer syntax
@@ -172,7 +173,8 @@ jobs:
         if: github.ref == 'refs/tags/v4.0.0'
         run: >-
           python scripts/check_release_identity.py
-          --expected-sha "$TESTED_SHA" --tag v4.0.0 --main-ref origin/main
+          --expected-sha "$TESTED_SHA" --tag v4.0.0
+          --main-ref refs/remotes/origin/main
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: v4-static-receipt-${{ env.TESTED_SHA }}

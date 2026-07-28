@@ -6,7 +6,7 @@
   "authorization_boundaries": [
     "no commit, push, publish, deploy, or real-user data"
   ],
-  "budget": "20 minutes; no network or publish",
+  "budget": "up to 4 minutes; no network or publish",
   "external_actions": [],
   "goal": "Complete and verify one bounded change in a disposable example directory",
   "stop_conditions": [

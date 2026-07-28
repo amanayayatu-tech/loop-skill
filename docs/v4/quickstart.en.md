@@ -1,13 +1,15 @@
 # LoopSkill 4 quickstart
 
-Status: the LoopSkill 4.0.0 candidate is passing release gates and is not yet
+Status: the LoopSkill 4.0.0 candidate is undergoing release validation and is not yet
 published. Public-release identity is established by final readback of the
 `v4.0.0` tag and GitHub Release.
 
 ## Install
 
 Requirements: macOS or Linux, Git, and Python 3.11–3.14. Runtime dependencies
-are standard-library only.
+are standard-library only. Version 4.0.0 may be published only after all eight
+Linux/macOS × Python 3.11, 3.12, 3.13, and 3.14 release-CI
+runtime/distribution lanes pass.
 
 ```bash
 git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
@@ -18,9 +20,9 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 ```
 
 The installer writes only `$CODEX_HOME/skills/loopskill4` and its v4-owned
-receipt/staging paths. It does not read or write `config.toml`, register MCP,
-overwrite an independent v3 installation, or require a Codex restart for
-LoopSkill 4.
+receipt/staging paths. It reads `config.toml` only to verify the before/after
+byte hash and does not modify it, register MCP, overwrite an independent v3
+installation, or require a Codex restart for LoopSkill 4.
 
 ## One goal, one entry, four visible phases
 
@@ -49,6 +51,24 @@ One entry does not mean silent authorization. A non-interactive session stops
 after PREPARE. Changed boundaries, expired confirmation, or vague “continue”
 fail closed.
 
+If this ordinary `start` invocation actually creates one task, it waits in the
+foreground for terminal authoritative readback for at most 300 seconds and
+closes the provider/app-server session in a `finally` path on success, error,
+or timeout. This is the current foreground observation window, not the task
+budget. A timeout is reported honestly as a limitation and makes no claim that
+the Host task completed, failed, or continues running. The machine-bound
+Attempt remains available for authoritative `status --refresh` readback, but
+LoopSkill never resends.
+The 4.0.0 ordinary entry supports only an individual Host task expected to
+finish within this window. Longer single Host executions are outside this
+release's public support boundary.
+
+The Codex Desktop folder-open → `list_projects` → `projectId` → `create_thread`
+route has 23/23 provisioning receipts. The current v4.0 app-server 0.144.4
+Provider has no project methods, so the ordinary entry uses a cwd-bound
+thread/start. Saved-project convenience is deferred to 4.0.x/4.1 and is not a
+4.0.0 promise.
+
 ## Explicit phases
 
 ```bash
@@ -61,9 +81,11 @@ fail closed.
 ```
 
 `confirm` requires an exact interactive confirmation. Plain status is local
-and read-only; `status --refresh` performs authoritative readback of the one
-existing Host task and advances its replay-safe local result/finalization
-chain without creating or resending work. Normal status hides internal
+and read-only. If a crash occurred after the local Attempt commit but before
+its first provider call, `status --refresh` may perform that Attempt's one
+first call; otherwise it only reads the one existing Host task and advances
+the replay-safe local result/finalization chain. It never performs a second
+create or resend. Normal status hides internal
 identity; add `--diagnostics` for diagnostic evidence.
 `UNKNOWN`/`UNVERIFIABLE` are intentional visible limitations, not success, and
 never trigger blind resend.
@@ -75,3 +97,17 @@ zero writes on v3 input and links to
 [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8).
 There is no automatic migration; continue using v3.3.8 independently when old
 data is required.
+
+## Uninstall
+
+The uninstaller machine-resolves the active receipt bound at installation;
+ordinary users do not fill in a receipt:
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py" --codex-home "${CODEX_HOME:-$HOME/.codex}"
+```
+
+The digest-bound management entry remains outside the removed installation, so
+the same command safely returns `ALREADY_UNINSTALLED` on replay. Missing or
+drifted receipt evidence fails closed; `config.toml`, v3 installs, and real
+loops remain untouched.

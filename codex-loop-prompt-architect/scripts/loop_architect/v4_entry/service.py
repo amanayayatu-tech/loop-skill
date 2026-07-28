@@ -1338,6 +1338,8 @@ def _result_semantics(observation: Mapping[str, Any]) -> tuple[str, str]:
     candidates = [line[len(marker) :] for line in text.splitlines() if line.startswith(marker)]
     if observation["status"] == "PENDING":
         raise ValueError("pending")
+    if observation["status"] == "FAILED":
+        return "FAILED", "Codex task ended without a valid semantic result."
     if len(candidates) == 1:
         try:
             value = parse_json_bytes(candidates[0].encode("utf-8"))
@@ -1352,8 +1354,6 @@ def _result_semantics(observation: Mapping[str, Any]) -> tuple[str, str]:
             and len(value["summary"]) <= 4096
         ):
             return str(value["outcome"]), value["summary"].strip()
-    if observation["status"] == "FAILED":
-        return "FAILED", "Codex task ended without a valid semantic result."
     return "UNVERIFIABLE", "Codex output lacked one valid semantic result envelope."
 
 

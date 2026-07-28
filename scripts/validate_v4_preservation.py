@@ -1460,7 +1460,7 @@ def _validate_corpus(root: Path, registry: dict[str, Any]) -> tuple[int, int]:
     if count_drift:
         raise ValidationFailure(f"exact case family count drift: {count_drift}")
     if sum(count for _, count in rows.values()) != len(exact_catalog):
-        raise ValidationFailure("corpus instance count does not match exact catalog")
+        raise ValidationFailure("corpus mapping count does not match exact catalog")
     return len(rows), len(exact_catalog)
 
 
@@ -1509,7 +1509,7 @@ def validate(root: Path) -> dict[str, Any]:
     capability_count, mapped_count = _validate_capabilities(
         root, registry, inventories, required_items
     )
-    family_count, instance_count = _validate_corpus(root, registry)
+    family_count, mapping_count = _validate_corpus(root, registry)
     _validate_anti_bloat_evidence(root)
     _validate_p6_predecessor_evidence(root)
     _validate_p7_baseline(root)
@@ -1522,7 +1522,7 @@ def validate(root: Path) -> dict[str, Any]:
         "mapped_required_items": mapped_count,
         "inventory_counts": {key: len(value) for key, value in inventories.items()},
         "corpus_family_count": family_count,
-        "corpus_instance_count": instance_count,
+        "corpus_mapping_count": mapping_count,
         "preservation_family_count": preservation_family_count,
         "preservation_case_binding_count": preservation_binding_count,
         "architecture_fitness": architecture_metrics,

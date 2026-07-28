@@ -14,9 +14,10 @@ import re
 import subprocess
 import sys
 import tarfile
-from datetime import datetime, timezone
+import stat
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -53,6 +54,9 @@ CANARY_TRUST = "host-tool-observed"
 CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.app-canary.provenance.v1\0"
 CANARY_LIVE_DOMAIN = b"loopskill.v4.app-canary.live-readback.v1\0"
 CANARY_HOST_ID_DOMAIN = b"loopskill.v4.app-canary.host-identity.v1\0"
+CANARY_OUTPUT_FILENAME = "canary-output.txt"
+CANARY_OUTPUT_BYTES = b"LOOPSKILL4_CANARY_OK\n"
+CANARY_OUTPUT_SHA256 = "8d23b5e88d9fb86f366700a6267f29b46bcca5cd45a59ed27afbbd04860eb638"
 RETIRED_PRODUCTION_PATHS = (
     "codex-loop-prompt-architect/scripts/adaptive_state_mcp.py",
     "codex-loop-prompt-architect/scripts/adaptive_state_runtime.py",
@@ -60,6 +64,13 @@ RETIRED_PRODUCTION_PATHS = (
     "codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py",
     "codex-loop-prompt-architect/scripts/loop_architect/v4_compat/",
     "codex-loop-prompt-architect/scripts/loopctl",
+)
+RETIRED_PUBLIC_SOURCE_PATHS = (
+    "P0-CLOSURE.md",
+    "P0-P2-CLOSURE.md",
+    "docs/codex-app-controller-turn-attestation-blocker.md",
+    "docs/codex-app-process-reaping-report.md",
+    "docs/readme-assets/",
 )
 RETIRED_RUNTIME_LITERALS = (
     b"ImportV3Snapshot",
@@ -117,6 +128,16 @@ def _load_preservation(root: Path):
     spec = importlib.util.spec_from_file_location("v4_preservation_for_rc", path)
     if spec is None or spec.loader is None:
         raise RcValidationError("RC_CASE_CATALOG_VALIDATOR_UNAVAILABLE")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_author_packet_builder(root: Path):
+    path = root / "scripts/build_v4_author_packet.py"
+    spec = importlib.util.spec_from_file_location("v4_author_packet_for_rc", path)
+    if spec is None or spec.loader is None:
+        raise RcValidationError("RC_AUTHOR_PACKET_BUILDER_UNAVAILABLE")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -392,6 +413,17 @@ def _stale_production_findings(
         path = entry["path"]
         if any(
             path == retired or (retired.endswith("/") and path.startswith(retired))
+            for retired in RETIRED_PUBLIC_SOURCE_PATHS
+        ):
+            findings.append(
+                {
+                    "path_digest": hashlib.sha256(path.encode()).hexdigest(),
+                    "rule": "retired_public_source_path",
+                }
+            )
+            continue
+        if any(
+            path == retired or (retired.endswith("/") and path.startswith(retired))
             for retired in RETIRED_PRODUCTION_PATHS
         ):
             findings.append(
@@ -584,7 +616,12 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
     return body
 
 
-def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
+def validate_canary_receipt(
+    value: dict[str, Any],
+    candidate: str,
+    *,
+    now: datetime | None = None,
+) -> None:
     expected_keys = {
         "artifact",
         "candidate_sha",
@@ -597,9 +634,14 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "host_receipt_digest",
         "host_receipt_issuer",
         "host_receipt_trust",
+        "host_create_readback_count",
+        "host_lifecycle_readback_count",
+        "host_result_digest",
         "host_task_identity_digest",
         "host_task_create_count",
         "host_task_readback_count",
+        "host_terminal_wait_readback_count",
+        "host_total_read_count",
         "intake_external_effects",
         "intake_heartbeat_count",
         "intake_host_task_count",
@@ -641,6 +683,7 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         "host_task_readback_count": 1,
         "host_receipt_issuer": CANARY_ISSUER,
         "host_receipt_trust": CANARY_TRUST,
+        "host_lifecycle_readback_count": 1,
         "intake_external_effects": 0,
         "intake_heartbeat_count": 0,
         "intake_host_task_count": 0,
@@ -666,10 +709,34 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
     for key, expected in required.items():
         if value.get(key) != expected:
             raise RcValidationError(f"RC_CANARY_RECEIPT_INVALID: {key}")
+    create_readbacks = value.get("host_create_readback_count")
+    if (
+        isinstance(create_readbacks, bool)
+        or not isinstance(create_readbacks, int)
+        or create_readbacks not in {1, 2, 3}
+    ):
+        raise RcValidationError("RC_CANARY_RECEIPT_INVALID: host_create_readback_count")
+    terminal_readbacks = value.get("host_terminal_wait_readback_count")
+    total_readbacks = value.get("host_total_read_count")
+    if (
+        isinstance(terminal_readbacks, bool)
+        or not isinstance(terminal_readbacks, int)
+        or not 1 <= terminal_readbacks <= 1_200
+        or isinstance(total_readbacks, bool)
+        or not isinstance(total_readbacks, int)
+        or total_readbacks
+        != create_readbacks
+        + terminal_readbacks
+        + value["host_task_readback_count"]
+        + value["host_lifecycle_readback_count"]
+    ):
+        raise RcValidationError("RC_CANARY_RECEIPT_INVALID: host readback counts")
     digest = value.get("host_receipt_digest")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: host_receipt_digest")
-    for field in ("host_task_identity_digest", "canary_output_sha256"):
+    if value.get("canary_output_sha256") != CANARY_OUTPUT_SHA256:
+        raise RcValidationError("RC_CANARY_RECEIPT_INVALID: canary_output_sha256")
+    for field in ("host_task_identity_digest", "host_result_digest"):
         if not isinstance(value.get(field), str) or not re.fullmatch(r"[0-9a-f]{64}", value[field]):
             raise RcValidationError(f"RC_CANARY_RECEIPT_INVALID: {field}")
     try:
@@ -678,13 +745,18 @@ def validate_canary_receipt(value: dict[str, Any], candidate: str) -> None:
         fresh_until = datetime.fromisoformat(value["fresh_until"].replace("Z", "+00:00"))
     except (KeyError, TypeError, ValueError) as exc:
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: freshness") from exc
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    issued_utc = issued.astimezone(timezone.utc)
+    fresh_until_utc = fresh_until.astimezone(timezone.utc)
     if (
         observed.tzinfo is None
         or issued.tzinfo is None
         or fresh_until.tzinfo is None
-        or observed.astimezone(timezone.utc) != issued.astimezone(timezone.utc)
-        or not issued < fresh_until
-        or (fresh_until - issued).total_seconds() > 600
+        or observed.astimezone(timezone.utc) != issued_utc
+        or not issued_utc < fresh_until_utc
+        or (fresh_until_utc - issued_utc).total_seconds() > 600
+        or issued_utc > current + timedelta(seconds=30)
+        or current > fresh_until_utc
     ):
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: freshness")
     if not isinstance(value.get("candidate_goal_digest"), str) or not re.fullmatch(
@@ -713,11 +785,47 @@ def _live_canary_observation(
             CodexAppServerProvider,
         )
         from loop_architect.v4_alpha.protocol import snapshot_digest
+        from loop_architect.v4_entry.service import STORE_FILENAME
         from loop_architect.v4_persistence.sqlite_store import SQLiteStore
     except ImportError as exc:
         raise RcValidationError("RC_CANARY_LIVE_RUNTIME_UNAVAILABLE") from exc
 
-    store_path = store_root / "loopskill4.sqlite3"
+    evidence_root = store_root.parent
+    workspace = evidence_root / "workspace"
+    output = workspace / CANARY_OUTPUT_FILENAME
+    try:
+        workspace_metadata = workspace.lstat()
+        entries = list(workspace.iterdir())
+        output_metadata = output.lstat()
+        if (
+            workspace.is_symlink()
+            or not workspace.is_dir()
+            or workspace_metadata.st_uid != os.getuid()
+            or workspace_metadata.st_mode & 0o077
+            or len(entries) != 1
+            or entries[0].name != CANARY_OUTPUT_FILENAME
+            or stat.S_ISLNK(output_metadata.st_mode)
+            or not stat.S_ISREG(output_metadata.st_mode)
+            or output_metadata.st_size != len(CANARY_OUTPUT_BYTES)
+        ):
+            raise OSError("invalid canary output")
+        descriptor = os.open(output, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(descriptor)
+            raw = os.read(descriptor, len(CANARY_OUTPUT_BYTES) + 1)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino)
+                != (output_metadata.st_dev, output_metadata.st_ino)
+                or raw != CANARY_OUTPUT_BYTES
+            ):
+                raise OSError("canary output changed during read")
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise RcValidationError("RC_CANARY_LIVE_OUTPUT_INVALID") from exc
+
+    store_path = store_root / STORE_FILENAME
     if not store_path.is_file() or store_path.is_symlink():
         raise RcValidationError("RC_CANARY_LIVE_STORE_INVALID")
     with SQLiteStore(store_path) as store:
@@ -736,7 +844,7 @@ def _live_canary_observation(
         )
         if not isinstance(provider_id, str) or not provider_id:
             raise RcValidationError("RC_CANARY_LIVE_HOST_IDENTITY_INVALID")
-        provider = CodexAppServerProvider(root)
+        provider = CodexAppServerProvider(workspace)
         adapter = CodexHostAdapter(
             provider,
             store,
@@ -747,6 +855,7 @@ def _live_canary_observation(
         task = adapter.read_task_result(provider_id)
         lifecycle = adapter.read_resource("lifecycle", provider_id)
         results = list(snapshot["results"].values())
+        reports = list(snapshot["reports"].values())
         reviews = list(snapshot["reviews"].values())
         finalizations = list(snapshot["finalizations"].values())
         artifacts = list(snapshot["artifacts"].values())
@@ -756,6 +865,8 @@ def _live_canary_observation(
             or len(results) != 1
             or results[0].get("state") != "ACKNOWLEDGED"
             or results[0].get("outcome") != "PASS"
+            or len(reports) != 1
+            or reports[0].get("state") != "ACCEPTED"
             or len(artifacts) != 1
             or artifacts[0].get("state") != "VERIFIED"
             or len(reviews) != 1
@@ -770,6 +881,7 @@ def _live_canary_observation(
         return {
             "artifact_state": artifacts[0]["state"],
             "assurance": snapshot["closure_assurance"]["strength"],
+            "canary_output_sha256": CANARY_OUTPUT_SHA256,
             "candidate_goal_digest": descriptors[0]["goal_digest"],
             "candidate_sha": candidate,
             "execution_disposition": snapshot["execution"]["disposition"],
@@ -782,6 +894,7 @@ def _live_canary_observation(
             "result_digest": task["result_digest"],
             "result_outcome": results[0]["outcome"],
             "result_state": results[0]["state"],
+            "report_state": reports[0]["state"],
             "review_state": reviews[0]["state"],
             "snapshot_digest": snapshot_digest(snapshot),
         }
@@ -801,7 +914,8 @@ def validate_live_canary(
         value["host_receipt_digest"] != digest
         or value["host_task_identity_digest"]
         != observation["host_task_identity_digest"]
-        or value["canary_output_sha256"] != observation["result_digest"]
+        or value["canary_output_sha256"] != observation["canary_output_sha256"]
+        or value["host_result_digest"] != observation["result_digest"]
         or value["candidate_goal_digest"]
         != observation["candidate_goal_digest"]
     ):
@@ -809,7 +923,13 @@ def validate_live_canary(
     return digest
 
 
-def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Path) -> None:
+def validate_conformance_receipt(
+    value: dict[str, Any],
+    candidate: str,
+    root: Path,
+    *,
+    expected_canary_sha256: str | None = None,
+) -> None:
     if (
         value.get("artifact") != "loopskill-v4-conformance-execution-v2"
         or value.get("candidate_sha") != candidate
@@ -929,6 +1049,10 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
     if (
         set(tests_by_id) != {item["assertion_test_id"] for item in results}
         or value.get("passed_test_methods") != len(tests_by_id)
+        or (
+            expected_canary_sha256 is not None
+            and canary_sha != expected_canary_sha256
+        )
     ):
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
     if value.get("binding_manifest_digest") != hashlib.sha256(_canonical(binding_rows)).hexdigest():
@@ -938,26 +1062,122 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_DIGEST_INVALID")
 
 
-def validate_author_packet(value: dict[str, Any], candidate: str, root: Path) -> None:
+def _fault_contract_counts(root: Path) -> tuple[int, int, int]:
+    scripts = root / "codex-loop-prompt-architect" / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    try:
+        from loop_architect.v4_alpha.store import FAULT_BOUNDARIES
+        from loop_architect.v4_alpha.vertical import vertical_commands
+        from loop_architect.v4_persistence.sqlite_store import (
+            DURABLE_FAULT_BOUNDARIES,
+        )
+    except ImportError as exc:
+        raise RcValidationError("RC_AUTHOR_PACKET_FAULT_CONTRACT_UNAVAILABLE") from exc
+    return len(FAULT_BOUNDARIES), len(DURABLE_FAULT_BOUNDARIES), len(vertical_commands())
+
+
+def validate_author_packet(
+    value: dict[str, Any],
+    candidate: str,
+    root: Path,
+    evidence_paths: Mapping[str, Path],
+) -> dict[str, dict[str, Any]]:
+    builder = _load_author_packet_builder(root)
     if (
-        value.get("artifact") != "loopskill-v4-publication-packet-v1"
+        set(value)
+        != {
+            "artifact",
+            "candidate_sha",
+            "evidence_receipts",
+            "packet_digest",
+            "public_release_effects",
+            "real_v3_loop_migrations",
+            "status",
+            "tracked_files",
+        }
+        or value.get("artifact") != builder.ARTIFACT
         or value.get("candidate_sha") != candidate
-        or value.get("status") != "PUBLICATION_CANDIDATE_VALIDATED"
+        or value.get("status") != builder.STATUS
         or value.get("public_release_effects") != 0
         or value.get("real_v3_loop_migrations") != 0
     ):
         raise RcValidationError("RC_AUTHOR_PACKET_INVALID")
-    files = value.get("files")
-    if not isinstance(files, dict) or len(files) < 12:
+    files = value.get("tracked_files")
+    if not isinstance(files, dict) or set(files) != set(builder.REQUIRED_TRACKED_FILES):
         raise RcValidationError("RC_AUTHOR_PACKET_INCOMPLETE")
-    for relative, expected in files.items():
-        path = (root / relative).resolve()
-        try:
-            path.relative_to(root.resolve())
-        except ValueError as exc:
-            raise RcValidationError("RC_AUTHOR_PACKET_PATH_INVALID") from exc
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+    for relative in builder.REQUIRED_TRACKED_FILES:
+        expected = files.get(relative)
+        if (
+            not isinstance(expected, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected)
+            or hashlib.sha256(_run(root, "git", "show", f"{candidate}:{relative}")).hexdigest()
+            != expected
+        ):
             raise RcValidationError(f"RC_AUTHOR_PACKET_FILE_DRIFT: {relative}")
+    evidence = value.get("evidence_receipts")
+    if (
+        not isinstance(evidence, dict)
+        or set(evidence) != set(builder.REQUIRED_EVIDENCE_RECEIPTS)
+        or any(
+            not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            for digest in evidence.values()
+        )
+    ):
+        raise RcValidationError("RC_AUTHOR_PACKET_EVIDENCE_INVALID")
+    if set(evidence_paths) != set(builder.REQUIRED_EVIDENCE_RECEIPTS):
+        raise RcValidationError("RC_AUTHOR_PACKET_EVIDENCE_PATH_SET_INVALID")
+    evidence_values: dict[str, dict[str, Any]] = {}
+    try:
+        for key in builder.REQUIRED_EVIDENCE_RECEIPTS:
+            receipt_value, receipt_digest = builder._read_evidence(
+                key, Path(evidence_paths[key]), candidate
+            )
+            builder.validate_evidence_receipt(key, receipt_value, candidate)
+            if receipt_digest != evidence[key]:
+                raise RcValidationError(
+                    f"RC_AUTHOR_PACKET_EVIDENCE_DIGEST_MISMATCH: {key}"
+                )
+            evidence_values[key] = receipt_value
+    except builder.AuthorPacketError as exc:
+        raise RcValidationError(f"RC_AUTHOR_PACKET_EVIDENCE_INVALID: {exc}") from exc
+    preflight = evidence_values["release_identity_preflight"]
+    try:
+        origin_main = _run(
+            root, "git", "rev-parse", "refs/remotes/origin/main^{commit}"
+        ).decode("ascii", "strict").strip()
+        v3 = _run(root, "git", "rev-parse", "v3.3.8^{commit}").decode(
+            "ascii", "strict"
+        ).strip()
+        paper = _run(
+            root, "git", "rev-parse", "paper-treatment-v3.3.12^{commit}"
+        ).decode("ascii", "strict").strip()
+        _run(root, "git", "merge-base", "--is-ancestor", origin_main, candidate)
+        local_v4_tag = _run(root, "git", "tag", "--list", "v4.0.0").strip()
+    except UnicodeDecodeError as exc:
+        raise RcValidationError("RC_AUTHOR_PACKET_PREFLIGHT_IDENTITY_INVALID") from exc
+    if (
+        preflight.get("origin_main_commit") != origin_main
+        or preflight.get("v3_baseline_commit") != v3
+        or preflight.get("paper_reference_commit") != paper
+        or local_v4_tag
+    ):
+        raise RcValidationError("RC_AUTHOR_PACKET_PREFLIGHT_IDENTITY_DRIFT")
+
+    in_memory_boundaries, sqlite_boundaries, operations = _fault_contract_counts(root)
+    matrix = evidence_values["test_fault_matrix"]
+    if (
+        matrix.get("in_memory_boundary_count") != in_memory_boundaries
+        or matrix.get("sqlite_boundary_count") != sqlite_boundaries
+        or matrix.get("vertical_operation_count") != operations
+        or matrix.get("vertical_fault_instance_count")
+        != in_memory_boundaries * operations
+    ):
+        raise RcValidationError("RC_AUTHOR_PACKET_FAULT_CONTRACT_DRIFT")
+    body = {key: item for key, item in value.items() if key != "packet_digest"}
+    if value.get("packet_digest") != builder._packet_digest(body):
+        raise RcValidationError("RC_AUTHOR_PACKET_DIGEST_INVALID")
+    return evidence_values
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -969,23 +1189,28 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--canary-store", type=Path)
     parser.add_argument("--conformance-receipt", type=Path)
     parser.add_argument("--author-packet", type=Path)
+    parser.add_argument("--evidence", action="append", default=[])
     parser.add_argument("--static-only", action="store_true")
-    parser.add_argument("--allow-non-head", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        receipt = static_receipt(
-            args.root, args.candidate, require_clean_head=not args.allow_non_head
-        )
+        receipt = static_receipt(args.root, args.candidate, require_clean_head=True)
+        exact_static_receipt = dict(receipt)
+        exact_static_receipt["gate_status"] = "PRE_CANARY_STATIC_ONLY"
+        exact_static_receipt.pop("receipt_digest", None)
+        exact_static_receipt["receipt_digest"] = hashlib.sha256(
+            _canonical(exact_static_receipt)
+        ).hexdigest()
         if args.static_only:
             if (
                 args.canary_receipt
                 or args.canary_store
                 or args.conformance_receipt
                 or args.author_packet
+                or args.evidence
             ):
                 raise RcValidationError("RC_STATIC_ONLY_WITH_FINAL_RECEIPT")
             receipt["gate_status"] = "PRE_CANARY_STATIC_ONLY"
@@ -995,29 +1220,54 @@ def main(argv: Sequence[str] | None = None) -> int:
                 or not args.canary_store
                 or not args.conformance_receipt
                 or not args.author_packet
+                or not args.evidence
             ):
                 raise RcValidationError("RC_FINAL_RECEIPTS_REQUIRED")
-            canary = json.loads(args.canary_receipt.read_text(encoding="utf-8"))
+            canary_raw = args.canary_receipt.read_bytes()
+            canary = json.loads(canary_raw.decode("utf-8", "strict"))
+            if canary_raw != _canonical(canary):
+                raise RcValidationError("RC_CANARY_RECEIPT_NOT_CANONICAL")
             live_digest = validate_live_canary(
                 canary,
                 args.candidate,
                 args.root,
                 args.canary_store,
             )
-            receipt["canary_receipt_digest"] = hashlib.sha256(
-                _canonical(canary)
-            ).hexdigest()
+            canary_digest = hashlib.sha256(canary_raw).hexdigest()
+            receipt["canary_receipt_digest"] = canary_digest
             receipt["live_canary_attestation_digest"] = live_digest
-            conformance = json.loads(args.conformance_receipt.read_text(encoding="utf-8"))
-            validate_conformance_receipt(conformance, args.candidate, args.root)
+            conformance_raw = args.conformance_receipt.read_bytes()
+            conformance = json.loads(conformance_raw.decode("utf-8", "strict"))
+            validate_conformance_receipt(
+                conformance,
+                args.candidate,
+                args.root,
+                expected_canary_sha256=canary_digest,
+            )
             receipt["conformance_receipt_digest"] = hashlib.sha256(
-                _canonical(conformance)
+                conformance_raw
             ).hexdigest()
-            packet = json.loads(args.author_packet.read_text(encoding="utf-8"))
-            validate_author_packet(packet, args.candidate, args.root)
-            receipt["author_packet_digest"] = hashlib.sha256(
-                _canonical(packet)
-            ).hexdigest()
+            packet_raw = args.author_packet.read_bytes()
+            packet = json.loads(packet_raw.decode("utf-8", "strict"))
+            builder = _load_author_packet_builder(args.root)
+            try:
+                evidence_paths = builder.parse_evidence_assignments(
+                    args.evidence, args.root.resolve(strict=True)
+                )
+            except builder.AuthorPacketError as exc:
+                raise RcValidationError(
+                    f"RC_AUTHOR_PACKET_EVIDENCE_ARGUMENT_INVALID: {exc}"
+                ) from exc
+            evidence_values = validate_author_packet(
+                packet, args.candidate, args.root, evidence_paths
+            )
+            if (
+                evidence_values["app_canary"] != canary
+                or evidence_values["final_conformance"] != conformance
+                or evidence_values["static_validation"] != exact_static_receipt
+            ):
+                raise RcValidationError("RC_AUTHOR_PACKET_PRIMARY_EVIDENCE_MISMATCH")
+            receipt["author_packet_digest"] = hashlib.sha256(packet_raw).hexdigest()
             receipt["gate_status"] = "LOOPSKILL_4_0_PUBLICATION_CANDIDATE_VALIDATED"
             receipt["publication_ready"] = True
         receipt.pop("receipt_digest", None)

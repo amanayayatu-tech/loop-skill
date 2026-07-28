@@ -6,6 +6,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -19,31 +20,39 @@ SPEC.loader.exec_module(runner)
 
 
 def canary(candidate: str) -> dict:
+    issued = datetime.now(timezone.utc).replace(microsecond=0)
+    issued_text = issued.isoformat().replace("+00:00", "Z")
+    fresh_text = (issued + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
     value = {
         "artifact": "loopskill-v4-disposable-app-canary-v1",
         "candidate_sha": candidate,
         "candidate_goal_digest": "e" * 64,
-        "canary_output_sha256": "b" * 64,
+        "canary_output_sha256": runner.rc.CANARY_OUTPUT_SHA256,
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
         "config_bytes_changed": 0,
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
-        "fresh_until": "2026-07-27T13:22:46Z",
+        "fresh_until": fresh_text,
         "host_receipt_issuer": runner.rc.CANARY_ISSUER,
         "host_receipt_trust": runner.rc.CANARY_TRUST,
+        "host_create_readback_count": 1,
+        "host_lifecycle_readback_count": 1,
+        "host_result_digest": "b" * 64,
         "host_task_create_count": 1,
         "host_task_identity_digest": "c" * 64,
         "host_task_readback_count": 1,
+        "host_terminal_wait_readback_count": 1,
+        "host_total_read_count": 4,
         "intake_external_effects": 0,
         "intake_heartbeat_count": 0,
         "intake_host_task_count": 0,
         "intake_loop_count": 0,
-        "issued_at": "2026-07-27T13:12:46Z",
+        "issued_at": issued_text,
         "loopskill_mcp_registration_count": 0,
         "machine_owned_identity": True,
         "manual_control_identity_count": 0,
-        "observed_at": "2026-07-27T13:12:46Z",
+        "observed_at": issued_text,
         "app_restart_count": 0,
         "prepare_delivery_count": 0,
         "prepare_heartbeat_count": 0,
@@ -102,13 +111,14 @@ def mock_execution(case_id, family, test_id, contract, target_result=None):
 
 
 class V4ConformanceRunnerTests(unittest.TestCase):
-    def test_all_349_instances_bind_to_an_executed_gate(self) -> None:
+    def test_all_349_semantic_mappings_bind_to_an_executed_gate(self) -> None:
         candidate = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "canary.json"
-            path.write_text(json.dumps(canary(candidate)), encoding="utf-8")
+            path.write_bytes(runner.rc._canonical(canary(candidate)))
+            canary_digest = hashlib.sha256(path.read_bytes()).hexdigest()
             with mock.patch.object(
                 runner,
                 "_run_case",
@@ -139,7 +149,21 @@ class V4ConformanceRunnerTests(unittest.TestCase):
         self.assertTrue(
             all(item["coverage_mapping_count"] == 1 for item in receipt["case_results"])
         )
-        runner.rc.validate_conformance_receipt(receipt, candidate, ROOT)
+        runner.rc.validate_conformance_receipt(
+            receipt,
+            candidate,
+            ROOT,
+            expected_canary_sha256=canary_digest,
+        )
+        with self.assertRaisesRegex(
+            runner.rc.RcValidationError, "RC_CONFORMANCE_RECEIPT_INVALID"
+        ):
+            runner.rc.validate_conformance_receipt(
+                receipt,
+                candidate,
+                ROOT,
+                expected_canary_sha256="f" * 64,
+            )
 
     def test_single_method_execution_requires_exactly_one_real_test(self) -> None:
         test_id = runner.FAMILY_TEST_BINDINGS["CAP-ARCHITECTURE"]

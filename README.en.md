@@ -7,7 +7,7 @@
 [中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> Release status: The LoopSkill 4.0.0 candidate is passing release gates and is not yet published. Public-release identity is established by final readback of the `v4.0.0` tag and GitHub Release.
+> Release status: The LoopSkill 4.0.0 candidate is undergoing release validation and is not yet published. Public-release identity is established by final readback of the `v4.0.0` tag and GitHub Release.
 
 LoopSkill turns long-running work into a recoverable loop with explicit authority, evidence, and stop conditions. An ordinary user supplies only a goal or goal file; machines own protocol identities, versions, receipts, and Host readback. The necessary human boundary remains:
 
@@ -33,7 +33,7 @@ To keep using old data, independently install or retain [LoopSkill v3.3.8](https
 <!-- parity: install -->
 ## 30-second install
 
-Requirements: macOS or Linux, Git, and Python 3.11–3.14. The LoopSkill 4 runtime uses only the Python standard library.
+Requirements: macOS or Linux, Git, and Python 3.11–3.14. The LoopSkill 4 runtime uses only the Python standard library. Version 4.0.0 may be published only after all eight Linux/macOS × Python 3.11, 3.12, 3.13, and 3.14 release-CI runtime/distribution lanes pass.
 
 ```bash
 git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
@@ -55,7 +55,7 @@ Create `goal.json`:
   "goal": "Complete and verify one small change in a disposable example directory",
   "task_horizon": "long",
   "write_scope": ["disposable-example"],
-  "budget": "20 minutes; no network or publish",
+  "budget": "up to 4 minutes; no network or publish",
   "external_actions": [],
   "acceptance_criteria": ["focused tests pass", "result is reviewed"],
   "stop_conditions": ["stop on unknown external state"],
@@ -73,6 +73,10 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 The same interaction performs read-only intake, writes local preparation artifacts, and shows the Goal, write scope, budget, external actions, acceptance criteria, stop conditions, and publication boundary. Only exact explicit confirmation can start. A non-interactive session stops at PREPARE; `DIRECT_TASK_RECOMMENDED` creates no loop.
 
 After confirmation, the public entry uses the local Codex `app-server` to create at most one task and perform authoritative readback. It registers no LoopSkill MCP and asks the user for no Host identity. If a create response is lost and the machine request marker cannot uniquely recover it, the state is `UNKNOWN`; it does not create again.
+
+If this ordinary `start` invocation actually creates one task, it waits in the foreground for terminal authoritative readback for at most 300 seconds and closes the provider/app-server session in a `finally` path on success, error, or timeout. The 300 seconds are the current foreground observation window, not the task budget. A timeout is reported honestly as a limitation and makes no claim that the Host task completed, failed, or continues running. The machine-bound Attempt remains available for later authoritative `status --refresh` readback, but LoopSkill never resends.
+
+LoopSkill 4.0.0 therefore supports the ordinary entry only for an individual Host task expected to finish within that observation window. Longer single Host executions are outside this release's public support boundary.
 
 The four phases may also be invoked explicitly:
 
@@ -97,7 +101,7 @@ The number of user-supplied control identities must be zero. Users do not copy t
 "$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
 ```
 
-Plain status reads only local state. `status --refresh` reads the exact existing Host task and advances its replay-safe local Result/Review/Finalization chain; it never creates or resends work. Default status shows only the goal, progress, result, limitations, and actionable next step. Internal identity and receipts appear only in explicit diagnostics. `UNKNOWN` means an external action may have happened but cannot be authoritatively confirmed; `UNVERIFIABLE` means the Host cannot provide the required assurance. Neither is success, and neither triggers blind resend.
+Plain status reads only local state. If a crash occurred after the local Attempt commit but before its first provider call, `status --refresh` may claim that Attempt and perform its one first call; otherwise it only reads the exact existing Host task and advances the replay-safe local Result/Review/Finalization chain. It never performs a second create or resend. Default status shows only the goal, progress, result, limitations, and actionable next step. Internal identity and receipts appear only in explicit diagnostics. `UNKNOWN` means an external action may have happened but cannot be authoritatively confirmed; `UNVERIFIABLE` means the Host cannot provide the required assurance. Neither is success, and neither triggers blind resend.
 
 <!-- parity: policy -->
 ## Optional policies
@@ -142,18 +146,23 @@ When v4 encounters a v3 root, state, or Controller Pack, it performs zero writes
 <!-- parity: uninstall -->
 ## Uninstall and fallback
 
-The installer prints the receipt path. Uninstall with that exact receipt:
+The installer machine-binds one active receipt; ordinary users do not copy or fill in a receipt:
 
 ```bash
-python3 scripts/uninstall_v4.py --codex-home "${CODEX_HOME:-$HOME/.codex}" --receipt "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/<receipt>.json"
+python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py" --codex-home "${CODEX_HOME:-$HOME/.codex}"
 ```
 
-Uninstall removes only the receipt-bound v4 installation and leaves `config.toml` and an independent v3 installation byte-identical. Fallback means uninstalling v4 and continuing to use separately installed v3.3.8; v4 does not restore, convert, or migrate v3 data.
+This digest-bound management entry lives outside the installation target, so the same command is safely repeatable and returns `ALREADY_UNINSTALLED`. The uninstaller resolves and verifies that machine-bound receipt; missing, drifted, or ambiguous evidence fails closed. It removes only the receipt-bound v4 installation and leaves `config.toml` and an independent v3 installation byte-identical. Fallback means uninstalling v4 and continuing to use separately installed v3.3.8; v4 does not restore, convert, or migrate v3 data.
 
 <!-- parity: limitations -->
 ## Known limitations
 
 - The first release supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
+- The verified Codex Desktop folder-open → `list_projects` → `projectId` →
+  `create_thread` route has 23/23 provisioning receipts. The app-server 0.144.4
+  Provider used by v4.0 exposes no project methods, so the default entry uses a
+  cwd-bound thread/start. Saved-project convenience is deferred to 4.0.x/4.1
+  and is not a 4.0.0 feature or release claim.
 - There is no cross-system exactly-once promise across SQLite, Codex, Git, and network boundaries.
 - There is no claim of empirically improved patch success or long-horizon superiority.
 - Memory isolation is reported only to the strength the Host can actually attest, which may be unavailable or unverifiable.
@@ -165,21 +174,23 @@ See [known limitations](docs/v4/known-limitations.md) for the complete list.
 ## Development and validation
 
 ```bash
-python3 scripts/generate_v4_protocol.py --check
-python3 scripts/validate_v4_preservation.py --root . --json
-PYTHONDONTWRITEBYTECODE=1 python3 -B -W error -m unittest discover -s tests -p 'test_v4*.py' -v
-coverage run -m unittest discover -s tests -p 'test_v4*.py'
-coverage report
-python3 scripts/check_v4_docs.py
+python3 -m venv .venv
+.venv/bin/python -m pip install --disable-pip-version-check -r requirements-test.txt
+.venv/bin/python scripts/generate_v4_protocol.py --check
+.venv/bin/python scripts/validate_v4_preservation.py --root . --json
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -W error -m unittest discover -s tests -p 'test_v4*.py' -v
+.venv/bin/python -m coverage run -m unittest discover -s tests -p 'test_v4*.py'
+.venv/bin/python -m coverage report --fail-under=80
+.venv/bin/python scripts/check_v4_docs.py --smoke
 ```
 
-CI also runs Linux/macOS isolated installation, dependency/import-graph, stale legacy runtime, privacy/secret/large-artifact, SBOM/license, and release-identity gates. The real Codex App canary is an exact-SHA local release gate; GitHub-hosted runners do not fake it.
+CI also runs all eight Linux/macOS × Python 3.11–3.14 runtime/distribution lanes, isolated installation, dependency/import-graph, stale legacy runtime, privacy/secret/large-artifact, SBOM/license, and release-identity gates. A result from one local Python runtime cannot substitute for that matrix. The real Codex App canary is an exact-SHA local release gate; GitHub-hosted runners do not fake it.
 
 <!-- parity: release -->
 ## Release, security, and historical versions
 
 - [v4 release process](docs/RELEASING.md)
-- [4.0 release notes](docs/v4/release-notes.md)
+- [4.0.0 release notes](docs/v4/release-notes.md)
 - [Security policy](SECURITY.md)
 - [MIT License](LICENSE)
 - [v3.3.8 historical release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)
