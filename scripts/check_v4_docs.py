@@ -251,6 +251,11 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     if any("<receipt>" in text or " --receipt " in text for text in public_entry_docs):
         raise DocsError("DOC_MANUAL_RECEIPT_TRANSPORT")
     if (
+        "codex login status 2>&1 | grep -F 'Logged in'" not in releasing
+        or "codex login status | grep -F 'Logged in'" in releasing
+    ):
+        raise DocsError("DOC_CANARY_LOGIN_STREAM_DRIFT")
+    if (
         "唯一首次 invocation" not in zh
         or "第二次 spawn" not in zh
         or "one first invocation" not in en

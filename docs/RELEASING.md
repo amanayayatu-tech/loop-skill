@@ -249,7 +249,7 @@ CONFIG_BEFORE="$(snapshot_path "$CANARY_CODEX_HOME/config.toml")"
 V3_BEFORE="$(snapshot_path "$CANARY_CODEX_HOME/skills/codex-loop-prompt-architect")"
 HOST_CONFIG_BEFORE="$(snapshot_path "$HOST_CONFIG")"
 HOST_AUTH_BEFORE="$(snapshot_path "$HOST_AUTH")"
-CODEX_HOME="$HOST_CODEX_HOME" codex login status | grep -F 'Logged in' >/dev/null
+CODEX_HOME="$HOST_CODEX_HOME" codex login status 2>&1 | grep -F 'Logged in' >/dev/null
 export CODEX_HOME="$CANARY_CODEX_HOME"
 LOOP_RELEASE_COMMIT="$CANDIDATE" PYTHON="$PY" bash scripts/install.sh \
   >"$RELEASE_TMP/canary-install.log"
