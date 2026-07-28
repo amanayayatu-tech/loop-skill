@@ -43,7 +43,8 @@ def receipt_for(key: str, candidate: str) -> dict:
             "canary_output_sha256": digest,
             "confirmation_count": 1,
             "confirmation_digest_bound": True,
-            "config_bytes_changed": 0,
+            "allowed_host_managed_delta_count": 0,
+            "canary_workspace_identity_digest": digest,
             "entry": "loopskill4",
             "finalization": "ACKNOWLEDGED",
             "host_create_readback_count": 1,
@@ -51,7 +52,7 @@ def receipt_for(key: str, candidate: str) -> dict:
             "host_auth_before_digest": digest,
             "host_config_after_digest": digest,
             "host_config_before_digest": digest,
-            "host_integrity_changed_input_count": 0,
+            "host_config_delta_kind": "NONE",
             "host_lifecycle_readback_count": 1,
             "host_receipt_digest": digest,
             "host_receipt_issuer": "codex-exec-jsonl-v1",
@@ -66,9 +67,12 @@ def receipt_for(key: str, candidate: str) -> dict:
             "intake_heartbeat_count": 0,
             "intake_host_task_count": 0,
             "intake_loop_count": 0,
+            "integrity_measurement_digest": digest,
             "loopskill_mcp_registration_count": 0,
             "machine_owned_identity": True,
             "manual_control_identity_count": 0,
+            "observed_host_auth_changed_bytes": 0,
+            "observed_host_config_changed_bytes": 0,
             "prepare_delivery_count": 0,
             "prepare_heartbeat_count": 0,
             "prepare_host_effects": 0,
@@ -82,6 +86,7 @@ def receipt_for(key: str, candidate: str) -> dict:
             "status": "PASS",
             "thread_content_retained": False,
             "unknown_preserved": True,
+            "unexpected_changed_input_count": 0,
             "v3_bytes_changed": 0,
         }
     if key == "coverage":
@@ -387,6 +392,14 @@ class V4AuthorPacketTests(unittest.TestCase):
             ("exec_canary", "host_task_create_count", 2),
             ("exec_canary", "host_terminal_wait_readback_count", 0),
             ("exec_canary", "host_total_read_count", 5),
+            ("exec_canary", "observed_host_auth_changed_bytes", 1),
+            ("exec_canary", "unexpected_changed_input_count", 1),
+            ("exec_canary", "allowed_host_managed_delta_count", 1),
+            (
+                "exec_canary",
+                "host_config_delta_kind",
+                "CODEX_WORKSPACE_TRUST_APPEND_V1",
+            ),
             ("coverage", "line_and_branch_percent", 79.99),
             ("coverage", "covered_branches", 1401),
             ("distribution", "config_bytes_changed", 1),
@@ -423,6 +436,7 @@ class V4AuthorPacketTests(unittest.TestCase):
         fixture.evidence["distribution"].write_text(
             json.dumps(invalid_digest), encoding="utf-8"
         )
+
         with self.assertRaisesRegex(
             packet_builder.AuthorPacketError,
             "AUTHOR_PACKET_EVIDENCE_DIGEST_INVALID",
@@ -446,6 +460,18 @@ class V4AuthorPacketTests(unittest.TestCase):
             packet_builder.build_packet(
                 fixture.root, fixture.candidate, fixture.evidence
             )
+
+    def test_exact_host_owned_trust_delta_is_accepted_without_zeroing_bytes(self) -> None:
+        value = receipt_for("exec_canary", "a" * 40)
+        value.update(
+            {
+                "allowed_host_managed_delta_count": 1,
+                "host_config_after_digest": "e" * 64,
+                "host_config_delta_kind": "CODEX_WORKSPACE_TRUST_APPEND_V1",
+                "observed_host_config_changed_bytes": 109,
+            }
+        )
+        packet_builder._validate_exec_canary(value)
 
     def test_private_evidence_keys_paths_and_secrets_fail_closed(self) -> None:
         fixture = self.fixture()

@@ -304,11 +304,9 @@ def _validate_exec_canary(value: Mapping[str, Any]) -> None:
             "app_restart_count": 0,
             "confirmation_count": 1,
             "confirmation_digest_bound": True,
-            "config_bytes_changed": 0,
             "finalization": "ACKNOWLEDGED",
             "entry": "loopskill4",
             "host_lifecycle_readback_count": 1,
-            "host_integrity_changed_input_count": 0,
             "host_receipt_issuer": "codex-exec-jsonl-v1",
             "host_receipt_trust": "same-process-terminal-observed",
             "host_task_create_count": 1,
@@ -332,9 +330,24 @@ def _validate_exec_canary(value: Mapping[str, Any]) -> None:
             "status": "PASS",
             "thread_content_retained": False,
             "unknown_preserved": True,
+            "unexpected_changed_input_count": 0,
             "v3_bytes_changed": 0,
         },
     )
+    config_changed = value.get("observed_host_config_changed_bytes")
+    allowed_count = value.get("allowed_host_managed_delta_count")
+    delta_kind = value.get("host_config_delta_kind")
+    if (
+        value.get("observed_host_auth_changed_bytes") != 0
+        or not _is_int(config_changed, minimum=0)
+        or not _is_int(allowed_count, minimum=0)
+        or (delta_kind, allowed_count, config_changed == 0)
+        not in {
+            ("NONE", 0, True),
+            ("CODEX_WORKSPACE_TRUST_APPEND_V1", 1, False),
+        }
+    ):
+        raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
     create_readbacks = value.get("host_create_readback_count")
     if not _is_int(create_readbacks, minimum=1) or create_readbacks not in {1, 2, 3}:
         raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
@@ -353,12 +366,14 @@ def _validate_exec_canary(value: Mapping[str, Any]) -> None:
         raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
     for field in (
         "candidate_goal_digest",
+        "canary_workspace_identity_digest",
         "canary_output_sha256",
         "host_receipt_digest",
         "host_auth_after_digest",
         "host_auth_before_digest",
         "host_config_after_digest",
         "host_config_before_digest",
+        "integrity_measurement_digest",
         "host_result_digest",
         "host_task_identity_digest",
         "provenance_digest",

@@ -1045,7 +1045,8 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
   and thresholds frozen before observing v4 performance;
 - rc: full fault matrix, isolated install/rollback, exact-candidate foreground exec
   evidence from an already-authenticated official Host context with no copied
-  credentials and unchanged Host config/auth hashes, independent review,
+  credentials, unchanged Host auth, and either unchanged Host config or the
+  single bounded exact-workspace trust append, independent review,
   `UX-009`, `CAP-OPERABILITY`,
   `CAP-DISTRIBUTION`, `CAP-DOCS`, and `CAP-RELEASE`, real new-user usability
   canary, fixed candidate SHA, and preserved failures/UNKNOWN;
@@ -1124,6 +1125,17 @@ validated only against the signed observation interval
 clock at later independent review or publication is not a veto. No case may
 substitute a fresh post-process Host readback, automatic resume, or second
 spawn for lost foreground evidence.
+
+`CAP-RELEASE-CANARY` is parameterized without changing the frozen 349/74
+evidence profile. Its executed assertion matrix covers unchanged config/auth;
+the one exact canonical current-workspace EOF trust append; pre-existing key;
+wrong, parent, relative, symlink-alias, or model-provided path; wrong trust
+value; duplicate/second entry; prefix mutation; insertion/reorder/delete/
+truncation/non-EOF append; auth mutation; missing before evidence; candidate,
+workspace, measurement, and receipt digest mismatch; and public-evidence path/
+content leakage. Only unchanged config or the exact single Host-owned append
+may yield `unexpected_changed_input_count=0`; the observed changed-byte count
+is never normalized to zero.
 
 32 KiB Pack and at least 50% control-interaction reduction were candidate beta
 targets, not alpha correctness gates. The P7 pre-comparison freeze makes them

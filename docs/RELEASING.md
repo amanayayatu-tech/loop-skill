@@ -284,35 +284,59 @@ HOST_CONFIG_AFTER="$(snapshot_path "$HOST_CONFIG")"
 HOST_AUTH_AFTER="$(snapshot_path "$HOST_AUTH")"
 test "$CONFIG_BEFORE" = "$CONFIG_AFTER"
 test "$V3_BEFORE" = "$V3_AFTER"
-test "$HOST_CONFIG_BEFORE" = "$HOST_CONFIG_AFTER"
 test "$HOST_AUTH_BEFORE" = "$HOST_AUTH_AFTER"
 ! grep -Eq '^[[:space:]]*\[mcp_servers\.' "$CANARY_CODEX_HOME/config.toml"
 "$PY" - "$CANDIDATE" "$CONFIG_BEFORE" "$CONFIG_AFTER" \
   "$V3_BEFORE" "$V3_AFTER" "$HOST_CONFIG_BEFORE" "$HOST_CONFIG_AFTER" \
   "$HOST_AUTH_BEFORE" "$HOST_AUTH_AFTER" \
+  "$CANARY_ROOT/canary-receipt.json" \
   "$EVIDENCE/canary-environment-integrity.json" <<'PY'
 from pathlib import Path
 import hashlib
 import json
 import sys
 
-candidate, *values, output = sys.argv[1:]
+candidate = sys.argv[1]
+values = sys.argv[2:10]
+receipt_path = Path(sys.argv[10])
+output = sys.argv[11]
 labels = ("isolated_config", "v3_sentinel", "host_config", "host_auth")
 pairs = {
     label: {"before": values[index * 2], "after": values[index * 2 + 1]}
     for index, label in enumerate(labels)
 }
-changed_input_count = sum(
-    row["before"] != row["after"] for row in pairs.values()
+receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+host_config_changed = pairs["host_config"]["before"] != pairs["host_config"]["after"]
+unexpected_changed_input_count = sum(
+    pairs[label]["before"] != pairs[label]["after"]
+    for label in ("isolated_config", "v3_sentinel", "host_auth")
 )
-if changed_input_count:
+if receipt["host_config_delta_kind"] == "NONE":
+    host_delta_matches = (
+        not host_config_changed
+        and receipt["allowed_host_managed_delta_count"] == 0
+        and receipt["observed_host_config_changed_bytes"] == 0
+    )
+elif receipt["host_config_delta_kind"] == "CODEX_WORKSPACE_TRUST_APPEND_V1":
+    host_delta_matches = (
+        host_config_changed
+        and receipt["allowed_host_managed_delta_count"] == 1
+        and receipt["observed_host_config_changed_bytes"] > 0
+    )
+else:
+    host_delta_matches = False
+unexpected_changed_input_count += int(not host_delta_matches)
+if unexpected_changed_input_count or receipt["unexpected_changed_input_count"] != 0:
     raise SystemExit("canary environment integrity changed")
 body = {
     "artifact": "loopskill-v4-canary-environment-integrity-v1",
+    "allowed_host_managed_delta_count": receipt["allowed_host_managed_delta_count"],
     "candidate_sha": candidate,
-    "changed_input_count": changed_input_count,
+    "host_config_delta_kind": receipt["host_config_delta_kind"],
     "measurements": pairs,
+    "observed_host_config_changed_bytes": receipt["observed_host_config_changed_bytes"],
     "status": "PASS",
+    "unexpected_changed_input_count": unexpected_changed_input_count,
 }
 body["measurement_digest"] = hashlib.sha256(
     b"loopskill.v4.canary-environment-integrity.v1\0"
@@ -341,12 +365,17 @@ The install readback must be `READY`; the first uninstall must be `UNINSTALLED`
 and the identical public command must then return `ALREADY_UNINSTALLED`.
 The installed entry persists domain-separated before/after Host config/auth
 measurements inside the private canary evidence root and derives the minimized
-public changed-byte/count fields from them. The runbook separately persists the
-isolated `config.toml`, authenticated Host config/auth files, and synthetic
-independent-v3 sentinel tree measurements. Every scoped input must have
-identical before/after digests, and no LoopSkill MCP entry or process may be
-created. Authentication material is never copied into the isolated install
-home. The
+public changed-byte/count fields from them. Host auth, isolated `config.toml`,
+and the synthetic independent-v3 sentinel must remain byte-identical. Host
+config may either remain byte-identical or differ only by one EOF-appended,
+LF-terminated `[projects."<exact canonical disposable workspace>"]` stanza
+whose sole value is `trust_level = "trusted"`. The validator recomputes the
+workspace and stanza digests, prefix equality, exact length, and 0/1 key counts;
+all other config changes fail closed. The observed nonzero byte count remains
+in the receipt. This is an official Codex Host-owned trust-registry effect, not
+an installer write: the installer and uninstaller still never modify Codex
+config or register MCP. Authentication material is never copied into the
+isolated install home. The
 foreground Codex process group must be reaped on success, failure, timeout, or
 interruption. A canary or cleanup failure is a HOLD with preserved evidence,
 never permission to rerun the provider action. The exact canary process scope

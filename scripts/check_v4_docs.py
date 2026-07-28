@@ -234,6 +234,10 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         "349 semantic mappings to 74",
         "canary-environment-integrity.json",
         "Host config/auth",
+        "CODEX_WORKSPACE_TRUST_APPEND_V1",
+        "observed_host_config_changed_bytes",
+        "unexpected_changed_input_count",
+        'trust_level = "trusted"',
     ):
         if literal not in releasing:
             raise DocsError(f"DOC_RELEASE_RUNBOOK_INCOMPLETE:{literal}")
@@ -246,6 +250,17 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         raise DocsError("DOC_RESTART_CLAIM_DRIFT:zh")
     if "or require a Codex App restart" not in en:
         raise DocsError("DOC_RESTART_CLAIM_DRIFT:en")
+    if (
+        "Host 自身可能" not in zh
+        or "真实非零" not in zh
+        or "Host itself may" not in en
+        or "real nonzero" not in en
+        or "Host 自身可能" not in quickstart_zh
+        or "真实非零" not in quickstart_zh
+        or "the Host may append" not in quickstart_en
+        or "real nonzero" not in quickstart_en
+    ):
+        raise DocsError("DOC_HOST_TRUST_DELTA_CLAIM_DRIFT")
     for literal in STALE_CURRENT_PRODUCT:
         if literal in zh or literal in en or literal in quickstart_zh or literal in quickstart_en:
             raise DocsError(f"DOC_STALE_V3_CURRENT_PRODUCT:{literal}")

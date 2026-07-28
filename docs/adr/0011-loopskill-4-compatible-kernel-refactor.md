@@ -178,6 +178,32 @@ model turn or artifact, and preserved `ExternalEffectUnverifiable` without
 resend. They are not Kernel/Store or model-effect failures and are excluded
 from the new candidate's acceptance evidence.
 
+### Release-canary Host-owned trust delta
+
+**Accepted 2026-07-28.** The official Codex Host consistently appends one
+workspace trust stanza when first executing in a fresh canonical workspace.
+The release contract therefore requires no **unauthorized** Host config/auth
+change rather than byte-identical Host config. Auth remains byte-identical.
+Host config may remain unchanged or equal its exact before bytes followed by
+one LF-prefixed and LF-terminated
+`[projects."<exact canonical disposable workspace>"]` stanza whose only value
+is `trust_level = "trusted"`. The before config must not already contain that
+exact key. Any other path, parent, alias, value, duplicate, second entry,
+insertion, deletion, reorder, truncation, prefix rewrite, or auth change fails
+closed.
+
+The private write-once measurement records domain-separated before/after,
+prefix, delta, workspace-identity, and aggregate measurement digests plus the
+real changed-byte and key counts. The minimized receipt exposes only those
+digests, `observed_host_config_changed_bytes`,
+`allowed_host_managed_delta_count`, `unexpected_changed_input_count`, and the
+delta kind. The final validator derives the canonical workspace from the
+evidence root and recomputes the only allowed stanza; it never trusts a bare
+`allowed=true`. This remains the existing receipt taxonomy and validator
+authority. It adds no Store, writer, project provisioner, wrapper, or cleanup:
+LoopSkill never prewrites or removes Host trust records. Installer/uninstaller
+config immutability remains unchanged; this is a Host invocation effect.
+
 ## v3.3.8 product-capability preservation decision
 
 Route B is not permission to retain only the Kernel-shaped assets that are
@@ -1046,7 +1072,8 @@ private-data-free new-user usability canary from the isolated installation
 through starting a minimal disposable loop, with no manual transcription of
 control identity. Installation isolation does not imply an unauthenticated
 Host: the sole model turn uses an already-authenticated official Codex context,
-without copying credentials, and must preserve Host config/auth hashes. This
+without copying credentials, and must preserve Host auth while measuring and
+classifying any Host config delta under the bounded trust-append contract. This
 paragraph recorded the earlier RC-only authorization and
 is not the current release boundary. The hard-break addendum now authorizes
 push, PR, merge, annotated tag, and a public GitHub 4.0.0 Release only after the
@@ -1069,7 +1096,9 @@ only digests of the directly captured same-process terminal observation and
 scoped Host config/auth measurements, never raw thread identity, content,
 config, auth, or paths. The canary persists exact before and after measurement
 artifacts; minimized changed-byte/count fields are derived from their measured
-comparison and cannot be hard-coded. The JSON receipt alone is insufficient:
+comparison and cannot be hard-coded. Auth must be unchanged. Config may be
+unchanged or contain only the bounded Host-owned trust append defined above.
+The JSON receipt alone is insufficient:
 the final local validator opens the disposable canonical store and binds the
 persisted same-process transcript, candidate goal, hashed Host identity, result,
 snapshot, Review, Finalization, and config/auth measurement digests. It does

@@ -63,7 +63,8 @@ def canary(candidate: str) -> dict:
         "canary_output_sha256": live["canary_output_sha256"],
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
-        "config_bytes_changed": 0,
+        "allowed_host_managed_delta_count": 0,
+        "canary_workspace_identity_digest": "3" * 64,
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
         "fresh_until": fresh_text,
@@ -71,7 +72,7 @@ def canary(candidate: str) -> dict:
         "host_auth_before_digest": "1" * 64,
         "host_config_after_digest": "2" * 64,
         "host_config_before_digest": "2" * 64,
-        "host_integrity_changed_input_count": 0,
+        "host_config_delta_kind": validator.HOST_CONFIG_DELTA_NONE,
         "host_receipt_issuer": validator.CANARY_ISSUER,
         "host_receipt_trust": validator.CANARY_TRUST,
         "host_create_readback_count": 1,
@@ -87,10 +88,13 @@ def canary(candidate: str) -> dict:
         "intake_host_task_count": 0,
         "intake_loop_count": 0,
         "issued_at": issued_text,
+        "integrity_measurement_digest": "4" * 64,
         "loopskill_mcp_registration_count": 0,
         "machine_owned_identity": True,
         "manual_control_identity_count": 0,
         "observed_at": issued_text,
+        "observed_host_auth_changed_bytes": 0,
+        "observed_host_config_changed_bytes": 0,
         "app_restart_count": 0,
         "prepare_delivery_count": 0,
         "prepare_heartbeat_count": 0,
@@ -104,6 +108,7 @@ def canary(candidate: str) -> dict:
         "status": "PASS",
         "thread_content_retained": False,
         "unknown_preserved": True,
+        "unexpected_changed_input_count": 0,
         "v3_bytes_changed": 0,
     }
     value["provenance_digest"] = validator._domain_digest(
@@ -113,6 +118,106 @@ def canary(candidate: str) -> dict:
         validator.CANARY_LIVE_DOMAIN, live
     )
     return value
+
+
+def write_integrity_evidence(
+    root: Path,
+    value: dict,
+    candidate: str,
+    *,
+    trust_append: bool = False,
+) -> tuple[dict, dict]:
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    identity, stanza = validator._canary_workspace_contract(root.resolve())
+    config = b'model = "synthetic"\n'
+    prefix_digest = hashlib.sha256(
+        validator.CANARY_CONFIG_PREFIX_DOMAIN + config
+    ).hexdigest()
+    delta = stanza if trust_append else b""
+    before_inputs = {
+        "host_auth": {"digest": "1" * 64, "presence": "FILE", "size": 10},
+        "host_config": {
+            "digest": "2" * 64,
+            "presence": "FILE",
+            "size": len(config),
+        },
+    }
+    after_inputs = {
+        "host_auth": dict(before_inputs["host_auth"]),
+        "host_config": {
+            "digest": "5" * 64 if trust_append else "2" * 64,
+            "presence": "FILE",
+            "size": len(config) + len(delta),
+        },
+    }
+    classification = {
+        "after_prefix_digest": prefix_digest,
+        "after_workspace_key_count": int(trust_append),
+        "allowed_host_managed_delta_count": int(trust_append),
+        "before_prefix_digest": prefix_digest,
+        "before_workspace_key_count": 0,
+        "delta_kind": (
+            validator.HOST_CONFIG_DELTA_TRUST_APPEND
+            if trust_append
+            else validator.HOST_CONFIG_DELTA_NONE
+        ),
+        "observed_delta_bytes": len(delta),
+        "observed_delta_digest": hashlib.sha256(
+            validator.CANARY_CONFIG_DELTA_DOMAIN + delta
+        ).hexdigest(),
+        "unexpected_changed_input_count": 0,
+        "workspace_identity_digest": identity,
+    }
+    before = {
+        "artifact": "loopskill-v4-canary-integrity-before-v1",
+        "candidate_sha": candidate,
+        "inputs": before_inputs,
+        "issued_at": value["issued_at"],
+        "workspace_identity_digest": identity,
+    }
+    final = {
+        "after": after_inputs,
+        "artifact": "loopskill-v4-canary-integrity-measurement-v1",
+        "before": before_inputs,
+        "candidate_sha": candidate,
+        "changed_bytes": {"host_auth": 0, "host_config": len(delta)},
+        "changed_input_count": int(trust_append),
+        "host_config_delta": classification,
+        "observed_at": value["observed_at"],
+        "total_changed_bytes": len(delta),
+    }
+    final["measurement_digest"] = validator._domain_digest(
+        validator.CANARY_INTEGRITY_MEASUREMENT_DOMAIN, final
+    )
+    value.update(
+        {
+            "allowed_host_managed_delta_count": int(trust_append),
+            "canary_workspace_identity_digest": identity,
+            "host_auth_after_digest": after_inputs["host_auth"]["digest"],
+            "host_auth_before_digest": before_inputs["host_auth"]["digest"],
+            "host_config_after_digest": after_inputs["host_config"]["digest"],
+            "host_config_before_digest": before_inputs["host_config"]["digest"],
+            "host_config_delta_kind": classification["delta_kind"],
+            "integrity_measurement_digest": final["measurement_digest"],
+            "observed_host_auth_changed_bytes": 0,
+            "observed_host_config_changed_bytes": len(delta),
+            "unexpected_changed_input_count": 0,
+        }
+    )
+    provenance = dict(value)
+    provenance.pop("provenance_digest")
+    provenance.pop("host_receipt_digest")
+    value["provenance_digest"] = validator._domain_digest(
+        validator.CANARY_PROVENANCE_DOMAIN, provenance
+    )
+    (root / validator.CANARY_INTEGRITY_BEFORE_FILENAME).write_bytes(
+        validator._canonical(before)
+    )
+    (root / validator.CANARY_INTEGRITY_FILENAME).write_bytes(
+        validator._canonical(final)
+    )
+    return before, final
 
 
 class V4RcAcceptanceTests(unittest.TestCase):
@@ -189,7 +294,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
         for field, invalid in (
             ("confirmation_count", 0),
             ("confirmation_digest_bound", False),
-            ("config_bytes_changed", 1),
+            ("observed_host_auth_changed_bytes", 1),
             ("host_task_create_count", 2),
             ("host_create_readback_count", 4),
             ("host_lifecycle_readback_count", 2),
@@ -202,6 +307,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
             ("prepare_delivery_count", 1),
             ("private_data_used", True),
             ("provider_resend_count", 1),
+            ("unexpected_changed_input_count", 1),
             ("v3_bytes_changed", 1),
             ("finalization", "UNKNOWN"),
             ("host_receipt_issuer", "self-asserted"),
@@ -275,40 +381,19 @@ class V4RcAcceptanceTests(unittest.TestCase):
         candidate = "a" * 40
         value = canary(candidate)
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
+            (root / "workspace").mkdir()
             with self.assertRaisesRegex(
                 validator.RcValidationError, "RC_CANARY_INTEGRITY_BEFORE_INVALID"
             ):
                 validator._validate_canary_integrity_evidence(value, candidate, root)
-            before = {
-                "artifact": "loopskill-v4-canary-integrity-before-v1",
-                "candidate_sha": candidate,
-                "inputs": {
-                    "host_auth": {"digest": "1" * 64, "presence": "FILE", "size": 10},
-                    "host_config": {"digest": "2" * 64, "presence": "FILE", "size": 20},
-                },
-                "issued_at": value["issued_at"],
-            }
-            final = {
-                "after": before["inputs"],
-                "artifact": "loopskill-v4-canary-integrity-measurement-v1",
-                "before": before["inputs"],
-                "candidate_sha": candidate,
-                "changed_bytes": {"host_auth": 0, "host_config": 0},
-                "changed_input_count": 0,
-                "observed_at": value["observed_at"],
-                "total_changed_bytes": 0,
-            }
-            (root / validator.CANARY_INTEGRITY_BEFORE_FILENAME).write_bytes(
-                validator._canonical(before)
-            )
-            (root / validator.CANARY_INTEGRITY_FILENAME).write_bytes(
-                validator._canonical(final)
-            )
+            before, final = write_integrity_evidence(root, value, candidate)
             validator._validate_canary_integrity_evidence(value, candidate, root)
-            final["changed_bytes"]["host_config"] = 1
-            final["changed_input_count"] = 1
-            final["total_changed_bytes"] = 1
+            final["host_config_delta"]["unexpected_changed_input_count"] = 1
+            final["measurement_digest"] = validator._domain_digest(
+                validator.CANARY_INTEGRITY_MEASUREMENT_DOMAIN,
+                {key: item for key, item in final.items() if key != "measurement_digest"},
+            )
             (root / validator.CANARY_INTEGRITY_FILENAME).write_bytes(
                 validator._canonical(final)
             )
@@ -316,18 +401,80 @@ class V4RcAcceptanceTests(unittest.TestCase):
                 validator.RcValidationError, "RC_CANARY_INTEGRITY_CHANGED"
             ):
                 validator._validate_canary_integrity_evidence(value, candidate, root)
-            final["changed_bytes"]["host_config"] = 0
-            final["changed_input_count"] = 0
-            final["total_changed_bytes"] = 0
-            final["after"] = {
-                **before["inputs"],
-                "host_config": {**before["inputs"]["host_config"], "digest": "3" * 64},
-            }
+            before, final = write_integrity_evidence(root, value, candidate)
+            final["after"]["host_config"]["digest"] = "3" * 64
+            final["measurement_digest"] = validator._domain_digest(
+                validator.CANARY_INTEGRITY_MEASUREMENT_DOMAIN,
+                {key: item for key, item in final.items() if key != "measurement_digest"},
+            )
             (root / validator.CANARY_INTEGRITY_FILENAME).write_bytes(
                 validator._canonical(final)
             )
             with self.assertRaisesRegex(
-                validator.RcValidationError, "RC_CANARY_INTEGRITY_DIGEST_MISMATCH"
+                validator.RcValidationError, "RC_CANARY_INTEGRITY_CHANGED"
+            ):
+                validator._validate_canary_integrity_evidence(value, candidate, root)
+
+    def test_exact_trust_append_and_binding_mutations_are_recomputed(self) -> None:
+        candidate = "a" * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            value = canary(candidate)
+            _, final = write_integrity_evidence(
+                root, value, candidate, trust_append=True
+            )
+            validator.validate_canary_receipt(value, candidate)
+            validator._validate_canary_integrity_evidence(value, candidate, root)
+            self.assertGreater(value["observed_host_config_changed_bytes"], 0)
+            self.assertEqual(value["allowed_host_managed_delta_count"], 1)
+            self.assertEqual(value["unexpected_changed_input_count"], 0)
+            for field, replacement in (
+                ("candidate_sha", "b" * 40),
+                ("measurement_digest", "f" * 64),
+            ):
+                with self.subTest(field=field):
+                    mutated = dict(final)
+                    mutated[field] = replacement
+                    (root / validator.CANARY_INTEGRITY_FILENAME).write_bytes(
+                        validator._canonical(mutated)
+                    )
+                    with self.assertRaises(validator.RcValidationError):
+                        validator._validate_canary_integrity_evidence(
+                            value, candidate, root
+                        )
+            for field, replacement in (
+                ("after_workspace_key_count", 2),
+                ("allowed_host_managed_delta_count", 0),
+                ("before_prefix_digest", "f" * 64),
+                ("observed_delta_bytes", 0),
+                ("observed_delta_digest", "f" * 64),
+                ("unexpected_changed_input_count", 1),
+            ):
+                with self.subTest(classification_field=field):
+                    _, mutated = write_integrity_evidence(
+                        root, value, candidate, trust_append=True
+                    )
+                    mutated["host_config_delta"][field] = replacement
+                    mutated["measurement_digest"] = validator._domain_digest(
+                        validator.CANARY_INTEGRITY_MEASUREMENT_DOMAIN,
+                        {
+                            key: item
+                            for key, item in mutated.items()
+                            if key != "measurement_digest"
+                        },
+                    )
+                    (root / validator.CANARY_INTEGRITY_FILENAME).write_bytes(
+                        validator._canonical(mutated)
+                    )
+                    with self.assertRaises(validator.RcValidationError):
+                        validator._validate_canary_integrity_evidence(
+                            value, candidate, root
+                        )
+            write_integrity_evidence(root, value, candidate, trust_append=True)
+            value["canary_workspace_identity_digest"] = "f" * 64
+            with self.assertRaisesRegex(
+                validator.RcValidationError,
+                "RC_CANARY_INTEGRITY_RECEIPT_MISMATCH",
             ):
                 validator._validate_canary_integrity_evidence(value, candidate, root)
 

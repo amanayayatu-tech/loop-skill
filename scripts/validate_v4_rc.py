@@ -55,6 +55,14 @@ CANARY_TRUST = "same-process-terminal-observed"
 CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.exec-canary.provenance.v1\0"
 CANARY_LIVE_DOMAIN = b"loopskill.v4.exec-canary.live-observation.v1\0"
 CANARY_HOST_ID_DOMAIN = b"loopskill.v4.exec-canary.host-identity.v1\0"
+CANARY_INTEGRITY_MEASUREMENT_DOMAIN = (
+    b"loopskill.v4.exec-canary.integrity-measurement.v1\0"
+)
+CANARY_CONFIG_PREFIX_DOMAIN = b"loopskill.v4.exec-canary.config-prefix.v1\0"
+CANARY_CONFIG_DELTA_DOMAIN = b"loopskill.v4.exec-canary.config-delta.v1\0"
+CANARY_WORKSPACE_DOMAIN = b"loopskill.v4.exec-canary.workspace.v1\0"
+HOST_CONFIG_DELTA_NONE = "NONE"
+HOST_CONFIG_DELTA_TRUST_APPEND = "CODEX_WORKSPACE_TRUST_APPEND_V1"
 CANARY_INTEGRITY_BEFORE_FILENAME = "canary-integrity-before.json"
 CANARY_INTEGRITY_FILENAME = "canary-integrity.json"
 CANARY_OUTPUT_FILENAME = "canary-output.txt"
@@ -633,7 +641,8 @@ def validate_canary_receipt(
         "candidate_goal_digest",
         "confirmation_count",
         "confirmation_digest_bound",
-        "config_bytes_changed",
+        "allowed_host_managed_delta_count",
+        "canary_workspace_identity_digest",
         "entry",
         "finalization",
         "host_receipt_digest",
@@ -674,9 +683,13 @@ def validate_canary_receipt(
         "host_auth_before_digest",
         "host_config_after_digest",
         "host_config_before_digest",
-        "host_integrity_changed_input_count",
+        "host_config_delta_kind",
+        "integrity_measurement_digest",
+        "observed_host_auth_changed_bytes",
+        "observed_host_config_changed_bytes",
         "thread_content_retained",
         "unknown_preserved",
+        "unexpected_changed_input_count",
         "v3_bytes_changed",
     }
     if set(value) != expected_keys:
@@ -686,14 +699,12 @@ def validate_canary_receipt(
         "candidate_sha": candidate,
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
-        "config_bytes_changed": 0,
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
         "host_task_create_count": 1,
         "host_task_readback_count": 1,
         "host_receipt_issuer": CANARY_ISSUER,
         "host_receipt_trust": CANARY_TRUST,
-        "host_integrity_changed_input_count": 0,
         "host_lifecycle_readback_count": 1,
         "intake_external_effects": 0,
         "intake_heartbeat_count": 0,
@@ -715,11 +726,33 @@ def validate_canary_receipt(
         "status": "PASS",
         "thread_content_retained": False,
         "unknown_preserved": True,
+        "unexpected_changed_input_count": 0,
         "v3_bytes_changed": 0,
     }
     for key, expected in required.items():
         if value.get(key) != expected:
             raise RcValidationError(f"RC_CANARY_RECEIPT_INVALID: {key}")
+    if value.get("observed_host_auth_changed_bytes") != 0:
+        raise RcValidationError(
+            "RC_CANARY_RECEIPT_INVALID: observed_host_auth_changed_bytes"
+        )
+    config_changed = value.get("observed_host_config_changed_bytes")
+    allowed_count = value.get("allowed_host_managed_delta_count")
+    delta_kind = value.get("host_config_delta_kind")
+    if (
+        isinstance(config_changed, bool)
+        or not isinstance(config_changed, int)
+        or config_changed < 0
+        or isinstance(allowed_count, bool)
+        or not isinstance(allowed_count, int)
+        or allowed_count not in {0, 1}
+        or (delta_kind, allowed_count, config_changed == 0)
+        not in {
+            (HOST_CONFIG_DELTA_NONE, 0, True),
+            (HOST_CONFIG_DELTA_TRUST_APPEND, 1, False),
+        }
+    ):
+        raise RcValidationError("RC_CANARY_RECEIPT_INVALID: host config delta")
     create_readbacks = value.get("host_create_readback_count")
     if (
         isinstance(create_readbacks, bool)
@@ -751,10 +784,12 @@ def validate_canary_receipt(
         if not isinstance(value.get(field), str) or not re.fullmatch(r"[0-9a-f]{64}", value[field]):
             raise RcValidationError(f"RC_CANARY_RECEIPT_INVALID: {field}")
     for field in (
+        "canary_workspace_identity_digest",
         "host_auth_after_digest",
         "host_auth_before_digest",
         "host_config_after_digest",
         "host_config_before_digest",
+        "integrity_measurement_digest",
     ):
         if not isinstance(value.get(field), str) or not re.fullmatch(
             r"[0-9a-f]{64}", value[field]
@@ -801,6 +836,29 @@ def _read_canonical_object(path: Path, code: str) -> dict[str, Any]:
     return value
 
 
+def _canary_workspace_contract(evidence_root: Path) -> tuple[str, bytes]:
+    workspace = evidence_root / "workspace"
+    try:
+        canonical = workspace.resolve(strict=True)
+        metadata = canonical.stat()
+    except OSError as exc:
+        raise RcValidationError("RC_CANARY_WORKSPACE_IDENTITY_INVALID") from exc
+    text = str(canonical)
+    if (
+        not workspace.is_absolute()
+        or workspace != canonical
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or '"' in text
+        or "\\" in text
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in text)
+    ):
+        raise RcValidationError("RC_CANARY_WORKSPACE_IDENTITY_INVALID")
+    identity = _domain_digest(CANARY_WORKSPACE_DOMAIN, text)
+    stanza = f'\n[projects."{text}"]\ntrust_level = "trusted"\n'.encode("utf-8")
+    return identity, stanza
+
+
 def _validate_canary_integrity_evidence(
     receipt: Mapping[str, Any], candidate: str, evidence_root: Path
 ) -> None:
@@ -812,10 +870,18 @@ def _validate_canary_integrity_evidence(
         evidence_root / CANARY_INTEGRITY_FILENAME,
         "RC_CANARY_INTEGRITY_INVALID",
     )
-    if set(before) != {"artifact", "candidate_sha", "inputs", "issued_at"} or (
+    workspace_identity, expected_stanza = _canary_workspace_contract(evidence_root)
+    if set(before) != {
+        "artifact",
+        "candidate_sha",
+        "inputs",
+        "issued_at",
+        "workspace_identity_digest",
+    } or (
         before["artifact"] != "loopskill-v4-canary-integrity-before-v1"
         or before["candidate_sha"] != candidate
         or before["issued_at"] != receipt["issued_at"]
+        or before["workspace_identity_digest"] != workspace_identity
     ):
         raise RcValidationError("RC_CANARY_INTEGRITY_BEFORE_INVALID")
     if set(final) != {
@@ -825,6 +891,8 @@ def _validate_canary_integrity_evidence(
         "candidate_sha",
         "changed_bytes",
         "changed_input_count",
+        "host_config_delta",
+        "measurement_digest",
         "observed_at",
         "total_changed_bytes",
     } or (
@@ -834,6 +902,13 @@ def _validate_canary_integrity_evidence(
         or final["before"] != before["inputs"]
     ):
         raise RcValidationError("RC_CANARY_INTEGRITY_INVALID")
+    measurement_body = dict(final)
+    claimed_measurement_digest = measurement_body.pop("measurement_digest")
+    expected_measurement_digest = _domain_digest(
+        CANARY_INTEGRITY_MEASUREMENT_DOMAIN, measurement_body
+    )
+    if claimed_measurement_digest != expected_measurement_digest:
+        raise RcValidationError("RC_CANARY_INTEGRITY_MEASUREMENT_DIGEST_INVALID")
     labels = {"host_auth", "host_config"}
     for phase in ("before", "after"):
         rows = final.get(phase)
@@ -862,17 +937,104 @@ def _validate_canary_integrity_evidence(
         or final.get("changed_input_count")
         != sum(value > 0 for value in changed.values())
         or final.get("total_changed_bytes") != sum(changed.values())
-        or final["changed_input_count"] != 0
-        or final["total_changed_bytes"] != 0
+    ):
+        raise RcValidationError("RC_CANARY_INTEGRITY_INVALID")
+    classification = final.get("host_config_delta")
+    expected_classification_keys = {
+        "after_prefix_digest",
+        "after_workspace_key_count",
+        "allowed_host_managed_delta_count",
+        "before_prefix_digest",
+        "before_workspace_key_count",
+        "delta_kind",
+        "observed_delta_bytes",
+        "observed_delta_digest",
+        "unexpected_changed_input_count",
+        "workspace_identity_digest",
+    }
+    if (
+        not isinstance(classification, dict)
+        or set(classification) != expected_classification_keys
+        or any(
+            not isinstance(classification[field], str)
+            or re.fullmatch(r"[0-9a-f]{64}", classification[field]) is None
+            for field in (
+                "after_prefix_digest",
+                "before_prefix_digest",
+                "observed_delta_digest",
+                "workspace_identity_digest",
+            )
+        )
+        or any(
+            isinstance(classification[field], bool)
+            or not isinstance(classification[field], int)
+            or classification[field] < 0
+            for field in (
+                "after_workspace_key_count",
+                "allowed_host_managed_delta_count",
+                "before_workspace_key_count",
+                "observed_delta_bytes",
+                "unexpected_changed_input_count",
+            )
+        )
+        or not isinstance(classification["delta_kind"], str)
+        or classification["workspace_identity_digest"] != workspace_identity
+        or classification["before_workspace_key_count"] != 0
+        or classification["unexpected_changed_input_count"] != 0
+        or changed["host_auth"] != 0
+        or final["before"]["host_auth"] != final["after"]["host_auth"]
     ):
         raise RcValidationError("RC_CANARY_INTEGRITY_CHANGED")
-    for label in labels:
-        if final["before"][label] != final["after"][label]:
-            raise RcValidationError("RC_CANARY_INTEGRITY_DIGEST_MISMATCH")
+    empty_delta_digest = hashlib.sha256(CANARY_CONFIG_DELTA_DOMAIN).hexdigest()
+    kind = classification["delta_kind"]
+    if kind == HOST_CONFIG_DELTA_NONE:
+        valid_delta = (
+            changed["host_config"] == 0
+            and final["changed_input_count"] == 0
+            and final["total_changed_bytes"] == 0
+            and final["before"]["host_config"] == final["after"]["host_config"]
+            and classification["after_workspace_key_count"] == 0
+            and classification["allowed_host_managed_delta_count"] == 0
+            and classification["observed_delta_bytes"] == 0
+            and classification["observed_delta_digest"] == empty_delta_digest
+            and classification["before_prefix_digest"]
+            == classification["after_prefix_digest"]
+        )
+    elif kind == HOST_CONFIG_DELTA_TRUST_APPEND:
+        expected_delta_digest = hashlib.sha256(
+            CANARY_CONFIG_DELTA_DOMAIN + expected_stanza
+        ).hexdigest()
+        valid_delta = (
+            final["before"]["host_config"]["presence"] == "FILE"
+            and final["after"]["host_config"]["presence"] == "FILE"
+            and final["after"]["host_config"]["size"]
+            == final["before"]["host_config"]["size"] + len(expected_stanza)
+            and changed["host_config"] == len(expected_stanza)
+            and final["changed_input_count"] == 1
+            and final["total_changed_bytes"] == len(expected_stanza)
+            and classification["after_workspace_key_count"] == 1
+            and classification["allowed_host_managed_delta_count"] == 1
+            and classification["observed_delta_bytes"] == len(expected_stanza)
+            and classification["observed_delta_digest"] == expected_delta_digest
+            and classification["before_prefix_digest"]
+            == classification["after_prefix_digest"]
+        )
+    else:
+        valid_delta = False
+    if not valid_delta:
+        raise RcValidationError("RC_CANARY_INTEGRITY_CHANGED")
     if (
-        receipt["config_bytes_changed"] != final["changed_bytes"]["host_config"]
-        or receipt["host_integrity_changed_input_count"]
-        != final["changed_input_count"]
+        receipt["observed_host_config_changed_bytes"]
+        != final["changed_bytes"]["host_config"]
+        or receipt["observed_host_auth_changed_bytes"]
+        != final["changed_bytes"]["host_auth"]
+        or receipt["allowed_host_managed_delta_count"]
+        != classification["allowed_host_managed_delta_count"]
+        or receipt["unexpected_changed_input_count"]
+        != classification["unexpected_changed_input_count"]
+        or receipt["host_config_delta_kind"] != classification["delta_kind"]
+        or receipt["canary_workspace_identity_digest"] != workspace_identity
+        or receipt["integrity_measurement_digest"] != claimed_measurement_digest
         or receipt["host_auth_before_digest"]
         != final["before"]["host_auth"]["digest"]
         or receipt["host_auth_after_digest"]

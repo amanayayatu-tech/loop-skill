@@ -25,7 +25,10 @@ alone is not a release.
   MCP, no restart, no provider resend, and no real v3/user/private data. The
   entry is installed and uninstalled in an isolated home, while the sole model
   turn uses an already-authenticated official Host context without copying
-  credentials; Host config/auth hashes must remain unchanged;
+  credentials; Host auth must remain unchanged, while Host config may either
+  remain unchanged or gain exactly one EOF-appended trusted-project stanza for
+  the exact canonical disposable workspace, with the real nonzero delta bound
+  into private measurement and the minimized receipt;
 - independent read-only architecture, UX, installer, CI, privacy, artifact,
   preservation, and documentation review bound to the same SHA.
 

@@ -41,6 +41,16 @@ CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.exec-canary.provenance.v1\0"
 CANARY_LIVE_DOMAIN = b"loopskill.v4.exec-canary.live-observation.v1\0"
 CANARY_HOST_ID_DOMAIN = b"loopskill.v4.exec-canary.host-identity.v1\0"
 CANARY_INTEGRITY_DOMAIN = b"loopskill.v4.exec-canary.integrity.v1\0"
+CANARY_INTEGRITY_MEASUREMENT_DOMAIN = (
+    b"loopskill.v4.exec-canary.integrity-measurement.v1\0"
+)
+CANARY_CONFIG_PREFIX_DOMAIN = b"loopskill.v4.exec-canary.config-prefix.v1\0"
+CANARY_CONFIG_DELTA_DOMAIN = b"loopskill.v4.exec-canary.config-delta.v1\0"
+CANARY_WORKSPACE_DOMAIN = b"loopskill.v4.exec-canary.workspace.v1\0"
+
+HOST_CONFIG_DELTA_NONE = "NONE"
+HOST_CONFIG_DELTA_TRUST_APPEND = "CODEX_WORKSPACE_TRUST_APPEND_V1"
+HOST_CONFIG_DELTA_UNEXPECTED = "UNEXPECTED"
 
 CANARY_RECEIPT_FILENAME = "canary-receipt.json"
 CANARY_INTEGRITY_BEFORE_FILENAME = "canary-integrity-before.json"
@@ -87,6 +97,42 @@ def _iso(value: datetime) -> str:
 
 def _domain_digest(domain: bytes, value: Any) -> str:
     return hashlib.sha256(domain + canonical_bytes(value)).hexdigest()
+
+
+def _bytes_digest(domain: bytes, value: bytes) -> str:
+    return hashlib.sha256(domain + value).hexdigest()
+
+
+def _canonical_workspace(workspace: Path | str) -> Path:
+    path = Path(workspace)
+    try:
+        canonical = path.resolve(strict=True)
+        metadata = canonical.stat()
+    except OSError as exc:
+        raise CanaryError("CANARY_WORKSPACE_IDENTITY_INVALID") from exc
+    text = str(canonical)
+    if (
+        not path.is_absolute()
+        or path != canonical
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or '"' in text
+        or "\\" in text
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in text)
+    ):
+        raise CanaryError("CANARY_WORKSPACE_IDENTITY_INVALID")
+    return canonical
+
+
+def _workspace_identity_digest(workspace: Path | str) -> str:
+    return _domain_digest(CANARY_WORKSPACE_DOMAIN, str(_canonical_workspace(workspace)))
+
+
+def _canonical_workspace_trust_stanza(workspace: Path | str) -> bytes:
+    canonical = _canonical_workspace(workspace)
+    return (
+        f'\n[projects."{canonical}"]\ntrust_level = "trusted"\n'.encode("utf-8")
+    )
 
 
 def _integrity_snapshot(inputs: Mapping[str, Path | str]) -> dict[str, Any]:
@@ -178,21 +224,83 @@ def _integrity_comparison(
     before: Mapping[str, Any],
     after: Mapping[str, Any],
     observed_at: datetime,
+    workspace: Path | str,
 ) -> dict[str, Any]:
     changed = {
         label: _changed_bytes(before[label]["raw"], after[label]["raw"])
         for label in sorted(_INTEGRITY_LABELS)
     }
-    return {
+    before_auth = before["host_auth"]["raw"]
+    after_auth = after["host_auth"]["raw"]
+    before_config = before["host_config"]["raw"]
+    after_config = after["host_config"]["raw"]
+    stanza = _canonical_workspace_trust_stanza(workspace)
+    header = stanza.split(b"\n", 2)[1] + b"\n"
+    workspace_digest = _workspace_identity_digest(workspace)
+    before_key_count = 0 if before_config is None else before_config.count(header)
+    after_key_count = 0 if after_config is None else after_config.count(header)
+    config_unchanged = before_config == after_config
+    exact_trust_append = (
+        before_config is not None
+        and after_config is not None
+        and before_key_count == 0
+        and after_key_count == 1
+        and after_config == before_config + stanza
+    )
+    if config_unchanged and before_key_count == 0:
+        kind = HOST_CONFIG_DELTA_NONE
+        allowed_delta_count = 0
+        config_unexpected = 0
+        after_prefix = after_config or b""
+        observed_delta = b""
+    elif exact_trust_append:
+        kind = HOST_CONFIG_DELTA_TRUST_APPEND
+        allowed_delta_count = 1
+        config_unexpected = 0
+        after_prefix = after_config[: len(before_config)]
+        observed_delta = after_config[len(before_config) :]
+    else:
+        kind = HOST_CONFIG_DELTA_UNEXPECTED
+        allowed_delta_count = 0
+        config_unexpected = 1
+        before_length = 0 if before_config is None else len(before_config)
+        after_bytes = b"" if after_config is None else after_config
+        after_prefix = after_bytes[:before_length]
+        observed_delta = after_bytes[before_length:]
+    auth_unexpected = int(before_auth != after_auth)
+    classification = {
+        "after_prefix_digest": _bytes_digest(
+            CANARY_CONFIG_PREFIX_DOMAIN, after_prefix
+        ),
+        "after_workspace_key_count": after_key_count,
+        "allowed_host_managed_delta_count": allowed_delta_count,
+        "before_prefix_digest": _bytes_digest(
+            CANARY_CONFIG_PREFIX_DOMAIN, before_config or b""
+        ),
+        "before_workspace_key_count": before_key_count,
+        "delta_kind": kind,
+        "observed_delta_bytes": len(observed_delta),
+        "observed_delta_digest": _bytes_digest(
+            CANARY_CONFIG_DELTA_DOMAIN, observed_delta
+        ),
+        "unexpected_changed_input_count": config_unexpected + auth_unexpected,
+        "workspace_identity_digest": workspace_digest,
+    }
+    body = {
         "after": _integrity_public(after),
         "artifact": "loopskill-v4-canary-integrity-measurement-v1",
         "before": _integrity_public(before),
         "candidate_sha": candidate_sha,
         "changed_bytes": changed,
         "changed_input_count": sum(value > 0 for value in changed.values()),
+        "host_config_delta": classification,
         "observed_at": _iso(observed_at),
         "total_changed_bytes": sum(changed.values()),
     }
+    body["measurement_digest"] = _domain_digest(
+        CANARY_INTEGRITY_MEASUREMENT_DOMAIN, body
+    )
+    return body
 
 
 def _validate_candidate(candidate_sha: str) -> str:
@@ -419,7 +527,12 @@ def _receipt(
         "canary_output_sha256": live["canary_output_sha256"],
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
-        "config_bytes_changed": integrity["changed_bytes"]["host_config"],
+        "allowed_host_managed_delta_count": integrity["host_config_delta"][
+            "allowed_host_managed_delta_count"
+        ],
+        "canary_workspace_identity_digest": integrity["host_config_delta"][
+            "workspace_identity_digest"
+        ],
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
         "fresh_until": _iso(issued_at + timedelta(minutes=10)),
@@ -427,7 +540,7 @@ def _receipt(
         "host_auth_before_digest": integrity["before"]["host_auth"]["digest"],
         "host_config_after_digest": integrity["after"]["host_config"]["digest"],
         "host_config_before_digest": integrity["before"]["host_config"]["digest"],
-        "host_integrity_changed_input_count": integrity["changed_input_count"],
+        "host_config_delta_kind": integrity["host_config_delta"]["delta_kind"],
         "host_receipt_issuer": CANARY_ISSUER,
         "host_receipt_trust": CANARY_TRUST,
         "host_create_readback_count": metrics["delivery_readback_count"],
@@ -452,6 +565,10 @@ def _receipt(
         "machine_owned_identity": True,
         "manual_control_identity_count": 0,
         "observed_at": _iso(observed_at),
+        "observed_host_auth_changed_bytes": integrity["changed_bytes"]["host_auth"],
+        "observed_host_config_changed_bytes": integrity["changed_bytes"][
+            "host_config"
+        ],
         "app_restart_count": 0,
         "prepare_delivery_count": 0,
         "prepare_heartbeat_count": 0,
@@ -464,7 +581,11 @@ def _receipt(
         "review": "PASS",
         "status": "PASS",
         "thread_content_retained": False,
+        "integrity_measurement_digest": integrity["measurement_digest"],
         "unknown_preserved": True,
+        "unexpected_changed_input_count": integrity["host_config_delta"][
+            "unexpected_changed_input_count"
+        ],
         "v3_bytes_changed": 0,
     }
     body["provenance_digest"] = _domain_digest(CANARY_PROVENANCE_DOMAIN, body)
@@ -525,9 +646,10 @@ def run_canary(
     producing ``canary-receipt.json``.
     """
     candidate = _validate_candidate(candidate_sha)
-    root = _ensure_empty_private_root(evidence_root)
+    root = _ensure_empty_private_root(evidence_root).resolve(strict=True)
     workspace = root / "workspace"
     workspace.mkdir(mode=0o700)
+    workspace = _canonical_workspace(workspace)
     prepared_root = root / "prepared"
     store_root = root / "store"
 
@@ -558,6 +680,7 @@ def run_canary(
             "candidate_sha": candidate,
             "inputs": _integrity_public(before_integrity),
             "issued_at": _iso(issued_at),
+            "workspace_identity_digest": _workspace_identity_digest(workspace),
         },
     )
 
@@ -610,10 +733,14 @@ def run_canary(
         after_integrity = _integrity_snapshot(integrity_inputs)
         integrity_observed_at = clock()
         comparison = _integrity_comparison(
-            candidate, before_integrity, after_integrity, integrity_observed_at
+            candidate,
+            before_integrity,
+            after_integrity,
+            integrity_observed_at,
+            workspace,
         )
         _write_canonical_once(root, CANARY_INTEGRITY_FILENAME, comparison)
-    if comparison["changed_input_count"] != 0:
+    if comparison["host_config_delta"]["unexpected_changed_input_count"] != 0:
         raise CanaryError("CANARY_HOST_INTEGRITY_CHANGED")
     if final_view.progress != "Finished" or final_view.result != "SUCCEEDED":
         raise CanaryError("CANARY_OUTCOME_NOT_PASS")

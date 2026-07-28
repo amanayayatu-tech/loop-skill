@@ -253,8 +253,11 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
             self.assertEqual(receipt["host_lifecycle_readback_count"], 1)
             self.assertEqual(receipt["host_terminal_wait_readback_count"], 1)
             self.assertEqual(receipt["host_total_read_count"], 4)
-            self.assertEqual(receipt["config_bytes_changed"], 0)
-            self.assertEqual(receipt["host_integrity_changed_input_count"], 0)
+            self.assertEqual(receipt["observed_host_config_changed_bytes"], 0)
+            self.assertEqual(receipt["observed_host_auth_changed_bytes"], 0)
+            self.assertEqual(receipt["allowed_host_managed_delta_count"], 0)
+            self.assertEqual(receipt["unexpected_changed_input_count"], 0)
+            self.assertEqual(receipt["host_config_delta_kind"], "NONE")
             self.assertEqual(
                 receipt["host_config_before_digest"],
                 receipt["host_config_after_digest"],
@@ -598,6 +601,127 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
             self.assertEqual(measurement["changed_bytes"]["host_config"], 0)
             self.assertFalse((evidence / canary.CANARY_RECEIPT_FILENAME).exists())
 
+    def test_exact_machine_workspace_trust_append_is_measured_and_passes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            inputs = integrity_inputs(parent)
+            evidence = parent / "trust-append-evidence"
+
+            def append_trust_after_wait(provider, workspace):
+                provider.wait_for_terminal(timeout_seconds=1)
+                stanza = canary._canonical_workspace_trust_stanza(workspace)
+                inputs["host_config"].write_bytes(
+                    inputs["host_config"].read_bytes() + stanza
+                )
+
+            receipt = canary.run_canary(
+                CANDIDATE,
+                evidence,
+                confirmation_callback=lambda boundary: True,
+                integrity_inputs=inputs,
+                provider_factory=lambda workspace: FakeCanaryProvider(workspace),
+                wait_callback=append_trust_after_wait,
+                clock=lambda: NOW,
+                token_factory=lambda: "000000000000000000000008",
+            )
+            measurement = json.loads(
+                (evidence / canary.CANARY_INTEGRITY_FILENAME).read_text()
+            )
+            expected_stanza = canary._canonical_workspace_trust_stanza(
+                (evidence / "workspace").resolve()
+            )
+            self.assertEqual(
+                receipt["observed_host_config_changed_bytes"], len(expected_stanza)
+            )
+            self.assertEqual(receipt["observed_host_auth_changed_bytes"], 0)
+            self.assertEqual(receipt["allowed_host_managed_delta_count"], 1)
+            self.assertEqual(receipt["unexpected_changed_input_count"], 0)
+            self.assertEqual(
+                receipt["host_config_delta_kind"],
+                canary.HOST_CONFIG_DELTA_TRUST_APPEND,
+            )
+            self.assertEqual(measurement["changed_input_count"], 1)
+            self.assertEqual(
+                measurement["host_config_delta"]["before_workspace_key_count"], 0
+            )
+            self.assertEqual(
+                measurement["host_config_delta"]["after_workspace_key_count"], 1
+            )
+            minimized = json.dumps(
+                {"measurement": measurement, "receipt": receipt}, sort_keys=True
+            )
+            self.assertNotIn(str((evidence / "workspace").resolve()), minimized)
+            self.assertNotIn("[projects.", minimized)
+            self.assertNotIn("model =", minimized)
+            self.assertNotIn("synthetic", minimized)
+            validator.validate_canary_receipt(receipt, CANDIDATE)
+            validator._validate_canary_integrity_evidence(
+                receipt, CANDIDATE, evidence.resolve()
+            )
+
+    def test_trust_delta_classifier_rejects_every_broader_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            workspace = parent / "workspace"
+            workspace.mkdir()
+            inputs = integrity_inputs(parent)
+            base = b'model = "synthetic"\n'
+            stanza = canary._canonical_workspace_trust_stanza(workspace)
+            parent_stanza = canary._canonical_workspace_trust_stanza(parent)
+            other = parent / "model-provided-workspace"
+            other.mkdir()
+            other_stanza = canary._canonical_workspace_trust_stanza(other)
+            cases = {
+                "preexisting_workspace": (base + stanza, base + stanza),
+                "different_path": (base, base + other_stanza),
+                "parent_path": (base, base + parent_stanza),
+                "wrong_trust": (
+                    base,
+                    base
+                    + stanza.replace(b'trusted"', b'untrusted"'),
+                ),
+                "two_entries": (base, base + stanza + other_stanza),
+                "prefix_modified": (base, b'M' + base[1:] + stanza),
+                "insertion": (base, base[:5] + stanza + base[5:]),
+                "delete_truncate": (base, base[:-1]),
+                "non_eof_append": (base, base + stanza + b"#extra\n"),
+            }
+            for name, (before_raw, after_raw) in cases.items():
+                with self.subTest(name=name):
+                    inputs["host_config"].write_bytes(before_raw)
+                    before = canary._integrity_snapshot(inputs)
+                    inputs["host_config"].write_bytes(after_raw)
+                    after = canary._integrity_snapshot(inputs)
+                    comparison = canary._integrity_comparison(
+                        CANDIDATE, before, after, NOW, workspace
+                    )
+                    self.assertEqual(
+                        comparison["host_config_delta"]["delta_kind"],
+                        canary.HOST_CONFIG_DELTA_UNEXPECTED,
+                    )
+                    self.assertGreater(
+                        comparison["host_config_delta"][
+                            "unexpected_changed_input_count"
+                        ],
+                        0,
+                    )
+            with self.assertRaisesRegex(
+                canary.CanaryError, "CANARY_WORKSPACE_IDENTITY_INVALID"
+            ):
+                canary._canonical_workspace_trust_stanza(Path("relative"))
+            alias = parent / "workspace-alias"
+            alias.symlink_to(workspace, target_is_directory=True)
+            with self.assertRaisesRegex(
+                canary.CanaryError, "CANARY_WORKSPACE_IDENTITY_INVALID"
+            ):
+                canary._canonical_workspace_trust_stanza(alias)
+            control = parent / "workspace\tcontrol"
+            control.mkdir()
+            with self.assertRaisesRegex(
+                canary.CanaryError, "CANARY_WORKSPACE_IDENTITY_INVALID"
+            ):
+                canary._canonical_workspace_trust_stanza(control)
+
     def test_default_provider_construction_occurs_only_after_confirmation(self):
         with tempfile.TemporaryDirectory() as temporary:
             evidence = Path(temporary) / "evidence"
@@ -625,7 +749,7 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
                     token_factory=lambda: "000000000000000000000004",
                 )
             constructor.assert_called_once()
-            wait.assert_called_once_with(providers[0], evidence / "workspace")
+            wait.assert_called_once_with(providers[0], (evidence / "workspace").resolve())
             self.assertEqual(providers[0].terminal_wait_read_count, 1)
             self.assertEqual(providers[0].protocol_preflight_count, 1)
             self.assertEqual(receipt["status"], "PASS")

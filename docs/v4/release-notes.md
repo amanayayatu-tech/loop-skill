@@ -35,8 +35,11 @@ writes and returns `USER_UNSUPPORTED_LEGACY_VERSION`. LoopSkill
 [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)
 remains independently available and unchanged.
 
-LoopSkill 4 itself does not register MCP, edit Codex `config.toml`, or require
-a Codex App restart for LoopSkill installation or use. It installs under a
+The LoopSkill 4 installer and uninstaller do not register MCP, edit Codex
+`config.toml`, or require a Codex App restart. During the first real invocation
+in a fresh workspace, the official Codex Host may append one exact workspace
+trust record with `trust_level = "trusted"`; this Host-owned effect is measured
+separately and is not attributed to installation. LoopSkill installs under a
 distinct v4 identity and does not overwrite an existing v3 installation.
 
 ## Safety preserved and redesigned

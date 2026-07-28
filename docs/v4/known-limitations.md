@@ -31,3 +31,8 @@
   for old data.
 - Uninstall removes only receipt-bound v4 files. It does not restore or convert
   v3 data and does not alter unrelated Codex configuration.
+- A first official Codex invocation in a fresh workspace may append one
+  Host-owned `trust_level = "trusted"` project record to Codex configuration.
+  LoopSkill does not prewrite or remove it. Release validation accepts only the
+  exact current canonical disposable-workspace EOF append and rejects every
+  other config or auth delta.

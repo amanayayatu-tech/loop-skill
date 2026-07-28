@@ -45,6 +45,8 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 
 The distinct installation target is `$CODEX_HOME/skills/loopskill4`. LoopSkill 4 itself does not register MCP, edit `config.toml`, or require a Codex App restart for LoopSkill installation or use. Codex or another product may still require a restart for unrelated reasons.
 
+The installer and uninstaller do not edit Codex configuration. On the first real official Codex Host invocation in a fresh workspace, the Host itself may append one `trust_level = "trusted"` record for that workspace at EOF. This is a Host-owned effect: the release gate permits only one append for the exact machine-generated canonical workspace and retains the real nonzero changed-byte count. Every other configuration change, or any auth change, fails closed.
+
 <!-- parity: usage -->
 ## Simplest usage
 
@@ -73,6 +75,8 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 The same interaction performs read-only intake, writes local preparation artifacts, and shows the Goal, write scope, budget, external actions, acceptance criteria, stop conditions, and publication boundary. Only exact explicit confirmation can start. A non-interactive session stops at PREPARE; `DIRECT_TASK_RECOMMENDED` creates no loop.
 
 After confirmation, the public entry starts one official foreground `codex exec --json` process. The executable owns its internal thread/turn lifecycle; LoopSkill supplies the confirmed semantic boundary on stdin, captures the machine-emitted identity and terminal JSONL, and never asks the user for Host identity. It registers no LoopSkill MCP and does not require an App restart.
+
+On the first execution in a fresh workspace, the official Codex Host may append one workspace trust record containing only `trust_level = "trusted"` to the end of `config.toml`. The LoopSkill installer and uninstaller still do not edit Codex configuration. The release canary accepts only that one EOF append bound to the exact machine-generated canonical disposable workspace, reports the real nonzero changed-byte count, and rejects every other path, value, duplicate, prefix rewrite, or auth change.
 
 The foreground process is bounded to at most 300 seconds and reaped on success, failure, timeout, or interruption. This is the observation window, not the task budget. A complete stream, zero exit status, final result, and external artifact verification are all required. Lost, malformed, failed, ambiguous, or timed-out evidence becomes `UNKNOWN`; LoopSkill does not resend or run `codex exec resume`.
 

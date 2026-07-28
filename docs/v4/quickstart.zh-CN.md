@@ -20,6 +20,12 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 `config.toml` 以核验安装前后字节哈希，不修改它，不注册 MCP，不覆盖独立 v3 安装，
 也不要求为了 LoopSkill 4 重启 Codex。
 
+安装器和卸载器不会编辑 Codex 配置。首次在全新 workspace 真实调用官方 Codex Host
+时，Host 自身可能在配置末尾登记该 workspace 的一条 `trust_level = "trusted"`
+记录。LoopSkill 将其作为 Host-owned effect 单独测量：只允许当前机器生成的精确
+canonical workspace 的单条 EOF 追加，保留真实非零 changed-byte 计数；其他配置变化
+或任何 auth 变化都会 fail closed。
+
 ## 一个目标，一个入口，四个可见阶段
 
 规范顺序是 `INTAKE → PREPARE → CONFIRM → START`。

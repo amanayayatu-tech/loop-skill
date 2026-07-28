@@ -23,6 +23,14 @@ receipt/staging paths. It reads `config.toml` only to verify the before/after
 byte hash and does not modify it, register MCP, overwrite an independent v3
 installation, or require a Codex restart for LoopSkill 4.
 
+The installer and uninstaller do not edit Codex configuration. On the first
+real official Codex Host invocation in a fresh workspace, the Host may append
+one `trust_level = "trusted"` record for that workspace at the end of its
+configuration. LoopSkill measures this separately as a Host-owned effect: only
+one EOF append for the exact machine-generated canonical workspace is allowed,
+and the real nonzero changed-byte count is retained. Every other configuration
+change, or any auth change, fails closed.
+
 ## One goal, one entry, four visible phases
 
 The normative order is `INTAKE → PREPARE → CONFIRM → START`.
