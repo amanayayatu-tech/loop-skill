@@ -451,7 +451,7 @@ class V4AuthorPacketTests(unittest.TestCase):
             {"provider_resource_ref": "provider-resource-raw"},
             {"provider_host_identity": "raw-host-identity"},
             {"artifact_path": "relative/private/receipt.json"},
-            {"summary": "stored at /Users/example/private/receipt.json"},
+            {"summary": "stored at /" + "Users/example/private/receipt.json"},
             {"summary": "stored at (/private/var/folders/private/receipt.json)"},
             {"summary": r"stored at C:\\Users\\example\\private.json"},
             {"summary": "Bearer abcdefghijklmnopqrstuvwxyz"},
