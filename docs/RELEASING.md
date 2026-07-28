@@ -201,11 +201,14 @@ invocation is the installed, receipt-checked `loopskill4 canary`, not the source
 tree entry:
 
 The exact candidate must first prove that preflight requires the official
-`--output-schema` flag, the private schema path is digest-bound and cleaned,
-and one schema-valid outcome/summary object is captured with no text-marker
-fallback. Private evidence may retain only the canonical structured response
-bytes needed to distinguish Host/model/parser failure; public evidence exposes
-digests and outcome only, never the raw Host transcript or identity.
+`--output-schema` and `--output-last-message` flags. The private schema and
+result paths are identity/digest-bound, outside the artifact workspace, and
+cleaned. JSONL is lifecycle-only; the result file is the sole semantic source.
+Bounded stderr is diagnostic and cannot alone veto success, while overflow
+fails closed. Private evidence retains only byte counts/digests and the safe
+terminal classification needed to distinguish transport/result failures;
+public evidence binds the diagnostic digest and exposes no raw Host transcript,
+result text, path, or identity.
 
 ```bash
 set -euo pipefail

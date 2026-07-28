@@ -61,10 +61,14 @@ CANARY_INTEGRITY_MEASUREMENT_DOMAIN = (
 CANARY_CONFIG_PREFIX_DOMAIN = b"loopskill.v4.exec-canary.config-prefix.v1\0"
 CANARY_CONFIG_DELTA_DOMAIN = b"loopskill.v4.exec-canary.config-delta.v1\0"
 CANARY_WORKSPACE_DOMAIN = b"loopskill.v4.exec-canary.workspace.v1\0"
+CANARY_PROVIDER_DIAGNOSTIC_DOMAIN = (
+    b"loopskill.v4.exec-canary.provider-diagnostic.v1\0"
+)
 HOST_CONFIG_DELTA_NONE = "NONE"
 HOST_CONFIG_DELTA_TRUST_APPEND = "CODEX_WORKSPACE_TRUST_APPEND_V1"
 CANARY_INTEGRITY_BEFORE_FILENAME = "canary-integrity-before.json"
 CANARY_INTEGRITY_FILENAME = "canary-integrity.json"
+CANARY_PROVIDER_DIAGNOSTIC_FILENAME = "canary-provider-diagnostic.json"
 CANARY_OUTPUT_FILENAME = "canary-output.txt"
 CANARY_OUTPUT_BYTES = b"LOOPSKILL4_CANARY_OK\n"
 CANARY_OUTPUT_SHA256 = "8d23b5e88d9fb86f366700a6267f29b46bcca5cd45a59ed27afbbd04860eb638"
@@ -671,6 +675,7 @@ def validate_canary_receipt(
         "private_data_used",
         "provenance_digest",
         "provider_resend_count",
+        "provider_terminal_diagnostic_digest",
         "research_scored",
         "result",
         "review",
@@ -790,6 +795,7 @@ def validate_canary_receipt(
         "host_config_after_digest",
         "host_config_before_digest",
         "integrity_measurement_digest",
+        "provider_terminal_diagnostic_digest",
     ):
         if not isinstance(value.get(field), str) or not re.fullmatch(
             r"[0-9a-f]{64}", value[field]
@@ -870,6 +876,59 @@ def _validate_canary_integrity_evidence(
         evidence_root / CANARY_INTEGRITY_FILENAME,
         "RC_CANARY_INTEGRITY_INVALID",
     )
+    provider_diagnostic = _read_canonical_object(
+        evidence_root / CANARY_PROVIDER_DIAGNOSTIC_FILENAME,
+        "RC_CANARY_PROVIDER_DIAGNOSTIC_INVALID",
+    )
+    expected_provider_keys = {
+        "artifact",
+        "code",
+        "primary_code",
+        "result_bytes",
+        "result_control_digest",
+        "result_sha256",
+        "returncode_class",
+        "schema_control_digest",
+        "stderr_bytes",
+        "stderr_sha256",
+        "stdout_bytes",
+        "stdout_sha256",
+        "terminal_event_count",
+        "terminal_event_type",
+    }
+    if (
+        set(provider_diagnostic) != expected_provider_keys
+        or provider_diagnostic["artifact"]
+        != "loopskill-codex-exec-terminal-diagnostic-v1"
+        or provider_diagnostic["code"] != "PASS"
+        or provider_diagnostic["primary_code"] is not None
+        or provider_diagnostic["returncode_class"] != "ZERO"
+        or provider_diagnostic["terminal_event_count"] != 1
+        or provider_diagnostic["terminal_event_type"] != "turn.completed"
+        or any(
+            isinstance(provider_diagnostic[field], bool)
+            or not isinstance(provider_diagnostic[field], int)
+            or provider_diagnostic[field] < 0
+            for field in ("result_bytes", "stderr_bytes", "stdout_bytes")
+        )
+        or any(
+            not isinstance(provider_diagnostic[field], str)
+            or re.fullmatch(r"[0-9a-f]{64}", provider_diagnostic[field]) is None
+            for field in (
+                "result_control_digest",
+                "result_sha256",
+                "schema_control_digest",
+                "stderr_sha256",
+                "stdout_sha256",
+            )
+        )
+        or provider_diagnostic["result_bytes"] <= 0
+        or provider_diagnostic["result_control_digest"]
+        != provider_diagnostic["result_sha256"]
+        or receipt.get("provider_terminal_diagnostic_digest")
+        != _domain_digest(CANARY_PROVIDER_DIAGNOSTIC_DOMAIN, provider_diagnostic)
+    ):
+        raise RcValidationError("RC_CANARY_PROVIDER_DIAGNOSTIC_INVALID")
     workspace_identity, expected_stanza = _canary_workspace_contract(evidence_root)
     if set(before) != {
         "artifact",

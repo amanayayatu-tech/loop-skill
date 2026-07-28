@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import stat
 import sys
 import tempfile
 import time
@@ -81,13 +83,16 @@ def success_jsonl(*, thread_id="thread-machine", result=RESULT_TEXT, extra=()):
 
 
 class FakeRunner:
-    def __init__(self, exec_result=None, exec_error=None):
+    def __init__(self, exec_result=None, exec_error=None, result_bytes=canonical_bytes(RESULT)):
         self.calls = []
         self.exec_result = exec_result or _ProcessResult(
             argv=("codex", "exec"), returncode=0, stdout=success_jsonl(), stderr=b""
         )
         self.exec_error = exec_error
         self.schema_snapshots = []
+        self.result_bytes = result_bytes
+        self.result_snapshots = []
+        self.result_identities = []
 
     def __call__(self, argv, **kwargs):
         self.calls.append((tuple(argv), dict(kwargs)))
@@ -103,6 +108,7 @@ class FakeRunner:
                     "--ignore-user-config",
                     "--json",
                     "--output-schema",
+                    "--output-last-message",
                     "--sandbox",
                     "--skip-git-repo-check",
                     "--strict-config",
@@ -112,7 +118,24 @@ class FakeRunner:
         if self.exec_error is not None:
             raise self.exec_error
         schema_path = Path(argv[tuple(argv).index("--output-schema") + 1])
+        result_path = Path(argv[tuple(argv).index("--output-last-message") + 1])
         self.schema_snapshots.append((schema_path, schema_path.read_bytes()))
+        before = result_path.lstat()
+        if self.result_bytes is not None:
+            result_path.write_bytes(self.result_bytes)
+        after = result_path.lstat()
+        self.result_identities.append(
+            (
+                before.st_dev,
+                before.st_ino,
+                stat.S_IMODE(before.st_mode),
+                after.st_dev,
+                after.st_ino,
+                stat.S_IMODE(after.st_mode),
+                stat.S_IMODE(result_path.parent.stat().st_mode),
+            )
+        )
+        self.result_snapshots.append((result_path, result_path.read_bytes()))
         return _ProcessResult(
             tuple(argv),
             self.exec_result.returncode,
@@ -149,13 +172,20 @@ class ExecProviderTests(unittest.TestCase):
             root = Path(temporary).resolve()
             self.assertFalse((root / ".git").exists())
             self.assertEqual(
-                build_exec_argv("/safe/codex", root, root / "schema.json"),
+                build_exec_argv(
+                    "/safe/codex",
+                    root,
+                    root / "schema.json",
+                    root / "result.json",
+                ),
                 (
                     "/safe/codex",
                     "exec",
                     "--json",
                     "--output-schema",
                     str(root / "schema.json"),
+                    "--output-last-message",
+                    str(root / "result.json"),
                     "--strict-config",
                     "--ignore-user-config",
                     "--ignore-rules",
@@ -212,14 +242,23 @@ class ExecProviderTests(unittest.TestCase):
             self.assertEqual(len(runner.calls), 3)
             argv, kwargs = runner.calls[-1]
             schema_path = Path(argv[argv.index("--output-schema") + 1])
-            self.assertEqual(argv, build_exec_argv(provider.executable, root, schema_path))
+            result_path = Path(argv[argv.index("--output-last-message") + 1])
+            self.assertEqual(
+                argv,
+                build_exec_argv(provider.executable, root, schema_path, result_path),
+            )
             self.assertFalse(schema_path.exists())
             self.assertFalse(schema_path.parent.exists())
+            self.assertFalse(result_path.exists())
             self.assertNotIn(root, schema_path.parents)
             self.assertEqual(
                 runner.schema_snapshots,
                 [(schema_path, canonical_bytes(result_payload_schema()))],
             )
+            self.assertEqual(runner.result_snapshots, [(result_path, canonical_bytes(RESULT))])
+            before_dev, before_ino, before_mode, after_dev, after_ino, after_mode, directory_mode = runner.result_identities[0]
+            self.assertEqual((before_dev, before_ino), (after_dev, after_ino))
+            self.assertEqual((before_mode, after_mode, directory_mode), (0o600, 0o600, 0o700))
             self.assertEqual(kwargs["cwd"], root)
             self.assertTrue(kwargs["stdin_bytes"].endswith(b"\n"))
             prompt = kwargs["stdin_bytes"].decode("utf-8")
@@ -309,19 +348,31 @@ class ExecProviderTests(unittest.TestCase):
             self.assertEqual(provider.metrics["duplicate_invoke_rejection_count"], 1)
             self.assertEqual(provider.metrics["provider_resend_count"], 0)
 
-    def test_nonzero_and_stderr_fail_closed_after_one_spawn(self):
-        variants = (
-            _ProcessResult(("codex",), 9, success_jsonl(), b""),
-            _ProcessResult(("codex",), 0, success_jsonl(), b"warning"),
-        )
-        for result in variants:
-            with self.subTest(returncode=result.returncode, stderr=bool(result.stderr)):
-                with tempfile.TemporaryDirectory() as temporary:
-                    provider = self.provider(Path(temporary), FakeRunner(exec_result=result))
-                    with self.assertRaises(HostResponseLost):
-                        provider.invoke("create_task", payload(), KEY)
-                    self.assertEqual(provider.metrics["task_create_count"], 1)
-                    self.assertIsNone(provider.readback("create_task", KEY))
+    def test_nonzero_fails_but_bounded_stderr_is_diagnostic_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(
+                Path(temporary),
+                FakeRunner(
+                    exec_result=_ProcessResult(("codex",), 9, success_jsonl(), b"notice")
+                ),
+            )
+            with self.assertRaises(HostResponseLost) as caught:
+                provider.invoke("create_task", payload(), KEY)
+            self.assertEqual(caught.exception.provider_code, "PROCESS_EXIT_NONZERO")
+            self.assertEqual(provider.terminal_diagnostic()["stderr_bytes"], 6)
+            self.assertIsNone(provider.readback("create_task", KEY))
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(
+                Path(temporary),
+                FakeRunner(
+                    exec_result=_ProcessResult(("codex",), 0, success_jsonl(), b"progress\n")
+                ),
+            )
+            provider.invoke("create_task", payload(), KEY)
+            diagnostic = provider.terminal_diagnostic()
+            self.assertEqual(diagnostic["code"], "PASS")
+            self.assertEqual(diagnostic["stderr_bytes"], len(b"progress\n"))
+            self.assertEqual(diagnostic["stderr_sha256"], hashlib.sha256(b"progress\n").hexdigest())
 
     def test_jsonl_success_ignores_additive_events_and_item_warning(self):
         transcript = _parse_jsonl(
@@ -336,7 +387,8 @@ class ExecProviderTests(unittest.TestCase):
             )
         )
         self.assertEqual(transcript.thread_id, "thread-machine")
-        self.assertEqual(transcript.result, RESULT)
+        self.assertEqual(transcript.terminal_event_type, "turn.completed")
+        self.assertEqual(transcript.terminal_event_count, 1)
 
     def test_jsonl_failure_matrix_is_fail_closed(self):
         valid = [
@@ -367,27 +419,53 @@ class ExecProviderTests(unittest.TestCase):
             "result_before_turn": event_bytes(valid[0], valid[2], valid[1], valid[3]),
             "result_after_terminal": event_bytes(*valid, valid[2]),
             "additive_after_terminal": event_bytes(*valid, {"type": "future.additive"}),
-            "missing_result": event_bytes(valid[0], valid[1], valid[-1]),
-            "multiple_results": event_bytes(valid[0], valid[1], valid[2], valid[2], valid[3]),
-            "conflicting_results": event_bytes(
-                valid[0],
-                valid[1],
-                valid[2],
-                {
-                    "item": {
-                        "id": "message-2",
-                        "text": '{"outcome":"FAILED","summary":"conflict"}',
-                        "type": "agent_message",
-                    },
-                    "type": "item.completed",
-                },
-                valid[3],
-            ),
             "oversized_line": b"{" + b"x" * (1024 * 1024) + b"}\n",
         }
         for name, raw in cases.items():
             with self.subTest(name=name), self.assertRaises(HostResponseLost):
                 _parse_jsonl(raw)
+
+    def test_jsonl_failure_classification_is_specific_and_privacy_safe(self):
+        cases = (
+            (b"{bad}\n", "STDOUT_JSONL_INVALID"),
+            (
+                event_bytes(
+                    {"thread_id": "one", "type": "thread.started"},
+                    {"thread_id": "two", "type": "thread.started"},
+                ),
+                "THREAD_IDENTITY_INVALID",
+            ),
+            (
+                event_bytes(
+                    {"thread_id": "one", "type": "thread.started"},
+                    {"type": "turn.started"},
+                    {"type": "turn.failed"},
+                ),
+                "TURN_TERMINAL_FAILED",
+            ),
+        )
+        for raw, code in cases:
+            with self.subTest(code=code), self.assertRaises(HostResponseLost) as caught:
+                _parse_jsonl(raw)
+            self.assertEqual(caught.exception.provider_code, code)
+
+        failed_jsonl = event_bytes(
+            {"thread_id": "one", "type": "thread.started"},
+            {"type": "turn.started"},
+            {"type": "turn.failed"},
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(
+                Path(temporary),
+                FakeRunner(
+                    exec_result=_ProcessResult(("codex",), 0, failed_jsonl, b"")
+                ),
+            )
+            with self.assertRaises(HostResponseLost):
+                provider.invoke("create_task", payload(), KEY)
+            diagnostic = provider.terminal_diagnostic()
+            self.assertEqual(diagnostic["terminal_event_count"], 1)
+            self.assertEqual(diagnostic["terminal_event_type"], "turn.failed")
 
     def test_structured_result_accepts_exactly_the_four_manifest_enums(self):
         schema = result_payload_schema()
@@ -401,12 +479,13 @@ class ExecProviderTests(unittest.TestCase):
         self.assertEqual(schema["properties"]["summary"]["minLength"], 1)
         self.assertEqual(schema["properties"]["summary"]["maxLength"], 4096)
         for outcome in ("PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"):
-            with self.subTest(outcome=outcome):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
                 value = {"outcome": outcome, "summary": "bounded evidence"}
-                self.assertEqual(
-                    _parse_jsonl(success_jsonl(result=canonical_bytes(value).decode())).result,
-                    value,
+                provider = self.provider(
+                    Path(temporary), FakeRunner(result_bytes=canonical_bytes(value))
                 )
+                provider.invoke("create_task", payload(), KEY)
+                self.assertEqual(provider.read_task_result("thread-machine")["result"], value)
 
     def test_structured_result_rejects_shape_type_encoding_and_size_drift(self):
         invalid = {
@@ -421,8 +500,13 @@ class ExecProviderTests(unittest.TestCase):
             "malformed": '{"outcome":"PASS","summary":',
         }
         for name, result in invalid.items():
-            with self.subTest(name=name), self.assertRaises(HostResponseLost):
-                _parse_jsonl(success_jsonl(result=result))
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                provider = self.provider(
+                    Path(temporary), FakeRunner(result_bytes=result.encode("utf-8"))
+                )
+                with self.assertRaises(HostResponseLost) as caught:
+                    provider.invoke("create_task", payload(), KEY)
+                self.assertEqual(caught.exception.provider_code, "RESULT_SCHEMA_INVALID")
 
     def test_schema_path_replacement_fails_closed_and_is_cleaned(self):
         class ReplacingRunner(FakeRunner):
@@ -437,7 +521,7 @@ class ExecProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             runner = ReplacingRunner()
             provider = self.provider(Path(temporary), runner)
-            with self.assertRaisesRegex(HostResponseLost, "schema control identity"):
+            with self.assertRaisesRegex(HostResponseLost, "control file identity"):
                 provider.invoke("create_task", payload(), KEY)
             schema_path = runner.schema_snapshots[0][0]
             self.assertFalse(schema_path.exists())
@@ -465,6 +549,158 @@ class ExecProviderTests(unittest.TestCase):
             self.assertFalse(schema_path.exists())
             self.assertFalse(schema_path.parent.exists())
 
+    def test_control_cleanup_failure_has_exact_classification(self):
+        class BlockingCleanupRunner(FakeRunner):
+            blocker = None
+
+            def __call__(self, argv, **kwargs):
+                result = super().__call__(argv, **kwargs)
+                if tuple(argv)[-1:] == ("-",):
+                    result_path = Path(
+                        argv[tuple(argv).index("--output-last-message") + 1]
+                    )
+                    self.blocker = result_path.parent / "foreign"
+                    self.blocker.write_bytes(b"block cleanup")
+                return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = BlockingCleanupRunner()
+            provider = self.provider(Path(temporary), runner)
+            with self.assertRaises(HostResponseLost) as caught:
+                provider.invoke("create_task", payload(), KEY)
+            self.assertEqual(caught.exception.provider_code, "CONTROL_CLEANUP_FAILED")
+            self.assertEqual(
+                provider.terminal_diagnostic()["code"], "CONTROL_CLEANUP_FAILED"
+            )
+            self.assertIsNone(provider.terminal_diagnostic()["primary_code"])
+            assert runner.blocker is not None
+            directory = runner.blocker.parent
+            runner.blocker.unlink()
+            directory.rmdir()
+
+    def test_primary_failure_is_preserved_when_cleanup_also_fails(self):
+        class InvalidBlockingRunner(FakeRunner):
+            blocker = None
+
+            def __init__(self):
+                super().__init__(result_bytes=b'{"outcome":"PASS"}')
+
+            def __call__(self, argv, **kwargs):
+                result = super().__call__(argv, **kwargs)
+                if tuple(argv)[-1:] == ("-",):
+                    result_path = Path(
+                        argv[tuple(argv).index("--output-last-message") + 1]
+                    )
+                    self.blocker = result_path.parent / "foreign"
+                    self.blocker.write_bytes(b"block cleanup")
+                return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = InvalidBlockingRunner()
+            provider = self.provider(Path(temporary), runner)
+            with self.assertRaises(HostResponseLost) as caught:
+                provider.invoke("create_task", payload(), KEY)
+            self.assertEqual(caught.exception.provider_code, "CONTROL_CLEANUP_FAILED")
+            diagnostic = provider.terminal_diagnostic()
+            self.assertEqual(diagnostic["code"], "CONTROL_CLEANUP_FAILED")
+            self.assertEqual(diagnostic["primary_code"], "RESULT_SCHEMA_INVALID")
+            assert runner.blocker is not None
+            directory = runner.blocker.parent
+            runner.blocker.unlink()
+            directory.rmdir()
+
+    def test_unclassified_runner_failure_is_not_mislabeled_as_cleanup(self):
+        class UnexpectedRunner(FakeRunner):
+            def __call__(self, argv, **kwargs):
+                result = super().__call__(argv, **kwargs)
+                if tuple(argv)[-1:] == ("-",):
+                    raise RuntimeError("synthetic unexpected runner failure")
+                return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = UnexpectedRunner()
+            provider = self.provider(Path(temporary), runner)
+            with self.assertRaises(HostResponseLost) as caught:
+                provider.invoke("create_task", payload(), KEY)
+            self.assertEqual(
+                caught.exception.provider_code, "UNCLASSIFIED_PROVIDER_FAILURE"
+            )
+            self.assertEqual(
+                provider.terminal_diagnostic()["code"],
+                "UNCLASSIFIED_PROVIDER_FAILURE",
+            )
+            self.assertIsNone(provider.terminal_diagnostic()["primary_code"])
+
+    def test_opened_fd_identity_rejects_regular_file_swap_after_path_check(self):
+        original_open = os.open
+        swapped = False
+
+        def racing_open(path, flags, *args, **kwargs):
+            nonlocal swapped
+            candidate = Path(path)
+            access_mode = flags & os.O_ACCMODE
+            if (
+                not swapped
+                and candidate.name == "result.json"
+                and access_mode == os.O_RDONLY
+            ):
+                swapped = True
+                replacement = candidate.with_name("replacement.json")
+                descriptor = original_open(
+                    replacement,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                try:
+                    os.write(descriptor, canonical_bytes(RESULT))
+                finally:
+                    os.close(descriptor)
+                candidate.unlink()
+                os.replace(replacement, candidate)
+            return original_open(path, flags, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+            exec_provider.os, "open", side_effect=racing_open
+        ):
+            provider = self.provider(Path(temporary), FakeRunner())
+            with self.assertRaises(HostResponseLost) as caught:
+                provider.invoke("create_task", payload(), KEY)
+            self.assertTrue(swapped)
+            self.assertEqual(caught.exception.provider_code, "RESULT_FILE_IDENTITY_DRIFT")
+            self.assertEqual(
+                provider.terminal_diagnostic()["code"],
+                "RESULT_FILE_IDENTITY_DRIFT",
+            )
+
+    def test_result_missing_replacement_and_oversize_fail_with_exact_codes(self):
+        class ReplacingResultRunner(FakeRunner):
+            def __call__(self, argv, **kwargs):
+                result = super().__call__(argv, **kwargs)
+                if tuple(argv)[-1:] == ("-",):
+                    result_path = Path(
+                        argv[tuple(argv).index("--output-last-message") + 1]
+                    )
+                    result_path.unlink()
+                    result_path.symlink_to(Path("/dev/null"))
+                return result
+
+        variants = (
+            (FakeRunner(result_bytes=None), "RESULT_FILE_MISSING"),
+            (ReplacingResultRunner(), "RESULT_FILE_IDENTITY_DRIFT"),
+            (FakeRunner(result_bytes=b"x" * (16 * 1024 + 1)), "RESULT_FILE_OVERSIZE"),
+        )
+        for runner, code in variants:
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
+                provider = self.provider(Path(temporary), runner)
+                with self.assertRaises(HostResponseLost) as caught:
+                    provider.invoke("create_task", payload(), KEY)
+                self.assertEqual(caught.exception.provider_code, code)
+                diagnostic = provider.terminal_diagnostic()
+                self.assertEqual(diagnostic["code"], code)
+                result_path = runner.result_snapshots[0][0]
+                self.assertFalse(result_path.exists())
+                self.assertFalse(result_path.parent.exists())
+
     def test_preflight_rejects_missing_output_schema_capability(self):
         class MissingSchemaRunner(FakeRunner):
             def __call__(self, argv, **kwargs):
@@ -478,6 +714,23 @@ class ExecProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaises(HostUnavailable):
                 self.provider(Path(temporary), MissingSchemaRunner()).preflight()
+
+    def test_preflight_rejects_missing_output_last_message_capability(self):
+        class MissingResultRunner(FakeRunner):
+            def __call__(self, argv, **kwargs):
+                result = super().__call__(argv, **kwargs)
+                if tuple(argv)[-2:] == ("exec", "--help"):
+                    return _ProcessResult(
+                        tuple(argv),
+                        0,
+                        result.stdout.replace(b"--output-last-message", b""),
+                        b"",
+                    )
+                return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(HostUnavailable):
+                self.provider(Path(temporary), MissingResultRunner()).preflight()
 
     def test_adapter_rejects_self_consistent_result_bound_to_foreign_schema(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -508,6 +761,109 @@ class ExecProviderTests(unittest.TestCase):
                     stdout_limit=100,
                     stderr_limit=100,
                 )
+            with self.assertRaises(HostResponseLost) as stderr:
+                _run_bounded_process(
+                    (sys.executable, "-c", "import sys; sys.stderr.write('x' * 1000)"),
+                    cwd=root,
+                    stdin_bytes=b"",
+                    timeout_seconds=3,
+                    stdout_limit=100,
+                    stderr_limit=100,
+                )
+            self.assertEqual(
+                stderr.exception.provider_code, "STDERR_DIAGNOSTIC_OVERFLOW"
+            )
+
+    def test_bounded_runner_classifies_spawn_timeout_and_reap_failures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            with self.assertRaises(HostUnavailable) as spawn:
+                _run_bounded_process(
+                    (str(root / "missing-executable"),),
+                    cwd=root,
+                    stdin_bytes=b"",
+                    timeout_seconds=1,
+                    stdout_limit=100,
+                    stderr_limit=100,
+                )
+            self.assertEqual(spawn.exception.provider_code, "PROCESS_SPAWN_FAILED")
+            with self.assertRaises(HostResponseLost) as timeout:
+                _run_bounded_process(
+                    (sys.executable, "-c", "import time; time.sleep(5)"),
+                    cwd=root,
+                    stdin_bytes=b"",
+                    timeout_seconds=0.1,
+                    stdout_limit=100,
+                    stderr_limit=100,
+                )
+            self.assertEqual(timeout.exception.provider_code, "PROCESS_TIMEOUT")
+            reap_error = exec_provider._coded_error(
+                "PROCESS_REAP_FAILED", "synthetic reap failure"
+            )
+            with mock.patch.object(
+                exec_provider, "_terminate_process_group", side_effect=reap_error
+            ), self.assertRaises(HostResponseLost) as reap:
+                _run_bounded_process(
+                    (sys.executable, "-c", "pass"),
+                    cwd=root,
+                    stdin_bytes=b"",
+                    timeout_seconds=1,
+                    stdout_limit=100,
+                    stderr_limit=100,
+                )
+            self.assertEqual(reap.exception.provider_code, "PROCESS_REAP_FAILED")
+
+    def test_canary_persists_exact_private_provider_failure_without_pass_receipt(self):
+        class InvalidArtifactRunner(ArtifactRunner):
+            def __init__(self, workspace):
+                super().__init__(workspace)
+                self.result_bytes = b'{"outcome":"PASS"}'
+
+        candidate = "b" * 40
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+            canary, "_validate_candidate", return_value=candidate
+        ):
+            root = Path(temporary)
+            inputs = root / "host-inputs"
+            inputs.mkdir()
+            config = inputs / "config.toml"
+            auth = inputs / "auth.json"
+            config.write_bytes(b"synthetic config\n")
+            auth.write_bytes(b"synthetic auth\n")
+            evidence = root / "evidence"
+            with self.assertRaisesRegex(
+                canary.CanaryError, "CANARY_PROVIDER_RESULT_SCHEMA_INVALID"
+            ):
+                canary.run_canary(
+                    candidate,
+                    evidence,
+                    confirmation_callback=lambda boundary: bool(boundary),
+                    integrity_inputs={
+                        "host_auth": auth.resolve(),
+                        "host_config": config.resolve(),
+                    },
+                    provider_factory=lambda workspace: CodexExecProvider(
+                        workspace,
+                        executable=sys.executable,
+                        issuer_ref=canary.CANARY_ISSUER,
+                        issuer_trust=canary.CANARY_TRUST,
+                        clock=lambda: NOW,
+                        runner=InvalidArtifactRunner(workspace),
+                    ),
+                    clock=lambda: NOW,
+                    token_factory=lambda: "000000000000000000000098",
+                )
+            diagnostic = json.loads(
+                (evidence / canary.CANARY_PROVIDER_DIAGNOSTIC_FILENAME).read_text()
+            )
+            self.assertEqual(diagnostic["code"], "RESULT_SCHEMA_INVALID")
+            self.assertEqual(diagnostic["returncode_class"], "ZERO")
+            self.assertGreater(diagnostic["result_bytes"], 0)
+            serialized = json.dumps(diagnostic, sort_keys=True)
+            self.assertNotIn(str(root), serialized)
+            self.assertNotIn("thread-machine", serialized)
+            self.assertNotIn('"outcome"', serialized)
+            self.assertFalse((evidence / canary.CANARY_RECEIPT_FILENAME).exists())
 
     def test_timeout_reaps_process_group_and_child(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -574,7 +930,7 @@ class ExecProviderTests(unittest.TestCase):
             "_terminate_process_group",
             wraps=exec_provider._terminate_process_group,
         ) as terminate:
-            with self.assertRaises(KeyboardInterrupt):
+            with self.assertRaises(HostResponseLost) as interrupted:
                 _run_bounded_process(
                     (sys.executable, "-c", "import time; time.sleep(60)"),
                     cwd=Path(temporary).resolve(),
@@ -583,6 +939,7 @@ class ExecProviderTests(unittest.TestCase):
                     stdout_limit=100,
                     stderr_limit=100,
                 )
+            self.assertEqual(interrupted.exception.provider_code, "PROCESS_INTERRUPTED")
             terminate.assert_called_once()
 
     def test_installed_entry_vertical_closes_result_artifact_review_and_finalization(self):

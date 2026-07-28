@@ -136,7 +136,7 @@ normatively superseded by this addendum.
 `app-server --stdio` Provider as the 4.0.0 production/default Host transport.**
 The public composition root constructs one `CodexExecProvider` behind the
 existing `CodexProviderPort`. It invokes the official `codex exec --json
---output-schema <machine-path>`
+--output-schema <machine-path> --output-last-message <machine-path>`
 foreground interface exactly once for a claimed durable Attempt. The official
 executable owns its internal thread/turn lifecycle, server requests, streaming,
 and shutdown; LoopSkill does not reimplement or expose those internal RPCs.
@@ -147,19 +147,21 @@ The transport contract is deliberately narrower:
   realpath/version binding, and bounded `exec --help` inspection; it creates no
   Host work;
 - START supplies the confirmed semantic prompt on stdin, a manifest-derived
-  closed result schema through one private machine-owned read-only temporary
-  control file, exact canonical cwd,
+  closed result schema and one machine-owned semantic-result file through a
+  private temporary control directory outside the artifact workspace, exact canonical cwd,
   workspace-write sandbox, explicit disabled sandbox network access, non-Git
   allowance, and JSONL output through a shell-free argv;
 - one Provider instance permits one subprocess spawn. Duplicate invoke is
   rejected before spawn; 4.0.0 has no `exec resume`, resend, daemon, proxy,
   project provisioner, or second Host protocol;
 - a bounded UTF-8 JSONL stream must contain one machine-emitted thread identity,
-  one turn start, one successful terminal event, a zero exit status, empty
-  stderr, and exactly one final agent-message JSON object conforming to the
-  `StageExternalResult`/`StageResult` outcome and summary contract. The schema
-  path and digest are machine-bound, verified before and after invocation, kept
-  outside the artifact workspace, and removed after process closure. Malformed,
+  one turn start, one successful terminal event, and a zero exit status. JSONL
+  is lifecycle-only. The official output-last-message file is the sole semantic
+  Result source and must conform to the `StageExternalResult`/`StageResult`
+  outcome and summary contract. Both control paths and digests are machine-bound,
+  verified before and after invocation, kept outside the artifact workspace,
+  and removed after process closure. Bounded stderr is diagnostic rather than
+  success authority; overflow fails closed. Malformed,
   truncated, oversized,
   conflicting, missing, failed, nonzero, timed-out, or interrupted evidence
   yields `UNKNOWN` and cannot mint PASS;

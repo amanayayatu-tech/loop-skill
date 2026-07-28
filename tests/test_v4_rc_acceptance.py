@@ -50,6 +50,27 @@ def live_observation(candidate: str) -> dict:
     }
 
 
+def provider_diagnostic() -> dict:
+    empty = hashlib.sha256(b"").hexdigest()
+    result = b'{"outcome":"PASS","summary":"complete"}'
+    return {
+        "artifact": "loopskill-codex-exec-terminal-diagnostic-v1",
+        "code": "PASS",
+        "primary_code": None,
+        "result_bytes": len(result),
+        "result_control_digest": hashlib.sha256(result).hexdigest(),
+        "result_sha256": hashlib.sha256(result).hexdigest(),
+        "returncode_class": "ZERO",
+        "schema_control_digest": "6" * 64,
+        "stderr_bytes": 0,
+        "stderr_sha256": empty,
+        "stdout_bytes": 100,
+        "stdout_sha256": "7" * 64,
+        "terminal_event_count": 1,
+        "terminal_event_type": "turn.completed",
+    }
+
+
 def canary(candidate: str) -> dict:
     live = live_observation(candidate)
     issued = datetime.now(timezone.utc).replace(microsecond=0)
@@ -102,6 +123,9 @@ def canary(candidate: str) -> dict:
         "prepare_host_task_count": 0,
         "private_data_used": False,
         "provider_resend_count": 0,
+        "provider_terminal_diagnostic_digest": validator._domain_digest(
+            validator.CANARY_PROVIDER_DIAGNOSTIC_DOMAIN, provider_diagnostic()
+        ),
         "research_scored": False,
         "result": "ACKNOWLEDGED",
         "review": "PASS",
@@ -129,6 +153,9 @@ def write_integrity_evidence(
 ) -> tuple[dict, dict]:
     workspace = root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
+    (root / validator.CANARY_PROVIDER_DIAGNOSTIC_FILENAME).write_bytes(
+        validator._canonical(provider_diagnostic())
+    )
     identity, stanza = validator._canary_workspace_contract(root.resolve())
     config = b'model = "synthetic"\n'
     prefix_digest = hashlib.sha256(

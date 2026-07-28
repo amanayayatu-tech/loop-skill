@@ -50,11 +50,11 @@ UTF-8 JSON。用户提供的 control identity 数量必须为 0。
 单入口不等于静默授权。非交互 session 在 PREPARE 后停止。边界变化、过期确认或模糊
 “继续”都会 fail closed。
 
-普通入口运行一次官方前台 `codex exec --json --output-schema` 进程，最长 300 秒，并在成功、失败、
+普通入口运行一次官方前台 `codex exec --json --output-schema --output-last-message` 进程，最长 300 秒，并在成功、失败、
 超时或中断时回收整个进程组。这是观察窗口，不是任务预算。只有完整终态 JSONL、
-零退出码、typed manifest 派生封闭 outcome/summary schema 下唯一合法的最终对象，
+零退出码、JSONL lifecycle 与机器控制 result 文件的唯一合法 outcome/summary 对象，
 以及 artifact 验证全部成立才可闭合。证据丢失或无效会成为 `UNKNOWN`；LoopSkill
-没有文本 marker 回退，绝不 resend，也不执行 `codex exec resume`。
+不从 `agent_message` 取 Result、没有文本 marker 回退，绝不 resend，也不执行 `codex exec resume`。bounded stderr 只作私有 digest 诊断；overflow fail closed。
 4.0.0 的普通入口只支持预期能在此窗口内结束的单个 Host task；更长的单次 Host 执行
 不在本版公开支持范围内。
 

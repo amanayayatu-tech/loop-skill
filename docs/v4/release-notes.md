@@ -9,7 +9,7 @@ persistence model, control identity transport, Pack/MCP execution path, and
 Codex boundary with a small deterministic Kernel, one typed wire authority,
 one SQLite state authority, capability libraries, and one Codex Host Adapter.
 The production Adapter now consumes one foreground official
-`codex exec --json --output-schema` invocation instead of owning the experimental external
+`codex exec --json --output-schema --output-last-message` invocation instead of owning the experimental external
 app-server thread/turn lifecycle.
 
 ## User experience
@@ -53,9 +53,10 @@ distinct v4 identity and does not overwrite an existing v3 installation.
   successor history that cannot rewrite its predecessor;
 - rebuildable audit/archive/privacy/metrics projections that never become a
   second state authority.
-- one bounded foreground Codex process group, strict JSONL terminal validation,
-  a typed-manifest-derived closed outcome/summary schema with no prose-marker
-  fallback, same-process result/schema digest binding, and `UNKNOWN` without
+- one bounded foreground Codex process group, strict lifecycle-only JSONL validation,
+  a typed-manifest-derived closed outcome/summary schema, one official
+  output-last-message result file with no agent-message/prose-marker fallback,
+  same-process result/schema digest binding, bounded diagnostic stderr, and `UNKNOWN` without
   resend when process, stream, schema, or terminal evidence is lost.
 
 ## Honest claim boundary

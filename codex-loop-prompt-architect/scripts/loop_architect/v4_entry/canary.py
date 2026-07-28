@@ -47,6 +47,9 @@ CANARY_INTEGRITY_MEASUREMENT_DOMAIN = (
 CANARY_CONFIG_PREFIX_DOMAIN = b"loopskill.v4.exec-canary.config-prefix.v1\0"
 CANARY_CONFIG_DELTA_DOMAIN = b"loopskill.v4.exec-canary.config-delta.v1\0"
 CANARY_WORKSPACE_DOMAIN = b"loopskill.v4.exec-canary.workspace.v1\0"
+CANARY_PROVIDER_DIAGNOSTIC_DOMAIN = (
+    b"loopskill.v4.exec-canary.provider-diagnostic.v1\0"
+)
 
 HOST_CONFIG_DELTA_NONE = "NONE"
 HOST_CONFIG_DELTA_TRUST_APPEND = "CODEX_WORKSPACE_TRUST_APPEND_V1"
@@ -55,6 +58,7 @@ HOST_CONFIG_DELTA_UNEXPECTED = "UNEXPECTED"
 CANARY_RECEIPT_FILENAME = "canary-receipt.json"
 CANARY_INTEGRITY_BEFORE_FILENAME = "canary-integrity-before.json"
 CANARY_INTEGRITY_FILENAME = "canary-integrity.json"
+CANARY_PROVIDER_DIAGNOSTIC_FILENAME = "canary-provider-diagnostic.json"
 CANARY_OUTPUT_FILENAME = "canary-output.txt"
 CANARY_OUTPUT_BYTES = b"LOOPSKILL4_CANARY_OK\n"
 CANARY_OUTPUT_SHA256 = "8d23b5e88d9fb86f366700a6267f29b46bcca5cd45a59ed27afbbd04860eb638"
@@ -378,8 +382,13 @@ def _default_wait(provider: Any, workspace: Path, *, timeout_seconds: float = 30
         raise CanaryError("CANARY_TERMINAL_WAIT_UNAVAILABLE")
     try:
         waiter(timeout_seconds=timeout_seconds)
-    except (HostUnavailable, ValueError) as exc:
-        raise CanaryError("CANARY_TERMINAL_WAIT_FAILED") from exc
+    except HostUnavailable as exc:
+        code = getattr(exc, "provider_code", None)
+        if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", code):
+            raise CanaryError(f"CANARY_PROVIDER_{code}") from exc
+        raise CanaryError("CANARY_TERMINAL_EVIDENCE_UNCLASSIFIED") from exc
+    except ValueError as exc:
+        raise CanaryError("CANARY_TERMINAL_WAIT_CONTRACT_INVALID") from exc
 
 
 def _verify_workspace(workspace: Path) -> None:
@@ -432,6 +441,63 @@ def _provider_metrics(provider: Any) -> dict[str, int]:
     ):
         raise CanaryError("CANARY_PROVIDER_METRICS_INVALID")
     return metrics
+
+
+def _provider_terminal_diagnostic(provider: Any) -> dict[str, Any]:
+    reader = getattr(provider, "terminal_diagnostic", None)
+    raw = reader() if callable(reader) else None
+    required = {
+        "artifact",
+        "code",
+        "primary_code",
+        "result_bytes",
+        "result_control_digest",
+        "result_sha256",
+        "returncode_class",
+        "schema_control_digest",
+        "stderr_bytes",
+        "stderr_sha256",
+        "stdout_bytes",
+        "stdout_sha256",
+        "terminal_event_count",
+        "terminal_event_type",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != required:
+        raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_UNAVAILABLE")
+    value = dict(raw)
+    if (
+        value["artifact"] != "loopskill-codex-exec-terminal-diagnostic-v1"
+        or not isinstance(value["code"], str)
+        or not re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", value["code"])
+        or (
+            value["primary_code"] is not None
+            and (
+                not isinstance(value["primary_code"], str)
+                or not re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", value["primary_code"])
+            )
+        )
+        or value["returncode_class"] not in {"ZERO", "NONZERO", "UNAVAILABLE"}
+        or value["terminal_event_type"] not in {None, "turn.completed", "turn.failed", "error"}
+    ):
+        raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID")
+    for name in (
+        "result_bytes",
+        "stderr_bytes",
+        "stdout_bytes",
+        "terminal_event_count",
+    ):
+        if isinstance(value[name], bool) or not isinstance(value[name], int) or value[name] < 0:
+            raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID")
+    for name in (
+        "result_control_digest",
+        "result_sha256",
+        "schema_control_digest",
+        "stderr_sha256",
+        "stdout_sha256",
+    ):
+        if not isinstance(value[name], str) or not re.fullmatch(r"[0-9a-f]{64}", value[name]):
+            raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID")
+    return value
 
 
 def _single(values: Mapping[str, Any], code: str) -> Mapping[str, Any]:
@@ -519,6 +585,7 @@ def _receipt(
     integrity: Mapping[str, Any],
     issued_at: datetime,
     observed_at: datetime,
+    provider_diagnostic: Mapping[str, Any],
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "artifact": CANARY_ARTIFACT,
@@ -576,6 +643,9 @@ def _receipt(
         "prepare_host_task_count": 0,
         "private_data_used": False,
         "provider_resend_count": metrics["provider_resend_count"],
+        "provider_terminal_diagnostic_digest": _domain_digest(
+            CANARY_PROVIDER_DIAGNOSTIC_DOMAIN, provider_diagnostic
+        ),
         "research_scored": False,
         "result": "ACKNOWLEDGED",
         "review": "PASS",
@@ -685,6 +755,7 @@ def run_canary(
     )
 
     provider = None
+    provider_diagnostic = None
     after_integrity = None
     integrity_observed_at = None
     try:
@@ -730,6 +801,17 @@ def run_canary(
         close = None if provider is None else getattr(provider, "close", None)
         if callable(close):
             close()
+        if provider is not None:
+            try:
+                provider_diagnostic = _provider_terminal_diagnostic(provider)
+            except CanaryError:
+                provider_diagnostic = None
+            if provider_diagnostic is not None:
+                _write_canonical_once(
+                    root,
+                    CANARY_PROVIDER_DIAGNOSTIC_FILENAME,
+                    provider_diagnostic,
+                )
         after_integrity = _integrity_snapshot(integrity_inputs)
         integrity_observed_at = clock()
         comparison = _integrity_comparison(
@@ -749,6 +831,8 @@ def run_canary(
     assert provider is not None
     assert integrity_observed_at is not None
     metrics = _provider_metrics(provider)
+    if provider_diagnostic is None or provider_diagnostic.get("code") != "PASS":
+        raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID")
     live, _ = _live_summary(candidate, store_root, workspace)
     receipt = _receipt(
         candidate,
@@ -757,6 +841,7 @@ def run_canary(
         comparison,
         issued_at,
         integrity_observed_at,
+        provider_diagnostic,
     )
     _write_receipt(root, receipt)
     return receipt

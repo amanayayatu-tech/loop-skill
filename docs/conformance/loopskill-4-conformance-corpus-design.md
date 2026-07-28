@@ -229,13 +229,15 @@ is normative and expands before execution.
 
 The 4.0.0 Codex profile additionally parameterizes these Host families with the
 foreground exec transport. Deterministic fixtures must cover exact shell-free
-argv/stdin/cwd, bundle/PATH binary binding, help/version/`--output-schema`
+argv/stdin/cwd, bundle/PATH binary binding, help/version/`--output-schema` plus
+`--output-last-message`
 preflight with zero
 invocations, workspace-write plus disabled sandbox network, non-Git roots,
-success, terminal failure, nonzero exit, malformed/truncated/oversized JSONL,
+success with empty or bounded nonempty stderr, terminal failure, nonzero exit,
+stderr overflow, malformed/truncated/oversized JSONL,
 unknown additive events, conflicting identities, missing/multiple terminal
 events, exact four-value result enum, missing/additional/wrong-type/oversized/
-malformed/conflicting structured results, private schema identity/race/cleanup,
+malformed structured result files, private schema/result identity/race/cleanup,
 timeout/interruption, and process-group cleanup. A valid directly
 captured stream may provide strict same-process effect/result/lifecycle
 evidence while the overall capability profile remains cooperative. No fixture

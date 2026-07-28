@@ -6,7 +6,8 @@
 - SQLite and Codex do not share one transaction. LoopSkill does not promise
   cross-system exactly-once across SQLite, Codex, Git, or network boundaries.
   External outcomes can remain `UNKNOWN`.
-- The 4.0 Provider owns one foreground `codex exec --json --output-schema`
+- The 4.0 Provider owns one foreground `codex exec --json --output-schema
+  --output-last-message`
   process and accepts only its directly captured terminal stream plus one
   schema-valid final outcome/summary object. Schema or result drift fails
   closed; there is no prose-marker fallback. It does not promise a

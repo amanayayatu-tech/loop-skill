@@ -23,6 +23,24 @@ def canary(candidate: str) -> dict:
     issued = datetime.now(timezone.utc).replace(microsecond=0)
     issued_text = issued.isoformat().replace("+00:00", "Z")
     fresh_text = (issued + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    result = b'{"outcome":"PASS","summary":"complete"}'
+    empty = hashlib.sha256(b"").hexdigest()
+    diagnostic = {
+        "artifact": "loopskill-codex-exec-terminal-diagnostic-v1",
+        "code": "PASS",
+        "primary_code": None,
+        "result_bytes": len(result),
+        "result_control_digest": hashlib.sha256(result).hexdigest(),
+        "result_sha256": hashlib.sha256(result).hexdigest(),
+        "returncode_class": "ZERO",
+        "schema_control_digest": "6" * 64,
+        "stderr_bytes": 0,
+        "stderr_sha256": empty,
+        "stdout_bytes": 100,
+        "stdout_sha256": "7" * 64,
+        "terminal_event_count": 1,
+        "terminal_event_type": "turn.completed",
+    }
     value = {
         "artifact": runner.rc.CANARY_ARTIFACT,
         "candidate_sha": candidate,
@@ -69,6 +87,9 @@ def canary(candidate: str) -> dict:
         "prepare_host_task_count": 0,
         "private_data_used": False,
         "provider_resend_count": 0,
+        "provider_terminal_diagnostic_digest": runner.rc._domain_digest(
+            runner.rc.CANARY_PROVIDER_DIAGNOSTIC_DOMAIN, diagnostic
+        ),
         "research_scored": False,
         "result": "ACKNOWLEDGED",
         "review": "PASS",

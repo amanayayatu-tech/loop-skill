@@ -9,7 +9,7 @@ conformance corpus. Core sees only manifest-generated `EffectAttempt`,
 or subprocess behavior.
 
 The production Provider is `CodexExecProvider`. It consumes the official
-foreground `codex exec --json --output-schema` boundary. It does not implement the experimental
+foreground `codex exec --json --output-schema --output-last-message` boundary. It does not implement the experimental
 external app-server protocol and does not expose a fallback to it.
 
 ## Execution ownership
@@ -25,7 +25,7 @@ One claimed Attempt permits one foreground process spawn:
 | --- | --- | --- |
 | Attempt committed but unclaimed | one claimant may invoke `codex exec` | the same durable Attempt may make its first call |
 | process started | no second spawn | accept only the directly captured terminal stream |
-| complete valid JSONL + one schema-valid final object + zero exit | bind same-process terminal observation and schema/result digests | local result/artifact/review/finalization may advance |
+| complete valid JSONL lifecycle + one schema-valid result file + zero exit | bind same-process terminal observation and schema/result digests | local result/artifact/review/finalization may advance |
 | lost, malformed, failed, ambiguous, timed-out, or interrupted evidence | no retry or resume | preserve `UNKNOWN` |
 
 There is no daemon, proxy, Supervisor, automatic `exec resume`, project
@@ -40,13 +40,16 @@ It is not cross-system exactly-once or provider idempotency.
 
 ## Preflight and invocation
 
-Preflight requires the official `--output-schema` capability. The Provider
+Preflight requires the official `--output-schema` and `--output-last-message`
+capabilities. The Provider
 derives one closed object schema from the typed `StageExternalResult` and
 `StageResult` payload contract, writes it to a private canonical non-symlink
 read-only temporary control file outside the artifact workspace, verifies its
-identity and bytes before and after the one process, and removes it. The JSONL
-parser accepts exactly one agent-message object with required `outcome` and
-`summary`; no prose-marker fallback exists.
+identity and bytes before and after the one process, and removes it. A second
+machine-controlled owner-only ordinary file in the same private directory is
+the sole semantic-result byte source. It is inode-, type-, size-, digest-, and
+schema-checked before cleanup. JSONL never supplies the Result and no
+agent-message or prose-marker fallback exists.
 
 Preflight has zero model/Host effects. It:
 
@@ -56,7 +59,8 @@ Preflight has zero model/Host effects. It:
 3. runs bounded `--version` and `exec --help` inspection; and
 4. fails closed if any required reviewed flag is absent.
 
-The pure argv builder selects `exec --json`, exact `--cd`, workspace-write
+The pure argv builder selects `exec --json`, both machine-controlled output
+paths, exact `--cd`, workspace-write
 sandbox, `sandbox_workspace_write.network_access=false`, non-Git support,
 ephemeral execution, ignored user config/rules, and prompt input from stdin. It
 never invokes a shell or asks the model/user for a control identity.
@@ -73,15 +77,23 @@ The UTF-8 JSONL parser requires exactly:
 - one `thread.started` with one machine-emitted identity;
 - one `turn.started`;
 - one `turn.completed` and no `turn.failed` or top-level `error`;
-- zero process exit status and empty stderr; and
-- at least one completed agent message, with the final one used as the result.
+- zero process exit status; and
+- one nonempty bounded result file valid against the closed manifest-derived schema.
 
 Unknown additive event types and item-level warnings may be ignored. Duplicate
 or conflicting identities, multiple terminal events, missing terminal/result,
-malformed or truncated JSON, oversized output, nonzero exit, stderr, timeout,
-or process death fail closed. The existing semantic-result parser and external
+malformed or truncated JSON, oversized output, nonzero exit, timeout, or
+process death fail closed. Bounded stderr is retained only as byte count and
+digest diagnostics and does not veto an otherwise valid terminal chain;
+stderr overflow fails closed. The existing semantic-result parser and external
 artifact verification remain independent gates; terminal JSONL alone cannot
 mint PASS.
+
+Failure evidence retains one privacy-safe internal classification and bounded
+byte/digest measurements. The public receipt binds its digest but contains no
+raw stderr, result, transcript, path, or Host identity. The classification is
+diagnostic only; the Adapter still maps ambiguous external completion to
+canonical `UNKNOWN` and never resends.
 
 The Provider caches the valid transcript only inside the live Provider object.
 `readback`, `read_task_result`, and lifecycle reads expose that same-process

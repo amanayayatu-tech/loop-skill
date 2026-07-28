@@ -187,6 +187,28 @@ class FakeCanaryProvider:
             raise ValueError("invalid wait")
         self.terminal_wait_read_count += 1
 
+    def terminal_diagnostic(self):
+        empty = hashlib.sha256(b"").hexdigest()
+        result = b'{"outcome":"PASS","summary":"disposable canary completed"}'
+        return {
+            "artifact": "loopskill-codex-exec-terminal-diagnostic-v1",
+            "code": "PASS" if self.mode != "unknown" else "STDOUT_JSONL_INVALID",
+            "primary_code": None,
+            "result_bytes": len(result),
+            "result_control_digest": hashlib.sha256(result).hexdigest(),
+            "result_sha256": hashlib.sha256(result).hexdigest(),
+            "returncode_class": "ZERO",
+            "schema_control_digest": domain_digest(
+                "loopskill-codex-result-schema-v1\n", result_payload_schema()
+            ),
+            "stderr_bytes": 0,
+            "stderr_sha256": empty,
+            "stdout_bytes": 0,
+            "stdout_sha256": empty,
+            "terminal_event_count": 1 if self.mode != "unknown" else 0,
+            "terminal_event_type": "turn.completed" if self.mode != "unknown" else None,
+        }
+
 
 class V4DisposableExecCanaryEntryTests(unittest.TestCase):
     def run_pass(self, evidence: Path):

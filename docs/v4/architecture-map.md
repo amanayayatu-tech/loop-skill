@@ -49,10 +49,11 @@ The public composition root constructs `CodexExecProvider` only after explicit
 confirmation. It sends the digest-bound semantic boundary on stdin, not
 user/model control identity. It derives one closed outcome/summary JSON Schema
 from the typed manifest, passes it through the official `--output-schema`
-option from a private read-only temporary control path, and removes that path
-after the process. The Provider owns one foreground process group and accepts
-only one bounded complete JSONL terminal chain with exactly one schema-valid
-final object. It has no text-marker fallback, provider
+option, and supplies one private `--output-last-message` path as the sole
+semantic-result byte source. Both controls remain outside the artifact workspace
+and are removed after the process. The Provider owns one foreground process group
+and accepts one bounded complete JSONL lifecycle plus one schema-valid result file.
+It has no `agent_message`/text-marker fallback, provider
 idempotency key, automatic resume, or cross-process readback. Missing,
 ambiguous, failed, truncated, timed-out, or lost evidence becomes `UNKNOWN`,
 never another invocation.
