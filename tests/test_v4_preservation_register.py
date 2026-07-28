@@ -42,6 +42,22 @@ class V4PreservationRegisterTests(unittest.TestCase):
         self.assertEqual(result["preservation_family_count"], 15)
         self.assertEqual(result["preservation_case_binding_count"], 317)
 
+    def test_source_identity_is_bound_to_tags_not_current_main(self) -> None:
+        source = self.registry["source_identity"]
+
+        def resolve(_root: Path, *args: str) -> bytes:
+            revision = args[-1]
+            if revision == f"{source['tag']}^{{}}":
+                return f"{source['commit']}\n".encode()
+            if revision == f"{source['paper_reference_tag']}^{{}}":
+                return f"{source['paper_reference_commit']}\n".encode()
+            raise AssertionError(f"unexpected Git lookup: {revision}")
+
+        with mock.patch.object(validator, "_run", side_effect=resolve) as run:
+            validator._validate_source_identity(ROOT, self.registry)
+
+        self.assertEqual(run.call_count, 2)
+
     def test_exact_case_catalog_is_frozen(self) -> None:
         corpus = (ROOT / validator.CORPUS_RELATIVE).read_text(encoding="utf-8")
         exact, _ = validator._exact_case_catalog(corpus)
