@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
-## [4.0.0] - 2026-07-27
+## [4.0.0] - 2026-07-28
 
 ### Breaking changes
 

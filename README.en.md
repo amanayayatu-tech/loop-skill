@@ -7,7 +7,7 @@
 [中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> Release status: The LoopSkill 4.0.0 candidate is undergoing release validation and is not yet published. Public-release identity is established by final readback of the `v4.0.0` tag and GitHub Release.
+> Release status: This source tree is the LoopSkill 4.0.0 stable release. Public availability is established by the `v4.0.0` tag and GitHub Release readback.
 
 LoopSkill turns long-running work into a recoverable loop with explicit authority, evidence, and stop conditions. An ordinary user supplies only a goal or goal file; machines own protocol identities, versions, receipts, and Host readback. The necessary human boundary remains:
 

@@ -7,7 +7,7 @@
 [English](README.en.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> 发布状态：LoopSkill 4.0.0 候选正在接受发行门禁；尚未发布。公开发行身份最终以 `v4.0.0` tag 与 GitHub Release 的 readback 为准。
+> 发布状态：此源码树是 LoopSkill 4.0.0 稳定发行；公开可用性以 `v4.0.0` tag 与 GitHub Release readback 为准。
 
 LoopSkill 把长任务变成一个有明确授权、证据和停止条件的可恢复 loop。普通用户只提供目标或目标文件；机器负责协议身份、版本、收据和 Host readback。产品仍保留必要的人类流程：
 

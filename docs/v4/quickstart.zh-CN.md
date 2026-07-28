@@ -1,6 +1,6 @@
 # LoopSkill 4 快速开始
 
-状态：LoopSkill 4.0.0 候选正在接受发行门禁，尚未发布；公开发行身份以 `v4.0.0` tag 与 GitHub Release 的最终 readback 为准。
+状态：此源码树是 LoopSkill 4.0.0 稳定发行；公开可用性以 `v4.0.0` tag 与 GitHub Release readback 为准。
 
 ## 安装
 
