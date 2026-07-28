@@ -28,12 +28,15 @@ alone is not a release.
 
 ## Conformance and receipts
 
-`scripts/run_v4_conformance.py` emits one result for each frozen case ID after
-running its bound unittest. Zero-test loads, skipped required tests, foreign
-case IDs, changed catalog digests, and missing results fail. The real App
-canary consumes typed fixture authorities instead of reconstructing protocol
-literals, and its public receipt contains no absolute private path, task/thread/
-turn identity, prompt, transcript, secret, or raw log.
+`scripts/run_v4_conformance.py` emits exactly 349 semantic coverage mappings
+bound to exactly 74 unique, actually executed deterministic assertion methods.
+It sets `independent_case_observation_claimed=false`; the mappings are not 349
+independent executions or runtime observations. Zero-test loads, skipped
+required tests, foreign case IDs, changed catalog digests, mapping or executed-
+method count drift, stronger observation claims, and missing results fail. The
+real App canary consumes typed fixture authorities instead of reconstructing
+protocol literals, and its public receipt contains no absolute private path,
+task/thread/turn identity, prompt, transcript, secret, or raw log.
 
 That minimized JSON is not self-authenticating and cannot satisfy the final
 gate alone. Final validation also opens the exact disposable v4 store and

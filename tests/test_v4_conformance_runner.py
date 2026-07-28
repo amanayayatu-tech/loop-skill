@@ -117,6 +117,13 @@ class V4ConformanceRunnerTests(unittest.TestCase):
                 receipt = runner.run(ROOT, candidate, path)
         self.assertEqual(receipt["case_count"], 349)
         self.assertEqual(receipt["mapped"], 349)
+        self.assertEqual(receipt["semantic_coverage_mapping_count"], 349)
+        self.assertEqual(receipt["test_method_count"], 74)
+        self.assertEqual(
+            receipt["evidence_profile"],
+            "SEMANTIC_MAPPINGS_TO_UNIQUE_EXECUTED_ASSERTIONS",
+        )
+        self.assertIs(receipt["independent_case_observation_claimed"], False)
         self.assertEqual(receipt["failed"], 0)
         self.assertEqual(
             [item["case_id"] for item in receipt["case_results"]],
@@ -215,6 +222,12 @@ class V4ConformanceRunnerTests(unittest.TestCase):
             ) as executed:
                 receipt = runner.hosted_run(ROOT, candidate)
         self.assertEqual(receipt["case_count"], 349)
+        self.assertEqual(receipt["deterministic_assertion_method_count"], 74)
+        self.assertEqual(
+            receipt["evidence_profile"],
+            "SEMANTIC_MAPPINGS_TO_UNIQUE_EXECUTED_ASSERTIONS",
+        )
+        self.assertIs(receipt["independent_case_observation_claimed"], False)
         self.assertEqual(receipt["real_external_effects"], 0)
         self.assertEqual(receipt["status"], "PASS_LOCAL_APP_GATE_REQUIRED")
         self.assertEqual(

@@ -816,9 +816,14 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
         or value.get("status") != "PASS"
         or value.get("case_count") != 349
         or value.get("mapped") != 349
+        or value.get("semantic_coverage_mapping_count") != 349
+        or value.get("passed_test_methods") != 74
         or value.get("failed") != 0
         or value.get("real_external_effects") != 1
         or value.get("canonical_case_ids") is not True
+        or value.get("evidence_profile")
+        != "SEMANTIC_MAPPINGS_TO_UNIQUE_EXECUTED_ASSERTIONS"
+        or value.get("independent_case_observation_claimed") is not False
     ):
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
     results = value.get("case_results")
@@ -834,7 +839,11 @@ def validate_conformance_receipt(value: dict[str, Any], candidate: str, root: Pa
     ):
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
     test_results = value.get("test_method_results")
-    if not isinstance(test_results, list) or value.get("test_method_count") != len(test_results):
+    if (
+        not isinstance(test_results, list)
+        or value.get("test_method_count") != len(test_results)
+        or len(test_results) != 74
+    ):
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
     tests_by_id: dict[str, dict[str, Any]] = {}
     for item in test_results:

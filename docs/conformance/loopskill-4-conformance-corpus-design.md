@@ -1092,8 +1092,12 @@ claim 349 independent executions. `UX-009-a` and
 test may cover multiple semantic mappings; the receipt must not present those
 mappings as independently executed or observed. No family row alone produces
 PASS and no mapping may be omitted. Selecting this evidence profile instead of
-349 selector-specific executable results is a release-claim decision and must
-be author-approved before publication.
+349 selector-specific executable results was author-approved on 2026-07-28 as
+release profile A for 4.0.0. The machine receipt therefore freezes exactly 349
+semantic mappings, exactly 74 unique actually executed assertion methods, and
+`independent_case_observation_claimed=false`. These counts and the weaker claim
+are normative: drift, omission, an unexecuted target, or relabeling a mapping
+as an independent observation fails closed.
 
 32 KiB Pack and at least 50% control-interaction reduction were candidate beta
 targets, not alpha correctness gates. The P7 pre-comparison freeze makes them

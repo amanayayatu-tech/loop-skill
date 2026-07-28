@@ -303,6 +303,32 @@ class V4RcAcceptanceTests(unittest.TestCase):
             ):
                 value = runner.run(ROOT, candidate, path)
         validator.validate_conformance_receipt(value, candidate, ROOT)
+        changed_profile = dict(value)
+        changed_profile["evidence_profile"] = "SELECTOR_SPECIFIC_OBSERVATIONS"
+        with self.assertRaisesRegex(
+            validator.RcValidationError, "RC_CONFORMANCE_RECEIPT_INVALID"
+        ):
+            validator.validate_conformance_receipt(changed_profile, candidate, ROOT)
+        changed_profile = dict(value)
+        changed_profile["independent_case_observation_claimed"] = True
+        with self.assertRaisesRegex(
+            validator.RcValidationError, "RC_CONFORMANCE_RECEIPT_INVALID"
+        ):
+            validator.validate_conformance_receipt(changed_profile, candidate, ROOT)
+        changed_count = dict(value)
+        changed_count["test_method_count"] = 73
+        with self.assertRaisesRegex(
+            validator.RcValidationError, "RC_CONFORMANCE_RECEIPT_INVALID"
+        ):
+            validator.validate_conformance_receipt(changed_count, candidate, ROOT)
+        changed_mapping_count = dict(value)
+        changed_mapping_count["semantic_coverage_mapping_count"] = 348
+        with self.assertRaisesRegex(
+            validator.RcValidationError, "RC_CONFORMANCE_RECEIPT_INVALID"
+        ):
+            validator.validate_conformance_receipt(
+                changed_mapping_count, candidate, ROOT
+            )
         value["case_results"][0]["case_id"] = "CASE-NOT-IN-FROZEN-CATALOG"
         value["case_results_digest"] = hashlib.sha256(
             validator._canonical(value["case_results"])

@@ -55,6 +55,9 @@ DOC = "test_v4_docs"
 APP = "test_v4_app_server_provider"
 
 CASE_CONTRACT_VERSION = "loopskill-v4-executable-case-contract-v1"
+EVIDENCE_PROFILE = "SEMANTIC_MAPPINGS_TO_UNIQUE_EXECUTED_ASSERTIONS"
+EXPECTED_SEMANTIC_MAPPING_COUNT = 349
+EXPECTED_EXECUTED_ASSERTION_METHOD_COUNT = 74
 CASE_CONTRACT_FIELDS = {
     "capability_profile",
     "case_id",
@@ -507,7 +510,7 @@ def _catalog_and_bindings(root: Path, candidate: str):
     ).decode("utf-8", "strict")
     catalog, by_family = preservation._exact_case_catalog(corpus)
     family_specs = _family_specs(corpus)
-    if len(catalog) != 349:
+    if len(catalog) != EXPECTED_SEMANTIC_MAPPING_COUNT:
         raise RuntimeError("CONFORMANCE_CASE_COUNT_DRIFT")
     concrete_families = {family for family, cases in by_family.items() if cases}
     if set(FAMILY_TEST_BINDINGS) != concrete_families:
@@ -587,6 +590,8 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
             ).hexdigest()
         results.append(result)
     test_method_results = [target_executions[key] for key in sorted(target_executions)]
+    if len(test_method_results) != EXPECTED_EXECUTED_ASSERTION_METHOD_COUNT:
+        raise RuntimeError("CONFORMANCE_EXECUTED_ASSERTION_COUNT_DRIFT")
     body = {
         "artifact": "loopskill-v4-conformance-execution-v2",
         "candidate_sha": candidate,
@@ -596,9 +601,12 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
         "case_results": results,
         "failed": 0,
         "corpus_sha256": corpus_digest,
+        "evidence_profile": EVIDENCE_PROFILE,
+        "independent_case_observation_claimed": False,
         "mapped": len(results),
         "passed_test_methods": len(test_method_results),
         "real_external_effects": 1,
+        "semantic_coverage_mapping_count": len(results),
         "status": "PASS",
         "test_method_count": len(test_method_results),
         "test_method_results": test_method_results,
@@ -627,6 +635,8 @@ def hosted_run(root: Path, candidate: str) -> dict[str, Any]:
         test_id: _run_test(test_id)
         for test_id in sorted({value[1] for value in bindings.values()})
     }
+    if len(target_results) != EXPECTED_EXECUTED_ASSERTION_METHOD_COUNT:
+        raise RuntimeError("CONFORMANCE_EXECUTED_ASSERTION_COUNT_DRIFT")
     mapping_results = [
         _run_case(
             case_id,
@@ -647,6 +657,8 @@ def hosted_run(root: Path, candidate: str) -> dict[str, Any]:
         "deterministic_assertion_results_digest": hashlib.sha256(
             rc._canonical([target_results[key] for key in sorted(target_results)])
         ).hexdigest(),
+        "evidence_profile": EVIDENCE_PROFILE,
+        "independent_case_observation_claimed": False,
         "semantic_coverage_mapping_count": len(mapping_results),
         "semantic_coverage_mapping_digest": hashlib.sha256(
             rc._canonical(mapping_results)

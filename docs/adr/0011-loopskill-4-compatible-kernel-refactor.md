@@ -863,8 +863,11 @@ Compatibility decisions:
 | `OD-3` | v3 read/shadow/import lasts one major cycle; no dual write or in-place conversion |
 | `OD-4` | Measurement definitions are approved; 32 KiB Pack and at least 50% interaction reduction remain candidate beta targets. Same-scenario v3 baseline and final thresholds must be frozen before observing v4 performance; they are not alpha correctness gates |
 | `OD-5` | First release supports only a Codex Adapter; kernel remains Host-neutral; no multi-host claim before a second real Adapter passes conformance |
+| `OD-6` | Release-evidence profile A is approved: 349 semantic mappings bind exactly 74 unique executed assertion methods; they are not 349 independent observations |
 
-No unresolved product semantic blocks the fixture-only P6 compatibility slice.
+This table is retained as decision history. The v4-only hard-break addendum
+normatively supersedes OD-3 and the former P6 compatibility implementation;
+OD-6 resolves the final conformance release-claim choice.
 
 ## Phases and gates
 
@@ -1038,6 +1041,15 @@ unless its fixture actually returns such an observation. Unknown IDs,
 self-consistent expected-contract mutation, unrelated target substitution, or
 an unexecuted target fails closed. This intentionally replaces the earlier
 second hand-written observer table.
+
+**Author release-evidence decision, 2026-07-28:** profile A is accepted for
+4.0.0. The release receipt contains exactly 349 semantic coverage mappings
+bound to exactly 74 unique, actually executed deterministic assertion methods.
+It must set `independent_case_observation_claimed=false` and must never describe
+the 349 mappings as 349 independent executions or runtime observations. The two
+real-App case IDs additionally bind the one exact-SHA disposable canary. A
+mapping-count drift, assertion-method-count drift, missing target execution, or
+stronger observation claim fails closed.
 
 ## Non-goals and safeguards
 
