@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tarfile
 import stat
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -49,11 +49,14 @@ FORBIDDEN_EVIDENCE_KEYS = {
     "worktree",
 }
 REQUIRED_DISTRIBUTIONS = ("jsonschema", "coverage", "PyYAML")
-CANARY_ISSUER = "codex-app-task-readback-v1"
-CANARY_TRUST = "host-tool-observed"
-CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.app-canary.provenance.v1\0"
-CANARY_LIVE_DOMAIN = b"loopskill.v4.app-canary.live-readback.v1\0"
-CANARY_HOST_ID_DOMAIN = b"loopskill.v4.app-canary.host-identity.v1\0"
+CANARY_ARTIFACT = "loopskill-v4-disposable-codex-exec-canary-v1"
+CANARY_ISSUER = "codex-exec-jsonl-v1"
+CANARY_TRUST = "same-process-terminal-observed"
+CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.exec-canary.provenance.v1\0"
+CANARY_LIVE_DOMAIN = b"loopskill.v4.exec-canary.live-observation.v1\0"
+CANARY_HOST_ID_DOMAIN = b"loopskill.v4.exec-canary.host-identity.v1\0"
+CANARY_INTEGRITY_BEFORE_FILENAME = "canary-integrity-before.json"
+CANARY_INTEGRITY_FILENAME = "canary-integrity.json"
 CANARY_OUTPUT_FILENAME = "canary-output.txt"
 CANARY_OUTPUT_BYTES = b"LOOPSKILL4_CANARY_OK\n"
 CANARY_OUTPUT_SHA256 = "8d23b5e88d9fb86f366700a6267f29b46bcca5cd45a59ed27afbbd04860eb638"
@@ -623,8 +626,6 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
 def validate_canary_receipt(
     value: dict[str, Any],
     candidate: str,
-    *,
-    now: datetime | None = None,
 ) -> None:
     expected_keys = {
         "artifact",
@@ -669,6 +670,11 @@ def validate_canary_receipt(
         "issued_at",
         "observed_at",
         "fresh_until",
+        "host_auth_after_digest",
+        "host_auth_before_digest",
+        "host_config_after_digest",
+        "host_config_before_digest",
+        "host_integrity_changed_input_count",
         "thread_content_retained",
         "unknown_preserved",
         "v3_bytes_changed",
@@ -676,7 +682,7 @@ def validate_canary_receipt(
     if set(value) != expected_keys:
         raise RcValidationError("RC_CANARY_RECEIPT_SHAPE_INVALID")
     required = {
-        "artifact": "loopskill-v4-disposable-app-canary-v1",
+        "artifact": CANARY_ARTIFACT,
         "candidate_sha": candidate,
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
@@ -687,6 +693,7 @@ def validate_canary_receipt(
         "host_task_readback_count": 1,
         "host_receipt_issuer": CANARY_ISSUER,
         "host_receipt_trust": CANARY_TRUST,
+        "host_integrity_changed_input_count": 0,
         "host_lifecycle_readback_count": 1,
         "intake_external_effects": 0,
         "intake_heartbeat_count": 0,
@@ -743,24 +750,32 @@ def validate_canary_receipt(
     for field in ("host_task_identity_digest", "host_result_digest"):
         if not isinstance(value.get(field), str) or not re.fullmatch(r"[0-9a-f]{64}", value[field]):
             raise RcValidationError(f"RC_CANARY_RECEIPT_INVALID: {field}")
+    for field in (
+        "host_auth_after_digest",
+        "host_auth_before_digest",
+        "host_config_after_digest",
+        "host_config_before_digest",
+    ):
+        if not isinstance(value.get(field), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", value[field]
+        ):
+            raise RcValidationError(f"RC_CANARY_RECEIPT_INVALID: {field}")
     try:
         observed = datetime.fromisoformat(value["observed_at"].replace("Z", "+00:00"))
         issued = datetime.fromisoformat(value["issued_at"].replace("Z", "+00:00"))
         fresh_until = datetime.fromisoformat(value["fresh_until"].replace("Z", "+00:00"))
     except (KeyError, TypeError, ValueError) as exc:
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: freshness") from exc
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     issued_utc = issued.astimezone(timezone.utc)
+    observed_utc = observed.astimezone(timezone.utc)
     fresh_until_utc = fresh_until.astimezone(timezone.utc)
     if (
         observed.tzinfo is None
         or issued.tzinfo is None
         or fresh_until.tzinfo is None
-        or observed.astimezone(timezone.utc) != issued_utc
+        or not issued_utc <= observed_utc <= fresh_until_utc
         or not issued_utc < fresh_until_utc
         or (fresh_until_utc - issued_utc).total_seconds() > 600
-        or issued_utc > current + timedelta(seconds=30)
-        or current > fresh_until_utc
     ):
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: freshness")
     if not isinstance(value.get("candidate_goal_digest"), str) or not re.fullmatch(
@@ -773,6 +788,101 @@ def validate_canary_receipt(
     expected_provenance = _domain_digest(CANARY_PROVENANCE_DOMAIN, provenance)
     if claimed_provenance != expected_provenance:
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: provenance_digest")
+
+
+def _read_canonical_object(path: Path, code: str) -> dict[str, Any]:
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8", "strict"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RcValidationError(code) from exc
+    if not isinstance(value, dict) or raw != _canonical(value):
+        raise RcValidationError(code)
+    return value
+
+
+def _validate_canary_integrity_evidence(
+    receipt: Mapping[str, Any], candidate: str, evidence_root: Path
+) -> None:
+    before = _read_canonical_object(
+        evidence_root / CANARY_INTEGRITY_BEFORE_FILENAME,
+        "RC_CANARY_INTEGRITY_BEFORE_INVALID",
+    )
+    final = _read_canonical_object(
+        evidence_root / CANARY_INTEGRITY_FILENAME,
+        "RC_CANARY_INTEGRITY_INVALID",
+    )
+    if set(before) != {"artifact", "candidate_sha", "inputs", "issued_at"} or (
+        before["artifact"] != "loopskill-v4-canary-integrity-before-v1"
+        or before["candidate_sha"] != candidate
+        or before["issued_at"] != receipt["issued_at"]
+    ):
+        raise RcValidationError("RC_CANARY_INTEGRITY_BEFORE_INVALID")
+    if set(final) != {
+        "after",
+        "artifact",
+        "before",
+        "candidate_sha",
+        "changed_bytes",
+        "changed_input_count",
+        "observed_at",
+        "total_changed_bytes",
+    } or (
+        final["artifact"] != "loopskill-v4-canary-integrity-measurement-v1"
+        or final["candidate_sha"] != candidate
+        or final["observed_at"] != receipt["observed_at"]
+        or final["before"] != before["inputs"]
+    ):
+        raise RcValidationError("RC_CANARY_INTEGRITY_INVALID")
+    labels = {"host_auth", "host_config"}
+    for phase in ("before", "after"):
+        rows = final.get(phase)
+        if not isinstance(rows, dict) or set(rows) != labels:
+            raise RcValidationError("RC_CANARY_INTEGRITY_INVALID")
+        for row in rows.values():
+            if (
+                not isinstance(row, dict)
+                or set(row) != {"digest", "presence", "size"}
+                or not isinstance(row["digest"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", row["digest"]) is None
+                or row["presence"] not in {"ABSENT", "FILE"}
+                or isinstance(row["size"], bool)
+                or not isinstance(row["size"], int)
+                or row["size"] < 0
+            ):
+                raise RcValidationError("RC_CANARY_INTEGRITY_INVALID")
+    changed = final.get("changed_bytes")
+    if (
+        not isinstance(changed, dict)
+        or set(changed) != labels
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in changed.values()
+        )
+        or final.get("changed_input_count")
+        != sum(value > 0 for value in changed.values())
+        or final.get("total_changed_bytes") != sum(changed.values())
+        or final["changed_input_count"] != 0
+        or final["total_changed_bytes"] != 0
+    ):
+        raise RcValidationError("RC_CANARY_INTEGRITY_CHANGED")
+    for label in labels:
+        if final["before"][label] != final["after"][label]:
+            raise RcValidationError("RC_CANARY_INTEGRITY_DIGEST_MISMATCH")
+    if (
+        receipt["config_bytes_changed"] != final["changed_bytes"]["host_config"]
+        or receipt["host_integrity_changed_input_count"]
+        != final["changed_input_count"]
+        or receipt["host_auth_before_digest"]
+        != final["before"]["host_auth"]["digest"]
+        or receipt["host_auth_after_digest"]
+        != final["after"]["host_auth"]["digest"]
+        or receipt["host_config_before_digest"]
+        != final["before"]["host_config"]["digest"]
+        or receipt["host_config_after_digest"]
+        != final["after"]["host_config"]["digest"]
+    ):
+        raise RcValidationError("RC_CANARY_INTEGRITY_RECEIPT_MISMATCH")
 
 
 def _live_canary_observation(
@@ -896,6 +1006,7 @@ def validate_live_canary(
 ) -> str:
     """Bind the receipt to the closed same-process transcript and local state."""
     validate_canary_receipt(value, candidate)
+    _validate_canary_integrity_evidence(value, candidate, store_root.parent)
     observation = _live_canary_observation(root, candidate, store_root)
     digest = _domain_digest(CANARY_LIVE_DOMAIN, observation)
     if (
@@ -1250,7 +1361,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 packet, args.candidate, args.root, evidence_paths
             )
             if (
-                evidence_values["app_canary"] != canary
+                evidence_values["exec_canary"] != canary
                 or evidence_values["final_conformance"] != conformance
                 or evidence_values["static_validation"] != exact_static_receipt
             ):

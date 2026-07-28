@@ -35,7 +35,7 @@ def receipt_for(key: str, candidate: str) -> dict:
         "artifact": packet_builder._EVIDENCE_ARTIFACTS[key],
         "candidate_sha": candidate,
     }
-    if key == "app_canary":
+    if key == "exec_canary":
         return {
             **common,
             "app_restart_count": 0,
@@ -47,10 +47,15 @@ def receipt_for(key: str, candidate: str) -> dict:
             "entry": "loopskill4",
             "finalization": "ACKNOWLEDGED",
             "host_create_readback_count": 1,
+            "host_auth_after_digest": digest,
+            "host_auth_before_digest": digest,
+            "host_config_after_digest": digest,
+            "host_config_before_digest": digest,
+            "host_integrity_changed_input_count": 0,
             "host_lifecycle_readback_count": 1,
             "host_receipt_digest": digest,
-            "host_receipt_issuer": "codex-app-task-readback-v1",
-            "host_receipt_trust": "host-tool-observed",
+            "host_receipt_issuer": "codex-exec-jsonl-v1",
+            "host_receipt_trust": "same-process-terminal-observed",
             "host_result_digest": digest,
             "host_task_create_count": 1,
             "host_task_identity_digest": digest,
@@ -337,7 +342,7 @@ class V4AuthorPacketTests(unittest.TestCase):
     def test_each_receipt_requires_its_typed_artifact_and_pass_state(self) -> None:
         fixture = self.fixture()
         status_fields = {
-            "app_canary": ("status", "FAIL"),
+            "exec_canary": ("status", "FAIL"),
             "coverage": ("status", "FAIL"),
             "distribution": ("status", "FAIL"),
             "final_conformance": ("status", "FAIL"),
@@ -378,10 +383,10 @@ class V4AuthorPacketTests(unittest.TestCase):
     def test_fixed_counts_zero_effects_and_digest_shapes_fail_closed(self) -> None:
         fixture = self.fixture()
         mutations = (
-            ("app_canary", "provider_resend_count", 1),
-            ("app_canary", "host_task_create_count", 2),
-            ("app_canary", "host_terminal_wait_readback_count", 0),
-            ("app_canary", "host_total_read_count", 5),
+            ("exec_canary", "provider_resend_count", 1),
+            ("exec_canary", "host_task_create_count", 2),
+            ("exec_canary", "host_terminal_wait_readback_count", 0),
+            ("exec_canary", "host_total_read_count", 5),
             ("coverage", "line_and_branch_percent", 79.99),
             ("coverage", "covered_branches", 1401),
             ("distribution", "config_bytes_changed", 1),

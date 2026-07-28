@@ -12,7 +12,7 @@ The author selects route B: replace the protocol kernel, persistence model, and
 Host boundary while reusing provenance-bound v3 safety assets. Successive
 author decisions expanded the boundary from a disposable alpha slice to a
 v4-only public 4.0.0 release. External Git writes remain gated on a clean new
-candidate, full local acceptance, a new exact-SHA App canary, independent
+candidate, full local acceptance, a new exact-SHA foreground exec canary, independent
 review, and secret/privacy checks. Real v3-loop migration, private research
 data, force pushes, and unsupported efficacy claims remain forbidden.
 
@@ -119,7 +119,7 @@ Consequences:
 - P6 compatibility code/tests/evidence and candidate `5d3d671da11ea5795a629b3df50ff6eb57252432`
   remain immutable predecessor evidence and are excluded from v4-only release
   acceptance. A new candidate SHA must pass new install, documentation, CI,
-  conformance, App-canary, privacy, and release-identity gates.
+  conformance, foreground-exec-canary, privacy, and release-identity gates.
 - After those gates pass, the author has authorized a non-force feature-branch
   push, PR, CI-gated merge, annotated `v4.0.0` tag, and public non-prerelease
   GitHub Release. No v3 tag/release/history may be rewritten or deleted.
@@ -220,7 +220,7 @@ process, or third governance layer.
 | `PRES-MIGRATION` | compatibility only | Safe-point read/shadow/dry-run/preview/confirm/cancel/import keeps original v3 bytes and forbids dual write. |
 | `PRES-DISTRIBUTION` | retain | Isolated install/uninstall/rollback keeps conflict fail-closed, absolute runtime identity, one registration and byte-exact recovery. |
 | `PRES-DOCS` | retain | Chinese/English quickstarts and Standard/Adaptive examples remain RC-blocking public assets. |
-| `PRES-RELEASE` | retain | Exact candidate SHA, local acceptance, compatibility CI separation, App canary, security and artifact gates remain mandatory. |
+| `PRES-RELEASE` | retain | Exact candidate SHA, local acceptance, release CI separation, foreground exec canary, security and artifact gates remain mandatory. |
 | `PRES-DEPRECATIONS` | deprecate | New v4 loops have no session State-Writer, native Goal generation recovery, Supervisor, 97-field write API, model authority, Pack truth, blind retry, or dual writer. |
 | `PRES-PUBLIC-SCHEMA-COMPAT` | compatibility only | Closed v3 schemas remain readable for diagnostics/shadow/import preview; v4 never writes their giant shape canonically. |
 
@@ -1039,7 +1039,7 @@ beta, and minimal-profile isolation.
 ### Historical RC-only boundary (superseded by the v4-only release addendum)
 
 Local isolated install/uninstall/rollback, the full Host/artifact fault matrix,
-one exact-candidate disposable App canary, independent read-only review, fixed
+one exact-candidate disposable foreground exec canary, independent read-only review, fixed
 candidate SHA, and an author approval packet are authorized. Every failure and
 UNKNOWN must remain preserved. RC requires one real, non-research,
 private-data-free new-user usability canary from the isolated installation
@@ -1064,14 +1064,21 @@ filesystem readback, not one transaction spanning arbitrary power loss.
 The candidate static gate records exact commit/tree, Python runtime, generated
 protocol counts, the complete installed-distribution SBOM and license inventory
 for that exact Python runtime, secret scan, tracked
-large-artifact scan and zero public effect. The App receipt stores only a digest
-of the machine-returned Host observation, never raw thread/task identity or
-content. The JSON receipt alone is insufficient: the final local validator must
-open the disposable canonical store and perform a fresh authoritative Host
-result/lifecycle readback, then bind its minimized live attestation to the
-candidate goal, hashed Host identity, result, snapshot, Review, and
-Finalization digests. The raw store and Host identity are not published. These
-receipts are build evidence, not runtime authority.
+large-artifact scan and zero public effect. The foreground-exec receipt stores
+only digests of the directly captured same-process terminal observation and
+scoped Host config/auth measurements, never raw thread identity, content,
+config, auth, or paths. The canary persists exact before and after measurement
+artifacts; minimized changed-byte/count fields are derived from their measured
+comparison and cannot be hard-coded. The JSON receipt alone is insufficient:
+the final local validator opens the disposable canonical store and binds the
+persisted same-process transcript, candidate goal, hashed Host identity, result,
+snapshot, Review, Finalization, and config/auth measurement digests. It does
+not perform or claim a fresh post-process Host readback. Receipt freshness is
+the immutable observation interval: `issued_at <= observed_at <= fresh_until`,
+with a maximum ten-minute interval. Later review or publication does not expire
+an internally valid historical observation. Reversed, overlong, missing, or
+digest-mismatched evidence fails closed. The raw store and Host identity are
+not published. These receipts are build evidence, not runtime authority.
 
 `scripts/validate_v4_rc.py` defaults to the final fail-closed mode: canary,
 349-item semantic coverage mapping, its unique executable conformance tests,
@@ -1081,7 +1088,7 @@ always records `publication_ready=false`; it cannot satisfy the publication
 candidate gate. `scripts/run_v4_conformance.py`
 expands the frozen exact catalog, executes every unique bound unittest target,
 emits one coverage-mapping record for each of the 349 canonical case IDs, and
-additionally binds the two real-App cases to the exact canary receipt. Each
+additionally binds the two real-exec cases to the exact canary receipt. Each
 mapping must first consume
 a machine-derived per-case contract covering precondition, stimulus,
 acceptance, effect state, event order, side-effect count, replay, capability,
@@ -1098,7 +1105,7 @@ second hand-written observer table.
 bound to exactly 74 unique, actually executed deterministic assertion methods.
 It must set `independent_case_observation_claimed=false` and must never describe
 the 349 mappings as 349 independent executions or runtime observations. The two
-real-App case IDs additionally bind the one exact-SHA disposable canary. A
+real-exec case IDs additionally bind the one exact-SHA disposable canary. A
 mapping-count drift, assertion-method-count drift, missing target execution, or
 stronger observation claim fails closed.
 

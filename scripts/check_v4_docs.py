@@ -232,6 +232,8 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         "scripts/build_v4_author_packet.py",
         "--canary-store",
         "349 semantic mappings to 74",
+        "canary-environment-integrity.json",
+        "Host config/auth",
     ):
         if literal not in releasing:
             raise DocsError(f"DOC_RELEASE_RUNBOOK_INCOMPLETE:{literal}")
@@ -262,6 +264,33 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         or "second spawn" not in en
     ):
         raise DocsError("DOC_REFRESH_ATTEMPT_SEMANTICS_DRIFT")
+    ux_contract = (root / "docs/architecture/loopskill-v4-single-entry-ux.md").read_text(
+        encoding="utf-8"
+    )
+    for literal in (
+        "durable Attempt has not been claimed",
+        "unique first foreground",
+        "no cross-process Host",
+        "never performs\na second spawn",
+    ):
+        if literal not in ux_contract:
+            raise DocsError(f"DOC_REFRESH_ATTEMPT_SEMANTICS_DRIFT:{literal}")
+    retired_canary_literals = (
+        "loopskill-v4-disposable-app-canary-v1",
+        "codex-app-task-readback-v1",
+        "host-tool-observed",
+    )
+    current_canary_sources = (
+        releasing,
+        ux_contract,
+        (root / "codex-loop-prompt-architect/scripts/loop_architect/v4_entry/canary.py").read_text(
+            encoding="utf-8"
+        ),
+        (root / "scripts/validate_v4_rc.py").read_text(encoding="utf-8"),
+    )
+    for literal in retired_canary_literals:
+        if any(literal in text for text in current_canary_sources):
+            raise DocsError(f"DOC_RETIRED_CANARY_IDENTITY:{literal}")
     candidate_zh = README_CANDIDATE_ZH in zh
     candidate_en = README_CANDIDATE_EN in en
     stable_zh = README_STABLE_ZH in zh

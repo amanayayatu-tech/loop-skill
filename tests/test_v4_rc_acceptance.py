@@ -57,7 +57,7 @@ def canary(candidate: str) -> dict:
     issued_text = issued.isoformat().replace("+00:00", "Z")
     fresh_text = fresh_until.isoformat().replace("+00:00", "Z")
     value = {
-        "artifact": "loopskill-v4-disposable-app-canary-v1",
+        "artifact": validator.CANARY_ARTIFACT,
         "candidate_sha": candidate,
         "candidate_goal_digest": live["candidate_goal_digest"],
         "canary_output_sha256": live["canary_output_sha256"],
@@ -67,6 +67,11 @@ def canary(candidate: str) -> dict:
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
         "fresh_until": fresh_text,
+        "host_auth_after_digest": "1" * 64,
+        "host_auth_before_digest": "1" * 64,
+        "host_config_after_digest": "2" * 64,
+        "host_config_before_digest": "2" * 64,
+        "host_integrity_changed_input_count": 0,
         "host_receipt_issuer": validator.CANARY_ISSUER,
         "host_receipt_trust": validator.CANARY_TRUST,
         "host_create_readback_count": 1,
@@ -222,25 +227,109 @@ class V4RcAcceptanceTests(unittest.TestCase):
             validator.RcValidationError, "RC_CANARY_RECEIPT_SHAPE_INVALID"
         ):
             validator.validate_canary_receipt(value, candidate)
-        for offset in (timedelta(days=-1), timedelta(minutes=2)):
-            with self.subTest(freshness_offset=offset):
-                value = canary(candidate)
-                observed = datetime.now(timezone.utc).replace(microsecond=0) + offset
-                value["issued_at"] = observed.isoformat().replace("+00:00", "Z")
-                value["observed_at"] = value["issued_at"]
-                value["fresh_until"] = (observed + timedelta(minutes=5)).isoformat().replace(
-                    "+00:00", "Z"
-                )
-                provenance = dict(value)
-                provenance.pop("provenance_digest")
-                provenance.pop("host_receipt_digest")
-                value["provenance_digest"] = validator._domain_digest(
-                    validator.CANARY_PROVENANCE_DOMAIN, provenance
-                )
-                with self.assertRaisesRegex(
-                    validator.RcValidationError, "RC_CANARY_RECEIPT_INVALID: freshness"
-                ):
-                    validator.validate_canary_receipt(value, candidate)
+        historical = canary(candidate)
+        old = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        historical["issued_at"] = old.isoformat().replace("+00:00", "Z")
+        historical["observed_at"] = (old + timedelta(minutes=2)).isoformat().replace(
+            "+00:00", "Z"
+        )
+        historical["fresh_until"] = (old + timedelta(minutes=5)).isoformat().replace(
+            "+00:00", "Z"
+        )
+        provenance = dict(historical)
+        provenance.pop("provenance_digest")
+        provenance.pop("host_receipt_digest")
+        historical["provenance_digest"] = validator._domain_digest(
+            validator.CANARY_PROVENANCE_DOMAIN, provenance
+        )
+        validator.validate_canary_receipt(historical, candidate)
+
+        for issued_offset, observed_offset, fresh_offset in (
+            (2, 1, 5),
+            (0, 6, 5),
+            (0, 1, 11),
+        ):
+            value = canary(candidate)
+            origin = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            value["issued_at"] = (
+                origin + timedelta(minutes=issued_offset)
+            ).isoformat().replace("+00:00", "Z")
+            value["observed_at"] = (
+                origin + timedelta(minutes=observed_offset)
+            ).isoformat().replace("+00:00", "Z")
+            value["fresh_until"] = (
+                origin + timedelta(minutes=fresh_offset)
+            ).isoformat().replace("+00:00", "Z")
+            provenance = dict(value)
+            provenance.pop("provenance_digest")
+            provenance.pop("host_receipt_digest")
+            value["provenance_digest"] = validator._domain_digest(
+                validator.CANARY_PROVENANCE_DOMAIN, provenance
+            )
+            with self.assertRaisesRegex(
+                validator.RcValidationError, "RC_CANARY_RECEIPT_INVALID: freshness"
+            ):
+                validator.validate_canary_receipt(value, candidate)
+
+    def test_canary_integrity_measurement_missing_mutated_and_mismatched_fail(self) -> None:
+        candidate = "a" * 40
+        value = canary(candidate)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(
+                validator.RcValidationError, "RC_CANARY_INTEGRITY_BEFORE_INVALID"
+            ):
+                validator._validate_canary_integrity_evidence(value, candidate, root)
+            before = {
+                "artifact": "loopskill-v4-canary-integrity-before-v1",
+                "candidate_sha": candidate,
+                "inputs": {
+                    "host_auth": {"digest": "1" * 64, "presence": "FILE", "size": 10},
+                    "host_config": {"digest": "2" * 64, "presence": "FILE", "size": 20},
+                },
+                "issued_at": value["issued_at"],
+            }
+            final = {
+                "after": before["inputs"],
+                "artifact": "loopskill-v4-canary-integrity-measurement-v1",
+                "before": before["inputs"],
+                "candidate_sha": candidate,
+                "changed_bytes": {"host_auth": 0, "host_config": 0},
+                "changed_input_count": 0,
+                "observed_at": value["observed_at"],
+                "total_changed_bytes": 0,
+            }
+            (root / validator.CANARY_INTEGRITY_BEFORE_FILENAME).write_bytes(
+                validator._canonical(before)
+            )
+            (root / validator.CANARY_INTEGRITY_FILENAME).write_bytes(
+                validator._canonical(final)
+            )
+            validator._validate_canary_integrity_evidence(value, candidate, root)
+            final["changed_bytes"]["host_config"] = 1
+            final["changed_input_count"] = 1
+            final["total_changed_bytes"] = 1
+            (root / validator.CANARY_INTEGRITY_FILENAME).write_bytes(
+                validator._canonical(final)
+            )
+            with self.assertRaisesRegex(
+                validator.RcValidationError, "RC_CANARY_INTEGRITY_CHANGED"
+            ):
+                validator._validate_canary_integrity_evidence(value, candidate, root)
+            final["changed_bytes"]["host_config"] = 0
+            final["changed_input_count"] = 0
+            final["total_changed_bytes"] = 0
+            final["after"] = {
+                **before["inputs"],
+                "host_config": {**before["inputs"]["host_config"], "digest": "3" * 64},
+            }
+            (root / validator.CANARY_INTEGRITY_FILENAME).write_bytes(
+                validator._canonical(final)
+            )
+            with self.assertRaisesRegex(
+                validator.RcValidationError, "RC_CANARY_INTEGRITY_DIGEST_MISMATCH"
+            ):
+                validator._validate_canary_integrity_evidence(value, candidate, root)
 
     def test_live_canary_requires_same_process_receipt_and_exact_store_bindings(self) -> None:
         candidate = "a" * 40
@@ -249,6 +338,8 @@ class V4RcAcceptanceTests(unittest.TestCase):
             validator,
             "_live_canary_observation",
             return_value=live_observation(candidate),
+        ), mock.patch.object(
+            validator, "_validate_canary_integrity_evidence"
         ) as readback:
             digest = validator.validate_live_canary(
                 value,
@@ -273,7 +364,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
                 validator,
                 "_live_canary_observation",
                 return_value=live_observation(candidate),
-            ):
+            ), mock.patch.object(validator, "_validate_canary_integrity_evidence"):
                 changed = canary(candidate)
                 changed[field] = "f" * 64
                 if field != "host_receipt_digest":

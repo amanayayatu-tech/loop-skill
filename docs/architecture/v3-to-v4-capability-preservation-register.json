@@ -2416,7 +2416,7 @@
       "rollback": "A failed candidate remains local and never changes public release or installation channels.",
       "user_visible_change": "RC-ready remains an approval state, never an automatic stable release.",
       "rc_blocking": true,
-      "acceptance_evidence": "scripts/validate_v4_rc.py binds exact clean SHA/tree, protocol counts, runtime, SBOM/license inventory, secret/large-artifact scans, zero publication and a strict privacy-minimized App canary receipt; tests/test_v4_rc_acceptance.py mutates critical canary fields and candidate cleanliness.",
+      "acceptance_evidence": "scripts/validate_v4_rc.py binds exact clean SHA/tree, protocol counts, runtime, SBOM/license inventory, secret/large-artifact scans, zero publication and a strict privacy-minimized foreground Codex exec canary receipt; tests/test_v4_rc_acceptance.py mutates critical canary fields and candidate cleanliness.",
       "acceptance_case_ids": ["CAP-RELEASE-SHA","CAP-RELEASE-MANIFEST","CAP-RELEASE-COMPAT-CI","CAP-RELEASE-CANARY","CAP-RELEASE-SBOM","CAP-RELEASE-LICENSE","CAP-RELEASE-SECRET","CAP-RELEASE-ARTIFACT","CAP-RELEASE-FAILURE","CAP-RELEASE-CANDIDATE-DRIFT","CAP-RELEASE-NO-PUBLIC-EFFECT","CAP-RELEASE-AUTHOR-PACKET","UX-009-a","F-001-a"],
       "covers": ["release:RELEASE-.*", "schema:APP-CANARY-RECEIPT-SCHEMA", "schema_symbol:codex-loop-prompt-architect/references/app-canary-receipt[.]schema[.]json/.*", "reference:codex-loop-prompt-architect/references/app-canary-receipt[.]schema[.]json", "test_file:tests/test_(?:app_canary_receipt|release_contract|release_identity|whitespace_range|v4_rc_acceptance)[.]py", "error_owner:PRES-RELEASE:.*"]
     },

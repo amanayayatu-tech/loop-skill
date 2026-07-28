@@ -445,10 +445,20 @@ class ExecProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
             canary, "_validate_candidate", return_value=candidate
         ):
+            host_inputs = Path(temporary) / "host-inputs"
+            host_inputs.mkdir()
+            config = host_inputs / "config.toml"
+            auth = host_inputs / "auth.json"
+            config.write_bytes(b"synthetic config\n")
+            auth.write_bytes(b"synthetic auth\n")
             receipt = canary.run_canary(
                 candidate,
                 Path(temporary) / "evidence",
                 confirmation_callback=lambda boundary: bool(boundary),
+                integrity_inputs={
+                    "host_auth": auth.resolve(),
+                    "host_config": config.resolve(),
+                },
                 provider_factory=factory,
                 clock=lambda: NOW,
                 token_factory=lambda: "000000000000000000000099",

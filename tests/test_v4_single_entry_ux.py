@@ -370,7 +370,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertIn('"status":"READY"', output)
             canary_receipt = {
-                "artifact": "loopskill-v4-disposable-app-canary-v1",
+                "artifact": "loopskill-v4-disposable-codex-exec-canary-v1",
                 "status": "PASS",
             }
             with mock.patch.object(

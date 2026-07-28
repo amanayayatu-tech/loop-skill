@@ -51,6 +51,18 @@ NOW = datetime(2026, 7, 28, 1, 2, 3, tzinfo=timezone.utc)
 CANDIDATE = "a" * 40
 
 
+def integrity_inputs(parent: Path) -> dict[str, Path]:
+    root = parent / "host-inputs"
+    root.mkdir(exist_ok=True)
+    config = root / "config.toml"
+    auth = root / "auth.json"
+    if not config.exists():
+        config.write_bytes(b'model = "synthetic"\n')
+    if not auth.exists():
+        auth.write_bytes(b'{"auth":"synthetic"}\n')
+    return {"host_auth": auth.resolve(), "host_config": config.resolve()}
+
+
 class FakeCanaryProvider:
     def __init__(self, workspace: Path, *, mode: str = "pass") -> None:
         self.workspace = workspace
@@ -172,7 +184,7 @@ class FakeCanaryProvider:
         self.terminal_wait_read_count += 1
 
 
-class V4DisposableAppCanaryEntryTests(unittest.TestCase):
+class V4DisposableExecCanaryEntryTests(unittest.TestCase):
     def run_pass(self, evidence: Path):
         providers = []
         confirmations = []
@@ -198,6 +210,7 @@ class V4DisposableAppCanaryEntryTests(unittest.TestCase):
             CANDIDATE,
             evidence,
             confirmation_callback=confirm,
+            integrity_inputs=integrity_inputs(evidence.parent),
             provider_factory=factory,
             wait_callback=wait,
             clock=lambda: NOW,
@@ -232,7 +245,7 @@ class V4DisposableAppCanaryEntryTests(unittest.TestCase):
             self.assertEqual(provider.duplicate_invoke_rejection_count, 0)
             self.assertEqual(provider.terminal_wait_read_count, 1)
             self.assertEqual(provider.protocol_preflight_count, 1)
-            validator.validate_canary_receipt(receipt, CANDIDATE, now=NOW)
+            validator.validate_canary_receipt(receipt, CANDIDATE)
             self.assertEqual(
                 receipt["canary_output_sha256"], canary.CANARY_OUTPUT_SHA256
             )
@@ -240,6 +253,16 @@ class V4DisposableAppCanaryEntryTests(unittest.TestCase):
             self.assertEqual(receipt["host_lifecycle_readback_count"], 1)
             self.assertEqual(receipt["host_terminal_wait_readback_count"], 1)
             self.assertEqual(receipt["host_total_read_count"], 4)
+            self.assertEqual(receipt["config_bytes_changed"], 0)
+            self.assertEqual(receipt["host_integrity_changed_input_count"], 0)
+            self.assertEqual(
+                receipt["host_config_before_digest"],
+                receipt["host_config_after_digest"],
+            )
+            self.assertEqual(
+                receipt["host_auth_before_digest"],
+                receipt["host_auth_after_digest"],
+            )
             self.assertEqual(
                 receipt["fresh_until"], "2026-07-28T01:12:03Z"
             )
@@ -337,6 +360,7 @@ class V4DisposableAppCanaryEntryTests(unittest.TestCase):
                     CANDIDATE,
                     evidence,
                     confirmation_callback=lambda boundary: True,
+                    integrity_inputs=integrity_inputs(Path(temporary)),
                     provider_factory=factory,
                     wait_callback=lambda provider, workspace: None,
                     clock=lambda: NOW,
@@ -375,6 +399,7 @@ class V4DisposableAppCanaryEntryTests(unittest.TestCase):
                         CANDIDATE,
                         evidence,
                         confirmation_callback=lambda boundary: True,
+                        integrity_inputs=integrity_inputs(Path(temporary)),
                         provider_factory=factory,
                         wait_callback=lambda provider, workspace: None,
                         clock=lambda: NOW,
@@ -499,6 +524,80 @@ class V4DisposableAppCanaryEntryTests(unittest.TestCase):
         with self.assertRaisesRegex(canary.CanaryError, "SINGLE_INVALID"):
             canary._single({"one": 1}, "SINGLE_INVALID")
 
+    def test_integrity_inputs_are_required_and_mutation_is_persisted_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            missing_evidence = parent / "missing-evidence"
+            factory = mock.Mock(side_effect=AssertionError("provider constructed"))
+            with self.assertRaisesRegex(
+                canary.CanaryError, "CANARY_INTEGRITY_INPUTS_MISSING"
+            ):
+                canary.run_canary(
+                    CANDIDATE,
+                    missing_evidence,
+                    confirmation_callback=lambda boundary: True,
+                    provider_factory=factory,
+                    clock=lambda: NOW,
+                )
+            factory.assert_not_called()
+
+            inputs = integrity_inputs(parent)
+            evidence = parent / "mutated-evidence"
+
+            def mutate_after_wait(provider, workspace):
+                provider.wait_for_terminal(timeout_seconds=1)
+                inputs["host_config"].write_bytes(b'model = "changed"\n')
+
+            with self.assertRaisesRegex(
+                canary.CanaryError, "CANARY_HOST_INTEGRITY_CHANGED"
+            ):
+                canary.run_canary(
+                    CANDIDATE,
+                    evidence,
+                    confirmation_callback=lambda boundary: True,
+                    integrity_inputs=inputs,
+                    provider_factory=lambda workspace: FakeCanaryProvider(workspace),
+                    wait_callback=mutate_after_wait,
+                    clock=lambda: NOW,
+                    token_factory=lambda: "000000000000000000000006",
+                )
+            measurement = json.loads(
+                (evidence / canary.CANARY_INTEGRITY_FILENAME).read_text()
+            )
+            self.assertEqual(measurement["changed_input_count"], 1)
+            self.assertGreater(measurement["total_changed_bytes"], 0)
+            self.assertFalse((evidence / canary.CANARY_RECEIPT_FILENAME).exists())
+
+    def test_auth_mutation_is_measured_and_cannot_mint_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            inputs = integrity_inputs(parent)
+            evidence = parent / "auth-mutated-evidence"
+
+            def mutate_after_wait(provider, workspace):
+                provider.wait_for_terminal(timeout_seconds=1)
+                inputs["host_auth"].write_bytes(b'{"changed":true}\n')
+
+            with self.assertRaisesRegex(
+                canary.CanaryError, "CANARY_HOST_INTEGRITY_CHANGED"
+            ):
+                canary.run_canary(
+                    CANDIDATE,
+                    evidence,
+                    confirmation_callback=lambda boundary: True,
+                    integrity_inputs=inputs,
+                    provider_factory=lambda workspace: FakeCanaryProvider(workspace),
+                    wait_callback=mutate_after_wait,
+                    clock=lambda: NOW,
+                    token_factory=lambda: "000000000000000000000007",
+                )
+            measurement = json.loads(
+                (evidence / canary.CANARY_INTEGRITY_FILENAME).read_text()
+            )
+            self.assertGreater(measurement["changed_bytes"]["host_auth"], 0)
+            self.assertEqual(measurement["changed_bytes"]["host_config"], 0)
+            self.assertFalse((evidence / canary.CANARY_RECEIPT_FILENAME).exists())
+
     def test_default_provider_construction_occurs_only_after_confirmation(self):
         with tempfile.TemporaryDirectory() as temporary:
             evidence = Path(temporary) / "evidence"
@@ -521,6 +620,7 @@ class V4DisposableAppCanaryEntryTests(unittest.TestCase):
                     CANDIDATE,
                     evidence,
                     confirmation_callback=lambda boundary: True,
+                    integrity_inputs=integrity_inputs(Path(temporary)),
                     clock=lambda: NOW,
                     token_factory=lambda: "000000000000000000000004",
                 )

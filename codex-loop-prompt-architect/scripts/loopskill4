@@ -467,18 +467,25 @@ def _interactive_canary(args):
         return answer == "RUN THIS CANARY"
 
     try:
+        host_codex_home = Path(
+            os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
+        ).resolve(strict=True)
         return run_canary(
             args.candidate,
             args.evidence_root,
             confirmation_callback=confirm,
+            integrity_inputs={
+                "host_auth": host_codex_home / "auth.json",
+                "host_config": host_codex_home / "config.toml",
+            },
         )
     except CanaryError as exc:
         if args.diagnostics:
             print(f"Canary gate: {exc.code}", file=sys.stderr)
         raise EntryError(
             "USER_INTERNAL_ERROR",
-            "The disposable App canary did not pass its exact boundary.",
-            "Preserve the private evidence root and inspect diagnostics; do not resend the task.",
+            "The disposable foreground exec canary did not pass its exact boundary.",
+            "Preserve the private evidence root and inspect diagnostics; do not spawn again.",
         ) from exc
 
 

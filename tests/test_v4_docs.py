@@ -54,6 +54,8 @@ class V4DocsTests(unittest.TestCase):
                 "docs/adr/0011-loopskill-4-compatible-kernel-refactor.md",
                 "protocol/v4/README.md",
                 "examples/v4-standard-input.json",
+                "codex-loop-prompt-architect/scripts/loop_architect/v4_entry/canary.py",
+                "scripts/validate_v4_rc.py",
             ):
                 source = ROOT / relative
                 target = root / relative

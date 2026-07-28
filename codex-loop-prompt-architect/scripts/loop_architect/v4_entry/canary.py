@@ -1,4 +1,4 @@
-"""One-shot, privacy-minimized LoopSkill 4 disposable App canary service.
+"""One-shot, privacy-minimized LoopSkill 4 foreground exec canary service.
 
 The service deliberately uses the public INTAKE -> PREPARE -> CONFIRM -> START
 path.  It never retries START, never serializes a Host identity, and emits a
@@ -34,18 +34,24 @@ from .service import (
 )
 
 
-CANARY_ISSUER = "codex-app-task-readback-v1"
-CANARY_TRUST = "host-tool-observed"
-CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.app-canary.provenance.v1\0"
-CANARY_LIVE_DOMAIN = b"loopskill.v4.app-canary.live-readback.v1\0"
-CANARY_HOST_ID_DOMAIN = b"loopskill.v4.app-canary.host-identity.v1\0"
+CANARY_ARTIFACT = "loopskill-v4-disposable-codex-exec-canary-v1"
+CANARY_ISSUER = "codex-exec-jsonl-v1"
+CANARY_TRUST = "same-process-terminal-observed"
+CANARY_PROVENANCE_DOMAIN = b"loopskill.v4.exec-canary.provenance.v1\0"
+CANARY_LIVE_DOMAIN = b"loopskill.v4.exec-canary.live-observation.v1\0"
+CANARY_HOST_ID_DOMAIN = b"loopskill.v4.exec-canary.host-identity.v1\0"
+CANARY_INTEGRITY_DOMAIN = b"loopskill.v4.exec-canary.integrity.v1\0"
 
 CANARY_RECEIPT_FILENAME = "canary-receipt.json"
+CANARY_INTEGRITY_BEFORE_FILENAME = "canary-integrity-before.json"
+CANARY_INTEGRITY_FILENAME = "canary-integrity.json"
 CANARY_OUTPUT_FILENAME = "canary-output.txt"
 CANARY_OUTPUT_BYTES = b"LOOPSKILL4_CANARY_OK\n"
 CANARY_OUTPUT_SHA256 = "8d23b5e88d9fb86f366700a6267f29b46bcca5cd45a59ed27afbbd04860eb638"
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_INTEGRITY_LABELS = frozenset({"host_auth", "host_config"})
+_MAX_INTEGRITY_INPUT_BYTES = 2 * 1024 * 1024
 _SAFE_PROVIDER_METRICS = frozenset(
     {
         "delivery_readback_count",
@@ -81,6 +87,112 @@ def _iso(value: datetime) -> str:
 
 def _domain_digest(domain: bytes, value: Any) -> str:
     return hashlib.sha256(domain + canonical_bytes(value)).hexdigest()
+
+
+def _integrity_snapshot(inputs: Mapping[str, Path | str]) -> dict[str, Any]:
+    """Measure exact scoped inputs without persisting their paths or contents."""
+
+    if set(inputs) != _INTEGRITY_LABELS:
+        raise CanaryError("CANARY_INTEGRITY_INPUTS_MISSING")
+    result: dict[str, Any] = {}
+    for label in sorted(_INTEGRITY_LABELS):
+        path = Path(inputs[label])
+        try:
+            if not path.is_absolute():
+                raise OSError("integrity path is not absolute")
+            if path.is_symlink():
+                raise OSError("unsafe integrity input")
+            if not path.exists():
+                state = {"presence": "ABSENT", "size": 0}
+                raw = None
+            else:
+                metadata = path.lstat()
+                if (
+                    stat.S_ISLNK(metadata.st_mode)
+                    or not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.getuid()
+                    or metadata.st_size > _MAX_INTEGRITY_INPUT_BYTES
+                ):
+                    raise OSError("unsafe integrity input")
+                descriptor = os.open(
+                    path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                )
+                try:
+                    opened = os.fstat(descriptor)
+                    chunks = []
+                    remaining = _MAX_INTEGRITY_INPUT_BYTES + 1
+                    while remaining:
+                        chunk = os.read(descriptor, min(65_536, remaining))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    raw = b"".join(chunks)
+                    if (
+                        len(raw) > _MAX_INTEGRITY_INPUT_BYTES
+                        or not stat.S_ISREG(opened.st_mode)
+                        or (opened.st_dev, opened.st_ino)
+                        != (metadata.st_dev, metadata.st_ino)
+                        or opened.st_size != len(raw)
+                    ):
+                        raise OSError("integrity input changed during read")
+                finally:
+                    os.close(descriptor)
+                state = {
+                    "content_sha256": hashlib.sha256(raw).hexdigest(),
+                    "presence": "FILE",
+                    "size": len(raw),
+                }
+        except OSError as exc:
+            raise CanaryError("CANARY_INTEGRITY_INPUT_INVALID") from exc
+        result[label] = {
+            "digest": _domain_digest(
+                CANARY_INTEGRITY_DOMAIN,
+                {"label": label, "state": state},
+            ),
+            "raw": raw,
+            "state": state,
+        }
+    return result
+
+
+def _integrity_public(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        label: {
+            "digest": snapshot[label]["digest"],
+            "presence": snapshot[label]["state"]["presence"],
+            "size": snapshot[label]["state"]["size"],
+        }
+        for label in sorted(_INTEGRITY_LABELS)
+    }
+
+
+def _changed_bytes(before: bytes | None, after: bytes | None) -> int:
+    left = b"" if before is None else before
+    right = b"" if after is None else after
+    return sum(a != b for a, b in zip(left, right)) + abs(len(left) - len(right))
+
+
+def _integrity_comparison(
+    candidate_sha: str,
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    observed_at: datetime,
+) -> dict[str, Any]:
+    changed = {
+        label: _changed_bytes(before[label]["raw"], after[label]["raw"])
+        for label in sorted(_INTEGRITY_LABELS)
+    }
+    return {
+        "after": _integrity_public(after),
+        "artifact": "loopskill-v4-canary-integrity-measurement-v1",
+        "before": _integrity_public(before),
+        "candidate_sha": candidate_sha,
+        "changed_bytes": changed,
+        "changed_input_count": sum(value > 0 for value in changed.values()),
+        "observed_at": _iso(observed_at),
+        "total_changed_bytes": sum(changed.values()),
+    }
 
 
 def _validate_candidate(candidate_sha: str) -> str:
@@ -150,7 +262,7 @@ def _request(candidate_sha: str) -> LoopIntakeInput:
 
 
 def _default_wait(provider: Any, workspace: Path, *, timeout_seconds: float = 300.0) -> None:
-    """Wait read-only for the unique Host task; never use file timing as closure."""
+    """Wait read-only for the unique invocation; never use file timing as closure."""
 
     del workspace
     waiter = getattr(provider, "wait_for_terminal", None)
@@ -296,19 +408,26 @@ def _receipt(
     candidate_sha: str,
     live: Mapping[str, Any],
     metrics: Mapping[str, int],
+    integrity: Mapping[str, Any],
+    issued_at: datetime,
     observed_at: datetime,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
-        "artifact": "loopskill-v4-disposable-app-canary-v1",
+        "artifact": CANARY_ARTIFACT,
         "candidate_sha": candidate_sha,
         "candidate_goal_digest": live["candidate_goal_digest"],
         "canary_output_sha256": live["canary_output_sha256"],
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
-        "config_bytes_changed": 0,
+        "config_bytes_changed": integrity["changed_bytes"]["host_config"],
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
-        "fresh_until": _iso(observed_at + timedelta(minutes=10)),
+        "fresh_until": _iso(issued_at + timedelta(minutes=10)),
+        "host_auth_after_digest": integrity["after"]["host_auth"]["digest"],
+        "host_auth_before_digest": integrity["before"]["host_auth"]["digest"],
+        "host_config_after_digest": integrity["after"]["host_config"]["digest"],
+        "host_config_before_digest": integrity["before"]["host_config"]["digest"],
+        "host_integrity_changed_input_count": integrity["changed_input_count"],
         "host_receipt_issuer": CANARY_ISSUER,
         "host_receipt_trust": CANARY_TRUST,
         "host_create_readback_count": metrics["delivery_readback_count"],
@@ -328,7 +447,7 @@ def _receipt(
         "intake_heartbeat_count": 0,
         "intake_host_task_count": 0,
         "intake_loop_count": 0,
-        "issued_at": _iso(observed_at),
+        "issued_at": _iso(issued_at),
         "loopskill_mcp_registration_count": 0,
         "machine_owned_identity": True,
         "manual_control_identity_count": 0,
@@ -354,9 +473,15 @@ def _receipt(
 
 
 def _write_receipt(root: Path, receipt: Mapping[str, Any]) -> None:
-    destination = root / CANARY_RECEIPT_FILENAME
-    temporary = root / ".canary-receipt.tmp"
-    raw = canonical_bytes(receipt)
+    _write_canonical_once(root, CANARY_RECEIPT_FILENAME, receipt)
+
+
+def _write_canonical_once(
+    root: Path, filename: str, value: Mapping[str, Any]
+) -> None:
+    destination = root / filename
+    temporary = root / f".{filename}.tmp"
+    raw = canonical_bytes(value)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(temporary, flags, 0o600)
@@ -379,7 +504,7 @@ def _write_receipt(root: Path, receipt: Mapping[str, Any]) -> None:
         finally:
             os.close(directory)
     except OSError as exc:
-        raise CanaryError("CANARY_RECEIPT_WRITE_FAILED") from exc
+        raise CanaryError("CANARY_EVIDENCE_WRITE_FAILED") from exc
 
 
 def run_canary(
@@ -387,6 +512,7 @@ def run_canary(
     evidence_root: Path | str,
     *,
     confirmation_callback: Callable[[Mapping[str, Any]], bool],
+    integrity_inputs: Mapping[str, Path | str] | None = None,
     provider_factory: Callable[[Path], Any] | None = None,
     wait_callback: Callable[[Any, Path], None] | None = None,
     clock: Callable[[], datetime] = _now,
@@ -420,25 +546,43 @@ def run_canary(
         raise CanaryError("CANARY_CONFIRMATION_DECLINED")
     confirmed = confirm_loop(prepared.directory, confirmed=True, clock=clock)
 
-    if provider_factory is None:
-        provider = CodexExecProvider(
-            workspace,
-            issuer_ref=CANARY_ISSUER,
-            issuer_trust=CANARY_TRUST,
-            clock=clock,
-        )
-    else:
-        provider = provider_factory(workspace)
+    if integrity_inputs is None:
+        raise CanaryError("CANARY_INTEGRITY_INPUTS_MISSING")
+    issued_at = clock()
+    before_integrity = _integrity_snapshot(integrity_inputs)
+    _write_canonical_once(
+        root,
+        CANARY_INTEGRITY_BEFORE_FILENAME,
+        {
+            "artifact": "loopskill-v4-canary-integrity-before-v1",
+            "candidate_sha": candidate,
+            "inputs": _integrity_public(before_integrity),
+            "issued_at": _iso(issued_at),
+        },
+    )
 
-    preflight = getattr(provider, "preflight", None)
-    if not callable(preflight):
-        raise CanaryError("CANARY_HOST_PROTOCOL_PREFLIGHT_UNAVAILABLE")
+    provider = None
+    after_integrity = None
+    integrity_observed_at = None
     try:
-        preflight()
-    except HostUnavailable as exc:
-        raise CanaryError("CANARY_HOST_PROTOCOL_INCOMPATIBLE") from exc
+        if provider_factory is None:
+            provider = CodexExecProvider(
+                workspace,
+                issuer_ref=CANARY_ISSUER,
+                issuer_trust=CANARY_TRUST,
+                clock=clock,
+            )
+        else:
+            provider = provider_factory(workspace)
 
-    try:
+        preflight = getattr(provider, "preflight", None)
+        if not callable(preflight):
+            raise CanaryError("CANARY_HOST_PROTOCOL_PREFLIGHT_UNAVAILABLE")
+        try:
+            preflight()
+        except HostUnavailable as exc:
+            raise CanaryError("CANARY_HOST_PROTOCOL_INCOMPATIBLE") from exc
+
         # Exactly one public START.  No exception path re-enters this call.
         start_loop(
             confirmed,
@@ -460,15 +604,32 @@ def run_canary(
             workspace_root=workspace,
         )
     finally:
-        close = getattr(provider, "close", None)
+        close = None if provider is None else getattr(provider, "close", None)
         if callable(close):
             close()
+        after_integrity = _integrity_snapshot(integrity_inputs)
+        integrity_observed_at = clock()
+        comparison = _integrity_comparison(
+            candidate, before_integrity, after_integrity, integrity_observed_at
+        )
+        _write_canonical_once(root, CANARY_INTEGRITY_FILENAME, comparison)
+    if comparison["changed_input_count"] != 0:
+        raise CanaryError("CANARY_HOST_INTEGRITY_CHANGED")
     if final_view.progress != "Finished" or final_view.result != "SUCCEEDED":
         raise CanaryError("CANARY_OUTCOME_NOT_PASS")
 
     _verify_workspace(workspace)
+    assert provider is not None
+    assert integrity_observed_at is not None
     metrics = _provider_metrics(provider)
     live, _ = _live_summary(candidate, store_root, workspace)
-    receipt = _receipt(candidate, live, metrics, clock())
+    receipt = _receipt(
+        candidate,
+        live,
+        metrics,
+        comparison,
+        issued_at,
+        integrity_observed_at,
+    )
     _write_receipt(root, receipt)
     return receipt

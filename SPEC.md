@@ -170,7 +170,7 @@ process-fault windows recover to exact pre-state or exact committed post-state.
 A public release requires deterministic tests, full corpus and fault gates,
 architecture/anti-bloat/preservation validators, Linux/macOS isolated install,
 documentation parity, privacy/security/dependency/SBOM checks, exact-SHA local
-Codex App canary, independent review, green PR/main/tag CI, annotated tag, and
+foreground Codex exec canary, independent review, green PR/main/tag CI, annotated tag, and
 public GitHub Release readback. No single gate implies patch-success or
 long-horizon efficacy.
 

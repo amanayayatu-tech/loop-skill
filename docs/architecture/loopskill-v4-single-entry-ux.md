@@ -75,9 +75,11 @@ contains one loop; exact replay of the same prepared start returns the prior
 accepted result without a second commit/event/Attempt/Host call, while a
 different prepared loop fails. Plain `status` and diagnostics are read-only
 and never create an absent store. `status --refresh` is the explicit
-machine-owned Host readback action: it reads the exact existing task result,
-advances the Result/Report/Artifact/Review/Finalization chain through
-replay-safe local commands, and never creates or resends a task.
+machine-owned recovery action. When the durable Attempt has not been claimed,
+it may acquire execution ownership and perform the unique first foreground
+Codex invocation. Once an invocation started, there is no cross-process Host
+readback or resume: lost evidence remains `UNKNOWN`, and refresh never performs
+a second spawn.
 
 SQLite schema v4 stores the user-visible goal descriptor plus immutable Actor,
 Grant, receipt, and trust-root registries in the same canonical database as the

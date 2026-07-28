@@ -204,7 +204,7 @@ tree entry:
 set -euo pipefail
 umask 077
 CANARY_CODEX_HOME="$RELEASE_TMP/canary-codex-home"
-CANARY_ROOT="$RELEASE_TMP/app-canary"
+CANARY_ROOT="$RELEASE_TMP/exec-canary"
 HOST_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 HOST_CONFIG="$HOST_CODEX_HOME/config.toml"
 HOST_AUTH="$HOST_CODEX_HOME/auth.json"
@@ -278,11 +278,51 @@ grep -F '"status":"ALREADY_UNINSTALLED"' <<<"$UNINSTALL_REPLAY" >/dev/null
 trap - EXIT
 
 test ! -e "$CANARY_CODEX_HOME/skills/loopskill4"
-test "$CONFIG_BEFORE" = "$(snapshot_path "$CANARY_CODEX_HOME/config.toml")"
-test "$V3_BEFORE" = "$(snapshot_path "$CANARY_CODEX_HOME/skills/codex-loop-prompt-architect")"
-test "$HOST_CONFIG_BEFORE" = "$(snapshot_path "$HOST_CONFIG")"
-test "$HOST_AUTH_BEFORE" = "$(snapshot_path "$HOST_AUTH")"
+CONFIG_AFTER="$(snapshot_path "$CANARY_CODEX_HOME/config.toml")"
+V3_AFTER="$(snapshot_path "$CANARY_CODEX_HOME/skills/codex-loop-prompt-architect")"
+HOST_CONFIG_AFTER="$(snapshot_path "$HOST_CONFIG")"
+HOST_AUTH_AFTER="$(snapshot_path "$HOST_AUTH")"
+test "$CONFIG_BEFORE" = "$CONFIG_AFTER"
+test "$V3_BEFORE" = "$V3_AFTER"
+test "$HOST_CONFIG_BEFORE" = "$HOST_CONFIG_AFTER"
+test "$HOST_AUTH_BEFORE" = "$HOST_AUTH_AFTER"
 ! grep -Eq '^[[:space:]]*\[mcp_servers\.' "$CANARY_CODEX_HOME/config.toml"
+"$PY" - "$CANDIDATE" "$CONFIG_BEFORE" "$CONFIG_AFTER" \
+  "$V3_BEFORE" "$V3_AFTER" "$HOST_CONFIG_BEFORE" "$HOST_CONFIG_AFTER" \
+  "$HOST_AUTH_BEFORE" "$HOST_AUTH_AFTER" \
+  "$EVIDENCE/canary-environment-integrity.json" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import sys
+
+candidate, *values, output = sys.argv[1:]
+labels = ("isolated_config", "v3_sentinel", "host_config", "host_auth")
+pairs = {
+    label: {"before": values[index * 2], "after": values[index * 2 + 1]}
+    for index, label in enumerate(labels)
+}
+changed_input_count = sum(
+    row["before"] != row["after"] for row in pairs.values()
+)
+if changed_input_count:
+    raise SystemExit("canary environment integrity changed")
+body = {
+    "artifact": "loopskill-v4-canary-environment-integrity-v1",
+    "candidate_sha": candidate,
+    "changed_input_count": changed_input_count,
+    "measurements": pairs,
+    "status": "PASS",
+}
+body["measurement_digest"] = hashlib.sha256(
+    b"loopskill.v4.canary-environment-integrity.v1\0"
+    + json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+Path(output).write_text(
+    json.dumps(body, sort_keys=True, separators=(",", ":")),
+    encoding="utf-8",
+)
+PY
 ```
 
 It must show:
@@ -299,10 +339,14 @@ It must show:
 
 The install readback must be `READY`; the first uninstall must be `UNINSTALLED`
 and the identical public command must then return `ALREADY_UNINSTALLED`.
-The isolated `config.toml`, authenticated Host config/auth files, and synthetic
-independent-v3 sentinel tree must have identical before/after digests, and no
-LoopSkill MCP entry or process may be created. Authentication material is never
-copied into the isolated install home. The
+The installed entry persists domain-separated before/after Host config/auth
+measurements inside the private canary evidence root and derives the minimized
+public changed-byte/count fields from them. The runbook separately persists the
+isolated `config.toml`, authenticated Host config/auth files, and synthetic
+independent-v3 sentinel tree measurements. Every scoped input must have
+identical before/after digests, and no LoopSkill MCP entry or process may be
+created. Authentication material is never copied into the isolated install
+home. The
 foreground Codex process group must be reaped on success, failure, timeout, or
 interruption. A canary or cleanup failure is a HOLD with preserved evidence,
 never permission to rerun the provider action. The exact canary process scope
@@ -327,7 +371,7 @@ post-process readback. A locally constructed receipt JSON alone cannot
 substitute for the bound store/artifact evidence. The disposable store and raw
 Host identity remain outside the repository and release packet.
 
-After the PASS receipt exists, bind the two real-App corpus mappings to that
+After the PASS receipt exists, bind the two real-exec corpus mappings to that
 receipt. This remains profile A: 349 semantic mappings to 74 unique executed
 assertion methods, not 349 independent observations.
 
@@ -455,7 +499,7 @@ PY
 
 "$PY" scripts/build_v4_author_packet.py \
   --root . --candidate "$CANDIDATE" \
-  --evidence "app_canary=$CANARY_ROOT/canary-receipt.json" \
+  --evidence "exec_canary=$CANARY_ROOT/canary-receipt.json" \
   --evidence "coverage=$EVIDENCE/coverage.json" \
   --evidence "distribution=$EVIDENCE/distribution.json" \
   --evidence "final_conformance=$EVIDENCE/final-conformance.json" \
@@ -472,7 +516,7 @@ PY
   --canary-store "$CANARY_ROOT/store" \
   --conformance-receipt "$EVIDENCE/final-conformance.json" \
   --author-packet "$EVIDENCE/author-packet.json" \
-  --evidence "app_canary=$CANARY_ROOT/canary-receipt.json" \
+  --evidence "exec_canary=$CANARY_ROOT/canary-receipt.json" \
   --evidence "coverage=$EVIDENCE/coverage.json" \
   --evidence "distribution=$EVIDENCE/distribution.json" \
   --evidence "final_conformance=$EVIDENCE/final-conformance.json" \

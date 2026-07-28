@@ -1043,7 +1043,7 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
   all remaining `UX-001..008`, `UX-010..016`, `CAP-MODES`, `CAP-ROLES`,
   `CAP-HUMAN`, `CAP-REPAIR`, `CAP-AUDIT`, `CAP-PRIVACY`, and `CAP-ARTIFACT`,
   and thresholds frozen before observing v4 performance;
-- rc: full fault matrix, isolated install/rollback, exact-candidate real App
+- rc: full fault matrix, isolated install/rollback, exact-candidate foreground exec
   evidence from an already-authenticated official Host context with no copied
   credentials and unchanged Host config/auth hashes, independent review,
   `UX-009`, `CAP-OPERABILITY`,
@@ -1102,7 +1102,7 @@ closed. The output contains 349 sorted unique coverage mappings, their target
 test identities and result digests, plus a canonical aggregate digest. It
 separately reports the number of unique executable test methods; it does not
 claim 349 independent executions. `UX-009-a` and
-`CAP-RELEASE-CANARY` additionally require the real App receipt. One executable
+`CAP-RELEASE-CANARY` additionally require the real exec receipt. One executable
 test may cover multiple semantic mappings; the receipt must not present those
 mappings as independently executed or observed. No family row alone produces
 PASS and no mapping may be omitted. Selecting this evidence profile instead of
@@ -1112,6 +1112,18 @@ semantic mappings, exactly 74 unique actually executed assertion methods, and
 `independent_case_observation_claimed=false`. These counts and the weaker claim
 are normative: drift, omission, an unexecuted target, or relabeling a mapping
 as an independent observation fails closed.
+
+The exec-canary gate also consumes two canonical, private measurement
+artifacts: one persisted before the unique invocation and one persisted after
+process closure. They bind exact candidate SHA, Host config/auth before and
+after domain-separated digests, changed-byte/count results, the disposable
+store, transcript, artifact, Review, and Finalization. Missing before evidence,
+measured mutation, or receipt/measurement digest mismatch fails. Freshness is
+validated only against the signed observation interval
+`issued_at <= observed_at <= fresh_until`, bounded to ten minutes; current wall
+clock at later independent review or publication is not a veto. No case may
+substitute a fresh post-process Host readback, automatic resume, or second
+spawn for lost foreground evidence.
 
 32 KiB Pack and at least 50% control-interaction reduction were candidate beta
 targets, not alpha correctness gates. The P7 pre-comparison freeze makes them

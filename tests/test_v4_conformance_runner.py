@@ -24,7 +24,7 @@ def canary(candidate: str) -> dict:
     issued_text = issued.isoformat().replace("+00:00", "Z")
     fresh_text = (issued + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
     value = {
-        "artifact": "loopskill-v4-disposable-app-canary-v1",
+        "artifact": runner.rc.CANARY_ARTIFACT,
         "candidate_sha": candidate,
         "candidate_goal_digest": "e" * 64,
         "canary_output_sha256": runner.rc.CANARY_OUTPUT_SHA256,
@@ -34,6 +34,11 @@ def canary(candidate: str) -> dict:
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
         "fresh_until": fresh_text,
+        "host_auth_after_digest": "1" * 64,
+        "host_auth_before_digest": "1" * 64,
+        "host_config_after_digest": "2" * 64,
+        "host_config_before_digest": "2" * 64,
+        "host_integrity_changed_input_count": 0,
         "host_receipt_issuer": runner.rc.CANARY_ISSUER,
         "host_receipt_trust": runner.rc.CANARY_TRUST,
         "host_create_readback_count": 1,
@@ -234,7 +239,7 @@ class V4ConformanceRunnerTests(unittest.TestCase):
                 "CAP-ARCHITECTURE-ONE-WRITER", family, test_id, changed
             )
 
-    def test_hosted_run_executes_all_bindings_without_faking_app_receipt(self) -> None:
+    def test_hosted_run_executes_all_bindings_without_faking_exec_receipt(self) -> None:
         candidate = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()

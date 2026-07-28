@@ -44,7 +44,7 @@ REQUIRED_TRACKED_FILES = (
 )
 
 REQUIRED_EVIDENCE_RECEIPTS = (
-    "app_canary",
+    "exec_canary",
     "coverage",
     "distribution",
     "final_conformance",
@@ -122,7 +122,7 @@ _SECRET_TEXT_PATTERNS = (
 )
 
 _EVIDENCE_ARTIFACTS = {
-    "app_canary": "loopskill-v4-disposable-app-canary-v1",
+    "exec_canary": "loopskill-v4-disposable-codex-exec-canary-v1",
     "coverage": "loopskill-v4-coverage-receipt-v1",
     "distribution": "loopskill-v4-distribution-receipt-v1",
     "final_conformance": "loopskill-v4-conformance-execution-v2",
@@ -297,7 +297,7 @@ def _require_fields(value: Mapping[str, Any], expected: Mapping[str, Any]) -> No
         raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
 
 
-def _validate_app_canary(value: Mapping[str, Any]) -> None:
+def _validate_exec_canary(value: Mapping[str, Any]) -> None:
     _require_fields(
         value,
         {
@@ -308,8 +308,9 @@ def _validate_app_canary(value: Mapping[str, Any]) -> None:
             "finalization": "ACKNOWLEDGED",
             "entry": "loopskill4",
             "host_lifecycle_readback_count": 1,
-            "host_receipt_issuer": "codex-app-task-readback-v1",
-            "host_receipt_trust": "host-tool-observed",
+            "host_integrity_changed_input_count": 0,
+            "host_receipt_issuer": "codex-exec-jsonl-v1",
+            "host_receipt_trust": "same-process-terminal-observed",
             "host_task_create_count": 1,
             "host_task_readback_count": 1,
             "intake_external_effects": 0,
@@ -354,6 +355,10 @@ def _validate_app_canary(value: Mapping[str, Any]) -> None:
         "candidate_goal_digest",
         "canary_output_sha256",
         "host_receipt_digest",
+        "host_auth_after_digest",
+        "host_auth_before_digest",
+        "host_config_after_digest",
+        "host_config_before_digest",
         "host_result_digest",
         "host_task_identity_digest",
         "provenance_digest",
@@ -531,7 +536,7 @@ def _validate_test_fault_matrix(value: Mapping[str, Any]) -> None:
 
 
 _EVIDENCE_VALIDATORS = {
-    "app_canary": _validate_app_canary,
+    "exec_canary": _validate_exec_canary,
     "coverage": _validate_coverage,
     "distribution": _validate_distribution,
     "final_conformance": _validate_final_conformance,
