@@ -7,33 +7,47 @@
 [English](README.en.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> 发布状态：此源码树是 LoopSkill 4.0.0 稳定发行；公开可用性以 `v4.0.0` tag 与 GitHub Release readback 为准。
+> 本文档对应 LoopSkill 4.0.0；当前可用的公开版本以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
 
-LoopSkill 把长任务变成一个有明确授权、证据和停止条件的可恢复 loop。普通用户只提供目标或目标文件；机器负责协议身份、版本、收据和 Host readback。产品仍保留必要的人类流程：
+**LoopSkill 帮你把一次聊天容易丢失的耐久任务，变成先看清边界、再启动一次、最后留下结果和证据的工作流程。**
+
+聊天会结束，长任务却未必已经完成。中途可能换上下文、重复执行同一步，或者只得到一句“完成了”，却不知道文件是否真的正确。LoopSkill 不承诺让模型永久自主运行；它为一个前台 Codex Host 任务提供清楚、可检查、不会盲目重试的边界。
+
+![耐久任务从目标和边界交接到证据与结果的故事图](docs/readme-assets/durable-handoff.png)
+
+你只需要给出目标。LoopSkill 会依次完成：
 
 `INTAKE / 质检 → PREPARE / 准备 → CONFIRM / 确认边界 → START / 启动`
 
+确认之前没有 Host 执行；确认之后至多启动一次。最终你看到的是目标、进度、结果、限制和下一步，而不是一串 thread ID、SHA 或 receipt。
+
 <!-- parity: break -->
-## 破坏性版本说明
+## 它解决什么问题
 
-LoopSkill 4 是 **v4-only hard break**。它保留 v3 已验证的安全原则，但不打开、导入、修复或运行 v3 loop、Controller Pack、MCP 状态或 CLI 数据。没有自动迁移，也没有双写。
+- **范围越做越大**：启动前先固定写入范围、预算、外部动作、验收标准和停止条件。
+- **输出丢了就盲目重做**：一次 Attempt 被取走后不会自动再发；证据不足时显示 `UNKNOWN`。
+- **旧证据冒充新结果**：结果、artifact、review 和 finalization 都绑定当前链路。
+- **模型搬运控制信息**：用户和模型都不负责复制 ID、SHA、receipt、schema 或 App enum。
+- **“完成”没有标准**：本地 artifact 会按明确条件验证，工作流闭合与外部效果确认分开表达。
 
-需要继续使用旧数据时，请独立安装或保留 [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)。v4 安装器不会修改它。
+LoopSkill 4 是 **v4-only hard break**。它保留 v3 的安全原则，但不打开、导入、修复或运行 v3 loop、Controller Pack、MCP 状态或旧 CLI 数据。
 
 <!-- parity: changes -->
-## 4.0 的变化
+## 适合与不适合
 
-- 一个 typed protocol manifest 定义 command、event、reference、receipt、capability 和 error 的 wire shape。
-- deterministic Kernel 只依赖 typed protocol 与 ports；SQLite Store 是唯一 canonical writer。
-- artifact、review、finalization 与 Codex Host Adapter 都在 Kernel 边界之外。
-- operation ID、handle、Actor/Grant、revision、receipt、digest 和 Host identity 全由机器生成、解析或验证。
-- Standard、Adaptive、Reviewer、Local Verifier、Decision Card 与 repair 是可选 policy；最小路径不加载 policy pack。
-- 外部 effect 只允许一次自动 attempt；不能权威 readback 时诚实返回 `UNKNOWN` 或 `UNVERIFIABLE`。
+| 适合使用 LoopSkill | 更适合直接交给 Codex |
+| --- | --- |
+| 跨多个步骤、容易中断的任务 | 一次问答或很短的单文件修改 |
+| 必须先确认写入或外部动作边界 | 不需要持久状态或恢复 |
+| 需要验证 artifact、review 和完成状态 | 用户马上就能人工检查结果 |
+| 外部结果不确定时必须避免盲重试 | 重做没有副作用的小操作 |
+
+质检会给出 `READY_FOR_LOOP`、`NEEDS_CLARIFICATION`、`BLOCKED` 或 `DIRECT_TASK_RECOMMENDED`。短任务不会被强行 Loop 化。
 
 <!-- parity: install -->
-## 30 秒安装
+## 3 分钟开始
 
-要求：macOS 或 Linux、Git、Python 3.11–3.14。LoopSkill 4 runtime 只使用 Python 标准库。4.0.0 只有在 Linux/macOS × Python 3.11、3.12、3.13、3.14 的八个 release-CI runtime/distribution lane 全部通过后才能发布。
+先决条件：macOS 或 Linux、Git、Python 3.11–3.14，以及已经登录的官方 Codex。LoopSkill 4 runtime 只依赖 Python 标准库。
 
 ```bash
 git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
@@ -43,46 +57,48 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 "$LOOPSKILL4" --help
 ```
 
-安装目标是独立的 `$CODEX_HOME/skills/loopskill4`。LoopSkill 4 自身不注册 MCP、不编辑 `config.toml`，也不要求为安装或使用 LoopSkill 4 重启 Codex App。Codex 或其他产品因无关原因仍可能要求重启。
-
-安装器和卸载器不会编辑 Codex 配置。首次在全新 workspace 真实调用官方 Codex Host 时，Host 自身可能在配置末尾追加该 workspace 的一条 `trust_level = "trusted"` 记录。这是 Host-owned effect：发行门只允许当前机器生成的精确 canonical workspace 的单条 EOF 追加，保留真实非零 changed-byte 计数；其他配置变化或任何 auth 变化都会 fail closed。
-
-<!-- parity: usage -->
-## 最简单的使用方式
+安装位置与 v3 分离。LoopSkill 4 自身**不注册 MCP**、不编辑 Codex `config.toml`，也**不要求为安装或使用 LoopSkill 4 重启** Codex App。
 
 创建 `goal.json`：
 
 ```json
 {
-  "goal": "在 disposable 示例目录中完成并验证一个小改动",
+  "goal": "在示例目录中创建并验证一份发布检查清单",
   "task_horizon": "long",
-  "write_scope": ["disposable-example"],
-  "budget": "up to 4 minutes; no network or publish",
+  "write_scope": ["release-checklist.md"],
+  "budget": "最多 4 分钟；不访问网络",
   "external_actions": [],
-  "acceptance_criteria": ["focused tests pass", "result is reviewed"],
-  "stop_conditions": ["stop on unknown external state"],
-  "authorization_boundaries": ["no commit, push, publish, deploy, or real-user data"]
+  "acceptance_criteria": ["artifact-changed", "file-exists:release-checklist.md"],
+  "stop_conditions": ["外部结果不确定时停止"],
+  "authorization_boundaries": ["不 commit、push、publish 或 deploy"]
 }
 ```
 
-然后执行一个主入口：
+然后使用唯一主入口：
 
 ```bash
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 "$LOOPSKILL4" start goal.json
 ```
 
-同一交互会先只读质检，再写本地准备产物并展示 Goal、写入范围、预算、外部动作、验收标准、停止条件和发布边界。只有精确的显式确认才能启动。非交互环境会停在 PREPARE；`DIRECT_TASK_RECOMMENDED` 不创建 loop。
+它不会静默开跑。你会先看到质检结论和准备好的边界摘要，再明确输入确认。非交互环境会停在 PREPARE；`DIRECT_TASK_RECOMMENDED` 不会创建 loop。
 
-确认后，公开入口启动一次官方前台 `codex exec --json --output-schema --output-last-message` 进程。官方可执行文件负责其内部 thread/turn 生命周期；LoopSkill 只通过 stdin 提交已确认的语义边界。JSONL 只证明机器生成的 identity 与 terminal lifecycle；机器控制的 `--output-last-message` 文件是唯一 semantic Result bytes，并按 typed manifest 派生的封闭 outcome/summary schema 验证。schema 与 result control 都在 artifact workspace 外的私有临时目录，调用后清理；不存在 `agent_message` 或文本 marker 回退。
+<!-- parity: usage -->
+## 从目标到结果
 
-在全新 workspace 首次执行时，官方 Codex Host 可能自行在 `config.toml` 文件末尾登记一条仅含 `trust_level = "trusted"` 的 workspace trust record。LoopSkill 安装器和卸载器仍不编辑 Codex 配置；发行 canary 只接受精确绑定当前机器生成 canonical disposable workspace 的这一条 EOF append，诚实记录非零 changed bytes，并拒绝其他路径、值、重复项、前缀改写或 auth 变化。
+```mermaid
+flowchart LR
+    G["目标或 goal.json"] --> I["INTAKE 质检"]
+    I --> P["PREPARE 准备"]
+    P --> C{"CONFIRM 确认边界"}
+    C -->|确认| S["START 一次 Host 任务"]
+    C -->|取消| X["零 Host 副作用停止"]
+    S --> A["机器验证 artifact"]
+    A --> R["review + finalization"]
+    R --> O["结果、限制与下一步"]
+```
 
-前台进程最长运行 300 秒，并在成功、失败、超时或中断时回收整个进程组。300 秒是观察窗口，不是任务预算。只有完整 JSONL lifecycle、零退出码、合法的唯一结果文件和外部 artifact 验证全部成立才可闭合。bounded stderr 是诊断通道，不是成功权威；overflow 仍 fail closed。证据丢失、畸形、失败、冲突、歧义或超时会成为 `UNKNOWN`；LoopSkill 不 resend，也不执行 `codex exec resume`。
-
-因此 4.0.0 的普通入口只支持预期能在该观察窗口内完成的单个 Host task；更长的单次 Host 执行不在本版公开支持范围内。
-
-也可以显式执行四个阶段：
+四个阶段也可以显式运行：
 
 ```bash
 "$LOOPSKILL4" intake goal.json
@@ -91,13 +107,34 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 "$LOOPSKILL4" start ./prepared-loop --root ./loopskill4-data
 ```
 
-<!-- parity: no-control -->
-## 普通用户永远不手工提供什么
+INTAKE 严格只读。PREPARE 只生成本地 manifest、边界摘要和人类可读计划。CONFIRM 绑定这些内容的 digest；内容改变后旧确认失效。只有有效确认后的 START 才能取得一次机器管理的 Attempt。
 
-普通输入中的控制身份数量必须为 0。用户不复制 task/thread/turn/route/effect/artifact/review/finalization ID，不粘贴 SHA、receipt、Pack identity、Gateway schema、MCP/App enum、heartbeat、readback 或 retry 参数。即使模型文本含有这些值，它们也不获得 authority。
+### 一个具体例子
+
+假设你要让 Codex 创建 `release-checklist.md`：
+
+1. 你写目标、允许写入的文件和验收条件。
+2. LoopSkill 判断任务是否值得进入 loop，并指出缺失信息。
+3. 你确认“只写这个文件、不发布、不访问网络”。
+4. Codex 在授权 workspace 内执行一次。
+5. LoopSkill 捕获实际文件变化，验证条件，再记录 Result、Review 与 Finalization。
+
+如果文件正确但 Host 自评证据不足，artifact correctness 和工作流限制会分别显示；系统不会把其中一个冒充另一个。
+
+<!-- parity: no-control -->
+## 你不需要手工处理什么
+
+普通用户提供的控制身份数量是 **0**。你不需要复制或填写：
+
+- task、thread、turn、route、effect、artifact、review 或 finalization ID；
+- commit SHA、content digest、receipt 或 Pack identity；
+- Gateway schema、MCP/App enum、sandbox 参数；
+- heartbeat、readback、retry 或 resume 参数。
+
+这些值由机器生成、解析或验证。即使模型文本中出现某个 ID，它也不会因此获得 authority。
 
 <!-- parity: status -->
-## 状态、结果与限制
+## 查看状态、结果与限制
 
 ```bash
 "$LOOPSKILL4" status --root ./loopskill4-data
@@ -105,75 +142,94 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 "$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
 ```
 
-普通 `status` 只读本地状态。若崩溃发生在本地 Attempt 提交后、执行权被取得前，`status --refresh` 可以取得该 Attempt 并完成唯一首次 invocation。一旦进程已经启动，4.0.0 没有跨进程 Host readback 或自动 resume；丢失的终态证据保持 `UNKNOWN`。它绝不第二次 spawn 或 resend。默认状态只展示目标、进度、结果、限制和可行动的下一步。内部 identity 与 receipt 只在显式 diagnostics 中出现。`UNKNOWN` 表示外部动作可能已经发生但无法权威确认；`UNVERIFIABLE` 表示 Host 不能提供所需证明。两者都不是成功。
+普通 `status` 只读本地状态。`status --refresh` 只有在 durable Attempt 尚未被取走时，才可能完成**唯一首次 invocation**；进程一旦启动，就没有跨进程自动恢复。它绝不执行**第二次 spawn**或 resend。
+
+- `UNKNOWN`：外部动作可能发生过，但终态证据丢失或有歧义。
+- `UNVERIFIABLE`：现有 Host 能力无法给出要求的证明。
+- `LIMITATION`：工作可以诚实结束，但保证强度不足以声称完全成功。
+
+这些都不会被改写成成功，也不会触发盲目重试。内部 identity 和 receipt 仅在显式 diagnostics 中显示。
 
 <!-- parity: policy -->
-## 可选策略
+## 可选的高级流程
 
-Standard 提供固定、依赖有序的 Goal Queue。Adaptive 提供一个 active goal 和有界、版本化的 roadmap revision。Reviewer、Local Verifier、Decision Card、human steering 与 bounded repair 都是可选能力，只能提交受权 semantic command，不能写 Store、签 Host receipt 或成为 Supervisor。
+最小任务不要求安装、理解或选择 policy pack。需要时可以使用：
+
+- **Standard**：固定、依赖有序的 Goal Queue；
+- **Adaptive**：一个 active goal 和有界、版本化的 roadmap revision；
+- **Reviewer / Local Verifier**：按当前 artifact 即时创建；
+- **Decision Card / bounded repair**：把人类选择绑定当前上下文并限制修复次数。
+
+这些能力只能提交受权 semantic command，不能直接写 Store、签 Host receipt 或成为 Supervisor。
 
 <!-- parity: architecture -->
-## 架构
+## 4.0 的内部结构
+
+默认路径保持简单：Entry 组合 Kernel、一个 SQLite Store、artifact/review/finalization libraries 和一个 Codex Host Adapter。
 
 ```mermaid
 flowchart LR
-    E["Entry / composition root"] --> K["Deterministic Kernel"]
+    E["Entry"] --> K["Deterministic Kernel"]
     K --> P["Typed protocol + ports"]
     E --> S["SQLite Store / one writer"]
-    E --> A["Artifact, review, finalization libraries"]
+    E --> A["Artifact + Review + Finalization"]
     E --> H["Codex Host Adapter"]
-    E -. optional .-> O["Standard / Adaptive policy"]
+    E -. 可选 .-> O["Standard / Adaptive policy"]
 ```
 
-Store 不控制 Host；Artifact 与 Host 不写 canonical state。一个 state authority 可以维护正交 aggregate/event streams，不等于一个巨大 enum 或单一物理 event stream。详见 [架构图](docs/v4/architecture-map.md)、[ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md) 与 [typed protocol](protocol/v4/README.md)。
+Store 不控制 Host；Artifact 和 Host 也不写 canonical state。进一步内容见 [架构图](docs/v4/architecture-map.md)、[ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md) 和 [typed protocol](protocol/v4/README.md)。
 
 <!-- parity: safety -->
-## 安全与恢复
+## 安全、恢复与诚实失败
 
-- 本地 operation acceptance、per-loop CAS、outbox 与 snapshot 在一个 SQLite transaction 中提交。
-- 相同 operation ID 和相同请求重放不产生第二个 event、handle 或 effect；不同请求返回 idempotency conflict。
-- provider 有 idempotency key 且存在 authoritative readback 时只称 effectively-once。
-- 否则仅承诺 at-most-one automatic attempt；crash/lost response 可能留下 `UNKNOWN`。
+- 本地 operation、per-loop CAS、outbox、event 和 snapshot 在一个 SQLite transaction 中提交。
+- 相同 operation ID 与相同请求重放不会产生第二个 event、handle 或 effect。
+- 外部执行只承诺 at-most-one automatic attempt；没有跨 SQLite、Codex、Git 或 network 的端到端 exactly-once。
+- 结果证据丢失时保持 `UNKNOWN`，不自动 resend，也不运行 `codex exec resume`。
 - path traversal、symlink、casefold alias、special file 和 open/read race 都 fail closed。
-- artifact correctness、workflow closure、assurance 和 external-effect finalization 是不同事实，不能互相替代。
+- 首次真实 Host 调用时，Host 自身可能为当前 workspace 追加一条 trust 记录；发行验证会保留**真实非零** changed-byte 计数。安装器和卸载器仍不编辑 Codex 配置。
 
 <!-- parity: evidence -->
-## 证据边界
+## 为什么“文件正确”和“任务完成”不是一回事
 
-仓库的 unit、fault-injection、conformance、isolated install 与 disposable 前台 Codex exec canary 只证明绑定版本和场景中的合同行为。它们不证明 patch-success 优势、任意长期任务有效性、Host 无故障或跨系统 exactly-once。
+![先核验结果证据再允许工作流闭合的示意图](docs/readme-assets/evidence-before-closure.png)
+
+LoopSkill 分开记录四件事：
+
+1. **Artifact correctness**：文件或变更是否符合本地条件。
+2. **Result / Review**：Host 返回了什么，审查结论是什么。
+3. **Workflow closure**：这个 loop 是否走完被授权的状态转换。
+4. **External-effect finalization**：外部动作是否有足够强的终态证据。
+
+单元测试、fault injection、conformance、隔离安装和 disposable canary 只证明绑定版本与场景中的合同行为，不证明 patch-success 提升、任意长期任务有效或 Host 永不失败。
 
 <!-- parity: v3 -->
-## v3 硬边界
+## v4 与 v3 的硬边界
 
-v4 遇到 v3 root、state 或 Controller Pack 时零写入，并返回稳定的 `USER_UNSUPPORTED_LEGACY_VERSION`，指向 [v3.3.8 Release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)。v4 不提供 importer、repair、legacy CLI alias、Pack runtime 或 v3 MCP State Gateway。
+v4 遇到 v3 root、state 或 Controller Pack 时零写入，并返回 `USER_UNSUPPORTED_LEGACY_VERSION`。它不提供 importer、repair、legacy CLI alias、Pack runtime 或 v3 MCP State Gateway，也不会自动迁移。
+
+需要旧数据时，请继续使用独立的 [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)。
 
 <!-- parity: uninstall -->
 ## 卸载与回退
-
-安装器会机器绑定唯一 active receipt；普通用户无需复制或填写 receipt：
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py" --codex-home "${CODEX_HOME:-$HOME/.codex}"
 ```
 
-这个 digest 绑定的管理入口位于安装目标之外，因此同一命令可安全重跑并返回 `ALREADY_UNINSTALLED`。卸载器自动解析并验证机器绑定的 receipt；缺失、漂移或歧义都会 fail closed。它只移除 receipt 绑定的 v4 安装，保持 `config.toml` 和独立 v3 安装字节不变。回退意味着卸载 v4 后继续使用单独的 v3.3.8；v4 不恢复、转换或迁移 v3 数据。
+卸载器只移除 receipt 绑定的 v4 安装，不修改 `config.toml`、v3 安装或 v3 数据。重复执行会安全返回 `ALREADY_UNINSTALLED`。回退意味着卸载 v4 后继续使用单独安装的 v3.3.8；v4 不反向转换数据。
 
 <!-- parity: limitations -->
-## 已知限制
+## 当前限制
 
-- 首发只支持 Codex Host Adapter；Kernel host-neutral 不等于 multi-host 支持。
-- 已验证的 Codex Desktop folder-open → `list_projects` → `projectId` →
-  `create_thread` 路线有 23/23 provisioning receipts，但 4.0.0 不接入该
-  路线。默认路径是 cwd-bound 前台 `codex exec` invocation；不承诺
-  Desktop-visible saved project/task。
-- 4.0.0 没有 provider idempotency、跨进程 lifecycle readback 或自动
-  `codex exec resume`。
-- 不承诺 SQLite/Codex/Git/network 的跨系统 exactly-once。
-- 不承诺实证 patch-success 提升或长期任务优越性。
-- memory isolation 只报告 Host 实际可证明的能力，可能是 unavailable 或 unverifiable。
-- Git/non-Git/new-Git capture 只在授权 root 和已验证 capability 内运行。
+- 4.0.0 只支持 Codex Host Adapter；Kernel host-neutral 不代表已经支持 multi-host。
+- 默认路径是一个 cwd-bound 前台 Codex Host 任务；不承诺 Desktop-visible saved project/task。
+- 单次前台观察窗口最长 300 秒；不承诺无限长任务、自动 resume 或跨进程 readback。
+- 没有 provider idempotency 或跨系统 exactly-once 承诺。
+- 不声称 patch 成功率提高，也不声称已经证明 long-horizon superiority。
+- memory isolation 只按 Host 实际可证明的强度报告，可能 unavailable 或 unverifiable。
 
-完整列表见 [已知限制](docs/v4/known-limitations.md)。
+详见 [已知限制](docs/v4/known-limitations.md)。
 
 <!-- parity: contributor -->
 ## 开发与验证
@@ -189,7 +245,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -W error -m unittest discover -s t
 .venv/bin/python scripts/check_v4_docs.py --smoke
 ```
 
-CI 还执行 Linux/macOS × Python 3.11–3.14 的八个 runtime/distribution lane、隔离安装、dependency/import graph、stale legacy runtime、privacy/secret/large artifact、SBOM/license 和 release identity 门禁。单一本地 Python 结果不能替代该矩阵。真实前台 Codex exec canary 只在本地 exact-SHA release gate 运行；GitHub-hosted runner 不调用模型。
+CI 还运行 Linux/macOS × Python 3.11–3.14 安装卸载矩阵、协议漂移、依赖方向、privacy/secret/large artifact、SBOM/license 和 release identity 检查。GitHub-hosted runner 不调用真实模型。
 
 <!-- parity: release -->
 ## 发布、安全与历史版本

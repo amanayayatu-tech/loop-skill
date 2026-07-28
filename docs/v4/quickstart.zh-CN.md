@@ -1,6 +1,6 @@
 # LoopSkill 4 快速开始
 
-状态：此源码树是 LoopSkill 4.0.0 稳定发行；公开可用性以 `v4.0.0` tag 与 GitHub Release readback 为准。
+本文档对应 LoopSkill 4.0.0；当前可用的公开版本以 GitHub Releases 页面为准。
 
 ## 安装
 

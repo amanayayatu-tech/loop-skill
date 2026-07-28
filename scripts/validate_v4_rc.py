@@ -86,7 +86,8 @@ RETIRED_PUBLIC_SOURCE_PATHS = (
     "P0-P2-CLOSURE.md",
     "docs/codex-app-controller-turn-attestation-blocker.md",
     "docs/codex-app-process-reaping-report.md",
-    "docs/readme-assets/",
+    "docs/readme-assets/loop-workflow-spec.json",
+    "docs/readme-assets/loop-workflow.png",
 )
 RETIRED_RUNTIME_LITERALS = (
     b"ImportV3Snapshot",
@@ -1117,6 +1118,7 @@ def _live_canary_observation(
     try:
         from loop_architect.v4_alpha.protocol import snapshot_digest
         from loop_architect.v4_entry.service import STORE_FILENAME
+        from loop_architect.v4_entry.canary import CANARY_GOAL
         from loop_architect.v4_persistence.sqlite_store import SQLiteStore
     except ImportError as exc:
         raise RcValidationError("RC_CANARY_LIVE_RUNTIME_UNAVAILABLE") from exc
@@ -1162,7 +1164,7 @@ def _live_canary_observation(
     with SQLiteStore(store_path) as store:
         store.verify_integrity()
         descriptors = store.loop_descriptors()
-        if len(descriptors) != 1 or candidate not in descriptors[0]["goal"]:
+        if len(descriptors) != 1 or descriptors[0]["goal"] != CANARY_GOAL:
             raise RcValidationError("RC_CANARY_LIVE_CANDIDATE_BINDING_INVALID")
         loop_ref = descriptors[0]["loop_ref"]
         snapshot = store.snapshot(loop_ref)

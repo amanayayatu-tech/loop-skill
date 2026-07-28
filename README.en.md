@@ -7,33 +7,47 @@
 [中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> Release status: This source tree is the LoopSkill 4.0.0 stable release. Public availability is established by the `v4.0.0` tag and GitHub Release readback.
+> This document describes LoopSkill 4.0.0. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
 
-LoopSkill turns long-running work into a recoverable loop with explicit authority, evidence, and stop conditions. An ordinary user supplies only a goal or goal file; machines own protocol identities, versions, receipts, and Host readback. The necessary human boundary remains:
+**LoopSkill turns durable work that can get lost in one chat into a flow that checks the boundary first, starts once, and leaves a result with evidence.**
+
+A chat can end before a long task is truly complete. Context can drift, a step can run twice, or “done” can arrive without proof that the file is correct. LoopSkill does not promise permanent autonomous execution. It gives one foreground Codex Host task a clear, inspectable boundary with no blind retry.
+
+![Durable handoff from a goal and boundary to evidence and result](docs/readme-assets/durable-handoff.png)
+
+You provide the goal. LoopSkill walks through:
 
 `INTAKE → PREPARE → CONFIRM → START`
 
+There is no Host execution before confirmation and at most one start afterward. You see the goal, progress, result, limitations, and next action—not a wall of thread IDs, SHA values, or receipts.
+
 <!-- parity: break -->
-## Breaking-release notice
+## Problems it solves
 
-LoopSkill 4 is a **v4-only hard break**. It preserves validated v3 safety principles, but it does not open, import, repair, or run v3 loops, Controller Packs, MCP state, or CLI data. There is no automatic migration and no dual write.
+- **Scope keeps growing**: write scope, budget, external actions, acceptance, and stop conditions are fixed before start.
+- **Lost output causes blind redo**: once an Attempt is claimed it is not automatically sent again; missing evidence becomes `UNKNOWN`.
+- **Old evidence looks like a new result**: Result, Artifact, Review, and Finalization bind the current chain.
+- **The model transports control data**: neither users nor models copy IDs, SHA values, receipts, schemas, or App enums.
+- **“Done” has no definition**: local artifacts are checked against explicit criteria, separately from workflow closure and external-effect evidence.
 
-To keep using old data, independently install or retain [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8). The v4 installer does not modify it.
+LoopSkill 4 is a **v4-only hard break**. It keeps v3 safety principles but does not open, import, repair, or run v3 loops, Controller Packs, MCP state, or legacy CLI data.
 
 <!-- parity: changes -->
-## What changed in 4.0
+## When to use it
 
-- One typed protocol manifest defines command, event, reference, receipt, capability, and error wire shapes.
-- The deterministic Kernel depends only on the typed protocol and ports; SQLite Store is the sole canonical writer.
-- Artifact, review, finalization, and the Codex Host Adapter remain outside the Kernel boundary.
-- Operation IDs, handles, Actor/Grant references, revisions, receipts, digests, and Host identities are machine-generated, parsed, or verified.
-- Standard, Adaptive, Reviewer, Local Verifier, Decision Card, and repair are optional policy; the minimal path loads no policy pack.
-- An external effect receives at most one automatic attempt; without authoritative readback it honestly becomes `UNKNOWN` or `UNVERIFIABLE`.
+| Use LoopSkill | Use Codex directly |
+| --- | --- |
+| Multi-step work likely to be interrupted | One question or a tiny one-file edit |
+| Write or external-action boundaries need confirmation | No persistent state or recovery is needed |
+| Artifact, review, and closure must be checked | You can immediately inspect the result yourself |
+| Uncertain external outcomes must not be retried blindly | Repeating the operation has no side effect |
+
+Intake returns `READY_FOR_LOOP`, `NEEDS_CLARIFICATION`, `BLOCKED`, or `DIRECT_TASK_RECOMMENDED`. A short task is not forced into a loop.
 
 <!-- parity: install -->
-## 30-second install
+## Start in 3 minutes
 
-Requirements: macOS or Linux, Git, and Python 3.11–3.14. The LoopSkill 4 runtime uses only the Python standard library. Version 4.0.0 may be published only after all eight Linux/macOS × Python 3.11, 3.12, 3.13, and 3.14 release-CI runtime/distribution lanes pass.
+Prerequisites: macOS or Linux, Git, Python 3.11–3.14, and an authenticated official Codex installation. The LoopSkill 4 runtime uses only the Python standard library.
 
 ```bash
 git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
@@ -43,46 +57,48 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 "$LOOPSKILL4" --help
 ```
 
-The distinct installation target is `$CODEX_HOME/skills/loopskill4`. LoopSkill 4 itself does not register MCP, edit `config.toml`, or require a Codex App restart for LoopSkill installation or use. Codex or another product may still require a restart for unrelated reasons.
-
-The installer and uninstaller do not edit Codex configuration. On the first real official Codex Host invocation in a fresh workspace, the Host itself may append one `trust_level = "trusted"` record for that workspace at EOF. This is a Host-owned effect: the release gate permits only one append for the exact machine-generated canonical workspace and retains the real nonzero changed-byte count. Every other configuration change, or any auth change, fails closed.
-
-<!-- parity: usage -->
-## Simplest usage
+The install is separate from v3. LoopSkill 4 itself **does not register MCP**, edit Codex `config.toml`, **or require a Codex App restart** for installation or use.
 
 Create `goal.json`:
 
 ```json
 {
-  "goal": "Complete and verify one small change in a disposable example directory",
+  "goal": "Create and verify a release checklist in the example directory",
   "task_horizon": "long",
-  "write_scope": ["disposable-example"],
-  "budget": "up to 4 minutes; no network or publish",
+  "write_scope": ["release-checklist.md"],
+  "budget": "up to 4 minutes; no network",
   "external_actions": [],
-  "acceptance_criteria": ["focused tests pass", "result is reviewed"],
-  "stop_conditions": ["stop on unknown external state"],
-  "authorization_boundaries": ["no commit, push, publish, deploy, or real-user data"]
+  "acceptance_criteria": ["artifact-changed", "file-exists:release-checklist.md"],
+  "stop_conditions": ["stop if external outcome is uncertain"],
+  "authorization_boundaries": ["no commit, push, publish, or deploy"]
 }
 ```
 
-Then use one main entry:
+Then use the one main entry:
 
 ```bash
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 "$LOOPSKILL4" start goal.json
 ```
 
-The same interaction performs read-only intake, writes local preparation artifacts, and shows the Goal, write scope, budget, external actions, acceptance criteria, stop conditions, and publication boundary. Only exact explicit confirmation can start. A non-interactive session stops at PREPARE; `DIRECT_TASK_RECOMMENDED` creates no loop.
+It does not start silently. You first see the intake result and prepared boundary, then explicitly confirm. A non-interactive session stops at PREPARE; `DIRECT_TASK_RECOMMENDED` creates no loop.
 
-After confirmation, the public entry starts one official foreground `codex exec --json --output-schema --output-last-message` process. The executable owns its internal thread/turn lifecycle; LoopSkill supplies the confirmed semantic boundary on stdin. JSONL proves only the machine-emitted identity and terminal lifecycle. The machine-controlled `--output-last-message` file is the sole semantic Result byte source and is validated against the typed-manifest-derived closed outcome/summary schema. Schema and result controls live in a private temporary directory outside the artifact workspace and are removed after invocation; there is no `agent_message` or text-marker fallback.
+<!-- parity: usage -->
+## From goal to result
 
-On the first execution in a fresh workspace, the official Codex Host may append one workspace trust record containing only `trust_level = "trusted"` to the end of `config.toml`. The LoopSkill installer and uninstaller still do not edit Codex configuration. The release canary accepts only that one EOF append bound to the exact machine-generated canonical disposable workspace, reports the real nonzero changed-byte count, and rejects every other path, value, duplicate, prefix rewrite, or auth change.
+```mermaid
+flowchart LR
+    G["Goal or goal.json"] --> I["INTAKE"]
+    I --> P["PREPARE"]
+    P --> C{"CONFIRM boundary"}
+    C -->|confirm| S["START one Host task"]
+    C -->|cancel| X["Stop with zero Host effects"]
+    S --> A["Machine verifies artifact"]
+    A --> R["Review + Finalization"]
+    R --> O["Result, limitations, next action"]
+```
 
-The foreground process is bounded to at most 300 seconds and reaped on success, failure, timeout, or interruption. This is the observation window, not the task budget. A complete JSONL lifecycle, zero exit status, one valid result file, and external artifact verification are all required. Bounded stderr is diagnostic rather than success authority; overflow still fails closed. Lost, malformed, failed, conflicting, ambiguous, or timed-out evidence becomes `UNKNOWN`; LoopSkill does not resend or run `codex exec resume`.
-
-LoopSkill 4.0.0 therefore supports the ordinary entry only for an individual Host task expected to finish within that observation window. Longer single Host executions are outside this release's public support boundary.
-
-The four phases may also be invoked explicitly:
+You can also invoke the four phases explicitly:
 
 ```bash
 "$LOOPSKILL4" intake goal.json
@@ -91,10 +107,31 @@ The four phases may also be invoked explicitly:
 "$LOOPSKILL4" start ./prepared-loop --root ./loopskill4-data
 ```
 
-<!-- parity: no-control -->
-## What ordinary users never provide manually
+INTAKE is strictly read-only. PREPARE writes only the local manifest, boundary summary, and human-readable plan. CONFIRM binds their digests; a content change invalidates the old confirmation. Only START with a valid confirmation may claim one machine-managed Attempt.
 
-The number of user-supplied control identities must be zero. Users do not copy task/thread/turn/route/effect/artifact/review/finalization IDs or paste SHA values, receipts, Pack identity, Gateway schemas, MCP/App enums, heartbeat, readback, or retry parameters. Even if model text contains such a value, it receives no authority.
+### A concrete example
+
+Suppose you ask Codex to create `release-checklist.md`:
+
+1. You describe the goal, allowed file, and acceptance criteria.
+2. LoopSkill decides whether the work merits a loop and identifies missing information.
+3. You confirm “write only this file; no publish; no network.”
+4. Codex executes once inside the authorized workspace.
+5. LoopSkill captures the real file change, verifies the criteria, and records Result, Review, and Finalization.
+
+If the file is correct but Host self-report evidence is insufficient, artifact correctness and the workflow limitation remain separate; neither is presented as the other.
+
+<!-- parity: no-control -->
+## What you never handle manually
+
+The number of user-supplied control identities is **0**. You do not copy or fill in:
+
+- task, thread, turn, route, effect, artifact, review, or finalization IDs;
+- commit SHA values, content digests, receipts, or Pack identity;
+- Gateway schemas, MCP/App enums, or sandbox arguments;
+- heartbeat, readback, retry, or resume parameters.
+
+Machines generate, parse, or verify these values. A value appearing in model text gains no authority.
 
 <!-- parity: status -->
 ## Status, result, and limitations
@@ -105,75 +142,94 @@ The number of user-supplied control identities must be zero. Users do not copy t
 "$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
 ```
 
-Plain status reads only local state. If a crash occurred after the local Attempt commit but before execution ownership was claimed, `status --refresh` may claim that Attempt and perform its one first invocation. Once a process was started, there is no cross-process Host readback or automatic resume: lost terminal evidence remains `UNKNOWN`. It never performs a second spawn or resend. Default status shows only the goal, progress, result, limitations, and actionable next step. Internal identity and receipts appear only in explicit diagnostics. `UNKNOWN` means an external action may have happened but cannot be authoritatively confirmed; `UNVERIFIABLE` means the Host cannot provide the required assurance. Neither is success.
+Plain `status` reads local state only. `status --refresh` may perform the **one first invocation** only while the durable Attempt remains unclaimed. After a process starts there is no cross-process automatic recovery. It never performs a **second spawn** or resend.
+
+- `UNKNOWN`: an external action may have happened, but terminal evidence is lost or ambiguous.
+- `UNVERIFIABLE`: available Host capabilities cannot provide the required evidence.
+- `LIMITATION`: work can end honestly, but its assurance is too weak for a full-success claim.
+
+None is rewritten as success or triggers blind retry. Internal identities and receipts appear only in explicit diagnostics.
 
 <!-- parity: policy -->
-## Optional policies
+## Optional advanced flows
 
-Standard provides a fixed dependency-ordered Goal Queue. Adaptive provides one active goal and bounded, versioned roadmap revision. Reviewer, Local Verifier, Decision Card, human steering, and bounded repair are optional capabilities. They may submit authorized semantic commands, but cannot write the Store, sign Host receipts, or become a Supervisor.
+The minimal task requires no policy pack to install, understand, or select. When useful, you can add:
+
+- **Standard**: a fixed dependency-ordered Goal Queue;
+- **Adaptive**: one active goal and bounded, versioned roadmap revision;
+- **Reviewer / Local Verifier**: created just in time for the current artifact;
+- **Decision Card / bounded repair**: binds human choices to current context and limits repair attempts.
+
+These capabilities may submit authorized semantic commands. They cannot write the Store directly, sign Host receipts, or become a Supervisor.
 
 <!-- parity: architecture -->
-## Architecture
+## How 4.0 is built
+
+The default path stays small: Entry composes the Kernel, one SQLite Store, artifact/review/finalization libraries, and one Codex Host Adapter.
 
 ```mermaid
 flowchart LR
-    E["Entry / composition root"] --> K["Deterministic Kernel"]
+    E["Entry"] --> K["Deterministic Kernel"]
     K --> P["Typed protocol + ports"]
     E --> S["SQLite Store / one writer"]
-    E --> A["Artifact, review, finalization libraries"]
+    E --> A["Artifact + Review + Finalization"]
     E --> H["Codex Host Adapter"]
     E -. optional .-> O["Standard / Adaptive policy"]
 ```
 
-Store does not control Host; Artifact and Host do not write canonical state. One state authority may maintain orthogonal aggregate/event streams—it does not imply one giant enum or one physical event stream. See the [architecture map](docs/v4/architecture-map.md), [ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md), and [typed protocol](protocol/v4/README.md).
+The Store does not control the Host; Artifact and Host code do not write canonical state. See the [architecture map](docs/v4/architecture-map.md), [ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md), and [typed protocol](protocol/v4/README.md).
 
 <!-- parity: safety -->
-## Safety and recovery
+## Safety, recovery, and honest failure
 
-- Local operation acceptance, per-loop CAS, outbox, and snapshot commit in one SQLite transaction.
-- Replaying the same operation ID and request creates no second event, handle, or effect; a changed request returns an idempotency conflict.
-- With provider idempotency keys and authoritative readback, the product says only effectively-once.
-- Otherwise it promises only at-most-one automatic attempt; a crash or lost response may leave `UNKNOWN`.
+- Local operation, per-loop CAS, outbox, event, and snapshot changes commit in one SQLite transaction.
+- Replaying the same operation ID and request does not create a second event, handle, or effect.
+- External execution promises only at-most-one automatic attempt; there is no end-to-end exactly-once guarantee across SQLite, Codex, Git, or network boundaries.
+- Lost result evidence remains `UNKNOWN`; there is no automatic resend or `codex exec resume`.
 - Path traversal, symlinks, case-fold aliases, special files, and open/read races fail closed.
-- Artifact correctness, workflow closure, assurance, and external-effect finalization are separate facts and cannot substitute for one another.
+- On the first real Host call, the Host itself may append one workspace trust record. Release validation preserves the **real nonzero** changed-byte count. The installer and uninstaller still do not edit Codex configuration.
 
 <!-- parity: evidence -->
-## Evidence boundary
+## Why “the file is correct” and “the task is complete” differ
 
-Repository unit, fault-injection, conformance, isolated-install, and disposable foreground Codex exec canary evidence proves only contract behavior for its bound version and scenario. It does not prove patch-success superiority, arbitrary long-horizon efficacy, a fault-free Host, or cross-system exactly-once.
+![Evidence is checked before workflow closure is accepted](docs/readme-assets/evidence-before-closure.png)
+
+LoopSkill records four separate facts:
+
+1. **Artifact correctness**: whether files or changes meet local criteria.
+2. **Result / Review**: what the Host returned and what review concluded.
+3. **Workflow closure**: whether the loop completed authorized state transitions.
+4. **External-effect finalization**: whether external outcomes have strong enough terminal evidence.
+
+Unit tests, fault injection, conformance, isolated installation, and disposable canaries prove only contract behavior for their bound version and scenario. They do not prove higher patch success, arbitrary long-horizon efficacy, or a fault-free Host.
 
 <!-- parity: v3 -->
-## v3 hard boundary
+## The hard boundary with v3
 
-When v4 encounters a v3 root, state, or Controller Pack, it performs zero writes and returns stable `USER_UNSUPPORTED_LEGACY_VERSION` with a link to the [v3.3.8 Release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8). v4 ships no importer, repair path, legacy CLI alias, Pack runtime, or v3 MCP State Gateway.
+When v4 encounters a v3 root, state, or Controller Pack, it performs zero writes and returns `USER_UNSUPPORTED_LEGACY_VERSION`. It ships no importer, repair path, legacy CLI alias, Pack runtime, or v3 MCP State Gateway, and it does not migrate automatically.
+
+For old data, continue using the independent [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8).
 
 <!-- parity: uninstall -->
 ## Uninstall and fallback
-
-The installer machine-binds one active receipt; ordinary users do not copy or fill in a receipt:
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py" --codex-home "${CODEX_HOME:-$HOME/.codex}"
 ```
 
-This digest-bound management entry lives outside the installation target, so the same command is safely repeatable and returns `ALREADY_UNINSTALLED`. The uninstaller resolves and verifies that machine-bound receipt; missing, drifted, or ambiguous evidence fails closed. It removes only the receipt-bound v4 installation and leaves `config.toml` and an independent v3 installation byte-identical. Fallback means uninstalling v4 and continuing to use separately installed v3.3.8; v4 does not restore, convert, or migrate v3 data.
+The uninstaller removes only the receipt-bound v4 installation. It does not modify `config.toml`, a v3 installation, or v3 data. Repeating the command safely returns `ALREADY_UNINSTALLED`. Fallback means uninstalling v4 and continuing with a separately installed v3.3.8; v4 does not reverse-convert data.
 
 <!-- parity: limitations -->
-## Known limitations
+## Current limitations
 
-- The first release supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
-- The verified Codex Desktop folder-open → `list_projects` → `projectId` →
-  `create_thread` route has 23/23 provisioning receipts, but it is not wired
-  into 4.0.0. The default is a cwd-bound foreground `codex exec` invocation;
-  Desktop-visible saved projects/tasks are not promised.
-- There is no provider idempotency, cross-process lifecycle readback, or
-  automatic `codex exec resume` in 4.0.0.
-- There is no cross-system exactly-once promise across SQLite, Codex, Git, and network boundaries.
-- There is no claim of empirically improved patch success or long-horizon superiority.
-- Memory isolation is reported only to the strength the Host can actually attest, which may be unavailable or unverifiable.
-- Git/non-Git/new-Git capture runs only inside an authorized root and verified capability.
+- Version 4.0.0 supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
+- The default is one cwd-bound foreground Codex Host task; Desktop-visible saved projects/tasks are not promised.
+- The foreground observation window is at most 300 seconds; unlimited tasks, automatic resume, and cross-process readback are not promised.
+- There is no provider idempotency or cross-system exactly-once claim.
+- There is no claim of improved patch success or proven long-horizon superiority.
+- Memory isolation is reported only to the strength the Host can attest and may be unavailable or unverifiable.
 
-See [known limitations](docs/v4/known-limitations.md) for the complete list.
+See [known limitations](docs/v4/known-limitations.md).
 
 <!-- parity: contributor -->
 ## Development and validation
@@ -189,7 +245,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -W error -m unittest discover -s t
 .venv/bin/python scripts/check_v4_docs.py --smoke
 ```
 
-CI also runs all eight Linux/macOS × Python 3.11–3.14 runtime/distribution lanes, isolated installation, dependency/import-graph, stale legacy runtime, privacy/secret/large-artifact, SBOM/license, and release-identity gates. A result from one local Python runtime cannot substitute for that matrix. The real foreground Codex exec canary is an exact-SHA local release gate; GitHub-hosted runners do not invoke a model.
+CI also runs the Linux/macOS × Python 3.11–3.14 install/uninstall matrix, protocol drift, dependency direction, privacy/secret/large-artifact, SBOM/license, and release-identity checks. GitHub-hosted runners do not invoke a real model.
 
 <!-- parity: release -->
 ## Release, security, and historical versions

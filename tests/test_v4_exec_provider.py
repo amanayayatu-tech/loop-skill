@@ -984,7 +984,20 @@ class ExecProviderTests(unittest.TestCase):
         self.assertEqual(receipt["provider_resend_count"], 0)
         self.assertEqual(len(providers), 1)
         calls = providers[0]._runner.calls
-        self.assertEqual(sum(call[0][-1:] == ("-",) for call in calls), 1)
+        exec_calls = [call for call in calls if call[0][-1:] == ("-",)]
+        self.assertEqual(len(exec_calls), 1)
+        stdin = exec_calls[0][1]["stdin_bytes"]
+        self.assertIn(canary.CANARY_GOAL.encode("utf-8"), stdin)
+        self.assertNotIn(candidate.encode("ascii"), stdin)
+        for forbidden in (
+            b"candidate_sha",
+            b"commit_sha",
+            b"thread_id",
+            b"task_id",
+            b"receipt_ref",
+            b"control_namespace",
+        ):
+            self.assertNotIn(forbidden, stdin)
 
 
 if __name__ == "__main__":

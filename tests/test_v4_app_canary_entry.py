@@ -152,7 +152,12 @@ class FakeCanaryProvider:
         self.task_result_read_count += 1
         if provider_id != self.provider_id:
             raise AssertionError("foreign provider identity")
-        outcome = "FAILED" if self.mode == "failed" else "PASS"
+        if self.mode == "failed":
+            outcome = "FAILED"
+        elif self.mode == "unverifiable":
+            outcome = "UNVERIFIABLE"
+        else:
+            outcome = "PASS"
         result = {"outcome": outcome, "summary": "disposable canary completed"}
         schema_digest = domain_digest(
             "loopskill-codex-result-schema-v1\n", result_payload_schema()
@@ -211,6 +216,36 @@ class FakeCanaryProvider:
 
 
 class V4DisposableExecCanaryEntryTests(unittest.TestCase):
+    def test_semantic_request_contains_only_locally_verifiable_work(self):
+        request = canary._request()
+        semantic_text = json.dumps(
+            {
+                "acceptance_criteria": request.acceptance_criteria,
+                "authorization_boundaries": request.authorization_boundaries,
+                "budget": request.budget,
+                "external_actions": request.external_actions,
+                "goal": request.goal,
+                "goal_plan": request.goal_plan,
+                "stop_conditions": request.stop_conditions,
+                "write_scope": request.write_scope,
+            },
+            sort_keys=True,
+        )
+        self.assertEqual(request.goal, canary.CANARY_GOAL)
+        self.assertEqual(request.external_actions, ())
+        self.assertIn(canary.CANARY_OUTPUT_SHA256, semantic_text)
+        self.assertNotIn(CANDIDATE, semantic_text)
+        for forbidden in (
+            "candidate_sha",
+            "commit_sha",
+            "thread_id",
+            "task_id",
+            "receipt_ref",
+            "control_namespace",
+            "Verify candidate",
+        ):
+            self.assertNotIn(forbidden, semantic_text)
+
     def run_pass(self, evidence: Path):
         providers = []
         confirmations = []
@@ -305,7 +340,8 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
             manifest = json.loads(
                 (evidence / "prepared" / MANIFEST_FILENAME).read_text(encoding="utf-8")
             )
-            self.assertIn(CANDIDATE, manifest["goal"])
+            self.assertEqual(manifest["goal"], canary.CANARY_GOAL)
+            self.assertNotIn(CANDIDATE, json.dumps(manifest, sort_keys=True))
             self.assertIn("exactly one LF byte", manifest["goal"])
             self.assertEqual(
                 manifest["acceptance_criteria"],
@@ -407,6 +443,7 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
         for mode, task_reads, lifecycle_reads in (
             ("unknown", 0, 0),
             ("failed", 1, 1),
+            ("unverifiable", 1, 1),
         ):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 evidence = Path(temporary) / "evidence"
