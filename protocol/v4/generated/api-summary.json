@@ -1,0 +1,480 @@
+{
+  "capabilities": [
+    "project_registration",
+    "task_create",
+    "thread_create",
+    "resource_read",
+    "message_send",
+    "eventual_indexing",
+    "lifecycle_readback",
+    "heartbeat",
+    "sandbox_receipt",
+    "trust_receipt",
+    "model_receipt",
+    "memory",
+    "provider_idempotency",
+    "artifact_existing_git",
+    "artifact_non_git",
+    "artifact_new_git"
+  ],
+  "commands": {
+    "AcknowledgeResult": {
+      "semantic_payload": {}
+    },
+    "AdvanceGoal": {
+      "semantic_payload": {
+        "disposition": {
+          "enum": [
+            "DONE",
+            "FAILED",
+            "LIMITATION"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "BeginEffectDelivery": {
+      "semantic_payload": {}
+    },
+    "BindHostResource": {
+      "semantic_payload": {
+        "role": {
+          "type": "string"
+        }
+      }
+    },
+    "CloseExecution": {
+      "semantic_payload": {}
+    },
+    "CreateLoop": {
+      "semantic_payload": {
+        "acceptance_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "authorization_boundaries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "budget": {
+          "type": "string"
+        },
+        "execution_mode": {
+          "enum": [
+            "STANDARD",
+            "ADAPTIVE"
+          ],
+          "type": "string"
+        },
+        "external_actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "goal_plan": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_roadmap_revisions": {
+          "type": "integer"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "stop_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "write_scope": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      }
+    },
+    "PauseLoop": {
+      "semantic_payload": {
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "PrepareFinalization": {
+      "semantic_payload": {
+        "disposition": {
+          "enum": [
+            "SUCCEEDED",
+            "LIMITATION",
+            "FAILED"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "PrepareRoute": {
+      "semantic_payload": {
+        "intent": {
+          "type": "string"
+        }
+      }
+    },
+    "RecordEffectObservation": {
+      "semantic_payload": {}
+    },
+    "RecordExternalEffectObservation": {
+      "semantic_payload": {}
+    },
+    "RecordPolicyDecision": {
+      "semantic_payload": {
+        "decision": {
+          "enum": [
+            "CONTINUE_REPAIR",
+            "WAIT",
+            "STOP"
+          ],
+          "type": "string"
+        },
+        "failure_fingerprint": {
+          "type": "string"
+        }
+      }
+    },
+    "RecordReview": {
+      "semantic_payload": {
+        "verdict": {
+          "enum": [
+            "PASS",
+            "REPAIR",
+            "LIMITATION"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "ResumeLoop": {
+      "semantic_payload": {}
+    },
+    "ReviseGoalPlan": {
+      "semantic_payload": {
+        "objective_order": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "StageExternalResult": {
+      "semantic_payload": {
+        "outcome": {
+          "enum": [
+            "PASS",
+            "FAILED",
+            "LIMITATION",
+            "UNVERIFIABLE"
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      }
+    },
+    "StageResult": {
+      "semantic_payload": {
+        "outcome": {
+          "enum": [
+            "PASS",
+            "FAILED",
+            "LIMITATION",
+            "UNVERIFIABLE"
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      }
+    },
+    "StopLoop": {
+      "semantic_payload": {
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "StrengthenClosureAssurance": {
+      "semantic_payload": {}
+    }
+  },
+  "errors": [
+    "INVALID_COMMAND",
+    "UNSUPPORTED_PROTOCOL_VERSION",
+    "RESOURCE_LIMIT_EXCEEDED",
+    "INVALID_UTF8",
+    "CONTROL_FIELD_INJECTION",
+    "INVALID_AUTHORITY",
+    "AUTHORITY_EXPIRED",
+    "AUTHORITY_SCOPE_MISMATCH",
+    "STALE_LOOP_REVISION",
+    "STALE_SUBJECT_REVISION",
+    "IDEMPOTENCY_CONFLICT",
+    "FOREIGN_REFERENCE",
+    "WRONG_REFERENCE_KIND",
+    "INVALID_TRANSITION",
+    "CAPABILITY_UNAVAILABLE",
+    "CAPABILITY_UNVERIFIABLE",
+    "RECEIPT_REQUIRED",
+    "RECEIPT_ISSUER_UNTRUSTED",
+    "RECEIPT_EXPIRED",
+    "RECEIPT_IDENTITY_MISMATCH",
+    "ATTEMPT_ALREADY_CONSUMED",
+    "ADAPTER_SCHEMA_DRIFT",
+    "ARTIFACT_IDENTITY_MISMATCH",
+    "ARTIFACT_STALE",
+    "REPORT_IDENTITY_MISMATCH",
+    "PATH_CONFINEMENT_VIOLATION",
+    "FINALIZATION_PRECONDITION_FAILED",
+    "USER_UNSUPPORTED_LEGACY_VERSION",
+    "STORE_RECOVERY_REQUIRED",
+    "INTERNAL_INVARIANT_VIOLATION",
+    "USER_INPUT_INVALID",
+    "USER_LOOP_EXISTS",
+    "USER_STORE_UNAVAILABLE",
+    "USER_INTERNAL_ERROR",
+    "USER_CLARIFICATION_REQUIRED",
+    "USER_DIRECT_TASK_RECOMMENDED",
+    "USER_CONFIRMATION_REQUIRED",
+    "USER_CONFIRMATION_STALE",
+    "USER_PREPARATION_INVALID"
+  ],
+  "events": [
+    "LoopCreated",
+    "GoalRegistered",
+    "GoalActivated",
+    "GoalPlanRegistered",
+    "StartAuthorized",
+    "HostResourceBound",
+    "ExternalEffectPrepared",
+    "ExternalEffectObserved",
+    "ExternalEffectUnknown",
+    "ExternalEffectUnverifiable",
+    "LateExternalEffectObserved",
+    "RoutePrepared",
+    "DeliveryAttemptCommitted",
+    "DeliveryObserved",
+    "DeliveryUnknown",
+    "DeliveryUnverifiable",
+    "LateDeliveryObserved",
+    "ResultStaged",
+    "ReportStaged",
+    "ArtifactCaptured",
+    "ArtifactVerified",
+    "ArtifactUnverifiable",
+    "ArtifactStale",
+    "ReportAccepted",
+    "ResultAcknowledged",
+    "ReviewRecorded",
+    "HumanDecisionRecorded",
+    "RepairAuthorized",
+    "RepairExhausted",
+    "RoadmapRevised",
+    "GoalAdvanced",
+    "LoopPaused",
+    "LoopResumed",
+    "LoopStopped",
+    "FinalizationPrepared",
+    "ExecutionFinalized",
+    "StrictFinalizationAcknowledged",
+    "ClosureAssuranceStrengthened",
+    "OperationRejected"
+  ],
+  "manifest_sha256": "ffbc01b8d8ba881a73a27b6b3d3e789d24acccb6b340ac0840589650bcbb514f",
+  "protocol_version": "4.0.0",
+  "reference_kinds": [
+    "LoopRef",
+    "ActorRef",
+    "AuthorityGrantRef",
+    "GoalRef",
+    "HostResourceRef",
+    "ExternalEffectRef",
+    "RouteRef",
+    "DeliveryRef",
+    "AttemptRef",
+    "ResultRef",
+    "ReportRef",
+    "ArtifactRef",
+    "ReviewRef",
+    "FinalizationRef",
+    "ReceiptRef"
+  ],
+  "wire_types": {
+    "ActorRef": [
+      "actor_ref",
+      "loop_namespace",
+      "actor_kind",
+      "identity_digest",
+      "issuer_ref",
+      "issuer_trust"
+    ],
+    "ApplyResult": [
+      "operation_id",
+      "loop_ref",
+      "loop_revision",
+      "event_types",
+      "response",
+      "snapshot_digest",
+      "replayed"
+    ],
+    "AuthorityGrant": [
+      "grant_ref",
+      "actor_ref",
+      "issuer_actor_ref",
+      "issuer_trust",
+      "allowed_commands",
+      "loop_scope",
+      "subject_kinds",
+      "exact_subjects",
+      "not_before",
+      "expires_at",
+      "nonce",
+      "canonical_digest"
+    ],
+    "CapabilityRecord": [
+      "capability",
+      "availability",
+      "assurance",
+      "issuer_ref",
+      "receipt_ref",
+      "details"
+    ],
+    "CommandEnvelope": [
+      "operation_id",
+      "command_type",
+      "protocol_version",
+      "actor_ref",
+      "authority_grant_ref",
+      "subject",
+      "expected_loop_revision",
+      "expected_subject_revisions",
+      "issued_at",
+      "machine_bindings",
+      "semantic_payload",
+      "request_digest"
+    ],
+    "EffectAttempt": [
+      "attempt_ref",
+      "loop_ref",
+      "subject_kind",
+      "subject_ref",
+      "delivery_ref",
+      "target_ref",
+      "provider_idempotency_key",
+      "provider_request_digest",
+      "action",
+      "payload"
+    ],
+    "LoopIntakeDecision": [
+      "disposition",
+      "route",
+      "reason",
+      "questions"
+    ],
+    "LoopIntakeInput": [
+      "goal",
+      "goal_plan",
+      "task_horizon",
+      "write_scope",
+      "budget",
+      "external_actions",
+      "acceptance_criteria",
+      "stop_conditions",
+      "authorization_boundaries"
+    ],
+    "LoopStartInput": [
+      "goal"
+    ],
+    "PreparedLoopBundle": [
+      "manifest_digest",
+      "boundary_digest",
+      "controller_plan_digest",
+      "instructions_digest",
+      "bundle_digest"
+    ],
+    "PreparedLoopManifest": [
+      "manifest_version",
+      "control_namespace",
+      "loop_ref",
+      "goal",
+      "goal_plan",
+      "task_horizon",
+      "execution_mode",
+      "max_roadmap_revisions",
+      "selection_reason",
+      "write_scope",
+      "budget",
+      "external_actions",
+      "acceptance_criteria",
+      "stop_conditions",
+      "authorization_boundaries",
+      "artifact_profile",
+      "workspace_identity_digest",
+      "prepared_at"
+    ],
+    "Receipt": [
+      "receipt_ref",
+      "issuer_ref",
+      "issuer_trust",
+      "trust_class",
+      "action",
+      "loop_ref",
+      "subject_ref",
+      "attempt_ref",
+      "target_ref",
+      "request_digest",
+      "provider_idempotency_key",
+      "provider_resource_ref",
+      "outcome",
+      "issued_at",
+      "expires_at",
+      "evidence_digest"
+    ],
+    "Reference": [
+      "kind",
+      "value",
+      "loop_ref"
+    ],
+    "UserFacingError": [
+      "code",
+      "message",
+      "next_action"
+    ],
+    "UserFacingStatus": [
+      "goal",
+      "progress",
+      "result",
+      "limitations",
+      "next_actions"
+    ]
+  },
+  "write_cas": "per_loop_revision"
+}

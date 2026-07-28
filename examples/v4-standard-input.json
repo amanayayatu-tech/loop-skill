@@ -1,0 +1,20 @@
+{
+  "acceptance_criteria": [
+    "focused tests pass",
+    "current artifact receives an independent review"
+  ],
+  "authorization_boundaries": [
+    "no commit, push, publish, deploy, or real-user data"
+  ],
+  "budget": "up to 4 minutes; no network or publish",
+  "external_actions": [],
+  "goal": "Complete and verify one bounded change in a disposable example directory",
+  "stop_conditions": [
+    "stop on unknown external state",
+    "stop when repair budget is exhausted"
+  ],
+  "task_horizon": "long",
+  "write_scope": [
+    "disposable-example"
+  ]
+}

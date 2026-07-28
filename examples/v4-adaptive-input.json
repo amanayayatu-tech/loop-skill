@@ -1,0 +1,21 @@
+{
+  "acceptance_criteria": [
+    "each milestone binds a current artifact and review",
+    "finalization is acknowledged or closes with a visible limitation"
+  ],
+  "authorization_boundaries": [
+    "roadmap revisions stay inside this goal envelope",
+    "no commit, push, publish, deploy, or real-user data"
+  ],
+  "budget": "60 minutes; at most three roadmap revisions and three repairs",
+  "external_actions": [],
+  "goal": "Explore and complete a bounded multi-milestone task in a disposable fixture",
+  "stop_conditions": [
+    "stop on unknown external state",
+    "ask for a decision after repeated failure"
+  ],
+  "task_horizon": "adaptive",
+  "write_scope": [
+    "disposable-example"
+  ]
+}

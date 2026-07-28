@@ -1,0 +1,29 @@
+{
+  "artifact": "loopskill-v4-p0-alpha-evidence-v1",
+  "base_sha": "843945d9d34e7f065b65d9172ea4a2df66c0f2e3",
+  "branch": "codex/loopskill-4-alpha-pure-kernel",
+  "checks": {
+    "external_effects": 0,
+    "fault_windows": 33,
+    "forbidden_import_scan": "PASS",
+    "operations": 11,
+    "ordered_events": 18,
+    "test_methods": 14,
+    "unittest_status": "PASS"
+  },
+  "design": {
+    "adr_sha256": "d2c9c0937491c850d876e149199fac256a70dbac38f7e8e5038aa3d8d611c909",
+    "corpus_families": 77,
+    "corpus_instances": 216,
+    "corpus_sha256": "0d473dda8ee42f7e0fbb0e2433c9b8bf057053ec8d7f701072fa68eb28901d33"
+  },
+  "recorded_date": "2026-07-27",
+  "scope": "bounded-pure-kernel-alpha",
+  "snapshot": {
+    "bytes": 2715,
+    "digest_domain": "loopskill-snapshot-v1\n",
+    "sha256": "8037bcb1cddd1686869c4743e6210e6f2d99e8120b1197b863fa38a5f241bd3f"
+  },
+  "status": "PASS",
+  "worktree_digest": "4e22add72684f5d034d760c8e4294ebf96978baa5116eb8ad09814424099111c"
+}

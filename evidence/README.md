@@ -1,25 +1,11 @@
-# Evidence index
+# Public evidence index
 
-These records are immutable historical evidence. They preserve both failures and
-successes and must not be rewritten to make a later result look cleaner.
+This v4 branch publishes only minimized, deterministic evidence under
+`v4-development/`. Raw App transcripts, Host resource identities, local absolute
+paths, and v3 incident logs remain in immutable Git history or author-controlled
+private evidence and are not part of the LoopSkill 4 release tree.
 
-| Date | Record | Result | Evidence ceiling |
-| --- | --- | --- | --- |
-| 2026-07-11 | [Adaptive App E2E](adaptive-app-e2e-20260711.md) | Bounded historical smoke | Not v3.2 acceptance |
-| 2026-07-12 | [Initial v3.2 attempt](v32-app-e2e-20260712-failed.md) | Failed | Failure evidence only |
-| 2026-07-12 | [Final attempt](v32-final-app-e2e-20260712-failed.md) | Failed | Failure evidence only |
-| 2026-07-12 | [Replacement 01](v32-replacement-final-app-e2e-20260712-failed.md) | Failed | Failure evidence only |
-| 2026-07-12 | [Replacement 02](v32-replacement-final-app-e2e-20260712-02-failed.md) | Failed | Failure evidence only |
-| 2026-07-12 | [Replacement 03](v32-replacement-final-app-e2e-20260712-03-failed.md) | Failed | Failure evidence only |
-| 2026-07-12 | [Replacement 04](v32-replacement-final-app-e2e-20260712-04-failed.md) | Failed and frozen | Failure evidence only |
-| 2026-07-13 | [Transport canary](v32-app-transport-canary-20260713.md) | `CANARY_PASS` | Transport smoke only |
-| 2026-07-13 | [Replacement 05](v32-replacement-final-app-e2e-20260713-05.md) | `FINALIZATION_ACKED` | Current-machine, root-confined bounded smoke only |
-| 2026-07-14 | [v3.2.1 transport/repair hotfix](v3.2.1-payload-transport-repair-exhaustion.md) | Local release gates and App canary pass | Repository and App smoke only; not app-server process-reaping acceptance |
-| 2026-07-14 | [v3.2.2 real Loop control incident](v3.2.2-real-loop-control-incident.md) | Sanitized regression fixture | Repository runtime/Pack regression only; not cross-version App acceptance |
-| 2026-07-14 | [v3.2.3 Worker classification reconciliation](v3.2.3-worker-classification-reconciliation.md) | Real-incident accounting hotfix | Repository runtime reconciliation only; does not turn Local FAIL into PASS |
-
-The final successful record does not constitute production, long-run,
-cross-version, formal, science, or public acceptance. Historical absolute local
-paths are retained because they are part of the frozen identity evidence; new
-records should prefer stable variables such as `$ATTEMPT_ROOT` in public prose
-while keeping authoritative digests and task identities in the evidence bundle.
+The JSON records here are development/predecessor evidence, not proof of product
+effectiveness, long-horizon superiority, cross-system exactly-once behavior, or
+public release identity. The final release gate regenerates privacy-safe evidence
+for the exact candidate SHA and scans both the Git tree and distribution archive.

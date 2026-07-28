@@ -1,0 +1,140 @@
+{
+  "artifact": "loopskill-v4-p7-policy-operability-and-comparison-evidence-v1",
+  "checkpoint_commit": "6c4a5229cf0df0d0555df629235e6dba52963564",
+  "checkpoint_parent": "d0ae2ef6137977d777db6df0eed6822aaf6244b5",
+  "status": "PASS",
+  "runtime_authority": false,
+  "real_external_effects": 0,
+  "architecture_gates": {
+    "typed_protocol_generation": "PASS",
+    "typed_protocol_manifest_sha256": "2c89e5ed3598c783cd114f49ad5ede31e8ab6e5c2b7d0daf6afe32a1aa8c618f",
+    "manifest_commands": 16,
+    "manifest_events": 33,
+    "manifest_errors": 44,
+    "full_v4_modules": 26,
+    "full_v4_dependency_edges": 39,
+    "import_graph_acyclic": true,
+    "canonical_writer_count": 1,
+    "policy_writer_count": 0,
+    "projection_writer_count": 0,
+    "supervisor_count": 0
+  },
+  "capability_gates": {
+    "standard_fixed_dependency_queue": "PASS",
+    "adaptive_one_active_goal_bounded_revision": "PASS",
+    "author_envelope": "PASS",
+    "jit_worker_reviewer_local_verifier": "PASS",
+    "decision_card_context_freshness": "PASS",
+    "bounded_repair_and_same_failure": "PASS",
+    "pause_resume_cas": "PASS",
+    "late_strict_assurance_without_disposition_rewrite": "PASS",
+    "unique_next_action_normal_trace": 11,
+    "unique_next_action_edge_classes": [
+      "UNKNOWN",
+      "UNVERIFIABLE",
+      "PAUSED",
+      "REPAIR",
+      "COOPERATIVE_TERMINAL"
+    ],
+    "audit_archive_status_rebuildable": "PASS",
+    "privacy_aggregate_no_raw_identity": "PASS",
+    "risk_scan_category_digest_only": "PASS",
+    "metrics_unmetered_explicit": "PASS",
+    "doctor_diagnostics_opt_in": "PASS"
+  },
+  "v4_receipt": {
+    "artifact": "loopskill-v4-p7-comparison-input-v1",
+    "canonical_commits": 11,
+    "closure_assurance": "STRICT",
+    "event_count": 18,
+    "execution_disposition": "SUCCEEDED",
+    "fixture_runner_sha256": "7166c9c0ad22bd585f9b47be58f640a220d35b877b1b37573227737b31165292",
+    "host_interaction_ledger": [
+      "strict Host resource create/readback receipt",
+      "strict delivery send/readback receipt",
+      "strict final lifecycle readback receipt"
+    ],
+    "measurement_code_sha256": "43bcecb5213d00403e1480db986bc55b1189446cf22a4fa8f5fcfad92928667c",
+    "metrics": {
+      "authorization_confirmations": 1,
+      "host_interactions": 3,
+      "human_interventions": 1,
+      "internal_control_interactions": 3,
+      "latency_ns": 5724584,
+      "local_writes": 17,
+      "pack_bytes": 1122,
+      "protocol_calls": 11,
+      "unknown_count": 0,
+      "user_start_actions": 1
+    },
+    "next_action_trace": [
+      {"command_type": "BindHostResource", "kind": "COMMAND"},
+      {"command_type": "PrepareRoute", "kind": "COMMAND"},
+      {"command_type": "BeginEffectDelivery", "kind": "COMMAND"},
+      {"command_type": "RecordEffectObservation", "kind": "EXTERNAL_WAIT"},
+      {"command_type": "StageResult", "kind": "COMMAND"},
+      {"command_type": "AcknowledgeResult", "kind": "COMMAND"},
+      {"command_type": "RecordReview", "kind": "POLICY_DECISION"},
+      {"command_type": "AdvanceGoal", "kind": "COMMAND"},
+      {"command_type": "PrepareFinalization", "kind": "COMMAND"},
+      {"command_type": "CloseExecution", "kind": "EXTERNAL_WAIT"},
+      {"command_type": null, "kind": "TERMINAL"}
+    ],
+    "real_external_effects": 0,
+    "scenario_sha256": "e6b5be9e97b42a47f17978c82fbe20725430042e0c66ae5a02e78a963798ecbe"
+  },
+  "comparison_result": {
+    "artifact": "loopskill-v4-p7-comparison-result-v1",
+    "baseline_sha256": "86514624e8ff089a00e5c7dbca8d36c37f55f3ea8357c31642c595645bec581c",
+    "internal_control_interaction_gate": "PASS",
+    "measurement_code_sha256": "43bcecb5213d00403e1480db986bc55b1189446cf22a4fa8f5fcfad92928667c",
+    "metrics": {
+      "authorization_confirmations": 1,
+      "host_interactions": 3,
+      "human_interventions": 1,
+      "internal_control_interactions": 3,
+      "latency_ns": 5724584,
+      "local_writes": 17,
+      "pack_bytes": 1122,
+      "protocol_calls": 11,
+      "unknown_count": 0,
+      "user_start_actions": 1
+    },
+    "pack_gate": "PASS",
+    "scenario_sha256": "e6b5be9e97b42a47f17978c82fbe20725430042e0c66ae5a02e78a963798ecbe",
+    "status": "PASS",
+    "thresholds": {
+      "internal_control_interaction_reduction_min": "1/2",
+      "v4_internal_control_interactions_max": 9,
+      "v4_pack_bytes_max": 32768
+    },
+    "v4_receipt_sha256": "38078268d07eef9437d78f8602409f321ea7f52b8dbc55bf947785067927476d"
+  },
+  "tests": {
+    "total_at_checkpoint": 129,
+    "passed_at_checkpoint": 129,
+    "failed": 0,
+    "errors": 0,
+    "policy_operability_methods": 14,
+    "beta_measurement_methods": 3
+  },
+  "file_sha256": {
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_alpha/kernel.py": "f025f8265ecc8320c464c3cd6c7194eee44edaf2ece1addad2225b1ecb9e9fa9",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_entry/preparation.py": "d3f7b8ce4cd078f10e1adda1436d771b35ad1ea0629075aca548f53b924751f5",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_operability/projections.py": "ee515f43ea3fde4102057a39b4fa5cbc09ee557b8d23f8dd9e2f8fc076c161a2",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_policy/policy.py": "449d22bd3f23c7feb38516e5ab48b71c27ac61cefc05938163e9aed96a30b178",
+    "docs/adr/0011-loopskill-4-compatible-kernel-refactor.md": "dde7a57b281b93ff394ed3466f9abcac8a7c95fd42acc0ff675542f133272fb5",
+    "docs/conformance/loopskill-4-conformance-corpus-design.md": "4e3fd2d0294f47c4b08b3e2e24f79f032ad1370f7688b9230ef075e655c8cfab",
+    "protocol/v4/loopskill-v4.protocol.json": "b49c3c50544348f44e2c4d6c44b91eab1e09c5a0e9a27cb41f1877f7cb8d1c00",
+    "scripts/run_v4_beta_fixture.py": "7166c9c0ad22bd585f9b47be58f640a220d35b877b1b37573227737b31165292",
+    "scripts/validate_v4_preservation.py": "2c8804070a787ba7d1631f346eda68146db06e80d380fd51aeb2ac2e6771e28d",
+    "tests/test_v4_beta_measurement.py": "a9aac8928f704d4959957be3eab4e93a9b66bc5c58a2cb0de104e487e9edc302",
+    "tests/test_v4_product_policy_operability.py": "a352b47156b65b9ddc2c68b1ca50abfdebfc841a1c587cac622ae5666abcefc2"
+  },
+  "claims_excluded": [
+    "real Host latency or performance",
+    "installed-product usability",
+    "real user loop effectiveness",
+    "RC or stable readiness"
+  ]
+}

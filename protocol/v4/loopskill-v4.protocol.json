@@ -1,0 +1,463 @@
+{
+  "capability_names": [
+    "project_registration",
+    "task_create",
+    "thread_create",
+    "resource_read",
+    "message_send",
+    "eventual_indexing",
+    "lifecycle_readback",
+    "heartbeat",
+    "sandbox_receipt",
+    "trust_receipt",
+    "model_receipt",
+    "memory",
+    "provider_idempotency",
+    "artifact_existing_git",
+    "artifact_non_git",
+    "artifact_new_git"
+  ],
+  "commands": {
+    "AcknowledgeResult": {
+      "semantic_payload": {}
+    },
+    "AdvanceGoal": {
+      "semantic_payload": {
+        "disposition": {
+          "enum": [
+            "DONE",
+            "FAILED",
+            "LIMITATION"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "BeginEffectDelivery": {
+      "semantic_payload": {}
+    },
+    "BindHostResource": {
+      "semantic_payload": {
+        "role": {
+          "type": "string"
+        }
+      }
+    },
+    "CloseExecution": {
+      "semantic_payload": {}
+    },
+    "CreateLoop": {
+      "semantic_payload": {
+        "acceptance_criteria": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "authorization_boundaries": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "budget": {"type": "string"},
+        "execution_mode": {
+          "enum": ["STANDARD", "ADAPTIVE"],
+          "type": "string"
+        },
+        "goal_plan": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "max_roadmap_revisions": {
+          "type": "integer"
+        },
+        "external_actions": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "stop_conditions": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "write_scope": {
+          "items": {"type": "string"},
+          "type": "array"
+        }
+      }
+    },
+    "PauseLoop": {
+      "semantic_payload": {
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "PrepareFinalization": {
+      "semantic_payload": {
+        "disposition": {
+          "enum": [
+            "SUCCEEDED",
+            "LIMITATION",
+            "FAILED"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "PrepareRoute": {
+      "semantic_payload": {
+        "intent": {
+          "type": "string"
+        }
+      }
+    },
+    "RecordEffectObservation": {
+      "semantic_payload": {}
+    },
+    "RecordExternalEffectObservation": {
+      "semantic_payload": {}
+    },
+    "RecordPolicyDecision": {
+      "semantic_payload": {
+        "decision": {
+          "enum": ["CONTINUE_REPAIR", "WAIT", "STOP"],
+          "type": "string"
+        },
+        "failure_fingerprint": {"type": "string"}
+      }
+    },
+    "RecordReview": {
+      "semantic_payload": {
+        "verdict": {
+          "enum": [
+            "PASS",
+            "REPAIR",
+            "LIMITATION"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "ResumeLoop": {
+      "semantic_payload": {}
+    },
+    "ReviseGoalPlan": {
+      "semantic_payload": {
+        "objective_order": {
+          "items": {"type": "string"},
+          "type": "array"
+        },
+        "reason": {"type": "string"}
+      }
+    },
+    "StopLoop": {
+      "semantic_payload": {
+        "reason": {"type": "string"}
+      }
+    },
+    "StageExternalResult": {
+      "semantic_payload": {
+        "outcome": {
+          "enum": ["PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"],
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      }
+    },
+    "StageResult": {
+      "semantic_payload": {
+        "outcome": {
+          "enum": [
+            "PASS",
+            "FAILED",
+            "LIMITATION",
+            "UNVERIFIABLE"
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
+      }
+    },
+    "StrengthenClosureAssurance": {
+      "semantic_payload": {}
+    }
+  },
+  "delivery_states": [
+    "PREPARED",
+    "ATTEMPT_COMMITTED",
+    "OBSERVED",
+    "UNKNOWN",
+    "UNVERIFIABLE"
+  ],
+  "errors": [
+    "INVALID_COMMAND",
+    "UNSUPPORTED_PROTOCOL_VERSION",
+    "RESOURCE_LIMIT_EXCEEDED",
+    "INVALID_UTF8",
+    "CONTROL_FIELD_INJECTION",
+    "INVALID_AUTHORITY",
+    "AUTHORITY_EXPIRED",
+    "AUTHORITY_SCOPE_MISMATCH",
+    "STALE_LOOP_REVISION",
+    "STALE_SUBJECT_REVISION",
+    "IDEMPOTENCY_CONFLICT",
+    "FOREIGN_REFERENCE",
+    "WRONG_REFERENCE_KIND",
+    "INVALID_TRANSITION",
+    "CAPABILITY_UNAVAILABLE",
+    "CAPABILITY_UNVERIFIABLE",
+    "RECEIPT_REQUIRED",
+    "RECEIPT_ISSUER_UNTRUSTED",
+    "RECEIPT_EXPIRED",
+    "RECEIPT_IDENTITY_MISMATCH",
+    "ATTEMPT_ALREADY_CONSUMED",
+    "ADAPTER_SCHEMA_DRIFT",
+    "ARTIFACT_IDENTITY_MISMATCH",
+    "ARTIFACT_STALE",
+    "REPORT_IDENTITY_MISMATCH",
+    "PATH_CONFINEMENT_VIOLATION",
+    "FINALIZATION_PRECONDITION_FAILED",
+    "USER_UNSUPPORTED_LEGACY_VERSION",
+    "STORE_RECOVERY_REQUIRED",
+    "INTERNAL_INVARIANT_VIOLATION",
+    "USER_INPUT_INVALID",
+    "USER_LOOP_EXISTS",
+    "USER_STORE_UNAVAILABLE",
+    "USER_INTERNAL_ERROR",
+    "USER_CLARIFICATION_REQUIRED",
+    "USER_DIRECT_TASK_RECOMMENDED",
+    "USER_CONFIRMATION_REQUIRED",
+    "USER_CONFIRMATION_STALE",
+    "USER_PREPARATION_INVALID"
+  ],
+  "events": [
+    "LoopCreated",
+    "GoalRegistered",
+    "GoalActivated",
+    "GoalPlanRegistered",
+    "StartAuthorized",
+    "HostResourceBound",
+    "ExternalEffectPrepared",
+    "ExternalEffectObserved",
+    "ExternalEffectUnknown",
+    "ExternalEffectUnverifiable",
+    "LateExternalEffectObserved",
+    "RoutePrepared",
+    "DeliveryAttemptCommitted",
+    "DeliveryObserved",
+    "DeliveryUnknown",
+    "DeliveryUnverifiable",
+    "LateDeliveryObserved",
+    "ResultStaged",
+    "ReportStaged",
+    "ArtifactCaptured",
+    "ArtifactVerified",
+    "ArtifactUnverifiable",
+    "ArtifactStale",
+    "ReportAccepted",
+    "ResultAcknowledged",
+    "ReviewRecorded",
+    "HumanDecisionRecorded",
+    "RepairAuthorized",
+    "RepairExhausted",
+    "RoadmapRevised",
+    "GoalAdvanced",
+    "LoopPaused",
+    "LoopResumed",
+    "LoopStopped",
+    "FinalizationPrepared",
+    "ExecutionFinalized",
+    "StrictFinalizationAcknowledged",
+    "ClosureAssuranceStrengthened",
+    "OperationRejected"
+  ],
+  "protocol_version": "4.0.0",
+  "reference_kinds": [
+    "LoopRef",
+    "ActorRef",
+    "AuthorityGrantRef",
+    "GoalRef",
+    "HostResourceRef",
+    "ExternalEffectRef",
+    "RouteRef",
+    "DeliveryRef",
+    "AttemptRef",
+    "ResultRef",
+    "ReportRef",
+    "ArtifactRef",
+    "ReviewRef",
+    "FinalizationRef",
+    "ReceiptRef"
+  ],
+  "result_states": [
+    "STAGED",
+    "ACKNOWLEDGED",
+    "STALE"
+  ],
+  "assurance_strengths": [
+    "NONE",
+    "LOCAL",
+    "COOPERATIVE",
+    "STRICT"
+  ],
+  "wire_types": {
+    "ActorRef": [
+      ["actor_ref", "str", {"type": "string"}],
+      ["loop_namespace", "str", {"type": "string"}],
+      ["actor_kind", "str", {"type": "string"}],
+      ["identity_digest", "str", {"type": "string"}],
+      ["issuer_ref", "str", {"type": "string"}],
+      ["issuer_trust", "str", {"type": "string"}]
+    ],
+    "AuthorityGrant": [
+      ["grant_ref", "str", {"type": "string"}],
+      ["actor_ref", "str", {"type": "string"}],
+      ["issuer_actor_ref", "str", {"type": "string"}],
+      ["issuer_trust", "str", {"type": "string"}],
+      ["allowed_commands", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["loop_scope", "str", {"type": "string"}],
+      ["subject_kinds", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["exact_subjects", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["not_before", "str", {"type": "string"}],
+      ["expires_at", "str", {"type": "string"}],
+      ["nonce", "str", {"type": "string"}],
+      ["canonical_digest", "str", {"type": "string"}]
+    ],
+    "Receipt": [
+      ["receipt_ref", "str", {"type": "string"}],
+      ["issuer_ref", "str", {"type": "string"}],
+      ["issuer_trust", "str", {"type": "string"}],
+      ["trust_class", "str", {"type": "string"}],
+      ["action", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}],
+      ["subject_ref", "str", {"type": "string"}],
+      ["attempt_ref", "str | None", {"type": ["string", "null"]}],
+      ["target_ref", "str | None", {"type": ["string", "null"]}],
+      ["request_digest", "str | None", {"type": ["string", "null"]}],
+      ["provider_idempotency_key", "str | None", {"type": ["string", "null"]}],
+      ["provider_resource_ref", "str | None", {"type": ["string", "null"]}],
+      ["outcome", "str", {"type": "string"}],
+      ["issued_at", "str", {"type": "string"}],
+      ["expires_at", "str", {"type": "string"}],
+      ["evidence_digest", "str", {"type": "string"}]
+    ],
+    "CommandEnvelope": [
+      ["operation_id", "str", {"type": "string"}],
+      ["command_type", "str", {"type": "string"}],
+      ["protocol_version", "str", {"type": "string"}],
+      ["actor_ref", "str", {"type": "string"}],
+      ["authority_grant_ref", "str", {"type": "string"}],
+      ["subject", "Mapping[str, Any]", {"type": "object"}],
+      ["expected_loop_revision", "int", {"type": "integer"}],
+      ["expected_subject_revisions", "Mapping[str, int]", {"additionalProperties": {"type": "integer"}, "type": "object"}],
+      ["issued_at", "str", {"type": "string"}],
+      ["machine_bindings", "Mapping[str, Mapping[str, str]]", {"type": "object"}],
+      ["semantic_payload", "Mapping[str, Any]", {"type": "object"}],
+      ["request_digest", "str", {"type": "string"}]
+    ],
+    "EffectAttempt": [
+      ["attempt_ref", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}],
+      ["subject_kind", "str", {"type": "string"}],
+      ["subject_ref", "str", {"type": "string"}],
+      ["delivery_ref", "str | None", {"type": ["string", "null"]}],
+      ["target_ref", "str", {"type": "string"}],
+      ["provider_idempotency_key", "str", {"type": "string"}],
+      ["provider_request_digest", "str", {"type": "string"}],
+      ["action", "str", {"type": "string"}],
+      ["payload", "Mapping[str, Any]", {"type": "object"}]
+    ],
+    "LoopStartInput": [
+      ["goal", "str", {"type": "string"}]
+    ],
+    "LoopIntakeInput": [
+      ["goal", "str", {"type": "string"}],
+      ["goal_plan", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["task_horizon", "str", {"type": "string"}],
+      ["write_scope", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["budget", "str", {"type": "string"}],
+      ["external_actions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["acceptance_criteria", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["stop_conditions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["authorization_boundaries", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}]
+    ],
+    "LoopIntakeDecision": [
+      ["disposition", "str", {"enum": ["READY_FOR_LOOP", "NEEDS_CLARIFICATION", "BLOCKED", "DIRECT_TASK_RECOMMENDED"], "type": "string"}],
+      ["route", "str", {"enum": ["DIRECT_TASK", "STANDARD_LOOP", "ADAPTIVE_LOOP", "UNDETERMINED"], "type": "string"}],
+      ["reason", "str", {"type": "string"}],
+      ["questions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}]
+    ],
+    "PreparedLoopManifest": [
+      ["manifest_version", "str", {"type": "string"}],
+      ["control_namespace", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}],
+      ["goal", "str", {"type": "string"}],
+      ["goal_plan", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["task_horizon", "str", {"type": "string"}],
+      ["execution_mode", "str", {"enum": ["STANDARD", "ADAPTIVE"], "type": "string"}],
+      ["max_roadmap_revisions", "int", {"type": "integer"}],
+      ["selection_reason", "str", {"type": "string"}],
+      ["write_scope", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["budget", "str", {"type": "string"}],
+      ["external_actions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["acceptance_criteria", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["stop_conditions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["authorization_boundaries", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["artifact_profile", "str", {"enum": ["existing_git", "non_git", "new_git", "UNBOUND"], "type": "string"}],
+      ["workspace_identity_digest", "str", {"type": "string"}],
+      ["prepared_at", "str", {"type": "string"}]
+    ],
+    "PreparedLoopBundle": [
+      ["manifest_digest", "str", {"type": "string"}],
+      ["boundary_digest", "str", {"type": "string"}],
+      ["controller_plan_digest", "str", {"type": "string"}],
+      ["instructions_digest", "str", {"type": "string"}],
+      ["bundle_digest", "str", {"type": "string"}]
+    ],
+    "UserFacingStatus": [
+      ["goal", "str", {"type": "string"}],
+      ["progress", "str", {"type": "string"}],
+      ["result", "str", {"type": "string"}],
+      ["limitations", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["next_actions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}]
+    ],
+    "UserFacingError": [
+      ["code", "str", {"type": "string"}],
+      ["message", "str", {"type": "string"}],
+      ["next_action", "str", {"type": "string"}]
+    ],
+    "Reference": [
+      ["kind", "str", {"type": "string"}],
+      ["value", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}]
+    ],
+    "CapabilityRecord": [
+      ["capability", "str", {"type": "string"}],
+      ["availability", "str", {"enum": ["AVAILABLE", "UNAVAILABLE", "UNVERIFIABLE"], "type": "string"}],
+      ["assurance", "str", {"type": "string"}],
+      ["issuer_ref", "str", {"type": "string"}],
+      ["receipt_ref", "str | None", {"type": ["string", "null"]}],
+      ["details", "Mapping[str, Any]", {"type": "object"}]
+    ],
+    "ApplyResult": [
+      ["operation_id", "str", {"type": "string"}],
+      ["loop_ref", "str", {"type": "string"}],
+      ["loop_revision", "int", {"type": "integer"}],
+      ["event_types", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["response", "Mapping[str, Any]", {"type": "object"}],
+      ["snapshot_digest", "str", {"type": "string"}],
+      ["replayed", "bool", {"type": "boolean"}, false]
+    ]
+  },
+  "write_cas": "per_loop_revision"
+}

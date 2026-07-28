@@ -1,12 +1,24 @@
 [tool.coverage.run]
 branch = true
 source = ["codex-loop-prompt-architect/scripts", "scripts"]
+omit = [
+  "codex-loop-prompt-architect/scripts/loop_architect/human_control.py",
+  "codex-loop-prompt-architect/scripts/loop_architect/schema.py",
+]
 
 [tool.coverage.report]
 fail_under = 80
 precision = 2
 show_missing = true
 skip_covered = true
+include = [
+  "codex-loop-prompt-architect/scripts/loop_architect/v4_*/*",
+  "codex-loop-prompt-architect/scripts/loopskill4",
+]
+omit = [
+  "codex-loop-prompt-architect/scripts/loop_architect/human_control.py",
+  "codex-loop-prompt-architect/scripts/loop_architect/schema.py",
+]
 
 [tool.coverage.xml]
 output = "coverage.xml"

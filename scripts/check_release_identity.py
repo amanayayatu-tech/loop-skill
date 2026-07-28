@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed unless a version tag names the exact protected-main commit."""
+"""Fail closed unless a version tag names the exact fetched main commit."""
 
 from __future__ import annotations
 
@@ -47,13 +47,17 @@ def check_release_identity(repo: Path, expected_sha: str, tag: str, main_ref: st
     if not re.fullmatch(r"refs/remotes/[A-Za-z0-9._/-]+", main_ref) or ".." in main_ref:
         raise ReleaseIdentityError("RELEASE_MAIN_REF_INVALID")
     expected_commit = _commit(repo, expected_sha)
+    tag_type = _git(
+        repo, "cat-file", "-t", f"refs/tags/{tag}", check=False
+    )
+    if tag_type.returncode != 0 or tag_type.stdout.strip() != "tag":
+        raise ReleaseIdentityError("RELEASE_TAG_NOT_ANNOTATED")
     tag_commit = _commit(repo, f"refs/tags/{tag}")
     main_commit = _commit(repo, main_ref)
     if expected_commit != tag_commit:
         raise ReleaseIdentityError("RELEASE_TAG_COMMIT_MISMATCH")
-    ancestor = _git(repo, "merge-base", "--is-ancestor", expected_commit, main_commit, check=False)
-    if ancestor.returncode != 0:
-        raise ReleaseIdentityError("RELEASE_COMMIT_NOT_ON_PROTECTED_MAIN")
+    if expected_commit != main_commit:
+        raise ReleaseIdentityError("RELEASE_COMMIT_NOT_EXACT_MAIN")
     version = (repo / "VERSION").read_text(encoding="utf-8").strip()
     if version != tag_match.group(1):
         raise ReleaseIdentityError("RELEASE_VERSION_TAG_MISMATCH")
@@ -63,7 +67,7 @@ def check_release_identity(repo: Path, expected_sha: str, tag: str, main_ref: st
     return {
         "tag": tag,
         "commit": expected_commit,
-        "protected_main_commit": main_commit,
+        "main_commit": main_commit,
         "version": version,
     }
 

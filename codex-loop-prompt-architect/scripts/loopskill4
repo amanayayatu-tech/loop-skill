@@ -1,0 +1,634 @@
+#!/usr/bin/env python3
+"""Native LoopSkill 4 intake/prepare/confirm/start public entry."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+from collections.abc import Mapping
+from pathlib import Path
+
+from loop_architect.v4_alpha.protocol import LoopIntakeInput
+from loop_architect.v4_adapters.codex import CodexExecProvider, HostUnavailable
+from loop_architect.v4_entry import (
+    EntryError,
+    confirm_loop,
+    control_loop,
+    diagnostics,
+    intake_report_loop,
+    prepare_loop,
+    policy_view,
+    review_prepared,
+    revise_goal_plan,
+    start_loop,
+    steer_loop,
+    status,
+    sync_loop,
+)
+from loop_architect.v4_entry.preparation import boundary_display
+from loop_architect.v4_entry.legacy_boundary import (
+    is_legacy_input,
+    unsupported_legacy_error,
+)
+
+
+class PublicParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The command input is invalid.",
+            "Run loopskill4 --help and provide one supported public action.",
+        )
+
+
+def default_root() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "LoopSkill" / "4"
+    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "loopskill" / "4"
+
+
+def parser() -> PublicParser:
+    result = PublicParser(prog="loopskill4")
+    subcommands = result.add_subparsers(dest="action", required=True)
+    inspect = subcommands.add_parser("intake")
+    inspect.add_argument("goal_or_file")
+    prepare = subcommands.add_parser("prepare")
+    prepare.add_argument("goal_or_file")
+    prepare.add_argument("--output", type=Path, required=True)
+    confirm = subcommands.add_parser("confirm")
+    confirm.add_argument("prepared_directory", type=Path)
+    start = subcommands.add_parser("start")
+    start.add_argument("goal_file_or_prepared_directory")
+    start.add_argument("--root", type=Path, default=default_root())
+    start.add_argument("--prepared-output", type=Path)
+    start.add_argument("--diagnostics", action="store_true")
+    show = subcommands.add_parser("status")
+    show.add_argument("--root", type=Path, default=default_root())
+    show.add_argument("--diagnostics", action="store_true")
+    show.add_argument("--refresh", action="store_true")
+    for lifecycle_action in ("pause", "resume", "stop"):
+        lifecycle = subcommands.add_parser(lifecycle_action)
+        lifecycle.add_argument("--root", type=Path, default=default_root())
+        if lifecycle_action != "resume":
+            lifecycle.add_argument(
+                "--reason", default="User requested lifecycle control."
+            )
+    doctor = subcommands.add_parser("doctor")
+    doctor.add_argument("--diagnostics", action="store_true")
+    canary = subcommands.add_parser("canary")
+    canary.add_argument("--candidate", required=True)
+    canary.add_argument("--evidence-root", type=Path, required=True)
+    canary.add_argument("--diagnostics", action="store_true")
+    compile_prepared = subcommands.add_parser("compile")
+    compile_prepared.add_argument("prepared_directory", type=Path)
+    policy = subcommands.add_parser("policy")
+    policy.add_argument("--root", type=Path, default=default_root())
+    revise = subcommands.add_parser("roadmap-revise")
+    revise.add_argument("objectives", nargs="+")
+    revise.add_argument("--reason", required=True)
+    revise.add_argument("--root", type=Path, default=default_root())
+    steer = subcommands.add_parser("steer")
+    steer.add_argument("choice", choices=("continue-repair", "wait", "stop"))
+    steer.add_argument("--failure-fingerprint", default="")
+    steer.add_argument("--root", type=Path, default=default_root())
+    return result
+
+
+_INTAKE_FIELDS = {
+    "acceptance_criteria",
+    "authorization_boundaries",
+    "budget",
+    "external_actions",
+    "goal",
+    "goal_plan",
+    "stop_conditions",
+    "task_horizon",
+    "write_scope",
+}
+_SEQUENCE_FIELDS = {
+    "acceptance_criteria",
+    "authorization_boundaries",
+    "external_actions",
+    "goal_plan",
+    "stop_conditions",
+    "write_scope",
+}
+
+
+def _intake_value(document) -> LoopIntakeInput:
+    if not isinstance(document, dict) or not set(document) <= _INTAKE_FIELDS:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The input file has unsupported fields.",
+            "Use only the documented semantic intake fields.",
+        )
+    values = {
+        "goal": "",
+        "goal_plan": (),
+        "task_horizon": "unspecified",
+        "write_scope": (),
+        "budget": "",
+        "external_actions": (),
+        "acceptance_criteria": (),
+        "stop_conditions": (),
+        "authorization_boundaries": (),
+    }
+    values.update(document)
+    if not values["goal_plan"] and isinstance(values["goal"], str):
+        values["goal_plan"] = (values["goal"],)
+    if not isinstance(values["goal"], str) or not isinstance(values["task_horizon"], str) or not isinstance(values["budget"], str):
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The input file contains an invalid semantic value.",
+            "Use UTF-8 strings and arrays of strings.",
+        )
+    for field in _SEQUENCE_FIELDS:
+        value = values[field]
+        if not isinstance(value, (list, tuple)) or not all(
+            isinstance(item, str) for item in value
+        ):
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The input file contains an invalid semantic list.",
+                "Use arrays containing only UTF-8 strings.",
+            )
+        values[field] = tuple(value)
+    return LoopIntakeInput(**values)
+
+
+def read_intake_input(value: str) -> LoopIntakeInput:
+    path = Path(value)
+    if value == "-":
+        raw = sys.stdin.buffer.read(32769)
+        return _decode_intake_bytes(raw, json_document=True)
+    if path.is_dir() and is_legacy_input(path):
+        raise EntryError(*unsupported_legacy_error())
+    if path.is_file():
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The goal file could not be read.",
+                "Provide one readable UTF-8 goal file.",
+            ) from exc
+        if len(raw) > 32768:
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The goal file is too large.",
+                "Reduce the semantic input to at most 32768 UTF-8 bytes.",
+            )
+        if is_legacy_input(path, raw):
+            raise EntryError(*unsupported_legacy_error())
+        if path.suffix.lower() == ".json":
+            return _decode_intake_bytes(raw, json_document=True)
+        return _intake_value({"goal": _decode_text(raw)})
+    if path.suffix.lower() in {".json", ".txt"} or "/" in value:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The goal file was not found.",
+            "Provide one readable goal file or literal goal text.",
+        )
+    return _intake_value({"goal": value})
+
+
+def _decode_intake_bytes(raw: bytes, *, json_document: bool) -> LoopIntakeInput:
+    if len(raw) > 32768:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The input is too large.",
+            "Reduce the semantic input to at most 32768 UTF-8 bytes.",
+        )
+    text = _decode_text(raw)
+    if not json_document:
+        return _intake_value({"goal": text})
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The input file is not valid UTF-8 JSON.",
+            "Use one JSON object containing documented semantic intake fields.",
+        ) from exc
+    return _intake_value(document)
+
+
+def _decode_text(raw: bytes) -> str:
+    try:
+        return raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The goal file is not valid UTF-8.",
+            "Save the file as UTF-8 and try again.",
+        ) from exc
+
+
+def print_status(value) -> None:
+    print("LoopSkill 4")
+    print("Goal: " + json.dumps(value.goal, ensure_ascii=False))
+    print(f"Progress: {value.progress}")
+    print(f"Result: {value.result}")
+    if value.limitations:
+        print("Limitations: " + " ".join(value.limitations))
+    else:
+        print("Limitations: None")
+    if value.next_actions:
+        print("Next action: " + " ".join(value.next_actions))
+    else:
+        print("Next action: None")
+
+
+def print_intake_report(report) -> None:
+    for section, value in report.items():
+        print(section)
+        print(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+
+def print_boundary(context) -> None:
+    print("LoopSkill 4 start boundary")
+    for label, value in boundary_display(context).items():
+        print(f"{label}: " + json.dumps(value, ensure_ascii=False))
+
+
+def _doctor_view(*, include_diagnostics: bool):
+    # This explicit operability command loads the optional projection lazily;
+    # the minimal intake/prepare/start path never imports it.
+    from loop_architect.v4_operability import doctor_projection
+
+    skill_root = Path(__file__).resolve().parents[1]
+    generated = skill_root / "scripts/loop_architect/v4_alpha/generated_protocol.py"
+    source_identity = hashlib.sha256(generated.read_bytes()).hexdigest()
+    capabilities = {
+        "host_lifecycle": "UNVERIFIABLE",
+        "memory": "UNVERIFIABLE",
+        "python_runtime": "AVAILABLE",
+    }
+    installed_identity = None
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home:
+        receipt_root = Path(codex_home) / "install-receipts/loopskill4"
+        pointer = receipt_root / "active-receipt"
+        if receipt_root.is_dir() and pointer.is_file() and not pointer.is_symlink():
+            try:
+                active = json.loads(pointer.read_text(encoding="utf-8"))
+                if not isinstance(active, dict) or set(active) != {"receipt", "sha256"}:
+                    raise ValueError("invalid active receipt pointer")
+                receipt_name = active["receipt"]
+                if (
+                    not isinstance(receipt_name, str)
+                    or Path(receipt_name).name != receipt_name
+                    or not receipt_name.endswith(".json")
+                ):
+                    raise ValueError("invalid active receipt name")
+                receipt_path = receipt_root / receipt_name
+                receipt_raw = receipt_path.read_bytes()
+                if (
+                    receipt_path.is_symlink()
+                    or hashlib.sha256(receipt_raw).hexdigest() != active["sha256"]
+                ):
+                    raise ValueError("active receipt drift")
+                receipt = json.loads(receipt_raw.decode("utf-8", "strict"))
+                expected = receipt["files"]
+                current = []
+                for path in sorted(skill_root.rglob("*")):
+                    relative = path.relative_to(skill_root)
+                    if (
+                        "__pycache__" in relative.parts
+                        or path.suffix == ".pyc"
+                        or path.name == ".DS_Store"
+                    ):
+                        continue
+                    if path.is_symlink():
+                        raise ValueError("installed symlink")
+                    if path.is_file():
+                        current.append(
+                            {
+                                "path": relative.as_posix(),
+                                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                "executable": bool(path.stat().st_mode & 0o111),
+                            }
+                        )
+                if current == expected and receipt.get("source_install_drift") == []:
+                    installed_identity = source_identity
+                    capabilities["install_receipt"] = "AVAILABLE"
+                else:
+                    installed_identity = "DRIFT"
+                    capabilities["install_receipt"] = "AVAILABLE"
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                installed_identity = "DRIFT"
+                capabilities["install_receipt"] = "UNVERIFIABLE"
+        else:
+            capabilities["install_receipt"] = "UNVERIFIABLE"
+    else:
+        capabilities["install_receipt"] = "UNVERIFIABLE"
+    return doctor_projection(
+        source_identity=source_identity,
+        installed_identity=installed_identity,
+        capabilities=capabilities,
+        diagnostics=include_diagnostics,
+    )
+
+
+def _interactive_start(args):
+    subject = Path(args.goal_file_or_prepared_directory)
+    if subject.is_dir():
+        if is_legacy_input(subject):
+            raise EntryError(*unsupported_legacy_error())
+        return _start_with_owned_provider(subject, root=args.root)
+    request = read_intake_input(args.goal_file_or_prepared_directory)
+    report = intake_report_loop(request)
+    print_intake_report(report)
+    disposition = report["1 最终判定"]["disposition"]
+    if disposition == "DIRECT_TASK_RECOMMENDED":
+        raise EntryError(
+            "USER_DIRECT_TASK_RECOMMENDED",
+            report["1 最终判定"]["reason"],
+            "Run the task directly in Codex; no loop was created.",
+        )
+    if disposition != "READY_FOR_LOOP":
+        raise EntryError(
+            "USER_CLARIFICATION_REQUIRED",
+            report["1 最终判定"]["reason"],
+            "Answer the listed intake questions; no loop was created.",
+        )
+    output = args.prepared_output or Path(str(args.root) + ".prepared")
+    prepared = prepare_loop(request, output, workspace_root=Path.cwd())
+    print_boundary(prepared)
+    if not sys.stdin.isatty():
+        raise EntryError(
+            "USER_CONFIRMATION_REQUIRED",
+            "The preparation is ready but interactive confirmation is unavailable.",
+            f"Review {output}, run loopskill4 confirm on it, then start that prepared directory.",
+        )
+    answer = input('Type "START THIS LOOP" to confirm the displayed boundary: ')
+    if answer != "START THIS LOOP":
+        raise EntryError(
+            "USER_CONFIRMATION_REQUIRED",
+            "The displayed start boundary was not explicitly confirmed.",
+            "Review the prepared artifacts and confirm them explicitly.",
+        )
+    confirmed = confirm_loop(output, confirmed=True)
+    return _start_with_owned_provider(confirmed, root=args.root)
+
+
+def _close_provider(provider) -> None:
+    close = getattr(provider, "close", None)
+    if callable(close):
+        close()
+
+
+def _finish_owned_provider_task(value, provider, *, root: Path):
+    """Finish this process's one created task without a daemon or resend."""
+
+    metrics = getattr(provider, "metrics", None)
+    if callable(metrics):
+        metrics = metrics()
+    if not isinstance(metrics, Mapping):
+        return value
+    created = metrics.get("task_create_count")
+    if created == 0:
+        return value
+    if created != 1:
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "The Codex task creation boundary was not singular.",
+            "Preserve the local state and inspect diagnostics; do not repeat start.",
+        )
+    waiter = getattr(provider, "wait_for_terminal", None)
+    if not callable(waiter):
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "The foreground Codex invocation has no bounded terminal evidence.",
+            "Preserve the local state and inspect diagnostics; do not repeat start or resume.",
+        )
+    try:
+        waiter(timeout_seconds=300.0)
+        return sync_loop(
+            root=root,
+            host_provider=provider,
+            workspace_root=Path.cwd(),
+        )
+    except (HostUnavailable, ValueError) as exc:
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "LoopSkill could not confirm whether the one Codex invocation reached a terminal state. It was not resent.",
+            "Preserve UNKNOWN and inspect diagnostics; do not run start or resume.",
+        ) from exc
+
+
+def _start_with_owned_provider(prepared, *, root: Path):
+    provider = CodexExecProvider(Path.cwd())
+    try:
+        value = start_loop(
+            prepared,
+            root=root,
+            host_provider=provider,
+            workspace_root=Path.cwd(),
+        )
+        return _finish_owned_provider_task(value, provider, root=root)
+    finally:
+        _close_provider(provider)
+
+
+def _refresh_with_owned_provider(*, root: Path):
+    provider = CodexExecProvider(Path.cwd())
+    try:
+        value = sync_loop(
+            root=root,
+            host_provider=provider,
+            workspace_root=Path.cwd(),
+        )
+        return _finish_owned_provider_task(value, provider, root=root)
+    finally:
+        _close_provider(provider)
+
+
+def _interactive_canary(args):
+    from loop_architect.v4_entry.canary import CanaryError, run_canary
+
+    def confirm(boundary):
+        print("Disposable canary boundary:")
+        print(
+            json.dumps(
+                boundary,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        if not sys.stdin.isatty():
+            return False
+        answer = input('Type "RUN THIS CANARY" to authorize one disposable Codex invocation: ')
+        return answer == "RUN THIS CANARY"
+
+    try:
+        host_codex_home = Path(
+            os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
+        ).resolve(strict=True)
+        return run_canary(
+            args.candidate,
+            args.evidence_root,
+            confirmation_callback=confirm,
+            integrity_inputs={
+                "host_auth": host_codex_home / "auth.json",
+                "host_config": host_codex_home / "config.toml",
+            },
+        )
+    except CanaryError as exc:
+        if args.diagnostics:
+            print(f"Canary gate: {exc.code}", file=sys.stderr)
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "The disposable foreground exec canary did not pass its exact boundary.",
+            "Preserve the private evidence root and inspect diagnostics; do not spawn again.",
+        ) from exc
+
+
+def main(argv=None) -> int:
+    try:
+        args = parser().parse_args(argv)
+        if args.action == "intake":
+            print_intake_report(intake_report_loop(read_intake_input(args.goal_or_file)))
+            return 0
+        if args.action == "prepare":
+            prepared = prepare_loop(
+                read_intake_input(args.goal_or_file),
+                args.output,
+                workspace_root=Path.cwd(),
+            )
+            print_boundary(prepared)
+            return 0
+        if args.action == "confirm":
+            prepared = review_prepared(args.prepared_directory)
+            print_boundary(prepared)
+            if not sys.stdin.isatty():
+                raise EntryError(
+                    "USER_CONFIRMATION_REQUIRED",
+                    "Interactive confirmation is required for this prepared boundary.",
+                    "Review the preparation in an interactive session; no start authority was created.",
+                )
+            answer = input('Type "START THIS LOOP" to confirm the displayed boundary: ')
+            if answer != "START THIS LOOP":
+                raise EntryError(
+                    "USER_CONFIRMATION_REQUIRED",
+                    "The displayed start boundary was not explicitly confirmed.",
+                    "Review the prepared artifacts and confirm them explicitly.",
+                )
+            prepared = confirm_loop(args.prepared_directory, confirmed=True)
+            print("Confirmation: accepted for the unchanged prepared boundary")
+            return 0
+        if args.action == "compile":
+            prepared = review_prepared(args.prepared_directory)
+            print(
+                json.dumps(
+                    {
+                        "boundary_digest": prepared.bundle.boundary_digest,
+                        "manifest_digest": prepared.bundle.manifest_digest,
+                        "status": "PREPARED_VALID",
+                        "host_effects": 0,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        if args.action == "doctor":
+            print(
+                json.dumps(
+                    _doctor_view(include_diagnostics=args.diagnostics),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        if args.action == "canary":
+            print(
+                json.dumps(
+                    _interactive_canary(args),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        if args.action == "policy":
+            print(
+                json.dumps(
+                    policy_view(root=args.root),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        if args.action == "roadmap-revise":
+            print(
+                json.dumps(
+                    revise_goal_plan(
+                        tuple(args.objectives),
+                        root=args.root,
+                        reason=args.reason,
+                    ),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        if args.action == "start":
+            value = _interactive_start(args)
+        elif args.action in {"pause", "resume", "stop"}:
+            value = control_loop(
+                args.action,
+                root=args.root,
+                reason=getattr(args, "reason", "User requested lifecycle control."),
+            )
+        elif args.action == "steer":
+            value = steer_loop(
+                args.choice,
+                root=args.root,
+                failure_fingerprint=args.failure_fingerprint,
+            )
+        else:
+            value = (
+                _refresh_with_owned_provider(root=args.root)
+                if args.refresh
+                else status(root=args.root)
+            )
+        print_status(value)
+        if getattr(args, "diagnostics", False):
+            print(
+                "Diagnostics: "
+                + json.dumps(
+                    diagnostics(root=args.root),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        return 0
+    except EntryError as exc:
+        print(f"LoopSkill 4 error [{exc.code}]: {exc.message}", file=sys.stderr)
+        print(f"Next action: {exc.next_action}", file=sys.stderr)
+        return 2
+    except Exception:
+        print(
+            "LoopSkill 4 error [USER_INTERNAL_ERROR]: LoopSkill could not safely complete the action.",
+            file=sys.stderr,
+        )
+        print(
+            "Next action: Preserve the current state and use status/readback or diagnostics; do not repeat start blindly.",
+            file=sys.stderr,
+        )
+        return 70
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
