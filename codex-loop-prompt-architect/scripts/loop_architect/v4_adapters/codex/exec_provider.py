@@ -149,12 +149,21 @@ def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
             process.wait(timeout=PROCESS_REAP_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
             pass
+    deadline = time.monotonic() + PROCESS_REAP_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            process.wait()
+            return
+        time.sleep(0.01)
     try:
-        os.killpg(process.pid, 0)
+        os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         process.wait()
         return
-    os.killpg(process.pid, signal.SIGKILL)
+    except PermissionError as exc:
+        raise HostResponseLost("Codex exec process group could not be reaped") from exc
     if process.poll() is None:
         process.wait(timeout=PROCESS_REAP_GRACE_SECONDS)
     deadline = time.monotonic() + PROCESS_REAP_GRACE_SECONDS
@@ -282,10 +291,12 @@ def _run_bounded_process(
         )
     finally:
         selector.close()
-        _terminate_process_group(process)
-        for stream in (process.stdin, process.stdout, process.stderr):
-            if not stream.closed:
-                stream.close()
+        try:
+            _terminate_process_group(process)
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if not stream.closed:
+                    stream.close()
 
 
 def _inspect_contract(
