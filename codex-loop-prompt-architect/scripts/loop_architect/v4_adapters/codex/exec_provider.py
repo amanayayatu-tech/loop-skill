@@ -156,14 +156,21 @@ def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
         except ProcessLookupError:
             process.wait()
             return
+        except PermissionError:
+            # Darwin may transiently retain an unsignalable orphan/zombie
+            # process-group identity after the session leader exits.  EPERM is
+            # not closure evidence; only bounded ESRCH is accepted.
+            pass
         time.sleep(0.01)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         process.wait()
         return
-    except PermissionError as exc:
-        raise HostResponseLost("Codex exec process group could not be reaped") from exc
+    except PermissionError:
+        # Continue to the same bounded ESRCH proof below.  If the identity does
+        # not disappear, the invocation remains failed/ambiguous.
+        pass
     if process.poll() is None:
         process.wait(timeout=PROCESS_REAP_GRACE_SECONDS)
     deadline = time.monotonic() + PROCESS_REAP_GRACE_SECONDS
@@ -172,6 +179,8 @@ def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
             os.killpg(process.pid, 0)
         except ProcessLookupError:
             return
+        except PermissionError:
+            pass
         time.sleep(0.01)
     raise HostResponseLost("Codex exec process group did not close")
 
