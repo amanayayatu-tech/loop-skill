@@ -189,9 +189,13 @@ are predecessor evidence, not release artifacts.
 
 After freezing the candidate SHA, run one new non-scored, non-research,
 disposable canary through the receipt-bound public entry installed from that
-exact commit. Both the install and the canary use a new isolated `CODEX_HOME`;
-they never inspect the operator's real v3 installation or data. The evidence
-root must not already exist. The command stops for the exact interactive phrase
+exact commit. Install, uninstall, config-integrity, and independent-v3 sentinel
+checks use a new isolated `CODEX_HOME`. The one authenticated model turn uses
+the operator's already-authenticated official Codex Host context without
+copying, linking, or rewriting credentials. Its config and auth files are only
+hashed before and after the turn; the canary never inspects the operator's real
+v3 installation or data. The evidence root must not already exist. The command
+stops for the exact interactive phrase
 `RUN THIS CANARY` before constructing the provider. In other words, the release
 invocation is the installed, receipt-checked `loopskill4 canary`, not the source-
 tree entry:
@@ -201,6 +205,9 @@ set -euo pipefail
 umask 077
 CANARY_CODEX_HOME="$RELEASE_TMP/canary-codex-home"
 CANARY_ROOT="$RELEASE_TMP/app-canary"
+HOST_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+HOST_CONFIG="$HOST_CODEX_HOME/config.toml"
+HOST_AUTH="$HOST_CODEX_HOME/auth.json"
 mkdir -p "$CANARY_CODEX_HOME/skills/codex-loop-prompt-architect"
 printf '%s\n' '# isolated LoopSkill 4 canary config' >"$CANARY_CODEX_HOME/config.toml"
 printf '%s\n' 'synthetic-v3-sentinel' >"$CANARY_CODEX_HOME/skills/codex-loop-prompt-architect/PRESERVE"
@@ -215,8 +222,12 @@ import os
 import sys
 
 root = Path(sys.argv[1])
-if root.is_file() and not root.is_symlink():
+if root.is_symlink():
+    value = [[".", "symlink", os.readlink(root)]]
+elif root.is_file():
     value = [[".", "file", hashlib.sha256(root.read_bytes()).hexdigest()]]
+elif not root.exists():
+    value = [[".", "absent"]]
 else:
     value = []
     for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
@@ -236,6 +247,9 @@ PY
 
 CONFIG_BEFORE="$(snapshot_path "$CANARY_CODEX_HOME/config.toml")"
 V3_BEFORE="$(snapshot_path "$CANARY_CODEX_HOME/skills/codex-loop-prompt-architect")"
+HOST_CONFIG_BEFORE="$(snapshot_path "$HOST_CONFIG")"
+HOST_AUTH_BEFORE="$(snapshot_path "$HOST_AUTH")"
+CODEX_HOME="$HOST_CODEX_HOME" codex login status | grep -F 'Logged in' >/dev/null
 export CODEX_HOME="$CANARY_CODEX_HOME"
 LOOP_RELEASE_COMMIT="$CANDIDATE" PYTHON="$PY" bash scripts/install.sh \
   >"$RELEASE_TMP/canary-install.log"
@@ -253,7 +267,7 @@ cleanup_canary_install() {
 }
 trap cleanup_canary_install EXIT
 
-"$CANARY_ENTRY" canary \
+CODEX_HOME="$HOST_CODEX_HOME" "$CANARY_ENTRY" canary \
   --candidate "$CANDIDATE" \
   --evidence-root "$CANARY_ROOT"
 
@@ -266,6 +280,8 @@ trap - EXIT
 test ! -e "$CANARY_CODEX_HOME/skills/loopskill4"
 test "$CONFIG_BEFORE" = "$(snapshot_path "$CANARY_CODEX_HOME/config.toml")"
 test "$V3_BEFORE" = "$(snapshot_path "$CANARY_CODEX_HOME/skills/codex-loop-prompt-architect")"
+test "$HOST_CONFIG_BEFORE" = "$(snapshot_path "$HOST_CONFIG")"
+test "$HOST_AUTH_BEFORE" = "$(snapshot_path "$HOST_AUTH")"
 ! grep -Eq '^[[:space:]]*\[mcp_servers\.' "$CANARY_CODEX_HOME/config.toml"
 ```
 
@@ -283,8 +299,10 @@ It must show:
 
 The install readback must be `READY`; the first uninstall must be `UNINSTALLED`
 and the identical public command must then return `ALREADY_UNINSTALLED`.
-`config.toml` and the synthetic independent-v3 sentinel tree must have identical
-before/after digests, and no LoopSkill MCP entry or process may be created. The
+The isolated `config.toml`, authenticated Host config/auth files, and synthetic
+independent-v3 sentinel tree must have identical before/after digests, and no
+LoopSkill MCP entry or process may be created. Authentication material is never
+copied into the isolated install home. The
 temporary Codex `app-server` provider used by the Host Adapter must close in a
 `finally` path on success, failure, or timeout. A canary or cleanup failure is a
 HOLD with preserved evidence, never permission to rerun the provider action.

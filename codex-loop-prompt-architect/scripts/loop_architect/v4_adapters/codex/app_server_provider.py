@@ -116,6 +116,34 @@ def _schema_accepts_literal(
         return "string" in allowed
     if isinstance(value, bool):
         return "boolean" in allowed
+    if value is None:
+        return "null" in allowed
+    if isinstance(value, Mapping):
+        properties = resolved.get("properties")
+        required = resolved.get("required", [])
+        if (
+            "object" not in allowed
+            or not isinstance(properties, Mapping)
+            or not isinstance(required, list)
+            or not set(required) <= set(value)
+            or (
+                resolved.get("additionalProperties") is False
+                and not set(value) <= set(properties)
+            )
+        ):
+            return False
+        return all(
+            key in properties
+            and _schema_accepts_literal(document, properties[key], item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        items = resolved.get("items")
+        return (
+            "array" in allowed
+            and items is not None
+            and all(_schema_accepts_literal(document, items, item) for item in value)
+        )
     return False
 
 
@@ -210,7 +238,21 @@ def _protocol_contract_from_schemas(
         "sandbox",
         "threadSource",
     }
-    turn_fields = {"clientUserMessageId", "cwd", "input", "threadId"}
+    turn_fields = {
+        "approvalPolicy",
+        "clientUserMessageId",
+        "cwd",
+        "input",
+        "sandboxPolicy",
+        "threadId",
+    }
+    representative_workspace_policy = {
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
+        "networkAccess": False,
+        "type": "workspaceWrite",
+        "writableRoots": ["/workspace"],
+    }
     if (
         not isinstance(thread_properties, Mapping)
         or not isinstance(turn_properties, Mapping)
@@ -224,7 +266,7 @@ def _protocol_contract_from_schemas(
             thread_params, thread_properties["approvalPolicy"], "on-request"
         )
         or not _schema_accepts_literal(
-            thread_params, thread_properties["sandbox"], "workspace-write"
+            thread_params, thread_properties["sandbox"], "read-only"
         )
         or not _schema_accepts_literal(
             thread_params, thread_properties["threadSource"], "loopskill4"
@@ -237,6 +279,14 @@ def _protocol_contract_from_schemas(
         )
         or not _schema_accepts_literal(
             turn_params, turn_properties["threadId"], "thread-id"
+        )
+        or not _schema_accepts_literal(
+            turn_params, turn_properties["approvalPolicy"], "on-request"
+        )
+        or not _schema_accepts_literal(
+            turn_params,
+            turn_properties["sandboxPolicy"],
+            representative_workspace_policy,
         )
         or not _supports_text_input(turn_params, turn_properties["input"])
     ):
@@ -709,7 +759,7 @@ class CodexAppServerProvider:
                     "approvalPolicy": "on-request",
                     "cwd": str(self.workspace),
                     "ephemeral": False,
-                    "sandbox": "workspace-write",
+                    "sandbox": "read-only",
                     "threadSource": "loopskill4",
                 },
             )
@@ -719,9 +769,17 @@ class CodexAppServerProvider:
             turn_started = session.request(
                 "turn/start",
                 {
+                    "approvalPolicy": "on-request",
                     "clientUserMessageId": provider_idempotency_key,
                     "cwd": str(self.workspace),
                     "input": [{"text": prompt, "type": "text"}],
+                    "sandboxPolicy": {
+                        "excludeSlashTmp": True,
+                        "excludeTmpdirEnvVar": True,
+                        "networkAccess": False,
+                        "type": "workspaceWrite",
+                        "writableRoots": [str(self.workspace)],
+                    },
                     "threadId": thread_id,
                 },
             )

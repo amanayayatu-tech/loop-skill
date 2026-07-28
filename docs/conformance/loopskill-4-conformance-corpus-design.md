@@ -1032,7 +1032,9 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
   `CAP-HUMAN`, `CAP-REPAIR`, `CAP-AUDIT`, `CAP-PRIVACY`, and `CAP-ARTIFACT`,
   and thresholds frozen before observing v4 performance;
 - rc: full fault matrix, isolated install/rollback, exact-candidate real App
-  evidence, independent review, `UX-009`, `CAP-OPERABILITY`,
+  evidence from an already-authenticated official Host context with no copied
+  credentials and unchanged Host config/auth hashes, independent review,
+  `UX-009`, `CAP-OPERABILITY`,
   `CAP-DISTRIBUTION`, `CAP-DOCS`, and `CAP-RELEASE`, real new-user usability
   canary, fixed candidate SHA, and preserved failures/UNKNOWN;
 - public release: author authorization is recorded in ADR 0011, but still

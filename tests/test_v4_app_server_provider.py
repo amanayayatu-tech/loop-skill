@@ -91,7 +91,7 @@ def protocol_schemas(
                 "approvalPolicy": {"enum": ["on-request"]},
                 "cwd": {"type": ["string", "null"]},
                 "ephemeral": {"type": ["boolean", "null"]},
-                "sandbox": {"enum": ["workspace-write"]},
+                "sandbox": {"enum": ["read-only"]},
                 "threadSource": {"type": ["string", "null"]},
             },
         },
@@ -101,6 +101,7 @@ def protocol_schemas(
             "type": "object",
             "required": ["input", "threadId"],
             "properties": {
+                "approvalPolicy": {"enum": ["on-request"]},
                 "clientUserMessageId": {"type": ["string", "null"]},
                 "cwd": {"type": ["string", "null"]},
                 "input": {
@@ -117,6 +118,24 @@ def protocol_schemas(
                             }
                         ]
                     },
+                },
+                "sandboxPolicy": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "required": ["type"],
+                            "properties": {
+                                "excludeSlashTmp": {"type": "boolean"},
+                                "excludeTmpdirEnvVar": {"type": "boolean"},
+                                "networkAccess": {"type": "boolean"},
+                                "type": {"enum": ["workspaceWrite"]},
+                                "writableRoots": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                        }
+                    ]
                 },
                 "threadId": {"type": "string"},
             },
@@ -345,6 +364,11 @@ class AppServerProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(HostUnavailable, "response shape drift"):
             _protocol_contract_from_schemas(drift)
 
+        missing_turn_policy = protocol_schemas()
+        del missing_turn_policy["turn_start_params"]["properties"]["sandboxPolicy"]
+        with self.assertRaisesRegex(HostUnavailable, "request shape drift"):
+            _protocol_contract_from_schemas(missing_turn_policy)
+
         probe = mock.Mock(side_effect=HostUnavailable("synthetic schema drift"))
         with tempfile.TemporaryDirectory() as temporary:
             provider = CodexAppServerProvider(
@@ -413,8 +437,29 @@ class AppServerProviderTests(unittest.TestCase):
         self.assertEqual(observed["status"], "OBSERVED")
         self.assertEqual(observed["trust"], "authoritative")
         self.assertEqual(invoke.calls[0][0], "thread/start")
+        self.assertEqual(
+            invoke.calls[0][1],
+            {
+                "approvalPolicy": "on-request",
+                "cwd": str(Path(temporary).resolve()),
+                "ephemeral": False,
+                "sandbox": "read-only",
+                "threadSource": "loopskill4",
+            },
+        )
         turn_payload = invoke.calls[1][1]
+        self.assertEqual(turn_payload["approvalPolicy"], "on-request")
         self.assertEqual(turn_payload["clientUserMessageId"], KEY)
+        self.assertEqual(
+            turn_payload["sandboxPolicy"],
+            {
+                "excludeSlashTmp": True,
+                "excludeTmpdirEnvVar": True,
+                "networkAccess": False,
+                "type": "workspaceWrite",
+                "writableRoots": [str(Path(temporary).resolve())],
+            },
+        )
         prompt = turn_payload["input"][0]["text"]
         self.assertIn(marker, prompt)
         self.assertIn('"authorization_boundaries":["no publish"]', prompt)

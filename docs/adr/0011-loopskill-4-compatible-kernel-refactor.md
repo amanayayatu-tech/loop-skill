@@ -996,7 +996,10 @@ candidate SHA, and an author approval packet are authorized. Every failure and
 UNKNOWN must remain preserved. RC requires one real, non-research,
 private-data-free new-user usability canary from the isolated installation
 through starting a minimal disposable loop, with no manual transcription of
-control identity. This paragraph recorded the earlier RC-only authorization and
+control identity. Installation isolation does not imply an unauthenticated
+Host: the sole model turn uses an already-authenticated official Codex context,
+without copying credentials, and must preserve Host config/auth hashes. This
+paragraph recorded the earlier RC-only authorization and
 is not the current release boundary. The hard-break addendum now authorizes
 push, PR, merge, annotated tag, and a public GitHub 4.0.0 Release only after the
 exact-SHA local, CI, canary, review, and readback gates pass. Automatic

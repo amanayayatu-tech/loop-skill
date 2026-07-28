@@ -22,7 +22,10 @@ alone is not a release.
 - one disposable, non-research Codex App canary on the exact candidate:
   zero-effect intake and prepare, explicit digest-bound confirmation, one
   machine-owned task start/readback, minimal artifact/review/finalization, no
-  MCP, no restart, no provider resend, and no real v3/user/private data;
+  MCP, no restart, no provider resend, and no real v3/user/private data. The
+  entry is installed and uninstalled in an isolated home, while the sole model
+  turn uses an already-authenticated official Host context without copying
+  credentials; Host config/auth hashes must remain unchanged;
 - independent read-only architecture, UX, installer, CI, privacy, artifact,
   preservation, and documentation review bound to the same SHA.
 
