@@ -174,6 +174,30 @@ class FakeSession:
 
 
 class AppServerProviderTests(unittest.TestCase):
+    def test_default_provider_prefers_safe_desktop_host_binary_on_macos(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            desktop = root / "desktop-codex"
+            desktop.write_bytes(b"desktop")
+            desktop.chmod(0o755)
+            with mock.patch.object(provider_module.sys, "platform", "darwin"), mock.patch.object(
+                provider_module, "CODEX_DESKTOP_EXECUTABLE", desktop
+            ), mock.patch.object(
+                provider_module.shutil, "which", return_value="/shadowed/codex"
+            ):
+                provider = CodexAppServerProvider(root)
+                self.assertEqual(provider.command[0], str(desktop))
+
+            desktop.unlink()
+            desktop.symlink_to(root / "foreign")
+            with mock.patch.object(provider_module.sys, "platform", "darwin"), mock.patch.object(
+                provider_module, "CODEX_DESKTOP_EXECUTABLE", desktop
+            ), mock.patch.object(
+                provider_module.shutil, "which", return_value="/fallback/codex"
+            ):
+                provider = CodexAppServerProvider(root)
+                self.assertEqual(provider.command[0], "/fallback/codex")
+
     def test_session_initialization_failure_closes_spawned_process(self):
         child_stdin, parent_stdin = os.pipe()
         parent_stdout, child_stdout = os.pipe()

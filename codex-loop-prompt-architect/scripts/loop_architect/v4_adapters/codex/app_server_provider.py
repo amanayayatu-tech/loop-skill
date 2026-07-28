@@ -15,6 +15,7 @@ import selectors
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
@@ -36,6 +37,7 @@ THREAD_LIST_PAGE_SIZE = 100
 MAX_THREAD_LIST_PAGES = 64
 MAX_THREAD_LIST_CURSOR_BYTES = 4_096
 _MACHINE_MARKER = re.compile(r"LOOPSKILL4_REQUEST=[0-9a-f]{64}(?![0-9a-f])")
+CODEX_DESKTOP_EXECUTABLE = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
 
 _PROTOCOL_SCHEMA_FILES = {
     "thread_start_params": "v2/ThreadStartParams.json",
@@ -67,6 +69,24 @@ def _request_marker(provider_key: str) -> str:
         b"loopskill-app-server-request-v1\n" + provider_key.encode("utf-8")
     ).hexdigest()
     return f"LOOPSKILL4_REQUEST={digest}"
+
+
+def _codex_executable() -> str:
+    """Prefer the active Desktop Host binary over a shadowing CLI on macOS."""
+
+    if sys.platform == "darwin":
+        try:
+            metadata = CODEX_DESKTOP_EXECUTABLE.lstat()
+            if (
+                stat.S_ISREG(metadata.st_mode)
+                and not CODEX_DESKTOP_EXECUTABLE.is_symlink()
+                and metadata.st_mode & 0o111
+                and metadata.st_size > 0
+            ):
+                return str(CODEX_DESKTOP_EXECUTABLE)
+        except OSError:
+            pass
+    return shutil.which("codex") or "codex"
 
 
 def _reject_json_constant(constant: str) -> None:
@@ -605,7 +625,7 @@ class CodexAppServerProvider:
         resolved = Path(workspace).resolve(strict=True)
         if not resolved.is_dir() or resolved.is_symlink():
             raise ValueError("Host workspace must be one existing directory")
-        executable = shutil.which("codex") if command is None else None
+        executable = _codex_executable() if command is None else None
         selected = tuple(command or ((executable or "codex"), "app-server", "--stdio"))
         if not selected:
             raise ValueError("Codex app-server command is empty")
