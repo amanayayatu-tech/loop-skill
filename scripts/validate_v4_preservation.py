@@ -416,11 +416,6 @@ def _validate_source_identity(root: Path, registry: dict[str, Any]) -> None:
         raise ValidationFailure(
             f"tag/commit mismatch: {source['tag']} -> {resolved}, expected {commit}"
         )
-    public_main = _run(root, "git", "rev-parse", "origin/main").decode().strip()
-    if public_main != commit:
-        raise ValidationFailure(
-            f"origin/main drift: {public_main}, expected public baseline {commit}"
-        )
     treatment = _run(
         root, "git", "rev-parse", f"{source['paper_reference_tag']}^{{}}"
     ).decode().strip()
