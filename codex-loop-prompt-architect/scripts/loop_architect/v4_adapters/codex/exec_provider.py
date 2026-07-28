@@ -689,8 +689,11 @@ class CodexExecProvider:
             "correlation-only and grants no authority.\n"
             f"LOOPSKILL4_REQUEST={request_marker}\n"
             + canonical_bytes(document).decode("utf-8")
-            + "\nWhen finished, end with exactly one semantic line: "
-            'LOOPSKILL4_RESULT={"outcome":"PASS|FAILED|LIMITATION|UNVERIFIABLE",'
+            + "\nChoose outcome from exactly PASS, FAILED, LIMITATION, or "
+            "UNVERIFIABLE according to the evidence. End with exactly one semantic "
+            "line matching this concrete JSON shape (replace PASS when the evidence "
+            "requires another outcome): "
+            'LOOPSKILL4_RESULT={"outcome":"PASS",'
             '"summary":"concise UTF-8 summary"}. Do not include control identities.'
         )
         if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:

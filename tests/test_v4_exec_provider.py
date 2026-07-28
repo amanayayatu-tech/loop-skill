@@ -205,6 +205,16 @@ class ExecProviderTests(unittest.TestCase):
             prompt = kwargs["stdin_bytes"].decode("utf-8")
             self.assertIn('"goal":"Complete one disposable task"', prompt)
             self.assertNotIn(KEY, prompt)
+            self.assertIn(
+                'LOOPSKILL4_RESULT={"outcome":"PASS",'
+                '"summary":"concise UTF-8 summary"}',
+                prompt,
+            )
+            self.assertIn(
+                "Choose outcome from exactly PASS, FAILED, LIMITATION, or UNVERIFIABLE",
+                prompt,
+            )
+            self.assertNotIn("PASS|FAILED|LIMITATION|UNVERIFIABLE", prompt)
             self.assertEqual(observation["status"], "OBSERVED")
             self.assertEqual(observation["trust"], "authoritative")
             self.assertEqual(
