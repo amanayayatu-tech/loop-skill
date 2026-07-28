@@ -18,8 +18,8 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
   TESTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
-# The real Codex App canary is an exact-SHA local release gate. GitHub-hosted
-# runners validate its receipt contract but never fake or invoke the App.
+# The real foreground Codex exec canary is an exact-SHA local release gate.
+# GitHub-hosted runners validate its receipt contract but never invoke a model.
 jobs:
   protocol-architecture-docs:
     name: Protocol, architecture, docs, and stale-runtime gates
@@ -61,7 +61,7 @@ jobs:
           tests.test_v4_legacy_boundary
           tests.test_v4_docs
           tests.test_v4_ci
-      - name: Execute every hosted conformance binding without faking App
+      - name: Execute hosted conformance bindings without invoking a model
         run: >-
           python scripts/run_v4_conformance.py --candidate "$TESTED_SHA"
           --hosted-unit-only --output hosted-conformance.json

@@ -18,7 +18,7 @@ exposure, unresolved deterministic gates, or identity drift.
 
 No evidence from a different commit may be used as exact-SHA evidence. A merge
 or squash creates a new candidate identity and requires the corresponding
-release-identity checks and real App canary on the merged SHA.
+release-identity checks and real foreground Codex exec canary on the merged SHA.
 
 ## Before Gate 1: freeze release truth once
 
@@ -185,7 +185,7 @@ Historical docs or synthetic fixtures containing retired terms must be exact
 allowlisted, non-installed, and non-importable by production. Old raw P8 logs
 are predecessor evidence, not release artifacts.
 
-## Gate 2: exact-SHA local Codex App canary
+## Gate 2: exact-SHA local foreground Codex exec canary
 
 After freezing the candidate SHA, run one new non-scored, non-research,
 disposable canary through the receipt-bound public entry installed from that
@@ -290,8 +290,8 @@ It must show:
 1. intake with 0 loop/task/heartbeat/external effects;
 2. prepare with 0 Host effects and digest-bound human views;
 3. explicit confirmation of the unchanged boundary;
-4. one machine-owned, cwd-bound start and at most one created App task;
-5. authoritative readback without hand-copied control identity;
+4. one machine-owned, cwd-bound foreground `codex exec --json` invocation;
+5. directly captured terminal JSONL without hand-copied control identity;
 6. minimal artifact, review, report, and finalization evidence;
 7. no LoopSkill MCP, no LoopSkill-required App restart, no provider resend,
    and no access to real v3 installs, user repositories, private experiments,
@@ -303,30 +303,29 @@ The isolated `config.toml`, authenticated Host config/auth files, and synthetic
 independent-v3 sentinel tree must have identical before/after digests, and no
 LoopSkill MCP entry or process may be created. Authentication material is never
 copied into the isolated install home. The
-temporary Codex `app-server` provider used by the Host Adapter must close in a
-`finally` path on success, failure, or timeout. A canary or cleanup failure is a
-HOLD with preserved evidence, never permission to rerun the provider action.
-The exact canary process scope must also prove zero live provider/app-server
-children after the installed entry exits; a global process-name search is not
-sufficient evidence. Its 300-second foreground terminal readback is an
-observation window, not a task budget. On timeout it must make no claim that the
-Host task continues and must not resend.
+foreground Codex process group must be reaped on success, failure, timeout, or
+interruption. A canary or cleanup failure is a HOLD with preserved evidence,
+never permission to rerun the provider action. The exact canary process scope
+must prove zero descendants after the installed entry exits; a global
+process-name search is not sufficient evidence. Its 300-second foreground
+terminal stream window is not a task budget. On timeout it must preserve
+`UNKNOWN`, make no lifecycle claim, and must not resend or resume.
 
 The Codex Desktop folder-open → `list_projects` → `projectId` → `create_thread`
-route has separate 23/23 verified provisioning receipts. App-server 0.144.4,
-which backs the v4.0 Provider, exposes no project methods; therefore the 4.0.0
-gate validates the cwd-bound route only. Saved-project convenience is deferred
-to 4.0.x/4.1 and must not be inferred from the Desktop provisioning evidence.
+route has separate 23/23 verified provisioning receipts, but it is not wired
+into the 4.0.0 Provider. The gate validates only the cwd-bound foreground exec
+route and makes no Desktop-visible saved project/task claim.
 
 If the outcome is `UNKNOWN`/`UNVERIFIABLE`, retain it honestly. Do not retry the
 provider action or reconstruct identity. The minimized receipt contains only
 candidate SHA, safe categories, counts, statuses, and digests—never task/thread/
 turn IDs, absolute private paths, App transcripts, prompts, secrets, or raw logs.
-The final local validator also receives the disposable v4 store path and must
-perform one fresh authoritative readback itself; a locally constructed receipt
-JSON cannot substitute for that live gate. Only the domain-separated minimized
-attestation is retained. The disposable store and its raw Host identity remain
-outside the repository and release packet.
+The final local validator receives the disposable v4 store path and recomputes
+the closed Result/Artifact/Review/Finalization bindings and domain-separated
+same-process attestation. It must not start another Host process or claim a
+post-process readback. A locally constructed receipt JSON alone cannot
+substitute for the bound store/artifact evidence. The disposable store and raw
+Host identity remain outside the repository and release packet.
 
 After the PASS receipt exists, bind the two real-App corpus mappings to that
 receipt. This remains profile A: 349 semantic mappings to 74 unique executed
@@ -495,7 +494,7 @@ PY
 4. Merge through the pull request without force or history rewriting.
 5. Fetch the exact merged `main` SHA and treat it as a new candidate identity.
    Because every receipt is candidate-bound, rerun the Gate 1 deterministic
-   suite, Gate 2 installed-entry App canary, Gate 3 review, and Gate 4 identity
+   suite, Gate 2 installed-entry exec canary, Gate 3 review, and Gate 4 identity
    checks; regenerate all nine receipts, the author packet, and final validation
    for that merged SHA even when its tree is byte-identical. If the tree differs,
    include every affected code gate in that rerun rather than inheriting feature-

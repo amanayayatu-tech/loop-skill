@@ -2,7 +2,7 @@
 
 LoopSkill 4.0.0 is publicly released only after the exact merged-main commit,
 annotated `v4.0.0` tag, tag CI, and public GitHub Release have all been read
-back. A local candidate, RC packet, App canary, pushed branch, merged PR, or tag
+back. A local candidate, RC packet, exec canary, pushed branch, merged PR, or tag
 alone is not a release.
 
 ## Candidate gates
@@ -19,7 +19,7 @@ alone is not a release.
 - bilingual README parity, real command syntax/smoke, local links, exact
   4.0.0 version/changelog/release-note identity, and no stale v3 current-product
   wording;
-- one disposable, non-research Codex App canary on the exact candidate:
+- one disposable, non-research foreground Codex exec canary on the exact candidate:
   zero-effect intake and prepare, explicit digest-bound confirmation, one
   machine-owned task start/readback, minimal artifact/review/finalization, no
   MCP, no restart, no provider resend, and no real v3/user/private data. The
@@ -37,18 +37,18 @@ It sets `independent_case_observation_claimed=false`; the mappings are not 349
 independent executions or runtime observations. Zero-test loads, skipped
 required tests, foreign case IDs, changed catalog digests, mapping or executed-
 method count drift, stronger observation claims, and missing results fail. The
-real App canary consumes typed fixture authorities instead of reconstructing
+real exec canary consumes typed fixture authorities instead of reconstructing
 protocol literals, and its public receipt contains no absolute private path,
 task/thread/turn identity, prompt, transcript, secret, or raw log.
 
 That minimized JSON is not self-authenticating and cannot satisfy the final
-gate alone. Final validation also opens the exact disposable v4 store and
-performs a fresh authoritative app-server readback of the machine-owned Host
-task and lifecycle. A domain-separated live attestation binds the candidate
-goal digest, hashed Host identity, Host-result digest, canonical snapshot
-digest, Result/Artifact/Review/Finalization states, and STRICT closure. The
-disposable store and raw Host identity remain local and are never committed or
-attached to the public Release.
+gate alone. Final validation opens the exact disposable v4 store and recomputes
+the closed same-process evidence binding; it does not start another process or
+claim post-process Host readback. A domain-separated attestation binds the
+candidate goal digest, hashed machine-emitted identity, Host-result digest,
+canonical snapshot digest, Result/Artifact/Review/Finalization states, and
+STRICT chain closure. The disposable store and raw Host identity remain local
+and are never committed or attached to the public Release.
 
 Historical P6 compatibility and earlier P8 candidate evidence remain immutable
 predecessor evidence only. They are explicitly excluded from current v4

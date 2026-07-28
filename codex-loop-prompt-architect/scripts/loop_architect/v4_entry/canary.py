@@ -15,9 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from loop_architect.v4_adapters.codex.app_server_provider import (
-    CodexAppServerProvider,
-)
+from loop_architect.v4_adapters.codex.exec_provider import CodexExecProvider
 from loop_architect.v4_adapters.codex.adapter import HostUnavailable
 from loop_architect.v4_alpha.protocol import (
     LoopIntakeInput,
@@ -130,9 +128,9 @@ def _request(candidate_sha: str) -> LoopIntakeInput:
         goal_plan=(goal,),
         task_horizon="long",
         write_scope=(CANARY_OUTPUT_FILENAME,),
-        budget="One disposable Host task; one automatic create attempt; no resend.",
+        budget="One foreground Codex invocation; one automatic attempt; no resend.",
         external_actions=(
-            "Create one disposable Codex App task after explicit confirmation.",
+            "Run one disposable foreground Codex invocation after explicit confirmation.",
         ),
         acceptance_criteria=(
             "artifact-changed",
@@ -423,7 +421,7 @@ def run_canary(
     confirmed = confirm_loop(prepared.directory, confirmed=True, clock=clock)
 
     if provider_factory is None:
-        provider = CodexAppServerProvider(
+        provider = CodexExecProvider(
             workspace,
             issuer_ref=CANARY_ISSUER,
             issuer_trust=CANARY_TRUST,

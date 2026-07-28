@@ -225,7 +225,19 @@ is normative and expands before execution.
 | `H-008` | final readback `a` strict; `b` missing/inconclusive | alpha.2 | 2 |
 | `H-009` | `a` trust; `b` sandbox; `c` model/turn identity absent or mismatched | alpha.2 | 3 |
 | `H-010` | effectively-once `a` both prerequisites; `b` one prerequisite missing | alpha.2 | 2 |
-| `H-011` | startup ExternalEffect `a` atomically committed with Attempt/outbox; `b` exact strict observation binds reserved HostResource and provider resource identity; `c` missing readback is UNKNOWN with no bind/resend; `d` cooperative UNVERIFIABLE later becomes OBSERVED only on the same exact Attempt; production bridge `e` reads the Host result and closes the exact external-effect subject chain; `f` all six local closure commands recover across every durable boundary without another create; `g` marker-bound provider readback preserves one-create and rejects ambiguous/foreign Host identity | alpha.2/rc | 7 |
+| `H-011` | startup ExternalEffect `a` atomically committed with Attempt/outbox; `b` exact strict observation binds reserved HostResource and provider resource identity; `c` missing evidence is UNKNOWN with no bind/resend; `d` cooperative UNVERIFIABLE may become OBSERVED only on the same exact Attempt when a profile supports later authoritative evidence; production bridge `e` reads the directly captured result and closes the exact external-effect subject chain; `f` all six local closure commands recover across every local durable boundary without another invocation; `g` foreground exec evidence loss consumes one spawn, exposes no cross-process readback, and rejects duplicate invoke before spawn | alpha.2/rc | 7 |
+
+The 4.0.0 Codex profile additionally parameterizes these Host families with the
+foreground exec transport. Deterministic fixtures must cover exact shell-free
+argv/stdin/cwd, bundle/PATH binary binding, help/version preflight with zero
+invocations, workspace-write plus disabled sandbox network, non-Git roots,
+success, terminal failure, nonzero exit, malformed/truncated/oversized JSONL,
+unknown additive events, conflicting identities, missing/multiple terminal
+events, timeout/interruption, and process-group cleanup. A valid directly
+captured stream may provide strict same-process effect/result/lifecycle
+evidence while the overall capability profile remains cooperative. No fixture
+may infer Desktop visibility, provider idempotency, automatic resume, or
+cross-process readback.
 
 ### Artifact libraries
 
@@ -1039,7 +1051,7 @@ Passing this set means only bounded pure-kernel alpha-slice conformance.
   canary, fixed candidate SHA, and preserved failures/UNKNOWN;
 - public release: author authorization is recorded in ADR 0011, but still
   requires exact merged-main identity, green PR/main/tag CI, a new exact-SHA
-  App canary, independent review, annotated tag, and release readback.
+  foreground Codex exec canary, independent review, annotated tag, and release readback.
 
 The RC distribution implementation binds `CAP-DISTRIBUTION-*` to the existing
 staged installer plus `scripts/uninstall_v4.py` and
@@ -1058,7 +1070,7 @@ license/dependency metadata, secret and large-artifact results, zero public
 effects, and `publication_ready=false`. Default/final validation fails closed
 unless the exact canary, a 349-mapping conformance receipt with every unique
 bound executable test PASS, and a privacy-minimized publication packet are all
-provided. The App canary receipt rejects extra raw Host
+provided. The exec canary receipt rejects extra raw Host
 identity/content fields and independently requires: public entry `loopskill4`;
 intake loop/task/heartbeat/external effects `0`; prepare task/heartbeat/delivery
 effects `0`; one digest-bound confirmation; one create and one authoritative

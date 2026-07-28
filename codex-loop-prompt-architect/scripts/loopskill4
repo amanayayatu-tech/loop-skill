@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from loop_architect.v4_alpha.protocol import LoopIntakeInput
-from loop_architect.v4_adapters.codex import CodexAppServerProvider, HostUnavailable
+from loop_architect.v4_adapters.codex import CodexExecProvider, HostUnavailable
 from loop_architect.v4_entry import (
     EntryError,
     confirm_loop,
@@ -403,8 +403,8 @@ def _finish_owned_provider_task(value, provider, *, root: Path):
     if not callable(waiter):
         raise EntryError(
             "USER_INTERNAL_ERROR",
-            "The created Codex task has no bounded terminal readback.",
-            "Preserve the local state and inspect diagnostics; do not repeat start.",
+            "The foreground Codex invocation has no bounded terminal evidence.",
+            "Preserve the local state and inspect diagnostics; do not repeat start or resume.",
         )
     try:
         waiter(timeout_seconds=300.0)
@@ -416,13 +416,13 @@ def _finish_owned_provider_task(value, provider, *, root: Path):
     except (HostUnavailable, ValueError) as exc:
         raise EntryError(
             "USER_INTERNAL_ERROR",
-            "LoopSkill could not confirm whether the one created Codex task reached a terminal state. The task was not resent.",
-            "Use status --refresh to read back the existing task; do not run start again.",
+            "LoopSkill could not confirm whether the one Codex invocation reached a terminal state. It was not resent.",
+            "Preserve UNKNOWN and inspect diagnostics; do not run start or resume.",
         ) from exc
 
 
 def _start_with_owned_provider(prepared, *, root: Path):
-    provider = CodexAppServerProvider(Path.cwd())
+    provider = CodexExecProvider(Path.cwd())
     try:
         value = start_loop(
             prepared,
@@ -436,7 +436,7 @@ def _start_with_owned_provider(prepared, *, root: Path):
 
 
 def _refresh_with_owned_provider(*, root: Path):
-    provider = CodexAppServerProvider(Path.cwd())
+    provider = CodexExecProvider(Path.cwd())
     try:
         value = sync_loop(
             root=root,
@@ -463,7 +463,7 @@ def _interactive_canary(args):
         )
         if not sys.stdin.isatty():
             return False
-        answer = input('Type "RUN THIS CANARY" to authorize one disposable App task: ')
+        answer = input('Type "RUN THIS CANARY" to authorize one disposable Codex invocation: ')
         return answer == "RUN THIS CANARY"
 
     try:

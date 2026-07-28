@@ -513,7 +513,7 @@ class V4DisposableAppCanaryEntryTests(unittest.TestCase):
                 return provider
 
             with mock.patch.object(
-                canary, "CodexAppServerProvider", side_effect=construct
+                canary, "CodexExecProvider", side_effect=construct
             ) as constructor, mock.patch.object(
                 canary, "_default_wait", wraps=canary._default_wait
             ) as wait:

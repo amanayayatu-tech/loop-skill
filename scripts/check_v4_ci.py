@@ -204,7 +204,7 @@ def validate(root: Path) -> dict[str, object]:
     ):
         if forbidden in text:
             raise CiError(f"CI_FORBIDDEN_SURFACE:{forbidden}")
-    if "real Codex App canary is an exact-SHA local release gate" not in text:
+    if "real foreground Codex exec canary is an exact-SHA local release gate" not in text:
         raise CiError("CI_LOCAL_CANARY_BOUNDARY_MISSING")
     return {
         "action_pin_count": len(re.findall(r"uses: actions/[^@\s]+@[0-9a-f]{40}", text)),

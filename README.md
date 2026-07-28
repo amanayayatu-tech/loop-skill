@@ -72,9 +72,9 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 
 同一交互会先只读质检，再写本地准备产物并展示 Goal、写入范围、预算、外部动作、验收标准、停止条件和发布边界。只有精确的显式确认才能启动。非交互环境会停在 PREPARE；`DIRECT_TASK_RECOMMENDED` 不创建 loop。
 
-确认后，公开入口通过本机 Codex `app-server` 创建至多一个 task 并执行权威 readback；它不注册 LoopSkill MCP，也不要求用户复制 Host identity。若 create 响应丢失且无法用机器 request marker 唯一回读，状态为 `UNKNOWN`，不会再次 create。
+确认后，公开入口启动一次官方前台 `codex exec --json` 进程。官方可执行文件负责其内部 thread/turn 生命周期；LoopSkill 只通过 stdin 提交已确认的语义边界，并直接捕获机器生成的 identity 与终态 JSONL，不要求用户复制 Host identity。它不注册 LoopSkill MCP，也不要求 App restart。
 
-若本次普通 `start` 确实创建了一个 task，它会在前台等待终态权威 readback，最长 300 秒，并在成功、错误或超时路径的 `finally` 中关闭 provider/app-server session。300 秒是当前前台观察窗口，不是任务预算。超时会诚实显示限制，不断言 Host task 已完成、失败或仍在继续；机器绑定的 Attempt 可供后续 `status --refresh` 权威回读，但绝不 resend。
+前台进程最长运行 300 秒，并在成功、失败、超时或中断时回收整个进程组。300 秒是观察窗口，不是任务预算。只有完整 stream、零退出码、最终结果和外部 artifact 验证全部成立才可闭合。证据丢失、畸形、失败、歧义或超时会成为 `UNKNOWN`；LoopSkill 不 resend，也不执行 `codex exec resume`。
 
 因此 4.0.0 的普通入口只支持预期能在该观察窗口内完成的单个 Host task；更长的单次 Host 执行不在本版公开支持范围内。
 
@@ -101,7 +101,7 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 "$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
 ```
 
-普通 `status` 只读本地状态。若崩溃发生在本地 Attempt 提交后、首次 provider 调用前，`status --refresh` 可以取得该 Attempt 的执行权并完成唯一首次调用；否则它只回读唯一既有 Host task，并推进可重放的本地 Result/Review/Finalization 链。它绝不执行第二次 create 或 resend。默认状态只展示目标、进度、结果、限制和可行动的下一步。内部 identity 与 receipt 只在显式 diagnostics 中出现。`UNKNOWN` 表示外部动作可能已经发生但无法权威确认；`UNVERIFIABLE` 表示 Host 不能提供所需证明。两者都不是成功，也不会触发盲重发。
+普通 `status` 只读本地状态。若崩溃发生在本地 Attempt 提交后、执行权被取得前，`status --refresh` 可以取得该 Attempt 并完成唯一首次 invocation。一旦进程已经启动，4.0.0 没有跨进程 Host readback 或自动 resume；丢失的终态证据保持 `UNKNOWN`。它绝不第二次 spawn 或 resend。默认状态只展示目标、进度、结果、限制和可行动的下一步。内部 identity 与 receipt 只在显式 diagnostics 中出现。`UNKNOWN` 表示外部动作可能已经发生但无法权威确认；`UNVERIFIABLE` 表示 Host 不能提供所需证明。两者都不是成功。
 
 <!-- parity: policy -->
 ## 可选策略
@@ -136,7 +136,7 @@ Store 不控制 Host；Artifact 与 Host 不写 canonical state。一个 state a
 <!-- parity: evidence -->
 ## 证据边界
 
-仓库的 unit、fault-injection、conformance、isolated install 与 disposable Codex App canary 只证明绑定版本和场景中的合同行为。它们不证明 patch-success 优势、任意长期任务有效性、Host 无故障或跨系统 exactly-once。
+仓库的 unit、fault-injection、conformance、isolated install 与 disposable 前台 Codex exec canary 只证明绑定版本和场景中的合同行为。它们不证明 patch-success 优势、任意长期任务有效性、Host 无故障或跨系统 exactly-once。
 
 <!-- parity: v3 -->
 ## v3 硬边界
@@ -159,10 +159,11 @@ python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py
 
 - 首发只支持 Codex Host Adapter；Kernel host-neutral 不等于 multi-host 支持。
 - 已验证的 Codex Desktop folder-open → `list_projects` → `projectId` →
-  `create_thread` 路线有 23/23 provisioning receipts；当前 v4.0 使用的
-  app-server 0.144.4 Provider 不提供 project 方法，因此默认入口采用
-  cwd-bound thread/start。saved-project convenience 延后到 4.0.x/4.1，不是
-  4.0.0 的功能或发布声明。
+  `create_thread` 路线有 23/23 provisioning receipts，但 4.0.0 不接入该
+  路线。默认路径是 cwd-bound 前台 `codex exec` invocation；不承诺
+  Desktop-visible saved project/task。
+- 4.0.0 没有 provider idempotency、跨进程 lifecycle readback 或自动
+  `codex exec resume`。
 - 不承诺 SQLite/Codex/Git/network 的跨系统 exactly-once。
 - 不承诺实证 patch-success 提升或长期任务优越性。
 - memory isolation 只报告 Host 实际可证明的能力，可能是 unavailable 或 unverifiable。
@@ -184,7 +185,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -W error -m unittest discover -s t
 .venv/bin/python scripts/check_v4_docs.py --smoke
 ```
 
-CI 还执行 Linux/macOS × Python 3.11–3.14 的八个 runtime/distribution lane、隔离安装、dependency/import graph、stale legacy runtime、privacy/secret/large artifact、SBOM/license 和 release identity 门禁。单一本地 Python 结果不能替代该矩阵。真实 Codex App canary 只在本地 exact-SHA release gate 运行，不在 GitHub-hosted runner 中伪造。
+CI 还执行 Linux/macOS × Python 3.11–3.14 的八个 runtime/distribution lane、隔离安装、dependency/import graph、stale legacy runtime、privacy/secret/large artifact、SBOM/license 和 release identity 门禁。单一本地 Python 结果不能替代该矩阵。真实前台 Codex exec canary 只在本地 exact-SHA release gate 运行；GitHub-hosted runner 不调用模型。
 
 <!-- parity: release -->
 ## 发布、安全与历史版本

@@ -8,6 +8,9 @@ LoopSkill 4 is a v4-only breaking release. It replaces the v3 protocol,
 persistence model, control identity transport, Pack/MCP execution path, and
 Codex boundary with a small deterministic Kernel, one typed wire authority,
 one SQLite state authority, capability libraries, and one Codex Host Adapter.
+The production Adapter now consumes one foreground official
+`codex exec --json` invocation instead of owning the experimental external
+app-server thread/turn lifecycle.
 
 ## User experience
 
@@ -39,7 +42,7 @@ distinct v4 identity and does not overwrite an existing v3 installation.
 ## Safety preserved and redesigned
 
 - per-loop CAS, local operation idempotency, one writer, durable outbox, exact
-  Attempt identity, lost-response recovery, and no blind resend;
+  Attempt identity, honest lost-evidence classification, and no blind resend;
 - machine-owned Actor/Grant/handle/version/receipt/digest/Host identity;
 - immutable content digests, path confinement, existing-Git/non-Git/new-Git
   capture, exact artifact/report/review/finalization bindings;
@@ -47,6 +50,9 @@ distinct v4 identity and does not overwrite an existing v3 installation.
   successor history that cannot rewrite its predecessor;
 - rebuildable audit/archive/privacy/metrics projections that never become a
   second state authority.
+- one bounded foreground Codex process group, strict JSONL terminal validation,
+  same-process result binding, and `UNKNOWN` without resend when process or
+  stream evidence is lost.
 
 ## Honest claim boundary
 
@@ -54,6 +60,8 @@ distinct v4 identity and does not overwrite an existing v3 installation.
 multi-host claim. The release does not promise cross-system exactly-once,
 empirical patch-success superiority, long-horizon efficacy, or Host memory
 isolation beyond what the Host can actually attest.
+It does not promise Desktop-visible saved projects/tasks, provider
+idempotency, cross-process lifecycle readback, or automatic `exec resume`.
 
 No binary asset is required for installation. Reproducible source from the
 annotated tag is the release artifact unless the final release packet lists a

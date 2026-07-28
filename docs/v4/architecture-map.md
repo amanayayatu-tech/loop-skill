@@ -13,7 +13,7 @@ Entry / composition root
   ├─ Artifact / review / finalization libraries
   │    └─ existing-Git, non-Git, new-Git capability implementations
   ├─ Codex Host Adapter
-  │    └─ local Codex app-server composite task create, readback, and honest capability rows
+  │    └─ one foreground official `codex exec --json` invocation and honest capability rows
   ├─ optional Policy
   │    └─ Standard, Adaptive, roles, decisions, bounded repair
   └─ rebuildable projections
@@ -45,36 +45,38 @@ attempt and the outcome may be `UNKNOWN`; the system does not resend. A late
 authoritative observation can strengthen the same subject identity but cannot
 invent a new attempt or rewrite workflow history.
 
-The public composition root constructs the production app-server provider only
-after explicit confirmation. It sends the digest-bound semantic boundary, not
-user/model control identity. The Host provider exposes no create idempotency
-key; after a crash it may perform only exact machine-marker readback. Missing or
-ambiguous readback becomes `UNKNOWN`, never another create.
+The public composition root constructs `CodexExecProvider` only after explicit
+confirmation. It sends the digest-bound semantic boundary on stdin, not
+user/model control identity. The Provider owns one foreground process group and
+accepts only one bounded complete JSONL terminal chain. It has no provider
+idempotency key, automatic resume, or cross-process readback. Missing,
+ambiguous, failed, truncated, timed-out, or lost evidence becomes `UNKNOWN`,
+never another invocation.
 
-When an ordinary `start` invocation itself creates the one task, Entry performs
-bounded foreground terminal readback for at most 300 seconds. The provider and
-its temporary `app-server` session close in a `finally` path on success, error,
-or timeout. This is an observation window, not the task budget. Timeout is an
-honest user-visible limitation and makes no claim that the Host task completed,
-failed, or continues running. The machine-bound Attempt remains available to
-`status --refresh`, and Entry does not resend. This does not change refresh
-semantics or grant refresh another attempt budget.
+The default foreground observation window is at most 300 seconds and is not the
+task budget. The official executable owns its internal thread/turn lifecycle;
+LoopSkill reaps the process group on every exit path. A new Provider cannot
+read a completed or failed prior process. `status --refresh` may execute the one
+first call only when the durable Attempt is still unclaimed; after a started
+process loses evidence it preserves `UNKNOWN` and does not resume or resend.
 
 Codex Desktop's folder-open → `list_projects` → `projectId` → `create_thread`
 route has 23/23 verified provisioning receipts. That evidence establishes the
-Desktop provisioning route, not a capability in the v4.0 Provider: app-server
-0.144.4 exposes no project methods. The 4.0 default therefore uses a cwd-bound
-thread/start. Optional saved-project convenience is deferred to 4.0.x/4.1.
+Desktop provisioning route, not a capability in the v4.0 Provider. The 4.0
+default is a foreground cwd-bound `codex exec` invocation and does not promise
+a Desktop-visible saved project/task. Optional saved-project convenience is
+deferred beyond 4.0.0.
 
 After exact task readback, Entry submits the generated
 `StageExternalResult` command and the existing Result/Artifact/Review/
 Finalization commands. Each local operation is independently transactional and
 replay-safe; every committed intermediate state has one deterministic successor.
 If a crash follows the local Attempt commit but precedes its provider call,
-`status --refresh` may claim that Attempt and execute its one first call.
-Otherwise refresh only reads the existing Host task and continues the local
-chain. It can never perform a second create or resend. The Host-result digest
-remains in the canonical Result binding so changed readback fails closed.
+`status --refresh` may claim that Attempt and execute its one first call. Once
+execution ownership was claimed, refresh cannot recover a foreign-process
+transcript and returns honest `UNKNOWN`; it can never perform a second spawn or
+resume. The directly captured Host-result digest remains in the canonical
+Result binding so changed local evidence fails closed.
 
 ## State and evidence
 

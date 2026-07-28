@@ -122,7 +122,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("RC_FINAL_RECEIPTS_REQUIRED", stream.getvalue())
 
-    def test_self_asserted_canary_json_cannot_replace_live_store_readback(self) -> None:
+    def test_self_asserted_canary_json_cannot_replace_bound_store_evidence(self) -> None:
         candidate = "a" * 40
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -242,7 +242,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
                 ):
                     validator.validate_canary_receipt(value, candidate)
 
-    def test_live_canary_requires_current_host_readback_and_exact_bindings(self) -> None:
+    def test_live_canary_requires_same_process_receipt_and_exact_store_bindings(self) -> None:
         candidate = "a" * 40
         value = canary(candidate)
         with mock.patch.object(

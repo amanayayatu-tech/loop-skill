@@ -72,9 +72,9 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 
 The same interaction performs read-only intake, writes local preparation artifacts, and shows the Goal, write scope, budget, external actions, acceptance criteria, stop conditions, and publication boundary. Only exact explicit confirmation can start. A non-interactive session stops at PREPARE; `DIRECT_TASK_RECOMMENDED` creates no loop.
 
-After confirmation, the public entry uses the local Codex `app-server` to create at most one task and perform authoritative readback. It registers no LoopSkill MCP and asks the user for no Host identity. If a create response is lost and the machine request marker cannot uniquely recover it, the state is `UNKNOWN`; it does not create again.
+After confirmation, the public entry starts one official foreground `codex exec --json` process. The executable owns its internal thread/turn lifecycle; LoopSkill supplies the confirmed semantic boundary on stdin, captures the machine-emitted identity and terminal JSONL, and never asks the user for Host identity. It registers no LoopSkill MCP and does not require an App restart.
 
-If this ordinary `start` invocation actually creates one task, it waits in the foreground for terminal authoritative readback for at most 300 seconds and closes the provider/app-server session in a `finally` path on success, error, or timeout. The 300 seconds are the current foreground observation window, not the task budget. A timeout is reported honestly as a limitation and makes no claim that the Host task completed, failed, or continues running. The machine-bound Attempt remains available for later authoritative `status --refresh` readback, but LoopSkill never resends.
+The foreground process is bounded to at most 300 seconds and reaped on success, failure, timeout, or interruption. This is the observation window, not the task budget. A complete stream, zero exit status, final result, and external artifact verification are all required. Lost, malformed, failed, ambiguous, or timed-out evidence becomes `UNKNOWN`; LoopSkill does not resend or run `codex exec resume`.
 
 LoopSkill 4.0.0 therefore supports the ordinary entry only for an individual Host task expected to finish within that observation window. Longer single Host executions are outside this release's public support boundary.
 
@@ -101,7 +101,7 @@ The number of user-supplied control identities must be zero. Users do not copy t
 "$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
 ```
 
-Plain status reads only local state. If a crash occurred after the local Attempt commit but before its first provider call, `status --refresh` may claim that Attempt and perform its one first call; otherwise it only reads the exact existing Host task and advances the replay-safe local Result/Review/Finalization chain. It never performs a second create or resend. Default status shows only the goal, progress, result, limitations, and actionable next step. Internal identity and receipts appear only in explicit diagnostics. `UNKNOWN` means an external action may have happened but cannot be authoritatively confirmed; `UNVERIFIABLE` means the Host cannot provide the required assurance. Neither is success, and neither triggers blind resend.
+Plain status reads only local state. If a crash occurred after the local Attempt commit but before execution ownership was claimed, `status --refresh` may claim that Attempt and perform its one first invocation. Once a process was started, there is no cross-process Host readback or automatic resume: lost terminal evidence remains `UNKNOWN`. It never performs a second spawn or resend. Default status shows only the goal, progress, result, limitations, and actionable next step. Internal identity and receipts appear only in explicit diagnostics. `UNKNOWN` means an external action may have happened but cannot be authoritatively confirmed; `UNVERIFIABLE` means the Host cannot provide the required assurance. Neither is success.
 
 <!-- parity: policy -->
 ## Optional policies
@@ -136,7 +136,7 @@ Store does not control Host; Artifact and Host do not write canonical state. One
 <!-- parity: evidence -->
 ## Evidence boundary
 
-Repository unit, fault-injection, conformance, isolated-install, and disposable Codex App canary evidence proves only contract behavior for its bound version and scenario. It does not prove patch-success superiority, arbitrary long-horizon efficacy, a fault-free Host, or cross-system exactly-once.
+Repository unit, fault-injection, conformance, isolated-install, and disposable foreground Codex exec canary evidence proves only contract behavior for its bound version and scenario. It does not prove patch-success superiority, arbitrary long-horizon efficacy, a fault-free Host, or cross-system exactly-once.
 
 <!-- parity: v3 -->
 ## v3 hard boundary
@@ -159,10 +159,11 @@ This digest-bound management entry lives outside the installation target, so the
 
 - The first release supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
 - The verified Codex Desktop folder-open → `list_projects` → `projectId` →
-  `create_thread` route has 23/23 provisioning receipts. The app-server 0.144.4
-  Provider used by v4.0 exposes no project methods, so the default entry uses a
-  cwd-bound thread/start. Saved-project convenience is deferred to 4.0.x/4.1
-  and is not a 4.0.0 feature or release claim.
+  `create_thread` route has 23/23 provisioning receipts, but it is not wired
+  into 4.0.0. The default is a cwd-bound foreground `codex exec` invocation;
+  Desktop-visible saved projects/tasks are not promised.
+- There is no provider idempotency, cross-process lifecycle readback, or
+  automatic `codex exec resume` in 4.0.0.
 - There is no cross-system exactly-once promise across SQLite, Codex, Git, and network boundaries.
 - There is no claim of empirically improved patch success or long-horizon superiority.
 - Memory isolation is reported only to the strength the Host can actually attest, which may be unavailable or unverifiable.
@@ -184,7 +185,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -W error -m unittest discover -s t
 .venv/bin/python scripts/check_v4_docs.py --smoke
 ```
 
-CI also runs all eight Linux/macOS × Python 3.11–3.14 runtime/distribution lanes, isolated installation, dependency/import-graph, stale legacy runtime, privacy/secret/large-artifact, SBOM/license, and release-identity gates. A result from one local Python runtime cannot substitute for that matrix. The real Codex App canary is an exact-SHA local release gate; GitHub-hosted runners do not fake it.
+CI also runs all eight Linux/macOS × Python 3.11–3.14 runtime/distribution lanes, isolated installation, dependency/import-graph, stale legacy runtime, privacy/secret/large-artifact, SBOM/license, and release-identity gates. A result from one local Python runtime cannot substitute for that matrix. The real foreground Codex exec canary is an exact-SHA local release gate; GitHub-hosted runners do not invoke a model.
 
 <!-- parity: release -->
 ## Release, security, and historical versions

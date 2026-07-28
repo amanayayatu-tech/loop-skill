@@ -39,22 +39,21 @@ UTF-8 JSON。用户提供的 control identity 数量必须为 0。
    0 heartbeat、0 delivery。
 3. `CONFIRM`：显示 Goal、写入范围、预算、外部动作、验收、停止和发布边界；确认绑定
    全部准备产物 digest。
-4. `START`：只接受仍有效的明确确认，机器化创建并 readback 至多一个 Host resource。
+4. `START`：只接受仍有效的明确确认，机器化启动至多一次前台 Codex invocation。
 
 单入口不等于静默授权。非交互 session 在 PREPARE 后停止。边界变化、过期确认或模糊
 “继续”都会 fail closed。
 
-若本次普通 `start` 确实创建了一个 task，它会在前台等待终态权威 readback，最长
-300 秒，并在成功、错误或超时路径的 `finally` 中关闭 provider/app-server session。
-这是当前前台观察窗口，不是任务预算。超时会诚实显示限制，不断言 Host task 已完成、
-失败或仍在继续；机器绑定的 Attempt 可供 `status --refresh` 权威回读，但绝不 resend。
+普通入口运行一次官方前台 `codex exec --json` 进程，最长 300 秒，并在成功、失败、
+超时或中断时回收整个进程组。这是观察窗口，不是任务预算。只有完整终态 JSONL、
+零退出码、最终结果和 artifact 验证全部成立才可闭合。证据丢失或无效会成为
+`UNKNOWN`；LoopSkill 绝不 resend，也不执行 `codex exec resume`。
 4.0.0 的普通入口只支持预期能在此窗口内结束的单个 Host task；更长的单次 Host 执行
 不在本版公开支持范围内。
 
 Codex Desktop 的 folder-open → `list_projects` → `projectId` → `create_thread`
-路线已有 23/23 provisioning receipts。当前 v4.0 app-server 0.144.4 Provider
-没有 project 方法，因此普通入口使用 cwd-bound thread/start；saved-project convenience
-延后到 4.0.x/4.1，不属于 4.0.0 承诺。
+路线已有 23/23 provisioning receipts，但 4.0.0 不接入该路线。普通入口采用
+cwd-bound 前台 `codex exec` invocation，不承诺 Desktop-visible saved project/task。
 
 ## 分阶段使用
 
@@ -68,9 +67,10 @@ Codex Desktop 的 folder-open → `list_projects` → `projectId` → `create_th
 ```
 
 `confirm` 需要交互式精确确认。普通 `status` 只读本地状态。若崩溃发生在本地 Attempt
-提交后、首次 provider 调用前，`status --refresh` 可执行该 Attempt 的唯一首次调用；否则只对
-唯一既有 Host task 做权威 readback，并推进可重放的本地结果/Finalization 链。它绝不第二次
-create 或 resend。普通状态隐藏内部 identity；添加 `--diagnostics` 才显示诊断证据。
+提交后、执行权被取得前，`status --refresh` 可执行该 Attempt 的唯一首次 invocation。
+一旦进程已启动，4.0.0 没有跨进程 readback 或自动 resume；丢失证据保持
+`UNKNOWN`。它绝不第二次 spawn 或 resend。普通状态隐藏内部 identity；添加
+`--diagnostics` 才显示诊断证据。
 `UNKNOWN`/`UNVERIFIABLE` 是有意的可见限制，不是成功，也不触发盲重发。
 
 ## v3

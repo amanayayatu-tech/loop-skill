@@ -54,7 +54,7 @@ RC = "test_v4_rc_acceptance"
 RD = "test_v4_rc_distribution"
 UX = "test_v4_single_entry_ux"
 DOC = "test_v4_docs"
-APP = "test_v4_app_server_provider"
+APP = "test_v4_exec_provider"
 
 CASE_CONTRACT_VERSION = "loopskill-v4-executable-case-contract-v1"
 EVIDENCE_PROFILE = "SEMANTIC_MAPPINGS_TO_UNIQUE_EXECUTED_ASSERTIONS"
@@ -420,8 +420,8 @@ CASE_TEST_OVERRIDES = {
     ),
     "H-011-g": _test(
         APP,
-        "AppServerProviderTests",
-        "test_crash_recovery_is_readback_only_and_ambiguous_identity_fails",
+        "ExecProviderTests",
+        "test_lost_evidence_consumes_only_spawn_and_duplicate_is_rejected_before_runner",
     ),
 }
 

@@ -788,7 +788,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
             provider = EntryProviderFixture()
             stdout = io.StringIO()
             stderr = io.StringIO()
-            with mock.patch.object(cli, "CodexAppServerProvider", return_value=provider), mock.patch.object(sys.stdin, "isatty", return_value=True), mock.patch(
+            with mock.patch.object(cli, "CodexExecProvider", return_value=provider), mock.patch.object(sys.stdin, "isatty", return_value=True), mock.patch(
                 "builtins.input", return_value="START THIS LOOP"
             ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 result = cli.main(

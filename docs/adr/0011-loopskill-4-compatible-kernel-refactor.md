@@ -130,6 +130,54 @@ hatch. Earlier compatibility-sunset, importer, registered-v3-MCP, and
 RC-ready-only passages below are retained as decision history and are
 normatively superseded by this addendum.
 
+## Decision addendum: foreground Codex Exec transport
+
+**Accepted 2026-07-28; this subsection supersedes the external
+`app-server --stdio` Provider as the 4.0.0 production/default Host transport.**
+The public composition root constructs one `CodexExecProvider` behind the
+existing `CodexProviderPort`. It invokes the official `codex exec --json`
+foreground interface exactly once for a claimed durable Attempt. The official
+executable owns its internal thread/turn lifecycle, server requests, streaming,
+and shutdown; LoopSkill does not reimplement or expose those internal RPCs.
+
+The transport contract is deliberately narrower:
+
+- preflight performs only bundle-first/PATH-fallback executable resolution,
+  realpath/version binding, and bounded `exec --help` inspection; it creates no
+  Host work;
+- START supplies the confirmed semantic prompt on stdin, exact canonical cwd,
+  workspace-write sandbox, explicit disabled sandbox network access, non-Git
+  allowance, and JSONL output through a shell-free argv;
+- one Provider instance permits one subprocess spawn. Duplicate invoke is
+  rejected before spawn; 4.0.0 has no `exec resume`, resend, daemon, proxy,
+  project provisioner, or second Host protocol;
+- a bounded UTF-8 JSONL stream must contain one machine-emitted thread identity,
+  one turn start, one successful terminal event, a zero exit status, empty
+  stderr, and a final agent result. Malformed, truncated, oversized,
+  conflicting, missing, failed, nonzero, timed-out, or interrupted evidence
+  yields `UNKNOWN` and cannot mint PASS;
+- successful same-process terminal evidence may bind strict effect/result/
+  lifecycle receipts for that one chain. The overall Host profile remains
+  cooperative because project registration, independent thread/message send,
+  heartbeat, provider idempotency, Desktop visibility, and cross-process
+  lifecycle readback are unavailable;
+- after process exit there is no Host readback claim. `status --refresh` may
+  execute the one first call only when the durable Attempt is still unclaimed;
+  after a started process loses its terminal evidence, refresh preserves
+  `UNKNOWN` and never resumes or retries.
+
+The only allowed delivery guarantee remains **“at-most-one automatic attempt;
+outcome may be UNKNOWN.”** Same-process terminal capture is not cross-system
+exactly-once and does not promise a Desktop-visible saved project or task.
+
+Commits `5edbaef`, `2354639`, and `f0d33c4`, together with the two terminal
+failed canaries, remain immutable predecessor evidence. They show only that the
+external app-server lifecycle was unsuitable as the 4.0.0 default after
+repeated exact-SHA canary failure: each created one Host thread, reached no
+model turn or artifact, and preserved `ExternalEffectUnverifiable` without
+resend. They are not Kernel/Store or model-effect failures and are excluded
+from the new candidate's acceptance evidence.
+
 ## v3.3.8 product-capability preservation decision
 
 Route B is not permission to retain only the Kernel-shaped assets that are

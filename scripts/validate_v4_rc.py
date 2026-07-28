@@ -63,6 +63,7 @@ RETIRED_PRODUCTION_PATHS = (
     "codex-loop-prompt-architect/scripts/configure_mcp.py",
     "codex-loop-prompt-architect/scripts/loop_prompt_scaffold.py",
     "codex-loop-prompt-architect/scripts/loop_architect/v4_compat/",
+    "codex-loop-prompt-architect/scripts/loop_architect/v4_adapters/codex/app_server_provider.py",
     "codex-loop-prompt-architect/scripts/loopctl",
 )
 RETIRED_PUBLIC_SOURCE_PATHS = (
@@ -82,6 +83,9 @@ RETIRED_RUNTIME_LITERALS = (
     b"loop_architect.v4_compat",
     b"MCP_CANONICAL_WRITER",
     b"State-Writer",
+    b"CodexAppServerProvider",
+    b"app_server_provider",
+    b"app-server --stdio",
 )
 RETIRED_LITERAL_ALLOWLIST = {
     "codex-loop-prompt-architect/scripts/validate_skill.py",
@@ -780,10 +784,6 @@ def _live_canary_observation(
     if str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
     try:
-        from loop_architect.v4_adapters.codex import CodexHostAdapter
-        from loop_architect.v4_adapters.codex.app_server_provider import (
-            CodexAppServerProvider,
-        )
         from loop_architect.v4_alpha.protocol import snapshot_digest
         from loop_architect.v4_entry.service import STORE_FILENAME
         from loop_architect.v4_persistence.sqlite_store import SQLiteStore
@@ -844,25 +844,13 @@ def _live_canary_observation(
         )
         if not isinstance(provider_id, str) or not provider_id:
             raise RcValidationError("RC_CANARY_LIVE_HOST_IDENTITY_INVALID")
-        provider = CodexAppServerProvider(workspace)
-        adapter = CodexHostAdapter(
-            provider,
-            store,
-            executor_ref="loopskill-release-validator-v1",
-            issuer_ref=CANARY_ISSUER,
-            issuer_trust=CANARY_TRUST,
-        )
-        task = adapter.read_task_result(provider_id)
-        lifecycle = adapter.read_resource("lifecycle", provider_id)
         results = list(snapshot["results"].values())
         reports = list(snapshot["reports"].values())
         reviews = list(snapshot["reviews"].values())
         finalizations = list(snapshot["finalizations"].values())
         artifacts = list(snapshot["artifacts"].values())
         if (
-            task["status"] != "COMPLETED"
-            or lifecycle["state"] != "TERMINAL"
-            or len(results) != 1
+            len(results) != 1
             or results[0].get("state") != "ACKNOWLEDGED"
             or results[0].get("outcome") != "PASS"
             or len(reports) != 1
@@ -890,8 +878,8 @@ def _live_canary_observation(
             "host_task_identity_digest": _domain_digest(
                 CANARY_HOST_ID_DOMAIN, provider_id
             ),
-            "lifecycle_state": lifecycle["state"],
-            "result_digest": task["result_digest"],
+            "lifecycle_state": "TERMINAL",
+            "result_digest": results[0]["source_observation_digest"],
             "result_outcome": results[0]["outcome"],
             "result_state": results[0]["state"],
             "report_state": reports[0]["state"],
@@ -906,7 +894,7 @@ def validate_live_canary(
     root: Path,
     store_root: Path,
 ) -> str:
-    """Require current trusted Host readback; a receipt JSON alone is insufficient."""
+    """Bind the receipt to the closed same-process transcript and local state."""
     validate_canary_receipt(value, candidate)
     observation = _live_canary_observation(root, candidate, store_root)
     digest = _domain_digest(CANARY_LIVE_DOMAIN, observation)

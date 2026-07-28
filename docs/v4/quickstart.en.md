@@ -43,30 +43,27 @@ The entry performs:
    boundary summary with 0 Host tasks, 0 heartbeats, and 0 delivery.
 3. `CONFIRM`: displays Goal, write scope, budget, external actions, acceptance,
    stop, and publication boundaries; confirmation binds every prepared digest.
-4. `START`: accepts only an unchanged valid confirmation and machine-creates
-   and reads back at most one Host resource.
+4. `START`: accepts only an unchanged valid confirmation and launches at most
+   one machine-owned foreground Codex invocation.
 
 One entry does not mean silent authorization. A non-interactive session stops
 after PREPARE. Changed boundaries, expired confirmation, or vague “continue”
 fail closed.
 
-If this ordinary `start` invocation actually creates one task, it waits in the
-foreground for terminal authoritative readback for at most 300 seconds and
-closes the provider/app-server session in a `finally` path on success, error,
-or timeout. This is the current foreground observation window, not the task
-budget. A timeout is reported honestly as a limitation and makes no claim that
-the Host task completed, failed, or continues running. The machine-bound
-Attempt remains available for authoritative `status --refresh` readback, but
-LoopSkill never resends.
+The ordinary entry runs one official `codex exec --json` process in the
+foreground for at most 300 seconds and reaps its process group on success,
+failure, timeout, or interruption. This is the observation window, not the task
+budget. A complete terminal JSONL stream, zero exit, final result, and artifact
+verification are all required. Lost or invalid evidence becomes `UNKNOWN`;
+LoopSkill never resends or runs `codex exec resume`.
 The 4.0.0 ordinary entry supports only an individual Host task expected to
 finish within this window. Longer single Host executions are outside this
 release's public support boundary.
 
 The Codex Desktop folder-open → `list_projects` → `projectId` → `create_thread`
-route has 23/23 provisioning receipts. The current v4.0 app-server 0.144.4
-Provider has no project methods, so the ordinary entry uses a cwd-bound
-thread/start. Saved-project convenience is deferred to 4.0.x/4.1 and is not a
-4.0.0 promise.
+route has 23/23 provisioning receipts, but it is not wired into 4.0.0. The
+ordinary entry uses a cwd-bound foreground `codex exec` invocation and does not
+promise a Desktop-visible saved project/task.
 
 ## Explicit phases
 
@@ -81,10 +78,10 @@ thread/start. Saved-project convenience is deferred to 4.0.x/4.1 and is not a
 
 `confirm` requires an exact interactive confirmation. Plain status is local
 and read-only. If a crash occurred after the local Attempt commit but before
-its first provider call, `status --refresh` may perform that Attempt's one
-first call; otherwise it only reads the one existing Host task and advances
-the replay-safe local result/finalization chain. It never performs a second
-create or resend. Normal status hides internal
+execution ownership was claimed, `status --refresh` may perform that Attempt's
+one first invocation. Once a process started, there is no cross-process
+readback or automatic resume; lost evidence remains `UNKNOWN`. It never
+performs a second spawn or resend. Normal status hides internal
 identity; add `--diagnostics` for diagnostic evidence.
 `UNKNOWN`/`UNVERIFIABLE` are intentional visible limitations, not success, and
 never trigger blind resend.

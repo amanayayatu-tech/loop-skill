@@ -6,6 +6,11 @@
 - SQLite and Codex do not share one transaction. LoopSkill does not promise
   cross-system exactly-once across SQLite, Codex, Git, or network boundaries.
   External outcomes can remain `UNKNOWN`.
+- The 4.0 Provider owns one foreground `codex exec --json` process and accepts
+  only its directly captured terminal stream. It does not promise a
+  Desktop-visible saved project/task, provider idempotency, cross-process Host
+  readback, or automatic `exec resume`. Lost process/stream evidence remains
+  `UNKNOWN` with no resend.
 - Cooperative Host evidence can close work with a visible limitation, but it
   cannot become strict Host-attested assurance. Missing capability is reported
   as unavailable or `UNVERIFIABLE`.
@@ -17,7 +22,7 @@
 - Standard and Adaptive policy constrain sequencing and repair; they do not
   prove the target task is achievable or that a model will produce a correct
   patch.
-- Repository tests and a disposable App canary do not prove empirical
+- Repository tests and a disposable foreground Codex exec canary do not prove empirical
   patch-success superiority, arbitrary long-horizon efficacy, or production
   reliability for every project.
 - v4 cannot open, import, repair, run, or automatically migrate v3 roots,

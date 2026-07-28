@@ -251,10 +251,10 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     if any("<receipt>" in text or " --receipt " in text for text in public_entry_docs):
         raise DocsError("DOC_MANUAL_RECEIPT_TRANSPORT")
     if (
-        "唯一首次调用" not in zh
-        or "第二次 create" not in zh
-        or "one first call" not in en
-        or "second create" not in en
+        "唯一首次 invocation" not in zh
+        or "第二次 spawn" not in zh
+        or "one first invocation" not in en
+        or "second spawn" not in en
     ):
         raise DocsError("DOC_REFRESH_ATTEMPT_SEMANTICS_DRIFT")
     candidate_zh = README_CANDIDATE_ZH in zh
