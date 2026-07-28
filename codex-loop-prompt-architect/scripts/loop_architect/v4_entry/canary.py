@@ -62,6 +62,15 @@ CANARY_PROVIDER_DIAGNOSTIC_FILENAME = "canary-provider-diagnostic.json"
 CANARY_OUTPUT_FILENAME = "canary-output.txt"
 CANARY_OUTPUT_BYTES = b"LOOPSKILL4_CANARY_OK\n"
 CANARY_OUTPUT_SHA256 = "8d23b5e88d9fb86f366700a6267f29b46bcca5cd45a59ed27afbbd04860eb638"
+CANARY_GOAL = (
+    f"In this workspace, create exactly one regular file named {CANARY_OUTPUT_FILENAME} "
+    "with UTF-8 content 'LOOPSKILL4_CANARY_OK' followed by exactly one LF byte. "
+    "Then check locally that the workspace contains no other entries, that the file "
+    f"exists, and that its SHA-256 is {CANARY_OUTPUT_SHA256}. Return PASS only when "
+    "all of those local checks succeed; return FAILED when a completed check does not "
+    "match; use LIMITATION or UNVERIFIABLE only when one of those local checks cannot "
+    "actually be performed."
+)
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _INTEGRITY_LABELS = frozenset({"host_auth", "host_config"})
@@ -339,36 +348,26 @@ def _ensure_empty_private_root(path: Path | str) -> Path:
     return root
 
 
-def _request(candidate_sha: str) -> LoopIntakeInput:
-    quoted = CANARY_OUTPUT_BYTES.decode("utf-8").rstrip("\n")
-    goal = (
-        f"Verify LoopSkill 4 candidate {candidate_sha} in this disposable workspace: "
-        f"create exactly {CANARY_OUTPUT_FILENAME} with UTF-8 content {quoted!r} "
-        "followed by exactly one LF byte, then "
-        "return the required schema-valid LoopSkill 4 PASS result object."
-    )
+def _request() -> LoopIntakeInput:
     return LoopIntakeInput(
-        goal=goal,
-        goal_plan=(goal,),
+        goal=CANARY_GOAL,
+        goal_plan=(CANARY_GOAL,),
         task_horizon="long",
         write_scope=(CANARY_OUTPUT_FILENAME,),
-        budget="One foreground Codex invocation; one automatic attempt; no resend.",
-        external_actions=(
-            "Run one disposable foreground Codex invocation after explicit confirmation.",
-        ),
+        budget="Complete only the stated local file operation and local checks.",
+        external_actions=(),
         acceptance_criteria=(
             "artifact-changed",
             f"file-exists:{CANARY_OUTPUT_FILENAME}",
             f"file-sha256:{CANARY_OUTPUT_FILENAME}={CANARY_OUTPUT_SHA256}",
         ),
         stop_conditions=(
-            "Stop after one START and one synchronization.",
-            "Preserve UNKNOWN or UNVERIFIABLE without resend.",
+            "Stop after the stated local file and workspace checks are complete.",
         ),
         authorization_boundaries=(
-            f"Write only {CANARY_OUTPUT_FILENAME} in the disposable workspace.",
-            "No commit, push, publish, deploy, installation, migration, or v3 access.",
-            "No private data or research scoring.",
+            f"Write only {CANARY_OUTPUT_FILENAME} inside this workspace.",
+            "Do not read or write outside this workspace.",
+            "Do not use the network or perform commit, push, publish, or deploy actions.",
         ),
     )
 
@@ -519,7 +518,7 @@ def _live_summary(
     with SQLiteStore(path) as store:
         store.verify_integrity()
         descriptors = store.loop_descriptors()
-        if len(descriptors) != 1 or candidate_sha not in descriptors[0]["goal"]:
+        if len(descriptors) != 1 or descriptors[0]["goal"] != CANARY_GOAL:
             raise CanaryError("CANARY_CANDIDATE_BINDING_INVALID")
         snapshot = store.snapshot(descriptors[0]["loop_ref"])
         if snapshot is None:
@@ -723,7 +722,7 @@ def run_canary(
     prepared_root = root / "prepared"
     store_root = root / "store"
 
-    request = _request(candidate)
+    request = _request()
     intake_report = intake_report_loop(request)
     if intake_report["1 最终判定"]["disposition"] != "READY_FOR_LOOP":
         raise CanaryError("CANARY_INTAKE_NOT_READY")

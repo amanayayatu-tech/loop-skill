@@ -2,10 +2,12 @@
 
 ## Supported versions
 
-LoopSkill 4.0.0 is the currently supported public line. LoopSkill v3.3.8
-remains an independent historical release; v4 does not repair or
-migrate its data. No paper-treatment or prerelease branch is promoted to a
-supported public line by implication.
+Security support follows the versions listed on GitHub Releases. This document
+describes the 4.0.0 security boundary without claiming that an unpublished
+source commit is already a public release. LoopSkill v3.3.8 remains an
+independent historical release; v4 does not repair or migrate its data. No
+paper-treatment or prerelease branch is promoted to a supported public line by
+implication.
 
 ## Reporting a vulnerability
 

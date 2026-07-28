@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import os
 import re
 import subprocess
@@ -54,14 +55,23 @@ COMMON_CLAIMS = (
     "scripts/check_v4_docs.py",
 )
 LOCAL_LINK_EXCLUSIONS = {"README.md", "README.en.md"}
-README_CANDIDATE_ZH = "4.0.0 候选正在接受发行门禁；尚未发布"
-README_CANDIDATE_EN = "4.0.0 candidate is undergoing release validation and is not yet published"
-README_STABLE_ZH = "此源码树是 LoopSkill 4.0.0 稳定发行"
-README_STABLE_EN = "This source tree is the LoopSkill 4.0.0 stable release"
-QUICKSTART_CANDIDATE_ZH = "LoopSkill 4.0.0 候选正在接受发行门禁，尚未发布"
-QUICKSTART_CANDIDATE_EN = "LoopSkill 4.0.0 candidate is undergoing release validation and is not yet"
-QUICKSTART_STABLE_ZH = "此源码树是 LoopSkill 4.0.0 稳定发行"
-QUICKSTART_STABLE_EN = "This source tree is the LoopSkill 4.0.0 stable release"
+README_STATUS_ZH = "本文档对应 LoopSkill 4.0.0；当前可用的公开版本以"
+README_STATUS_EN = "This document describes LoopSkill 4.0.0. See"
+QUICKSTART_STATUS_ZH = "本文档对应 LoopSkill 4.0.0；当前可用的公开版本以 GitHub Releases 页面为准"
+QUICKSTART_STATUS_EN = "This document describes LoopSkill 4.0.0. See GitHub Releases for the public"
+SECURITY_STATUS = "Security support follows the versions listed on GitHub Releases."
+README_ASSETS = (
+    (
+        "docs/readme-assets/durable-handoff.png",
+        "f75273951962563c96fc85d0c237eedd791dcb63",
+        "99d89f8e7a3ae08e35282ed1275e0d35882a96759fffa6a3efe32523cd7dc1a6",
+    ),
+    (
+        "docs/readme-assets/evidence-before-closure.png",
+        "766b631dfd889352664d3f112df43048278f8518",
+        "e9088274d7745679a8563ba6baef2db2c47b11a792b978fb15de03b5ceb1cdd0",
+    ),
+)
 
 
 class DocsError(ValueError):
@@ -83,6 +93,50 @@ def _blocks(text: str, language: str) -> tuple[str, ...]:
 def _links(text: str) -> collections.Counter[str]:
     values = re.findall(r"\[[^\]]+\]\(([^)]+)\)", text)
     return collections.Counter(value for value in values if value not in LOCAL_LINK_EXCLUSIONS)
+
+
+def _images(text: str) -> tuple[tuple[str, str], ...]:
+    return tuple(re.findall(r"!\[([^\]]+)\]\(([^)]+)\)", text))
+
+
+def _check_readme_assets(root: Path, zh: str, en: str) -> None:
+    zh_images = tuple(
+        image for image in _images(zh) if image[1].startswith("docs/readme-assets/")
+    )
+    en_images = tuple(
+        image for image in _images(en) if image[1].startswith("docs/readme-assets/")
+    )
+    expected = tuple(path for path, _, _ in README_ASSETS)
+    if tuple(target for _, target in zh_images) != expected:
+        raise DocsError("DOC_IMAGE_TARGET_DRIFT:zh")
+    if tuple(target for _, target in en_images) != expected:
+        raise DocsError("DOC_IMAGE_TARGET_DRIFT:en")
+    if any(len(alt.strip()) < 12 for alt, _ in zh_images + en_images):
+        raise DocsError("DOC_IMAGE_ALT_MISSING")
+    if any(zh_alt == en_alt for (zh_alt, _), (en_alt, _) in zip(zh_images, en_images)):
+        raise DocsError("DOC_IMAGE_ALT_PARITY_DRIFT")
+    for relative, expected_blob, expected_sha256 in README_ASSETS:
+        path = root / relative
+        if not path.is_file() or path.is_symlink():
+            raise DocsError(f"DOC_IMAGE_UNSAFE:{relative}")
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != expected_sha256:
+            raise DocsError(f"DOC_IMAGE_BYTES_DRIFT:{relative}")
+        blob_digest = hashlib.sha1(
+            f"blob {len(raw)}\0".encode("ascii") + raw
+        ).hexdigest()
+        if blob_digest != expected_blob:
+            raise DocsError(f"DOC_IMAGE_BLOB_DRIFT:{relative}")
+        if not (root / ".git").exists():
+            continue
+        try:
+            blob = subprocess.check_output(
+                ["git", "rev-parse", f"v3.3.8:{relative}"], cwd=root, text=True
+            ).strip()
+        except subprocess.CalledProcessError as exc:
+            raise DocsError(f"DOC_IMAGE_PROVENANCE_MISSING:{relative}") from exc
+        if blob != expected_blob:
+            raise DocsError(f"DOC_IMAGE_PROVENANCE_DRIFT:{relative}")
 
 
 def _check_local_links(root: Path, text: str, name: str, base: Path | None = None) -> None:
@@ -211,6 +265,7 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     _check_bash(zh_bash, "README")
     if _links(zh) != _links(en):
         raise DocsError("DOC_LINK_PARITY_DRIFT")
+    _check_readme_assets(root, zh, en)
     _check_local_links(root, zh, "README")
     _check_local_links(root, en, "README.en")
     quickstart_zh_bash = _blocks(quickstart_zh, "bash")
@@ -306,46 +361,29 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     for literal in retired_canary_literals:
         if any(literal in text for text in current_canary_sources):
             raise DocsError(f"DOC_RETIRED_CANARY_IDENTITY:{literal}")
-    candidate_zh = README_CANDIDATE_ZH in zh
-    candidate_en = README_CANDIDATE_EN in en
-    stable_zh = README_STABLE_ZH in zh
-    stable_en = README_STABLE_EN in en
-    quick_candidate_zh = QUICKSTART_CANDIDATE_ZH in quickstart_zh
-    quick_candidate_en = QUICKSTART_CANDIDATE_EN in quickstart_en
-    quick_stable_zh = QUICKSTART_STABLE_ZH in quickstart_zh
-    quick_stable_en = QUICKSTART_STABLE_EN in quickstart_en
     if (
-        candidate_zh != candidate_en
-        or stable_zh != stable_en
-        or candidate_zh != quick_candidate_zh
-        or stable_zh != quick_stable_zh
-        or quick_candidate_zh != quick_candidate_en
-        or quick_stable_zh != quick_stable_en
+        README_STATUS_ZH not in zh
+        or README_STATUS_EN not in en
+        or QUICKSTART_STATUS_ZH not in quickstart_zh
+        or QUICKSTART_STATUS_EN not in quickstart_en
+        or SECURITY_STATUS not in security
     ):
         raise DocsError("DOC_RELEASE_STATUS_PARITY_DRIFT")
-    if mode == "release":
-        if (
-            not stable_zh
-            or candidate_zh
-            or "尚未发布" in zh
-            or "尚未发布" in quickstart_zh
-            or "not yet published" in en
-            or "not yet published" in quickstart_en
-            or "LoopSkill 4.0.0 is the currently supported public line." not in security
-            or "## [4.0.0] - 2026-07-28" not in changelog
-        ):
-            raise DocsError("DOC_RELEASE_STATUS_NOT_STABLE")
-    elif mode == "candidate" and (
-        not candidate_zh
-        or stable_zh
-        or "after public release" not in security
-    ):
+    premature = (
+        "稳定发行",
+        "尚未发布",
+        "stable release",
+        "not yet published",
+        "currently supported public line",
+    )
+    if any(literal in text for literal in premature for text in (zh, en, quickstart_zh, quickstart_en, security)):
         raise DocsError("DOC_RELEASE_STATUS_PREMATURE_OR_AMBIGUOUS")
-    elif mode == "auto" and candidate_zh == stable_zh:
-        raise DocsError("DOC_RELEASE_STATUS_MISSING_OR_AMBIGUOUS")
+    if mode == "release" and "## [4.0.0] - 2026-07-28" not in changelog:
+        raise DocsError("DOC_RELEASE_STATUS_NOT_STABLE")
     return {
         "bash_command_blocks": len(zh_bash),
         "link_targets": sum(_links(zh).values()),
+        "readme_asset_count": len(README_ASSETS),
         "quickstart_bash_command_blocks": len(quickstart_zh_bash),
         "release_bash_command_blocks": len(releasing_bash),
         "release_mode": mode,

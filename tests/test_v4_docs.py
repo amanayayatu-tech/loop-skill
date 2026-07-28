@@ -21,9 +21,9 @@ class V4DocsTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["section_count"], 16)
         self.assertGreaterEqual(result["bash_command_blocks"], 6)
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        mode = "release" if docs.README_STABLE_ZH in readme else "candidate"
-        self.assertEqual(docs.validate(ROOT, mode=mode)["status"], "PASS")
+        self.assertEqual(result["readme_asset_count"], 2)
+        self.assertEqual(docs.validate(ROOT, mode="candidate")["status"], "PASS")
+        self.assertEqual(docs.validate(ROOT, mode="release")["status"], "PASS")
         smoke = docs.smoke_public_commands(ROOT)
         self.assertEqual(smoke["status"], "PASS")
         self.assertEqual(smoke["command_count"], 5)
@@ -50,6 +50,8 @@ class V4DocsTests(unittest.TestCase):
                 "docs/v4/known-limitations.md",
                 "docs/v4/architecture-map.md",
                 "docs/v4/release-notes.md",
+                "docs/readme-assets/durable-handoff.png",
+                "docs/readme-assets/evidence-before-closure.png",
                 "docs/RELEASING.md",
                 "docs/adr/0011-loopskill-4-compatible-kernel-refactor.md",
                 "protocol/v4/README.md",
@@ -69,7 +71,7 @@ class V4DocsTests(unittest.TestCase):
             with self.assertRaisesRegex(docs.DocsError, "DOC_STALE_V3_CURRENT_PRODUCT"):
                 docs.validate(root)
 
-    def test_release_mode_requires_stable_wording(self) -> None:
+    def test_release_mode_uses_durable_status_without_premature_claim(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shutil.copytree(
@@ -78,51 +80,16 @@ class V4DocsTests(unittest.TestCase):
                 dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns(".git", "__pycache__"),
             )
-            replacements = {
-                "README.md": (
-                    "> 发布状态：LoopSkill 4.0.0 候选正在接受发行门禁；尚未发布。公开发行身份最终以 `v4.0.0` tag 与 GitHub Release 的 readback 为准。",
-                    "> 发布状态：此源码树是 LoopSkill 4.0.0 稳定发行；公开可用性以 `v4.0.0` tag 与 GitHub Release readback 为准。",
-                ),
-                "README.en.md": (
-                    "> Release status: The LoopSkill 4.0.0 candidate is undergoing release validation and is not yet published. Public-release identity is established by final readback of the `v4.0.0` tag and GitHub Release.",
-                    "> Release status: This source tree is the LoopSkill 4.0.0 stable release. Public availability is established by the `v4.0.0` tag and GitHub Release readback.",
-                ),
-                "docs/v4/quickstart.zh-CN.md": (
-                    "状态：LoopSkill 4.0.0 候选正在接受发行门禁，尚未发布；公开发行身份以 `v4.0.0` tag 与 GitHub Release 的最终 readback 为准。",
-                    "状态：此源码树是 LoopSkill 4.0.0 稳定发行；公开可用性以 `v4.0.0` tag 与 GitHub Release readback 为准。",
-                ),
-                "docs/v4/quickstart.en.md": (
-                    "Status: the LoopSkill 4.0.0 candidate is undergoing release validation and is not yet\npublished. Public-release identity is established by final readback of the\n`v4.0.0` tag and GitHub Release.",
-                    "Status: This source tree is the LoopSkill 4.0.0 stable release. Public\navailability is established by the `v4.0.0` tag and GitHub Release readback.",
-                ),
-                "SECURITY.md": (
-                    "LoopSkill 4.0 receives current security fixes after public release.",
-                    "LoopSkill 4.0.0 is the currently supported public line.",
-                ),
-                "CHANGELOG.md": (
-                    "## [4.0.0] - 2026-07-27",
-                    "## [4.0.0] - 2026-07-28",
-                ),
-            }
-            for relative, (candidate, stable) in replacements.items():
-                path = root / relative
-                path.write_text(
-                    path.read_text(encoding="utf-8").replace(candidate, stable),
-                    encoding="utf-8",
-                )
             self.assertEqual(docs.validate(root)["status"], "PASS")
             self.assertEqual(docs.validate(root, mode="release")["status"], "PASS")
-            with self.assertRaisesRegex(
-                docs.DocsError, "DOC_RELEASE_STATUS_PREMATURE_OR_AMBIGUOUS"
-            ):
-                docs.validate(root, mode="candidate")
+            self.assertEqual(docs.validate(root, mode="candidate")["status"], "PASS")
             stale_zh = root / "README.md"
             stale_zh.write_text(
-                stale_zh.read_text(encoding="utf-8") + "\n尚未发布\n",
+                stale_zh.read_text(encoding="utf-8") + "\n此源码树是稳定发行\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(
-                docs.DocsError, "DOC_RELEASE_STATUS_NOT_STABLE"
+                docs.DocsError, "DOC_RELEASE_STATUS_PREMATURE_OR_AMBIGUOUS"
             ):
                 docs.validate(root, mode="release")
 
