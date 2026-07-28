@@ -161,7 +161,12 @@
           "enum": ["PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"],
           "type": "string"
         },
-        "summary": {"type": "string"}
+        "summary": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        }
       }
     },
     "StageResult": {
@@ -176,6 +181,9 @@
           "type": "string"
         },
         "summary": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "\\S",
           "type": "string"
         }
       }

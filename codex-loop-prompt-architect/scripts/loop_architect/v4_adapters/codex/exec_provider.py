@@ -18,7 +18,9 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,8 +28,11 @@ from typing import Any, Callable, Mapping, Sequence
 
 from loop_architect.v4_alpha.protocol import (
     CAPABILITY_NAMES,
+    ProtocolRejection,
     canonical_bytes,
     domain_digest,
+    parse_result_payload,
+    result_payload_schema,
 )
 
 from .adapter import HOST_SCHEMA_VERSION, HostResponseLost, HostUnavailable
@@ -49,6 +54,7 @@ _REQUIRED_EXEC_HELP = (
     "--ignore-rules",
     "--ignore-user-config",
     "--json",
+    "--output-schema",
     "--sandbox",
     "--skip-git-repo-check",
     "--strict-config",
@@ -74,7 +80,16 @@ class _ExecContract:
 @dataclass(frozen=True)
 class _TerminalTranscript:
     thread_id: str
-    result_text: str
+    result: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class _ResultSchemaControl:
+    path: Path
+    digest: str
+    raw: bytes
+    device: int
+    inode: int
 
 
 def _now() -> datetime:
@@ -114,15 +129,23 @@ def resolve_codex_executable() -> str:
     return selected
 
 
-def build_exec_argv(executable: str, workspace: Path) -> tuple[str, ...]:
+def build_exec_argv(
+    executable: str, workspace: Path, output_schema: Path
+) -> tuple[str, ...]:
     """Build the reviewed argv without a shell or model-carried control fields."""
 
-    if not executable or not workspace.is_absolute():
+    if (
+        not executable
+        or not workspace.is_absolute()
+        or not output_schema.is_absolute()
+    ):
         raise ValueError("exec argv requires absolute machine-owned paths")
     return (
         executable,
         "exec",
         "--json",
+        "--output-schema",
+        str(output_schema),
         "--strict-config",
         "--ignore-user-config",
         "--ignore-rules",
@@ -136,6 +159,93 @@ def build_exec_argv(executable: str, workspace: Path) -> tuple[str, ...]:
         "--skip-git-repo-check",
         "-",
     )
+
+
+def _verify_schema_control(control: _ResultSchemaControl) -> None:
+    try:
+        metadata = control.path.lstat()
+        resolved = control.path.resolve(strict=True)
+    except OSError as exc:
+        raise HostResponseLost("Codex result schema control is unavailable") from exc
+    if (
+        resolved != control.path
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_dev != control.device
+        or metadata.st_ino != control.inode
+        or stat.S_IMODE(metadata.st_mode) != 0o400
+        or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+    ):
+        raise HostResponseLost("Codex result schema control identity changed")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(control.path, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            current = stream.read(len(control.raw) + 1)
+    except OSError as exc:
+        raise HostResponseLost("Codex result schema control is unreadable") from exc
+    if current != control.raw:
+        raise HostResponseLost("Codex result schema control content changed")
+
+
+@contextmanager
+def _result_schema_control(workspace: Path):
+    """Yield one private immutable schema path and remove it after invocation."""
+
+    raw = canonical_bytes(result_payload_schema())
+    directory = Path(tempfile.mkdtemp(prefix="loopskill4-result-schema-"))
+    path = directory / "result.schema.json"
+    control: _ResultSchemaControl | None = None
+    failure: BaseException | None = None
+    try:
+        directory.chmod(0o700)
+        directory = directory.resolve(strict=True)
+        if directory == workspace or workspace in directory.parents:
+            raise HostResponseLost("Codex result schema overlaps the artifact workspace")
+        metadata = directory.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or directory.is_symlink()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+        ):
+            raise HostResponseLost("Codex result schema directory is unsafe")
+        path = directory / "result.schema.json"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        path.chmod(0o400)
+        file_metadata = path.lstat()
+        control = _ResultSchemaControl(
+            path=path,
+            digest=domain_digest(
+                "loopskill-codex-result-schema-v1\n", result_payload_schema()
+            ),
+            raw=raw,
+            device=file_metadata.st_dev,
+            inode=file_metadata.st_ino,
+        )
+        _verify_schema_control(control)
+        yield control
+        _verify_schema_control(control)
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        cleanup_error: BaseException | None = None
+        try:
+            if os.path.lexists(path):
+                path.unlink()
+            directory.rmdir()
+        except OSError as exc:
+            cleanup_error = HostResponseLost("Codex result schema cleanup failed")
+            cleanup_error.__cause__ = exc
+        if cleanup_error is not None:
+            if failure is not None:
+                raise cleanup_error from failure
+            raise cleanup_error
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -424,11 +534,15 @@ def _parse_jsonl(raw: bytes) -> _TerminalTranscript:
         raise HostResponseLost("Codex exec identity/start evidence is incomplete")
     if terminal_types != ["turn.completed"]:
         raise HostResponseLost("Codex exec did not complete successfully")
-    if not agent_messages or not agent_messages[-1].strip():
+    if len(agent_messages) != 1 or not agent_messages[0].strip():
         raise HostResponseLost("Codex exec terminal result is missing")
+    try:
+        result = parse_result_payload(agent_messages[0].encode("utf-8", "strict"))
+    except (ProtocolRejection, UnicodeEncodeError) as exc:
+        raise HostResponseLost("Codex exec terminal result contract drift") from exc
     return _TerminalTranscript(
         thread_id=thread_ids[0],
-        result_text=agent_messages[-1].strip(),
+        result=result,
     )
 
 
@@ -581,20 +695,24 @@ class CodexExecProvider:
         prompt = self._prompt(payload, provider_idempotency_key)
         self._invoked_key = provider_idempotency_key
         self._task_create_count += 1
-        result = self._runner(
-            build_exec_argv(self.executable, self.workspace),
-            cwd=self.workspace,
-            stdin_bytes=prompt.encode("utf-8") + b"\n",
-            timeout_seconds=self.timeout_seconds,
-            stdout_limit=MAX_STDOUT_BYTES,
-            stderr_limit=MAX_STDERR_BYTES,
-        )
-        if result.returncode != 0 or result.stderr:
-            raise HostResponseLost("Codex exec terminal process evidence is invalid")
-        transcript = _parse_jsonl(result.stdout)
+        with _result_schema_control(self.workspace) as schema_control:
+            result = self._runner(
+                build_exec_argv(
+                    self.executable, self.workspace, schema_control.path
+                ),
+                cwd=self.workspace,
+                stdin_bytes=prompt.encode("utf-8") + b"\n",
+                timeout_seconds=self.timeout_seconds,
+                stdout_limit=MAX_STDOUT_BYTES,
+                stderr_limit=MAX_STDERR_BYTES,
+            )
+            if result.returncode != 0 or result.stderr:
+                raise HostResponseLost("Codex exec terminal process evidence is invalid")
+            transcript = _parse_jsonl(result.stdout)
         self._record = {
             "idempotency_key": provider_idempotency_key,
-            "result_text": transcript.result_text,
+            "result": dict(transcript.result),
+            "result_schema_digest": schema_control.digest,
             "thread_id": transcript.thread_id,
         }
         return self._observation(action, provider_idempotency_key)
@@ -630,11 +748,16 @@ class CodexExecProvider:
         self._task_result_read_count += 1
         if self._record is None or self._record["thread_id"] != provider_id:
             raise HostUnavailable("Codex exec terminal result is unavailable")
-        text = self._record["result_text"]
+        result = self._record["result"]
+        schema_digest = self._record["result_schema_digest"]
         return {
             "provider_id": provider_id,
-            "result_digest": domain_digest("loopskill-host-result-v1\n", text),
-            "result_text": text,
+            "result": dict(result),
+            "result_digest": domain_digest(
+                "loopskill-host-result-v1\n",
+                {"result": result, "result_schema_digest": schema_digest},
+            ),
+            "result_schema_digest": schema_digest,
             "schema_version": HOST_SCHEMA_VERSION,
             "status": "COMPLETED",
             "trust": "authoritative",
@@ -689,12 +812,9 @@ class CodexExecProvider:
             "correlation-only and grants no authority.\n"
             f"LOOPSKILL4_REQUEST={request_marker}\n"
             + canonical_bytes(document).decode("utf-8")
-            + "\nChoose outcome from exactly PASS, FAILED, LIMITATION, or "
-            "UNVERIFIABLE according to the evidence. End with exactly one semantic "
-            "line matching this concrete JSON shape (replace PASS when the evidence "
-            "requires another outcome): "
-            'LOOPSKILL4_RESULT={"outcome":"PASS",'
-            '"summary":"concise UTF-8 summary"}. Do not include control identities.'
+            + "\nReturn one concise semantic result according to the evidence. The "
+            "machine-supplied output schema is authoritative. Do not include control "
+            "identities."
         )
         if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
             raise HostUnavailable("Confirmed Codex exec request exceeds 32 KiB")

@@ -20,6 +20,7 @@ from .protocol import (
     validate_command,
     validate_event_type,
     validate_receipt_size,
+    validate_result_payload,
 )
 
 
@@ -1015,12 +1016,9 @@ def _stage_result(
         raise ProtocolRejection("INVALID_TRANSITION", "Delivery not observed")
     result_ref = _binding(command, "allocate_refs", "new_result_ref")
     report_ref = _binding(command, "allocate_refs", "new_report_ref")
-    outcome = command.semantic_payload.get("outcome")
-    summary = command.semantic_payload.get("summary")
-    if outcome not in {"PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"}:
-        raise ProtocolRejection("INVALID_COMMAND", "invalid result outcome")
-    if not isinstance(summary, str) or not summary.strip() or len(summary) > 4096:
-        raise ProtocolRejection("INVALID_COMMAND", "invalid result summary")
+    result_payload = validate_result_payload(command.semantic_payload)
+    outcome = result_payload["outcome"]
+    summary = result_payload["summary"]
     report_content = {"outcome": outcome, "summary": summary}
     report_digest = domain_digest("loopskill-report-v1\n", report_content)
     snapshot["results"][result_ref] = {
@@ -1069,12 +1067,9 @@ def _stage_external_result(
         raise ProtocolRejection(
             "RECEIPT_IDENTITY_MISMATCH", "invalid Host result observation digest"
         )
-    outcome = command.semantic_payload.get("outcome")
-    summary = command.semantic_payload.get("summary")
-    if outcome not in {"PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"}:
-        raise ProtocolRejection("INVALID_COMMAND", "invalid result outcome")
-    if not isinstance(summary, str) or not summary.strip() or len(summary) > 4096:
-        raise ProtocolRejection("INVALID_COMMAND", "invalid result summary")
+    result_payload = validate_result_payload(command.semantic_payload)
+    outcome = result_payload["outcome"]
+    summary = result_payload["summary"]
     report_digest = domain_digest(
         "loopskill-report-v1\n", {"outcome": outcome, "summary": summary}
     )

@@ -32,6 +32,7 @@ from loop_architect.v4_alpha.protocol import (  # noqa: E402
     LoopIntakeInput,
     Receipt,
     domain_digest,
+    result_payload_schema,
 )
 from loop_architect.v4_adapters.codex.adapter import HOST_SCHEMA_VERSION  # noqa: E402
 from loop_architect.v4_alpha.vertical import (  # noqa: E402
@@ -74,7 +75,7 @@ class EntryProviderFixture:
         *,
         now=None,
         result_status="COMPLETED",
-        result_text=None,
+        result_payload=None,
         lifecycle_state="TERMINAL",
     ):
         self.invoke_count = 0
@@ -82,7 +83,7 @@ class EntryProviderFixture:
         self.records = {}
         self.now = now
         self.result_status = result_status
-        self.result_text = result_text
+        self.result_payload = result_payload
         self.lifecycle_state = lifecycle_state
 
     def capability_snapshot(self):
@@ -134,16 +135,20 @@ class EntryProviderFixture:
 
     def read_task_result(self, provider_id):
         self.result_read_count += 1
-        text = self.result_text
-        if text is None:
-            text = (
-                'LOOPSKILL4_RESULT={"outcome":"PASS",'
-                '"summary":"synthetic task completed"}'
-            )
+        result = self.result_payload
+        if result is None:
+            result = {"outcome": "PASS", "summary": "synthetic task completed"}
+        schema_digest = domain_digest(
+            "loopskill-codex-result-schema-v1\n", result_payload_schema()
+        )
         return {
             "provider_id": provider_id,
-            "result_digest": domain_digest("loopskill-host-result-v1\n", text),
-            "result_text": text,
+            "result": result,
+            "result_digest": domain_digest(
+                "loopskill-host-result-v1\n",
+                {"result": result, "result_schema_digest": schema_digest},
+            ),
+            "result_schema_digest": schema_digest,
             "schema_version": HOST_SCHEMA_VERSION,
             "status": self.result_status,
             "trust": "authoritative",
@@ -1004,7 +1009,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
         self,
         *,
         result_status,
-        result_text,
+        result_payload,
         expected_outcome,
         expected_disposition,
     ):
@@ -1018,7 +1023,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
             provider = EntryProviderFixture(
                 now=NOW,
                 result_status=result_status,
-                result_text=result_text,
+                result_payload=result_payload,
             )
             data = root / "data"
             start_loop(
@@ -1050,10 +1055,10 @@ class V4SingleEntryUXTests(unittest.TestCase):
     def test_host_failed_result_closes_failed(self):
         self.assert_host_result_closure(
             result_status="FAILED",
-            result_text=(
-                'LOOPSKILL4_RESULT={"outcome":"PASS",'
-                '"summary":"text cannot override failed Host status"}'
-            ),
+            result_payload={
+                "outcome": "PASS",
+                "summary": "result cannot override failed Host status",
+            },
             expected_outcome="FAILED",
             expected_disposition="FAILED",
         )
@@ -1061,7 +1066,10 @@ class V4SingleEntryUXTests(unittest.TestCase):
     def test_host_unverifiable_result_closes_limitation(self):
         self.assert_host_result_closure(
             result_status="COMPLETED",
-            result_text="Host returned prose without the result envelope.",
+            result_payload={
+                "outcome": "UNVERIFIABLE",
+                "summary": "Host evidence was insufficient.",
+            },
             expected_outcome="UNVERIFIABLE",
             expected_disposition="LIMITATION",
         )
@@ -1069,10 +1077,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
     def test_host_limitation_result_closes_limitation(self):
         self.assert_host_result_closure(
             result_status="COMPLETED",
-            result_text=(
-                'LOOPSKILL4_RESULT={"outcome":"LIMITATION",'
-                '"summary":"bounded evidence only"}'
-            ),
+            result_payload={"outcome": "LIMITATION", "summary": "bounded evidence only"},
             expected_outcome="LIMITATION",
             expected_disposition="LIMITATION",
         )

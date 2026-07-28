@@ -29,6 +29,7 @@ from loop_architect.v4_adapters.codex.adapter import (  # noqa: E402
 from loop_architect.v4_alpha.protocol import (  # noqa: E402
     CAPABILITY_NAMES,
     domain_digest,
+    result_payload_schema,
 )
 from loop_architect.v4_entry import canary  # noqa: E402
 from loop_architect.v4_entry.preparation import (  # noqa: E402
@@ -152,15 +153,18 @@ class FakeCanaryProvider:
         if provider_id != self.provider_id:
             raise AssertionError("foreign provider identity")
         outcome = "FAILED" if self.mode == "failed" else "PASS"
-        text = (
-            'LOOPSKILL4_RESULT={"outcome":"'
-            + outcome
-            + '","summary":"disposable canary completed"}'
+        result = {"outcome": outcome, "summary": "disposable canary completed"}
+        schema_digest = domain_digest(
+            "loopskill-codex-result-schema-v1\n", result_payload_schema()
         )
         return {
             "provider_id": provider_id,
-            "result_digest": domain_digest("loopskill-host-result-v1\n", text),
-            "result_text": text,
+            "result": result,
+            "result_digest": domain_digest(
+                "loopskill-host-result-v1\n",
+                {"result": result, "result_schema_digest": schema_digest},
+            ),
+            "result_schema_digest": schema_digest,
             "schema_version": HOST_SCHEMA_VERSION,
             "status": "FAILED" if self.mode == "failed" else "COMPLETED",
             "trust": "authoritative",
@@ -309,7 +313,7 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
             self.assertNotIn(provider.provider_id, serialized)
             self.assertNotIn(str(evidence), serialized)
             self.assertNotIn("thread_id", serialized)
-            self.assertNotIn("result_text", serialized)
+            self.assertNotIn("raw_result", serialized)
             with SQLiteStore(evidence / "store" / STORE_FILENAME) as store:
                 snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
                 self.assertEqual(snapshot["execution"]["state"], "TERMINAL")

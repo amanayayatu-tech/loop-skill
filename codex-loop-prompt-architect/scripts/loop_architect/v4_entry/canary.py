@@ -341,7 +341,7 @@ def _request(candidate_sha: str) -> LoopIntakeInput:
         f"Verify LoopSkill 4 candidate {candidate_sha} in this disposable workspace: "
         f"create exactly {CANARY_OUTPUT_FILENAME} with UTF-8 content {quoted!r} "
         "followed by exactly one LF byte, then "
-        "return the required LoopSkill 4 PASS result envelope."
+        "return the required schema-valid LoopSkill 4 PASS result object."
     )
     return LoopIntakeInput(
         goal=goal,

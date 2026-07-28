@@ -135,7 +135,8 @@ normatively superseded by this addendum.
 **Accepted 2026-07-28; this subsection supersedes the external
 `app-server --stdio` Provider as the 4.0.0 production/default Host transport.**
 The public composition root constructs one `CodexExecProvider` behind the
-existing `CodexProviderPort`. It invokes the official `codex exec --json`
+existing `CodexProviderPort`. It invokes the official `codex exec --json
+--output-schema <machine-path>`
 foreground interface exactly once for a claimed durable Attempt. The official
 executable owns its internal thread/turn lifecycle, server requests, streaming,
 and shutdown; LoopSkill does not reimplement or expose those internal RPCs.
@@ -145,7 +146,9 @@ The transport contract is deliberately narrower:
 - preflight performs only bundle-first/PATH-fallback executable resolution,
   realpath/version binding, and bounded `exec --help` inspection; it creates no
   Host work;
-- START supplies the confirmed semantic prompt on stdin, exact canonical cwd,
+- START supplies the confirmed semantic prompt on stdin, a manifest-derived
+  closed result schema through one private machine-owned read-only temporary
+  control file, exact canonical cwd,
   workspace-write sandbox, explicit disabled sandbox network access, non-Git
   allowance, and JSONL output through a shell-free argv;
 - one Provider instance permits one subprocess spawn. Duplicate invoke is
@@ -153,7 +156,11 @@ The transport contract is deliberately narrower:
   project provisioner, or second Host protocol;
 - a bounded UTF-8 JSONL stream must contain one machine-emitted thread identity,
   one turn start, one successful terminal event, a zero exit status, empty
-  stderr, and a final agent result. Malformed, truncated, oversized,
+  stderr, and exactly one final agent-message JSON object conforming to the
+  `StageExternalResult`/`StageResult` outcome and summary contract. The schema
+  path and digest are machine-bound, verified before and after invocation, kept
+  outside the artifact workspace, and removed after process closure. Malformed,
+  truncated, oversized,
   conflicting, missing, failed, nonzero, timed-out, or interrupted evidence
   yields `UNKNOWN` and cannot mint PASS;
 - successful same-process terminal evidence may bind strict effect/result/
@@ -169,6 +176,8 @@ The transport contract is deliberately narrower:
 The only allowed delivery guarantee remains **“at-most-one automatic attempt;
 outcome may be UNKNOWN.”** Same-process terminal capture is not cross-system
 exactly-once and does not promise a Desktop-visible saved project or task.
+There is no text-marker fallback: the model never transports a result control
+envelope through prose.
 
 Commits `5edbaef`, `2354639`, and `f0d33c4`, together with the two terminal
 failed canaries, remain immutable predecessor evidence. They show only that the

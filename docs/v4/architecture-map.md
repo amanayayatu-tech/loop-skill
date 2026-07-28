@@ -47,8 +47,12 @@ invent a new attempt or rewrite workflow history.
 
 The public composition root constructs `CodexExecProvider` only after explicit
 confirmation. It sends the digest-bound semantic boundary on stdin, not
-user/model control identity. The Provider owns one foreground process group and
-accepts only one bounded complete JSONL terminal chain. It has no provider
+user/model control identity. It derives one closed outcome/summary JSON Schema
+from the typed manifest, passes it through the official `--output-schema`
+option from a private read-only temporary control path, and removes that path
+after the process. The Provider owns one foreground process group and accepts
+only one bounded complete JSONL terminal chain with exactly one schema-valid
+final object. It has no text-marker fallback, provider
 idempotency key, automatic resume, or cross-process readback. Missing,
 ambiguous, failed, truncated, timed-out, or lost evidence becomes `UNKNOWN`,
 never another invocation.

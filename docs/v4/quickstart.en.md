@@ -58,12 +58,14 @@ One entry does not mean silent authorization. A non-interactive session stops
 after PREPARE. Changed boundaries, expired confirmation, or vague “continue”
 fail closed.
 
-The ordinary entry runs one official `codex exec --json` process in the
+The ordinary entry runs one official `codex exec --json --output-schema`
+process in the
 foreground for at most 300 seconds and reaps its process group on success,
 failure, timeout, or interruption. This is the observation window, not the task
-budget. A complete terminal JSONL stream, zero exit, final result, and artifact
+budget. A complete terminal JSONL stream, zero exit, exactly one final object
+valid against the typed-manifest-derived closed outcome/summary schema, and artifact
 verification are all required. Lost or invalid evidence becomes `UNKNOWN`;
-LoopSkill never resends or runs `codex exec resume`.
+LoopSkill has no prose-marker fallback, never resends, and never runs `codex exec resume`.
 The 4.0.0 ordinary entry supports only an individual Host task expected to
 finish within this window. Longer single Host executions are outside this
 release's public support boundary.

@@ -32,12 +32,18 @@ from loop_architect.v4_adapters.codex.exec_provider import (  # noqa: E402
 )
 import loop_architect.v4_adapters.codex.exec_provider as exec_provider  # noqa: E402
 from loop_architect.v4_alpha.protocol import CAPABILITY_NAMES, domain_digest  # noqa: E402
+from loop_architect.v4_alpha.protocol import (  # noqa: E402
+    ProtocolRejection,
+    canonical_bytes,
+    result_payload_schema,
+)
 from loop_architect.v4_entry import canary  # noqa: E402
 
 
 NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
 KEY = "machine-operation-key"
-RESULT = 'LOOPSKILL4_RESULT={"outcome":"PASS","summary":"complete"}'
+RESULT = {"outcome": "PASS", "summary": "complete"}
+RESULT_TEXT = canonical_bytes(RESULT).decode("utf-8")
 
 
 def payload():
@@ -61,7 +67,7 @@ def event_bytes(*events):
     )
 
 
-def success_jsonl(*, thread_id="thread-machine", result=RESULT, extra=()):
+def success_jsonl(*, thread_id="thread-machine", result=RESULT_TEXT, extra=()):
     return event_bytes(
         {"thread_id": thread_id, "type": "thread.started"},
         {"type": "turn.started"},
@@ -81,6 +87,7 @@ class FakeRunner:
             argv=("codex", "exec"), returncode=0, stdout=success_jsonl(), stderr=b""
         )
         self.exec_error = exec_error
+        self.schema_snapshots = []
 
     def __call__(self, argv, **kwargs):
         self.calls.append((tuple(argv), dict(kwargs)))
@@ -95,6 +102,7 @@ class FakeRunner:
                     "--ignore-rules",
                     "--ignore-user-config",
                     "--json",
+                    "--output-schema",
                     "--sandbox",
                     "--skip-git-repo-check",
                     "--strict-config",
@@ -103,6 +111,8 @@ class FakeRunner:
             return _ProcessResult(tuple(argv), 0, flags.encode(), b"")
         if self.exec_error is not None:
             raise self.exec_error
+        schema_path = Path(argv[tuple(argv).index("--output-schema") + 1])
+        self.schema_snapshots.append((schema_path, schema_path.read_bytes()))
         return _ProcessResult(
             tuple(argv),
             self.exec_result.returncode,
@@ -139,11 +149,13 @@ class ExecProviderTests(unittest.TestCase):
             root = Path(temporary).resolve()
             self.assertFalse((root / ".git").exists())
             self.assertEqual(
-                build_exec_argv("/safe/codex", root),
+                build_exec_argv("/safe/codex", root, root / "schema.json"),
                 (
                     "/safe/codex",
                     "exec",
                     "--json",
+                    "--output-schema",
+                    str(root / "schema.json"),
                     "--strict-config",
                     "--ignore-user-config",
                     "--ignore-rules",
@@ -199,22 +211,22 @@ class ExecProviderTests(unittest.TestCase):
             observation = provider.invoke("create_task", payload(), KEY)
             self.assertEqual(len(runner.calls), 3)
             argv, kwargs = runner.calls[-1]
-            self.assertEqual(argv, build_exec_argv(provider.executable, root))
+            schema_path = Path(argv[argv.index("--output-schema") + 1])
+            self.assertEqual(argv, build_exec_argv(provider.executable, root, schema_path))
+            self.assertFalse(schema_path.exists())
+            self.assertFalse(schema_path.parent.exists())
+            self.assertNotIn(root, schema_path.parents)
+            self.assertEqual(
+                runner.schema_snapshots,
+                [(schema_path, canonical_bytes(result_payload_schema()))],
+            )
             self.assertEqual(kwargs["cwd"], root)
             self.assertTrue(kwargs["stdin_bytes"].endswith(b"\n"))
             prompt = kwargs["stdin_bytes"].decode("utf-8")
             self.assertIn('"goal":"Complete one disposable task"', prompt)
             self.assertNotIn(KEY, prompt)
-            self.assertIn(
-                'LOOPSKILL4_RESULT={"outcome":"PASS",'
-                '"summary":"concise UTF-8 summary"}',
-                prompt,
-            )
-            self.assertIn(
-                "Choose outcome from exactly PASS, FAILED, LIMITATION, or UNVERIFIABLE",
-                prompt,
-            )
-            self.assertNotIn("PASS|FAILED|LIMITATION|UNVERIFIABLE", prompt)
+            self.assertNotIn("semantic line matching", prompt)
+            self.assertIn("machine-supplied output schema is authoritative", prompt)
             self.assertEqual(observation["status"], "OBSERVED")
             self.assertEqual(observation["trust"], "authoritative")
             self.assertEqual(
@@ -222,10 +234,20 @@ class ExecProviderTests(unittest.TestCase):
             )
             result = provider.read_task_result("thread-machine")
             self.assertEqual(result["status"], "COMPLETED")
-            self.assertEqual(result["result_text"], RESULT)
+            self.assertEqual(result["result"], RESULT)
+            expected_schema_digest = domain_digest(
+                "loopskill-codex-result-schema-v1\n", result_payload_schema()
+            )
+            self.assertEqual(result["result_schema_digest"], expected_schema_digest)
             self.assertEqual(
                 result["result_digest"],
-                domain_digest("loopskill-host-result-v1\n", RESULT),
+                domain_digest(
+                    "loopskill-host-result-v1\n",
+                    {
+                        "result": RESULT,
+                        "result_schema_digest": expected_schema_digest,
+                    },
+                ),
             )
             lifecycle = provider.read_resource("lifecycle", "thread-machine")
             self.assertEqual(lifecycle["state"], "TERMINAL")
@@ -274,6 +296,11 @@ class ExecProviderTests(unittest.TestCase):
             with self.assertRaises(HostResponseLost):
                 provider.invoke("create_task", payload(), KEY)
             calls_after_loss = len(runner.calls)
+            schema_path = Path(
+                runner.calls[-1][0][runner.calls[-1][0].index("--output-schema") + 1]
+            )
+            self.assertFalse(schema_path.exists())
+            self.assertFalse(schema_path.parent.exists())
             with self.assertRaises(HostUnavailable):
                 provider.invoke("create_task", payload(), KEY)
             self.assertEqual(len(runner.calls), calls_after_loss)
@@ -309,14 +336,14 @@ class ExecProviderTests(unittest.TestCase):
             )
         )
         self.assertEqual(transcript.thread_id, "thread-machine")
-        self.assertEqual(transcript.result_text, RESULT)
+        self.assertEqual(transcript.result, RESULT)
 
     def test_jsonl_failure_matrix_is_fail_closed(self):
         valid = [
             {"thread_id": "thread-machine", "type": "thread.started"},
             {"type": "turn.started"},
             {
-                "item": {"id": "message", "text": RESULT, "type": "agent_message"},
+                "item": {"id": "message", "text": RESULT_TEXT, "type": "agent_message"},
                 "type": "item.completed",
             },
             {"type": "turn.completed", "usage": {}},
@@ -341,11 +368,133 @@ class ExecProviderTests(unittest.TestCase):
             "result_after_terminal": event_bytes(*valid, valid[2]),
             "additive_after_terminal": event_bytes(*valid, {"type": "future.additive"}),
             "missing_result": event_bytes(valid[0], valid[1], valid[-1]),
+            "multiple_results": event_bytes(valid[0], valid[1], valid[2], valid[2], valid[3]),
+            "conflicting_results": event_bytes(
+                valid[0],
+                valid[1],
+                valid[2],
+                {
+                    "item": {
+                        "id": "message-2",
+                        "text": '{"outcome":"FAILED","summary":"conflict"}',
+                        "type": "agent_message",
+                    },
+                    "type": "item.completed",
+                },
+                valid[3],
+            ),
             "oversized_line": b"{" + b"x" * (1024 * 1024) + b"}\n",
         }
         for name, raw in cases.items():
             with self.subTest(name=name), self.assertRaises(HostResponseLost):
                 _parse_jsonl(raw)
+
+    def test_structured_result_accepts_exactly_the_four_manifest_enums(self):
+        schema = result_payload_schema()
+        self.assertEqual(schema["type"], "object")
+        self.assertEqual(schema["required"], ["outcome", "summary"])
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(
+            schema["properties"]["outcome"]["enum"],
+            ["PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"],
+        )
+        self.assertEqual(schema["properties"]["summary"]["minLength"], 1)
+        self.assertEqual(schema["properties"]["summary"]["maxLength"], 4096)
+        for outcome in ("PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"):
+            with self.subTest(outcome=outcome):
+                value = {"outcome": outcome, "summary": "bounded evidence"}
+                self.assertEqual(
+                    _parse_jsonl(success_jsonl(result=canonical_bytes(value).decode())).result,
+                    value,
+                )
+
+    def test_structured_result_rejects_shape_type_encoding_and_size_drift(self):
+        invalid = {
+            "additional": '{"extra":1,"outcome":"PASS","summary":"ok"}',
+            "missing": '{"outcome":"PASS"}',
+            "wrong_type": '{"outcome":"PASS","summary":7}',
+            "unknown_enum": '{"outcome":"PASS|FAILED|LIMITATION|UNVERIFIABLE","summary":"ok"}',
+            "blank": '{"outcome":"PASS","summary":"   "}',
+            "oversized": json.dumps(
+                {"outcome": "PASS", "summary": "é" * 4096}, ensure_ascii=False
+            ),
+            "malformed": '{"outcome":"PASS","summary":',
+        }
+        for name, result in invalid.items():
+            with self.subTest(name=name), self.assertRaises(HostResponseLost):
+                _parse_jsonl(success_jsonl(result=result))
+
+    def test_schema_path_replacement_fails_closed_and_is_cleaned(self):
+        class ReplacingRunner(FakeRunner):
+            def __call__(self, argv, **kwargs):
+                result = super().__call__(argv, **kwargs)
+                if tuple(argv)[-1:] == ("-",):
+                    schema_path = Path(argv[tuple(argv).index("--output-schema") + 1])
+                    schema_path.unlink()
+                    schema_path.symlink_to(Path("/dev/null"))
+                return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = ReplacingRunner()
+            provider = self.provider(Path(temporary), runner)
+            with self.assertRaisesRegex(HostResponseLost, "schema control identity"):
+                provider.invoke("create_task", payload(), KEY)
+            schema_path = runner.schema_snapshots[0][0]
+            self.assertFalse(schema_path.exists())
+            self.assertFalse(schema_path.parent.exists())
+            self.assertEqual(provider.metrics["task_create_count"], 1)
+            self.assertEqual(provider.metrics["provider_resend_count"], 0)
+
+    def test_schema_content_race_fails_closed_and_is_cleaned(self):
+        class MutatingRunner(FakeRunner):
+            def __call__(self, argv, **kwargs):
+                result = super().__call__(argv, **kwargs)
+                if tuple(argv)[-1:] == ("-",):
+                    schema_path = Path(argv[tuple(argv).index("--output-schema") + 1])
+                    schema_path.chmod(0o600)
+                    schema_path.write_bytes(b"{}")
+                    schema_path.chmod(0o400)
+                return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = MutatingRunner()
+            provider = self.provider(Path(temporary), runner)
+            with self.assertRaisesRegex(HostResponseLost, "schema control content"):
+                provider.invoke("create_task", payload(), KEY)
+            schema_path = runner.schema_snapshots[0][0]
+            self.assertFalse(schema_path.exists())
+            self.assertFalse(schema_path.parent.exists())
+
+    def test_preflight_rejects_missing_output_schema_capability(self):
+        class MissingSchemaRunner(FakeRunner):
+            def __call__(self, argv, **kwargs):
+                result = super().__call__(argv, **kwargs)
+                if tuple(argv)[-2:] == ("exec", "--help"):
+                    return _ProcessResult(
+                        tuple(argv), 0, result.stdout.replace(b"--output-schema", b""), b""
+                    )
+                return result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(HostUnavailable):
+                self.provider(Path(temporary), MissingSchemaRunner()).preflight()
+
+    def test_adapter_rejects_self_consistent_result_bound_to_foreign_schema(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = self.provider(Path(temporary), FakeRunner())
+            provider.invoke("create_task", payload(), KEY)
+            assert provider._record is not None
+            provider._record["result_schema_digest"] = "0" * 64
+            adapter = CodexHostAdapter(
+                provider,
+                object(),
+                executor_ref="machine-executor",
+                issuer_ref=provider.issuer_ref,
+                issuer_trust=provider.issuer_trust,
+                clock=lambda: NOW,
+            )
+            with self.assertRaisesRegex(ProtocolRejection, "task result digest"):
+                adapter.read_task_result("thread-machine")
 
     def test_bounded_runner_rejects_oversized_output(self):
         with tempfile.TemporaryDirectory() as temporary:

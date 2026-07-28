@@ -9,7 +9,7 @@ conformance corpus. Core sees only manifest-generated `EffectAttempt`,
 or subprocess behavior.
 
 The production Provider is `CodexExecProvider`. It consumes the official
-foreground `codex exec --json` boundary. It does not implement the experimental
+foreground `codex exec --json --output-schema` boundary. It does not implement the experimental
 external app-server protocol and does not expose a fallback to it.
 
 ## Execution ownership
@@ -25,7 +25,7 @@ One claimed Attempt permits one foreground process spawn:
 | --- | --- | --- |
 | Attempt committed but unclaimed | one claimant may invoke `codex exec` | the same durable Attempt may make its first call |
 | process started | no second spawn | accept only the directly captured terminal stream |
-| complete valid JSONL + zero exit | bind same-process terminal observation | local result/artifact/review/finalization may advance |
+| complete valid JSONL + one schema-valid final object + zero exit | bind same-process terminal observation and schema/result digests | local result/artifact/review/finalization may advance |
 | lost, malformed, failed, ambiguous, timed-out, or interrupted evidence | no retry or resume | preserve `UNKNOWN` |
 
 There is no daemon, proxy, Supervisor, automatic `exec resume`, project
@@ -39,6 +39,14 @@ The only guarantee text for this Provider is:
 It is not cross-system exactly-once or provider idempotency.
 
 ## Preflight and invocation
+
+Preflight requires the official `--output-schema` capability. The Provider
+derives one closed object schema from the typed `StageExternalResult` and
+`StageResult` payload contract, writes it to a private canonical non-symlink
+read-only temporary control file outside the artifact workspace, verifies its
+identity and bytes before and after the one process, and removes it. The JSONL
+parser accepts exactly one agent-message object with required `outcome` and
+`summary`; no prose-marker fallback exists.
 
 Preflight has zero model/Host effects. It:
 

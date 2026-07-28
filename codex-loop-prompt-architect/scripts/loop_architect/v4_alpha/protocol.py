@@ -201,6 +201,53 @@ def domain_digest(domain: str, value: Any) -> str:
     return hashlib.sha256(domain.encode("utf-8") + canonical_bytes(value)).hexdigest()
 
 
+def result_payload_schema() -> dict[str, Any]:
+    """Derive the one Host final-result schema from the typed manifest."""
+
+    external = SEMANTIC_PAYLOAD_SPECS["StageExternalResult"]["semantic_payload"]
+    staged = SEMANTIC_PAYLOAD_SPECS["StageResult"]["semantic_payload"]
+    if external != staged:
+        raise RuntimeError("StageExternalResult and StageResult contract drift")
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": False,
+        "properties": {name: dict(specification) for name, specification in external.items()},
+        "required": sorted(external),
+        "type": "object",
+    }
+
+
+def validate_result_payload(value: Any) -> dict[str, str]:
+    """Validate one closed semantic result without a text-marker fallback."""
+
+    specification = SEMANTIC_PAYLOAD_SPECS["StageExternalResult"]["semantic_payload"]
+    if not isinstance(value, Mapping) or set(value) != set(specification):
+        raise ProtocolRejection("INVALID_COMMAND", "result payload shape drift")
+    outcome = value["outcome"]
+    summary = value["summary"]
+    if not isinstance(outcome, str) or outcome not in specification["outcome"]["enum"]:
+        raise ProtocolRejection("INVALID_COMMAND", "result outcome enum drift")
+    if not isinstance(summary, str):
+        raise ProtocolRejection("INVALID_COMMAND", "result summary must be string")
+    try:
+        encoded = summary.encode("utf-8", "strict")
+    except UnicodeEncodeError as exc:
+        raise ProtocolRejection("INVALID_UTF8", "result summary is not UTF-8") from exc
+    summary_spec = specification["summary"]
+    if (
+        not summary.strip()
+        or len(summary) < summary_spec["minLength"]
+        or len(summary) > summary_spec["maxLength"]
+        or len(encoded) > MAX_SEMANTIC_STRING_BYTES
+    ):
+        raise ProtocolRejection("RESOURCE_LIMIT_EXCEEDED", "result summary bound")
+    return {"outcome": outcome, "summary": summary}
+
+
+def parse_result_payload(raw: bytes) -> dict[str, str]:
+    return validate_result_payload(parse_json_bytes(raw))
+
+
 def raw_domain_digest(domain: str, raw: bytes) -> str:
     return hashlib.sha256(domain.encode("utf-8") + raw).hexdigest()
 
@@ -332,6 +379,12 @@ def validate_command(command: CommandEnvelope) -> None:
             raise ProtocolRejection("INVALID_COMMAND", f"{name} must be a string array")
         if "enum" in specification and value not in specification["enum"]:
             raise ProtocolRejection("INVALID_COMMAND", f"{name} enum drift")
+        if specification["type"] == "string" and "minLength" in specification:
+            if len(value) < specification["minLength"] or not value.strip():
+                raise ProtocolRejection("INVALID_COMMAND", f"{name} is empty")
+        if specification["type"] == "string" and "maxLength" in specification:
+            if len(value) > specification["maxLength"]:
+                raise ProtocolRejection("RESOURCE_LIMIT_EXCEEDED", f"{name} is oversized")
     raw = canonical_bytes(command_without_digest(command))
     if len(raw) > MAX_COMMAND_BYTES:
         raise ProtocolRejection("RESOURCE_LIMIT_EXCEEDED", "command exceeds byte limit")

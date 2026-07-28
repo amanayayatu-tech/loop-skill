@@ -189,6 +189,9 @@
           "type": "string"
         },
         "summary": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "\\S",
           "type": "string"
         }
       }
@@ -205,6 +208,9 @@
           "type": "string"
         },
         "summary": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "\\S",
           "type": "string"
         }
       }
@@ -302,7 +308,7 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "manifest_sha256": "3ad5c3d0ba787ef9954050536bfd2451f94c4f86debc1f67e2a89fc4f9a8029c",
+  "manifest_sha256": "ffbc01b8d8ba881a73a27b6b3d3e789d24acccb6b340ac0840589650bcbb514f",
   "protocol_version": "4.0.0",
   "reference_kinds": [
     "LoopRef",

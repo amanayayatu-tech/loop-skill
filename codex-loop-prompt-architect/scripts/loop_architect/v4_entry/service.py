@@ -36,8 +36,8 @@ from loop_architect.v4_alpha.protocol import (
     authority_grant_digest,
     build_command,
     domain_digest,
-    parse_json_bytes,
     snapshot_digest,
+    validate_result_payload,
 )
 from loop_architect.v4_entry.preparation import (
     CONFIRMATION_ISSUER,
@@ -1333,28 +1333,15 @@ def _grant_for(store: SQLiteStore, command_type: str, subject_ref: str) -> Autho
 
 
 def _result_semantics(observation: Mapping[str, Any]) -> tuple[str, str]:
-    text = observation["result_text"]
-    marker = "LOOPSKILL4_RESULT="
-    candidates = [line[len(marker) :] for line in text.splitlines() if line.startswith(marker)]
     if observation["status"] == "PENDING":
         raise ValueError("pending")
     if observation["status"] == "FAILED":
         return "FAILED", "Codex task ended without a valid semantic result."
-    if len(candidates) == 1:
-        try:
-            value = parse_json_bytes(candidates[0].encode("utf-8"))
-        except ProtocolRejection:
-            value = None
-        if (
-            isinstance(value, Mapping)
-            and set(value) == {"outcome", "summary"}
-            and value["outcome"] in {"PASS", "FAILED", "LIMITATION", "UNVERIFIABLE"}
-            and isinstance(value["summary"], str)
-            and value["summary"].strip()
-            and len(value["summary"]) <= 4096
-        ):
-            return str(value["outcome"]), value["summary"].strip()
-    return "UNVERIFIABLE", "Codex output lacked one valid semantic result envelope."
+    try:
+        value = validate_result_payload(observation["result"])
+    except (KeyError, ProtocolRejection):
+        return "UNVERIFIABLE", "Codex output lacked one valid structured result."
+    return value["outcome"], value["summary"]
 
 
 def _allocated_subjects(

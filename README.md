@@ -74,11 +74,11 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 
 同一交互会先只读质检，再写本地准备产物并展示 Goal、写入范围、预算、外部动作、验收标准、停止条件和发布边界。只有精确的显式确认才能启动。非交互环境会停在 PREPARE；`DIRECT_TASK_RECOMMENDED` 不创建 loop。
 
-确认后，公开入口启动一次官方前台 `codex exec --json` 进程。官方可执行文件负责其内部 thread/turn 生命周期；LoopSkill 只通过 stdin 提交已确认的语义边界，并直接捕获机器生成的 identity 与终态 JSONL，不要求用户复制 Host identity。它不注册 LoopSkill MCP，也不要求 App restart。
+确认后，公开入口启动一次官方前台 `codex exec --json --output-schema` 进程。官方可执行文件负责其内部 thread/turn 生命周期；LoopSkill 只通过 stdin 提交已确认的语义边界，从 typed manifest 派生封闭的 outcome/summary schema，并直接捕获机器生成的 identity、终态 JSONL 与唯一结构化结果，不要求用户复制 Host identity。schema 位于机器私有的只读临时控制路径，调用后清理；不存在文本 marker 回退。它不注册 LoopSkill MCP，也不要求 App restart。
 
 在全新 workspace 首次执行时，官方 Codex Host 可能自行在 `config.toml` 文件末尾登记一条仅含 `trust_level = "trusted"` 的 workspace trust record。LoopSkill 安装器和卸载器仍不编辑 Codex 配置；发行 canary 只接受精确绑定当前机器生成 canonical disposable workspace 的这一条 EOF append，诚实记录非零 changed bytes，并拒绝其他路径、值、重复项、前缀改写或 auth 变化。
 
-前台进程最长运行 300 秒，并在成功、失败、超时或中断时回收整个进程组。300 秒是观察窗口，不是任务预算。只有完整 stream、零退出码、最终结果和外部 artifact 验证全部成立才可闭合。证据丢失、畸形、失败、歧义或超时会成为 `UNKNOWN`；LoopSkill 不 resend，也不执行 `codex exec resume`。
+前台进程最长运行 300 秒，并在成功、失败、超时或中断时回收整个进程组。300 秒是观察窗口，不是任务预算。只有完整 stream、零退出码、schema 合法的唯一最终结果和外部 artifact 验证全部成立才可闭合。证据丢失、畸形、失败、冲突、歧义或超时会成为 `UNKNOWN`；LoopSkill 不 resend，也不执行 `codex exec resume`。
 
 因此 4.0.0 的普通入口只支持预期能在该观察窗口内完成的单个 Host task；更长的单次 Host 执行不在本版公开支持范围内。
 

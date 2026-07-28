@@ -200,6 +200,13 @@ stops for the exact interactive phrase
 invocation is the installed, receipt-checked `loopskill4 canary`, not the source-
 tree entry:
 
+The exact candidate must first prove that preflight requires the official
+`--output-schema` flag, the private schema path is digest-bound and cleaned,
+and one schema-valid outcome/summary object is captured with no text-marker
+fallback. Private evidence may retain only the canonical structured response
+bytes needed to distinguish Host/model/parser failure; public evidence exposes
+digests and outcome only, never the raw Host transcript or identity.
+
 ```bash
 set -euo pipefail
 umask 077

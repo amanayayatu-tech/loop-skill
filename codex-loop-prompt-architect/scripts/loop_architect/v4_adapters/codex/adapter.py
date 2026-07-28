@@ -12,6 +12,8 @@ from loop_architect.v4_alpha.protocol import (
     ProtocolRejection,
     Receipt,
     domain_digest,
+    result_payload_schema,
+    validate_result_payload,
     validate_capability_record,
 )
 
@@ -306,8 +308,9 @@ class CodexHostAdapter:
         response = self.provider.read_task_result(provider_id)
         if not isinstance(response, Mapping) or set(response) != {
             "provider_id",
+            "result",
             "result_digest",
-            "result_text",
+            "result_schema_digest",
             "schema_version",
             "status",
             "trust",
@@ -323,10 +326,25 @@ class CodexHostAdapter:
             self._schema_drift("task result status")
         if response["trust"] != "authoritative":
             raise ProtocolRejection("RECEIPT_ISSUER_UNTRUSTED", "task result trust")
-        text = response["result_text"]
+        result = response["result"]
         digest = response["result_digest"]
-        if not isinstance(text, str) or not isinstance(digest, str) or digest != domain_digest(
-            "loopskill-host-result-v1\n", text
+        schema_digest = response["result_schema_digest"]
+        expected_schema_digest = domain_digest(
+            "loopskill-codex-result-schema-v1\n", result_payload_schema()
+        )
+        try:
+            result = validate_result_payload(result)
+        except ProtocolRejection:
+            self._schema_drift("task result payload")
+        if (
+            not isinstance(digest, str)
+            or not isinstance(schema_digest, str)
+            or schema_digest != expected_schema_digest
+            or digest
+            != domain_digest(
+                "loopskill-host-result-v1\n",
+                {"result": result, "result_schema_digest": schema_digest},
+            )
         ):
             raise ProtocolRejection("RECEIPT_IDENTITY_MISMATCH", "task result digest")
         return dict(response)

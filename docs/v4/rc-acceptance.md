@@ -29,6 +29,9 @@ alone is not a release.
   remain unchanged or gain exactly one EOF-appended trusted-project stanza for
   the exact canonical disposable workspace, with the real nonzero delta bound
   into private measurement and the minimized receipt;
+  the official `--output-schema` path must yield exactly one schema-valid
+  outcome/summary object whose schema and canonical result digests are bound to
+  private evidence; no text-marker fallback or raw public transcript is allowed;
 - independent read-only architecture, UX, installer, CI, privacy, artifact,
   preservation, and documentation review bound to the same SHA.
 
