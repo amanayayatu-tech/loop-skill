@@ -532,11 +532,19 @@ class _AppServerSession:
                     raise HostUnavailable("Codex app-server returned invalid JSON") from exc
                 if not isinstance(message, Mapping):
                     raise HostUnavailable("Codex app-server response schema drift")
+                if "id" in message and "method" in message:
+                    self._write(
+                        {
+                            "error": {
+                                "code": -32601,
+                                "message": "LoopSkill client request unsupported",
+                            },
+                            "id": message["id"],
+                            "jsonrpc": "2.0",
+                        }
+                    )
+                    continue
                 if message.get("id") != request_id:
-                    if "id" in message and "method" in message:
-                        raise HostUnavailable(
-                            "Codex app-server requested unsupported interactive input"
-                        )
                     continue
                 if "error" in message:
                     raise HostUnavailable("Codex app-server rejected the request")

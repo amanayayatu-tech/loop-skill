@@ -283,6 +283,38 @@ class AppServerProviderTests(unittest.TestCase):
             stream.close()
             os.close(write_fd)
 
+    def test_server_request_fails_closed_without_aborting_pending_response(self):
+        read_fd, write_fd = os.pipe()
+        stream = os.fdopen(read_fd, "rb", buffering=0)
+        session = object.__new__(_AppServerSession)
+        session._process = type("Process", (), {"stdout": stream})()
+        session._next_id = 1
+        session._timeout_seconds = 0.2
+        session._write = mock.Mock()
+        session._read_frame = mock.Mock(
+            side_effect=(
+                b'{"id":1,"jsonrpc":"2.0","method":"future/request","params":{}}\n',
+                b'{"id":1,"jsonrpc":"2.0","result":{"status":"ready"}}\n',
+            )
+        )
+        try:
+            self.assertEqual(session.request("bounded/request", {}), {"status": "ready"})
+        finally:
+            stream.close()
+            os.close(write_fd)
+        self.assertEqual(session._write.call_count, 2)
+        self.assertEqual(
+            session._write.call_args_list[1].args[0],
+            {
+                "error": {
+                    "code": -32601,
+                    "message": "LoopSkill client request unsupported",
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+            },
+        )
+
     def provider(
         self,
         root,
