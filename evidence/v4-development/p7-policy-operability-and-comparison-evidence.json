@@ -85,7 +85,7 @@
   },
   "comparison_result": {
     "artifact": "loopskill-v4-p7-comparison-result-v1",
-    "baseline_sha256": "0b32780e2428ef6debd7331681d1078187fda2771e186b16551495f25f71227a",
+    "baseline_sha256": "86514624e8ff089a00e5c7dbca8d36c37f55f3ea8357c31642c595645bec581c",
     "internal_control_interaction_gate": "PASS",
     "measurement_code_sha256": "43bcecb5213d00403e1480db986bc55b1189446cf22a4fa8f5fcfad92928667c",
     "metrics": {
