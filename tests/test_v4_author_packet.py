@@ -504,6 +504,14 @@ class V4AuthorPacketTests(unittest.TestCase):
                         fixture.root, fixture.candidate, fixture.evidence
                     )
 
+    def test_public_urls_and_synthetic_relative_paths_are_not_private(self) -> None:
+        packet_builder._validate_evidence_privacy(
+            {
+                "download_location": "https://github.com/amanayayatu-tech/loop-skill",
+                "precondition": "Synthetic Git/non-Git fixture at workspace/output.txt",
+            }
+        )
+
     def test_receipt_candidate_and_repository_candidate_drift_fail_closed(self) -> None:
         fixture = self.fixture()
         key = packet_builder.REQUIRED_EVIDENCE_RECEIPTS[0]

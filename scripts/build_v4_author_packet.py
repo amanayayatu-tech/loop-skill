@@ -108,7 +108,8 @@ _FORBIDDEN_KEY_TOKENS = frozenset(
     }
 )
 _PRIVATE_PATH_RE = re.compile(
-    r"(?:(?<![:/])/(?!/)[^\s\"'<>]+|~(?:/|$)|(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"'<>]*|file://[^\s\"'<>]*)"
+    r"(?:(?<![A-Za-z0-9])/(?:Users|home|private|tmp|var/folders)(?:/|$)[^\s\"'<>]*"
+    r"|~(?:/|$)|(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"'<>]*|file://[^\s\"'<>]*)"
 )
 _RAW_UUID_RE = re.compile(
     r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-8][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])"
