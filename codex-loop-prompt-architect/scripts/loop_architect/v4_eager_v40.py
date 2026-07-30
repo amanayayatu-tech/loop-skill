@@ -52,4 +52,5 @@ def reduce_eager_command(
         command,
         context,
         expected_protocol_version=EAGER_PROTOCOL_VERSION,
+        persisted_storage_mode=storage_mode,
     )

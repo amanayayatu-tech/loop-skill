@@ -36,6 +36,7 @@ from loop_architect.v4_alpha.generated_protocol import (  # noqa: E402
 from loop_architect.v4_alpha.kernel import (  # noqa: E402
     AuthorityContext,
     _create_loop,
+    reduce_command,
     validate_authority,
 )
 from loop_architect.v4_alpha.plan_codec import (  # noqa: E402
@@ -583,6 +584,61 @@ class V41PlanCapacityTests(unittest.TestCase):
             first_review_ref = first_advance.machine_bindings["resolved_refs"][
                 "review_ref"
             ]
+            before_missing_effect_goal = store.snapshot(prepared.manifest.loop_ref)
+            malformed = json.loads(json.dumps(before_missing_effect_goal))
+            first_result = malformed["results"][
+                malformed["reviews"][first_review_ref]["result_ref"]
+            ]
+            del malformed["external_effects"][
+                first_result["external_effect_ref"]
+            ]["goal_ref"]
+            store._snapshots[prepared.manifest.loop_ref] = malformed
+            missing_effect_command = with_command_change(
+                first_advance,
+                lambda values: values.update(
+                    operation_id="operation-content-missing-effect-goal"
+                ),
+            )
+            with self.assertRaises(ProtocolRejection) as missing_effect_goal:
+                store.apply(missing_effect_command)
+            self.assertEqual(
+                missing_effect_goal.exception.detail,
+                "Result effect does not bind a Goal",
+            )
+            self.assertEqual(
+                store.snapshot(prepared.manifest.loop_ref), malformed
+            )
+            exact_eager_mode = classify_persisted_storage_mode(
+                eager_fixture()["eager_plan_checkpoint"]["checkpoint_snapshot"]
+            )
+            self.assertEqual(exact_eager_mode, EAGER_STORAGE_MODE)
+            with self.assertRaises(ProtocolRejection) as missing_eager_effect_goal:
+                reduce_command(
+                    malformed,
+                    missing_effect_command,
+                    store.authority,
+                    persisted_storage_mode=exact_eager_mode,
+                )
+            self.assertEqual(
+                missing_eager_effect_goal.exception.detail,
+                "Result effect does not bind a Goal",
+            )
+            explicit_null = json.loads(json.dumps(malformed))
+            explicit_null["external_effects"][
+                first_result["external_effect_ref"]
+            ]["goal_ref"] = None
+            with self.assertRaises(ProtocolRejection) as explicit_legacy_null:
+                reduce_command(
+                    explicit_null,
+                    missing_effect_command,
+                    store.authority,
+                    persisted_storage_mode=LEGACY_ABSENT_STORAGE_MODE,
+                )
+            self.assertEqual(
+                explicit_legacy_null.exception.detail,
+                "Result effect does not bind a Goal",
+            )
+            store._snapshots[prepared.manifest.loop_ref] = before_missing_effect_goal
             store.apply(first_advance)
             snapshot = store.snapshot(prepared.manifest.loop_ref)
             second_goal_ref = snapshot["goal_plan"]["active_goal_ref"]
@@ -1792,6 +1848,7 @@ except ProtocolRejection as exc:
                 memory.snapshot(fixture["loop_ref"]), before_memory_crossgrade
             )
             self.assertEqual(memory.commit_count, 5)
+
             self.assertEqual(schema_rows(), schema_before)
             view = status(root=root)
             self.assertNotEqual(view.progress, "Finished")
@@ -1973,6 +2030,37 @@ except ProtocolRejection as exc:
                 self.assertEqual(
                     classify_persisted_storage_mode(observed),
                     LEGACY_ABSENT_STORAGE_MODE,
+                )
+
+            sync_root, sync_path = seed_case("sync")
+            provider = FakeProvider()
+            sync_view = sync_loop(
+                root=sync_root,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=None,
+            )
+            self.assertEqual(provider.invoke_count, 1)
+            self.assertEqual(sync_view.progress, "Finished")
+            self.assertEqual(sync_view.result, "LIMITATION")
+            with SQLiteStore(sync_path) as store:
+                terminal = store.snapshot(checkpoint["loop_ref"])
+                self.assertEqual(terminal["loop_revision"], 8)
+                self.assertEqual(terminal["execution"]["state"], "TERMINAL")
+                self.assertEqual(
+                    next(iter(terminal["goals"].values()))["state"], "LIMITATION"
+                )
+                self.assertEqual(
+                    snapshot_digest(terminal),
+                    "bd8e09db75559c04d423bdadca51864109d1a36ef87d1447666b3d8d3ab64fd3",
+                )
+                self.assertEqual(
+                    classify_persisted_storage_mode(terminal),
+                    LEGACY_ABSENT_STORAGE_MODE,
+                )
+                self.assertEqual(
+                    hashlib.sha256(store.canonical_export()).hexdigest(),
+                    "38d8a4d56c1a13e6bcac2e36581c4f9a6cccc9c5d6e1987d8bfca302d1f2db94",
                 )
 
             content_root = base / "content"

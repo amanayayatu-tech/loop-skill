@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from .protocol import (
     CONTENT_STORAGE_MODE,
+    LEGACY_ABSENT_STORAGE_MODE,
     MAX_EVENTS_PER_COMMAND,
     PROTOCOL_VERSION,
     ActorRef,
@@ -451,6 +452,7 @@ def reduce_command(
     context: AuthorityContext,
     *,
     expected_protocol_version: str = PROTOCOL_VERSION,
+    persisted_storage_mode: str = CONTENT_STORAGE_MODE,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     validate_command(
         command, expected_protocol_version=expected_protocol_version
@@ -462,11 +464,20 @@ def reduce_command(
     reducer = _REDUCERS.get(command.command_type)
     if reducer is None:
         raise ProtocolRejection("INVALID_COMMAND", command.command_type)
-    new_snapshot, events, response = reducer(
-        copy.deepcopy(snapshot) if snapshot is not None else None,
-        command,
-        context,
-    )
+    reducer_snapshot = copy.deepcopy(snapshot) if snapshot is not None else None
+    if reducer is _advance_goal:
+        new_snapshot, events, response = _advance_goal(
+            reducer_snapshot,
+            command,
+            context,
+            persisted_storage_mode=persisted_storage_mode,
+        )
+    else:
+        new_snapshot, events, response = reducer(
+            reducer_snapshot,
+            command,
+            context,
+        )
     if len(events) > MAX_EVENTS_PER_COMMAND:
         raise ProtocolRejection("RESOURCE_LIMIT_EXCEEDED", "too many events")
     _increment_loop(new_snapshot, command)
@@ -1421,6 +1432,8 @@ def _advance_goal(
     snapshot: dict[str, Any] | None,
     command: CommandEnvelope,
     _: AuthorityContext,
+    *,
+    persisted_storage_mode: str = CONTENT_STORAGE_MODE,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     assert snapshot is not None
     goal_ref = str(command.subject["subject_ref"])
@@ -1460,11 +1473,20 @@ def _advance_goal(
     effect_ref = result.get("external_effect_ref")
     if isinstance(effect_ref, str):
         effect = snapshot["external_effects"].get(effect_ref)
-        if not isinstance(effect, Mapping) or not isinstance(effect.get("goal_ref"), str):
+        if not isinstance(effect, Mapping):
             raise ProtocolRejection(
                 "INVALID_TRANSITION", "Result effect does not bind a Goal"
             )
-        bound_goal_refs.append(str(effect["goal_ref"]))
+        effect_goal_ref = effect.get("goal_ref")
+        if isinstance(effect_goal_ref, str):
+            bound_goal_refs.append(effect_goal_ref)
+        elif (
+            persisted_storage_mode != LEGACY_ABSENT_STORAGE_MODE
+            or "goal_ref" in effect
+        ):
+            raise ProtocolRejection(
+                "INVALID_TRANSITION", "Result effect does not bind a Goal"
+            )
     if not bound_goal_refs or any(reference != goal_ref for reference in bound_goal_refs):
         raise ProtocolRejection(
             "INVALID_TRANSITION", "Review Result does not bind the subject Goal"
