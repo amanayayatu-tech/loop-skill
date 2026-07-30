@@ -24,6 +24,7 @@ CANARY_CANDIDATE_PROVENANCE_DOMAIN = (
     b"loopskill.v4.exec-canary.candidate-provenance.v1\0"
 )
 MAX_EVIDENCE_BYTES = 1024 * 1024
+MAX_CANARY_PAIR_ELAPSED_SECONDS = 7_200
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -424,20 +425,30 @@ def _validate_canary_pair(values: Mapping[str, Mapping[str, Any]]) -> None:
     two = values["exec_canary_2_goal"]
     eight = values["exec_canary_8_goal"]
     try:
+        two_issued = datetime.fromisoformat(
+            str(two["issued_at"]).replace("Z", "+00:00")
+        )
         two_observed = datetime.fromisoformat(
             str(two["observed_at"]).replace("Z", "+00:00")
         )
         eight_issued = datetime.fromisoformat(
             str(eight["issued_at"]).replace("Z", "+00:00")
         )
+        eight_observed = datetime.fromisoformat(
+            str(eight["observed_at"]).replace("Z", "+00:00")
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise AuthorPacketError(
             "AUTHOR_PACKET_CANARY_SEQUENCE_INVALID"
         ) from exc
     if (
-        two_observed.tzinfo is None
+        two_issued.tzinfo is None
+        or two_observed.tzinfo is None
         or eight_issued.tzinfo is None
+        or eight_observed.tzinfo is None
         or two_observed > eight_issued
+        or (eight_observed - two_issued).total_seconds()
+        > MAX_CANARY_PAIR_ELAPSED_SECONDS
         or two["host_task_create_count"] + eight["host_task_create_count"] != 10
         or two.get("candidate_tree_sha") != eight.get("candidate_tree_sha")
         or two.get("candidate_provenance_digest")

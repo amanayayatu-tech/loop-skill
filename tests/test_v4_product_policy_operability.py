@@ -15,6 +15,7 @@ from loop_architect.v4_alpha.kernel import AuthorityContext  # noqa: E402
 from loop_architect.v4_alpha.protocol import (  # noqa: E402
     ProtocolRejection,
     build_command,
+    with_command_change,
 )
 from loop_architect.v4_alpha.store import InMemoryStore  # noqa: E402
 from loop_architect.v4_alpha.vertical import (  # noqa: E402
@@ -93,21 +94,24 @@ def _rebuild(command, *, semantic_payload=None, receipt_ref=None):
     }
     if receipt_ref is not None:
         bindings["receipt_refs"]["receipt"] = receipt_ref
-    return build_command(
-        operation_id=command.operation_id,
-        command_type=command.command_type,
-        actor_ref=command.actor_ref,
-        authority_grant_ref=command.authority_grant_ref,
-        subject=dict(command.subject),
-        expected_loop_revision=command.expected_loop_revision,
-        expected_subject_revisions=dict(command.expected_subject_revisions),
-        issued_at=command.issued_at,
-        machine_bindings=bindings,
-        semantic_payload=(
-            dict(command.semantic_payload)
-            if semantic_payload is None
-            else semantic_payload
+    return with_command_change(
+        command,
+        lambda values: values.update(
+            machine_bindings=bindings,
+            semantic_payload=(
+                dict(command.semantic_payload)
+                if semantic_payload is None
+                else semantic_payload
+            ),
         ),
+    )
+
+
+def _legacy_build_command(**values):
+    command = build_command(**values)
+    return with_command_change(
+        command,
+        lambda wire: wire.update(protocol_version="4.0.0"),
     )
 
 
@@ -236,7 +240,7 @@ class V4ProductPolicyTests(unittest.TestCase):
         authority = _authority_with_commands("PauseLoop", "ResumeLoop")
         store = InMemoryStore(authority)
         store.apply(vertical_commands()[0])
-        pause = build_command(
+        pause = _legacy_build_command(
             operation_id="op-pause-0001",
             command_type="PauseLoop",
             actor_ref="actor-author-0001",
@@ -252,7 +256,7 @@ class V4ProductPolicyTests(unittest.TestCase):
         snapshot = store.snapshot(LOOP_REF)
         self.assertEqual((paused.event_types, snapshot["execution"]["state"]), (("LoopPaused",), "PAUSED"))
         self.assertNotIn("wait for author boundary", str(snapshot))
-        resume = build_command(
+        resume = _legacy_build_command(
             operation_id="op-resume-0001",
             command_type="ResumeLoop",
             actor_ref="actor-author-0001",
@@ -316,7 +320,7 @@ class V4ProductPolicyTests(unittest.TestCase):
             store.apply(command)
         snapshot = store.snapshot(LOOP_REF)
         self.assertEqual(snapshot["closure_assurance"]["strength"], "COOPERATIVE")
-        strengthen = build_command(
+        strengthen = _legacy_build_command(
             operation_id="op-strengthen-0001",
             command_type="StrengthenClosureAssurance",
             actor_ref="actor-system-0001",
@@ -343,7 +347,7 @@ class V4OperabilityProjectionTests(unittest.TestCase):
         store = InMemoryStore(fixture_authority())
         store.apply(vertical_commands()[0])
         stale = _rebuild(vertical_commands()[1])
-        stale = build_command(
+        stale = _legacy_build_command(
             operation_id="op-stale-audit",
             command_type=stale.command_type,
             actor_ref=stale.actor_ref,

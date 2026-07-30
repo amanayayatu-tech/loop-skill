@@ -26,7 +26,6 @@ from loop_architect.v4_alpha.protocol import (
     AuthorityGrantV2,
     CommandEnvelope,
     EffectAttempt,
-    PROTOCOL_VERSION,
     Receipt,
     InjectedCrash,
     ProtocolRejection,
@@ -595,7 +594,6 @@ class SQLiteStore:
                 current is not None
                 and current.get("goal_plan", {}).get("storage_mode")
                 != CONTENT_STORAGE_MODE
-                and command.protocol_version != PROTOCOL_VERSION
             )
             if eager_v4_0:
                 from loop_architect.v4_eager_v40 import reduce_eager_command

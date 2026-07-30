@@ -14,6 +14,7 @@ from .protocol import (
     build_command,
     canonical_bytes,
     snapshot_digest,
+    with_command_change,
 )
 
 
@@ -271,7 +272,7 @@ def _command(
     bindings: Mapping[str, Mapping[str, str]],
     payload: Mapping[str, Any],
 ) -> CommandEnvelope:
-    return build_command(
+    command = build_command(
         operation_id=f"op-{step:04d}",
         command_type=command_type,
         actor_ref=actor_ref,
@@ -282,6 +283,16 @@ def _command(
         issued_at=f"2026-07-27T00:00:{step - 1:02d}Z",
         machine_bindings=bindings,
         semantic_payload=payload,
+    )
+    if step == 1:
+        return command
+    # This frozen alpha trace creates its historical eager snapshot in step 1.
+    # Every continuation envelope is pinned to the v4.0 protocol so a missing
+    # storage_mode can never be upgraded into the current reducer by changing
+    # only the envelope version.
+    return with_command_change(
+        command,
+        lambda values: values.update(protocol_version="4.0.0"),
     )
 
 

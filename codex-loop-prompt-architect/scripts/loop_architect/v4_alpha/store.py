@@ -12,7 +12,6 @@ from .protocol import (
     ApplyResult,
     CommandEnvelope,
     CONTENT_STORAGE_MODE,
-    PROTOCOL_VERSION,
     InjectedCrash,
     ProtocolRejection,
     command_digest,
@@ -220,7 +219,6 @@ class InMemoryStore:
                 current is not None
                 and current.get("goal_plan", {}).get("storage_mode")
                 != CONTENT_STORAGE_MODE
-                and command.protocol_version != PROTOCOL_VERSION
             )
             if eager_v4_0:
                 from loop_architect.v4_eager_v40 import reduce_eager_command

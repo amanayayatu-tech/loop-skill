@@ -1782,6 +1782,40 @@ except ProtocolRejection as exc:
                     fixture["checkpoint_export_sha256"],
                 )
                 store.verify_integrity()
+                crossgrade = with_command_change(
+                    commands[0],
+                    lambda values: values.update(
+                        {
+                            "operation_id": "operation-eager-crossgrade-v41",
+                            "protocol_version": PROTOCOL_VERSION,
+                        }
+                    ),
+                )
+                before_crossgrade = store.snapshot(fixture["loop_ref"])
+                with self.assertRaises(ProtocolRejection) as rejected_crossgrade:
+                    store.apply(crossgrade)
+                self.assertEqual(
+                    rejected_crossgrade.exception.code,
+                    "UNSUPPORTED_PROTOCOL_VERSION",
+                )
+                self.assertEqual(
+                    store.snapshot(fixture["loop_ref"]), before_crossgrade
+                )
+            memory = InMemoryStore(legacy_authority)
+            memory._snapshots[fixture["loop_ref"]] = json.loads(
+                json.dumps(snapshot)
+            )
+            before_memory_crossgrade = memory.snapshot(fixture["loop_ref"])
+            with self.assertRaises(ProtocolRejection) as rejected_memory_crossgrade:
+                memory.apply(crossgrade)
+            self.assertEqual(
+                rejected_memory_crossgrade.exception.code,
+                "UNSUPPORTED_PROTOCOL_VERSION",
+            )
+            self.assertEqual(
+                memory.snapshot(fixture["loop_ref"]), before_memory_crossgrade
+            )
+            self.assertEqual(memory.commit_count, 0)
             self.assertEqual(schema_rows(), schema_before)
             view = status(root=root)
             self.assertNotEqual(view.progress, "Finished")
@@ -1939,6 +1973,44 @@ except ProtocolRejection as exc:
             self.assertEqual(
                 parent_symlink.exception.code, "PATH_CONFINEMENT_VIOLATION"
             )
+
+            race_parent = root / "race-parent"
+            race_parent.mkdir()
+            race_source = race_parent / "source.md"
+            race_source.write_text("AUTHORIZED", encoding="utf-8")
+            outside_parent = root / "outside-parent"
+            outside_parent.mkdir()
+            (outside_parent / "source.md").write_text(
+                "UNAUTHORIZED", encoding="utf-8"
+            )
+            moved_parent = root / "race-parent-bound"
+            original_open = os.open
+            replaced = False
+
+            def replace_parent_after_open(name, flags, mode=0o777, *, dir_fd=None):
+                nonlocal replaced
+                descriptor = original_open(name, flags, mode, dir_fd=dir_fd)
+                if name == race_parent.name and not replaced:
+                    replaced = True
+                    race_parent.rename(moved_parent)
+                    race_parent.symlink_to(outside_parent, target_is_directory=True)
+                return descriptor
+
+            try:
+                with mock.patch.object(
+                    cli.os, "open", side_effect=replace_parent_after_open
+                ):
+                    with self.assertRaises(Exception) as parent_replacement:
+                        cli.read_intake_input(str(race_source))
+                self.assertEqual(
+                    parent_replacement.exception.code,
+                    "PATH_CONFINEMENT_VIOLATION",
+                )
+            finally:
+                if race_parent.is_symlink():
+                    race_parent.unlink()
+                if moved_parent.exists():
+                    moved_parent.rename(race_parent)
 
             directory = root / "not-regular.txt"
             directory.mkdir()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 
 
@@ -22,14 +23,33 @@ _LEGACY_BYTE_MARKERS = (
 )
 
 
-def is_legacy_input(path: Path, payload: bytes | None = None) -> bool:
+def is_legacy_input(
+    path: Path,
+    payload: bytes | None = None,
+    *,
+    path_kind: str | None = None,
+    directory_entries: Collection[str] = (),
+) -> bool:
     """Recognize only stable public v3 markers without parsing legacy state."""
 
     if path.name in _LEGACY_BASENAMES or path.name == ".codex-loop":
         return True
-    if path.is_dir():
-        marker_root = path / ".codex-loop"
-        if marker_root.is_dir() or any((path / name).exists() for name in _LEGACY_BASENAMES):
+    is_directory = path.is_dir() if path_kind is None else path_kind == "directory"
+    if is_directory:
+        if path_kind is None:
+            marker_root = path / ".codex-loop"
+            directory_entries = {
+                name
+                for name in (".codex-loop", *_LEGACY_BASENAMES)
+                if (
+                    marker_root.is_dir()
+                    if name == ".codex-loop"
+                    else (path / name).exists()
+                )
+            }
+        if ".codex-loop" in directory_entries or any(
+            name in directory_entries for name in _LEGACY_BASENAMES
+        ):
             return True
     if payload is not None:
         prefix = payload[:32768]

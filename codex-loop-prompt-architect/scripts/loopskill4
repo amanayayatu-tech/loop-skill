@@ -10,6 +10,7 @@ import os
 import stat
 import sys
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 from loop_architect.v4_alpha.generated_protocol import CAPACITY_CONTRACT
@@ -219,91 +220,127 @@ def _canonical_plan_input(document, raw: bytes) -> LoopIntakeInput:
     )
 
 
-def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
-    absolute = path if path.is_absolute() else Path.cwd() / path
-    # macOS exposes root-owned compatibility aliases such as /var -> /private/var.
-    # The caller rejects every non-root-owned symlink component first; resolving
-    # the remaining immutable system alias lets descriptor traversal retain
-    # O_NOFOLLOW without rejecting ordinary files created by tempfile.
-    canonical = absolute.resolve(strict=True)
-    parts = canonical.parts[1:]
-    flags_directory = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
-        os, "O_NOFOLLOW", 0
+def _stat_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
     )
-    flags_file = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptors = []
+
+
+def _admission_components(path: Path) -> tuple[str, tuple[str, ...]]:
+    if path.is_absolute():
+        components = tuple(path.parts[1:])
+        # Darwin exposes this one fixed compatibility anchor as
+        # /var -> private/var.  Verify that exact system alias, then traverse
+        # /private/var directly; never resolve or follow a user-controlled
+        # component.
+        if sys.platform == "darwin" and components[:1] == ("var",):
+            try:
+                alias = os.lstat("/var")
+                alias_target = os.readlink("/var")
+            except OSError:
+                pass
+            else:
+                if (
+                    stat.S_ISLNK(alias.st_mode)
+                    and alias.st_uid == 0
+                    and alias_target == "private/var"
+                ):
+                    components = ("private", "var", *components[1:])
+        anchor = "/"
+    else:
+        components = tuple(path.parts)
+        anchor = "."
+    if (
+        not components
+        or any(component in {"", ".", ".."} for component in components)
+        or not hasattr(os, "O_DIRECTORY")
+        or not hasattr(os, "O_NOFOLLOW")
+    ):
+        raise OSError("invalid source path")
+    return anchor, components
+
+
+@contextmanager
+def _admission_parent(path: Path):
+    anchor, components = _admission_components(path)
+    flags_directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptors: list[int] = []
+    mappings: list[tuple[int, str, tuple[int, int, int, int, int]]] = []
     try:
-        if not parts or ".." in parts:
-            raise OSError("invalid source path")
-        directory_fd = os.open(canonical.anchor, flags_directory)
+        directory_fd = os.open(anchor, flags_directory)
         descriptors.append(directory_fd)
-        for component in parts[:-1]:
-            directory_fd = os.open(
-                component, flags_directory, dir_fd=directory_fd
+        for component in components[:-1]:
+            child_fd = os.open(component, flags_directory, dir_fd=directory_fd)
+            mappings.append(
+                (directory_fd, component, _stat_identity(os.fstat(child_fd)))
             )
-            descriptors.append(directory_fd)
-        before = os.stat(
-            parts[-1], dir_fd=directory_fd, follow_symlinks=False
-        )
-        if before.st_size > maximum:
-            raise EntryError(
-                "RESOURCE_LIMIT_EXCEEDED",
-                "The input file exceeds the supported byte boundary.",
-                f"Reduce the input to at most {maximum} UTF-8 bytes.",
+            descriptors.append(child_fd)
+            directory_fd = child_fd
+        yield directory_fd, components[-1], mappings
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _assert_stable_mappings(
+    mappings: list[tuple[int, str, tuple[int, int, int, int, int]]],
+) -> None:
+    for parent_fd, component, expected in mappings:
+        current = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(current.st_mode) or _stat_identity(current) != expected:
+            raise OSError("source path component changed")
+
+
+def _admitted_path_kind(path: Path) -> str | None:
+    try:
+        with _admission_parent(path) as (directory_fd, leaf, mappings):
+            metadata = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISLNK(metadata.st_mode):
+                raise OSError("source path is a symlink")
+            _assert_stable_mappings(mappings)
+            if stat.S_ISREG(metadata.st_mode):
+                return "file"
+            if stat.S_ISDIR(metadata.st_mode):
+                return "directory"
+            return "other"
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise EntryError(
+            "PATH_CONFINEMENT_VIOLATION",
+            "The requested source is unavailable, unsafe, or changed while reading.",
+            "Provide one stable regular UTF-8 file without symlinks.",
+        ) from exc
+
+
+def _admitted_directory_entries(path: Path) -> tuple[str, ...]:
+    descriptors: list[int] = []
+    flags_directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        with _admission_parent(path) as (directory_fd, leaf, mappings):
+            before = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+            if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+                raise OSError("source directory changed")
+            descriptor = os.open(leaf, flags_directory, dir_fd=directory_fd)
+            descriptors.append(descriptor)
+            opened = os.fstat(descriptor)
+            if _stat_identity(opened) != _stat_identity(before):
+                raise OSError("source directory identity changed")
+            entries = tuple(sorted(os.listdir(descriptor)))
+            after = os.fstat(descriptor)
+            if _stat_identity(after) != _stat_identity(opened):
+                raise OSError("source directory changed while inspecting")
+            _assert_stable_mappings(
+                [*mappings, (directory_fd, leaf, _stat_identity(opened))]
             )
-        if stat.S_ISLNK(before.st_mode):
-            raise EntryError(
-                "PATH_CONFINEMENT_VIOLATION",
-                "The source path is a symlink.",
-                "Provide one stable regular file.",
-            )
-        if not stat.S_ISREG(before.st_mode):
-            raise EntryError(
-                "USER_INPUT_INVALID",
-                "The source is not a regular file.",
-                "Provide one regular UTF-8 JSON, text, or Markdown file.",
-            )
-        descriptor = os.open(parts[-1], flags_file, dir_fd=directory_fd)
-        descriptors.append(descriptor)
-        opened = os.fstat(descriptor)
-        before_identity = (
-            before.st_dev,
-            before.st_ino,
-            before.st_mode,
-            before.st_size,
-            before.st_mtime_ns,
-        )
-        opened_identity = (
-            opened.st_dev,
-            opened.st_ino,
-            opened.st_mode,
-            opened.st_size,
-            opened.st_mtime_ns,
-        )
-        if opened_identity != before_identity:
-            raise OSError("source identity changed")
-        chunks = []
-        remaining = maximum + 1
-        while remaining:
-            chunk = os.read(descriptor, min(65_536, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        raw = b"".join(chunks)
-        after = os.fstat(descriptor)
-        after_identity = (
-            after.st_dev,
-            after.st_ino,
-            after.st_mode,
-            after.st_size,
-            after.st_mtime_ns,
-        )
-        if len(raw) > maximum or after_identity != opened_identity:
-            raise OSError("source changed while reading")
-        return raw
-    except EntryError:
-        raise
+            return entries
     except OSError as exc:
         raise EntryError(
             "PATH_CONFINEMENT_VIOLATION",
@@ -318,33 +355,79 @@ def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
                 pass
 
 
-def _has_untrusted_symlink_component(path: Path) -> bool:
-    absolute = path if path.is_absolute() else Path.cwd() / path
-    current = Path(absolute.anchor)
-    for part in absolute.parts[1:]:
-        current /= part
-        try:
-            metadata = current.lstat()
-            if stat.S_ISLNK(metadata.st_mode) and metadata.st_uid != 0:
-                return True
-        except OSError:
-            return False
-    return False
-
-
+def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
+    flags_file = os.O_RDONLY | os.O_NOFOLLOW
+    descriptors = []
+    try:
+        with _admission_parent(path) as (directory_fd, leaf, mappings):
+            before = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+            if before.st_size > maximum:
+                raise EntryError(
+                    "RESOURCE_LIMIT_EXCEEDED",
+                    "The input file exceeds the supported byte boundary.",
+                    f"Reduce the input to at most {maximum} UTF-8 bytes.",
+                )
+            if stat.S_ISLNK(before.st_mode):
+                raise EntryError(
+                    "PATH_CONFINEMENT_VIOLATION",
+                    "The source path is a symlink.",
+                    "Provide one stable regular file.",
+                )
+            if not stat.S_ISREG(before.st_mode):
+                raise EntryError(
+                    "USER_INPUT_INVALID",
+                    "The source is not a regular file.",
+                    "Provide one regular UTF-8 JSON, text, or Markdown file.",
+                )
+            descriptor = os.open(leaf, flags_file, dir_fd=directory_fd)
+            descriptors.append(descriptor)
+            opened = os.fstat(descriptor)
+            before_identity = _stat_identity(before)
+            opened_identity = _stat_identity(opened)
+            if opened_identity != before_identity:
+                raise OSError("source identity changed")
+            chunks = []
+            remaining = maximum + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65_536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            after = os.fstat(descriptor)
+            if len(raw) > maximum or _stat_identity(after) != opened_identity:
+                raise OSError("source changed while reading")
+            _assert_stable_mappings(
+                [*mappings, (directory_fd, leaf, opened_identity)]
+            )
+            return raw
+    except EntryError:
+        raise
+    except OSError as exc:
+        raise EntryError(
+            "PATH_CONFINEMENT_VIOLATION",
+            "The requested source is unavailable, unsafe, or changed while reading.",
+            "Provide one stable regular UTF-8 file without symlinks.",
+        ) from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 def read_intake_input(value: str) -> LoopIntakeInput:
     path = Path(value)
     if value == "-":
         raw = sys.stdin.buffer.read(int(CAPACITY_CONTRACT["expert_json_max_bytes"]) + 1)
         return _decode_intake_bytes(raw, json_document=True)
-    if path.exists() or path.is_symlink():
-        if _has_untrusted_symlink_component(path):
-            raise EntryError(
-                "PATH_CONFINEMENT_VIOLATION",
-                "The source path contains a symlink.",
-                "Provide one stable regular file without symlink components.",
-            )
-        if path.is_dir() and is_legacy_input(path):
+    path_kind = _admitted_path_kind(path)
+    if path_kind is not None:
+        if path_kind == "directory" and is_legacy_input(
+            path,
+            path_kind="directory",
+            directory_entries=_admitted_directory_entries(path),
+        ):
             raise EntryError(*unsupported_legacy_error())
         suffix = path.suffix.lower()
         if suffix not in {".json", ".md", ".txt"}:
@@ -370,7 +453,7 @@ def read_intake_input(value: str) -> LoopIntakeInput:
             ]
         )
         raw = _read_admitted_file(path, maximum=maximum)
-        if is_legacy_input(path, raw):
+        if is_legacy_input(path, raw, path_kind="file"):
             raise EntryError(*unsupported_legacy_error())
         if suffix == ".json":
             return _decode_intake_bytes(raw, json_document=True)

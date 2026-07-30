@@ -865,31 +865,16 @@ def validate_canary_pair(
 ) -> None:
     validate_canary_receipt(two_goal, candidate, expected_goal_count=2)
     validate_canary_receipt(eight_goal, candidate, expected_goal_count=8)
+    builder = _load_author_packet_builder(Path(__file__).resolve().parents[1])
     try:
-        two_observed = datetime.fromisoformat(
-            two_goal["observed_at"].replace("Z", "+00:00")
+        builder._validate_canary_pair(
+            {
+                "exec_canary_2_goal": two_goal,
+                "exec_canary_8_goal": eight_goal,
+            }
         )
-        eight_issued = datetime.fromisoformat(
-            eight_goal["issued_at"].replace("Z", "+00:00")
-        )
-    except (KeyError, TypeError, ValueError) as exc:
+    except builder.AuthorPacketError as exc:
         raise RcValidationError("RC_CANARY_SEQUENCE_INVALID") from exc
-    if (
-        two_observed.tzinfo is None
-        or eight_issued.tzinfo is None
-        or two_observed > eight_issued
-        or two_goal["host_task_create_count"]
-        + eight_goal["host_task_create_count"]
-        != 10
-        or two_goal["candidate_tree_sha"] != eight_goal["candidate_tree_sha"]
-        or two_goal["candidate_provenance_digest"]
-        != eight_goal["candidate_provenance_digest"]
-        or two_goal["canary_workspace_identity_digest"]
-        == eight_goal["canary_workspace_identity_digest"]
-        or two_goal["host_task_identity_digest"]
-        == eight_goal["host_task_identity_digest"]
-    ):
-        raise RcValidationError("RC_CANARY_SEQUENCE_INVALID")
 
 
 def _read_canonical_object(path: Path, code: str) -> dict[str, Any]:

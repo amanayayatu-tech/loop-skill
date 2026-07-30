@@ -454,6 +454,23 @@ class V4RcAcceptanceTests(unittest.TestCase):
             issued=issued + timedelta(minutes=1),
         )
         validator.validate_canary_pair(two, eight, candidate)
+        exact_budget = canary(
+            candidate,
+            goal_count=8,
+            route_digit="8",
+            issued=issued + timedelta(seconds=7_200),
+        )
+        validator.validate_canary_pair(two, exact_budget, candidate)
+        over_budget = canary(
+            candidate,
+            goal_count=8,
+            route_digit="8",
+            issued=issued + timedelta(seconds=7_201),
+        )
+        with self.assertRaisesRegex(
+            validator.RcValidationError, "RC_CANARY_SEQUENCE_INVALID"
+        ):
+            validator.validate_canary_pair(two, over_budget, candidate)
         for mutation in ("sequence", "tree", "workspace", "task"):
             with self.subTest(mutation=mutation):
                 changed = dict(eight)
