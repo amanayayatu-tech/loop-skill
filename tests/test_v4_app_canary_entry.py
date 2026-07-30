@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -50,6 +51,7 @@ VALIDATOR_SPEC.loader.exec_module(validator)
 
 NOW = datetime(2026, 7, 28, 1, 2, 3, tzinfo=timezone.utc)
 CANDIDATE = "a" * 40
+REAL_CANDIDATE_PROVENANCE = canary._candidate_provenance
 
 
 def integrity_inputs(parent: Path) -> dict[str, Path]:
@@ -222,6 +224,78 @@ class FakeCanaryProvider:
 
 
 class V4DisposableExecCanaryEntryTests(unittest.TestCase):
+    def setUp(self):
+        def synthetic_provenance(candidate, _root):
+            body = {
+                "candidate_execution_mode": "CLEAN_GIT_WORKTREE",
+                "candidate_sha": candidate,
+                "candidate_tree_sha": "b" * 40,
+            }
+            body["candidate_provenance_digest"] = canary._domain_digest(
+                canary.CANARY_CANDIDATE_PROVENANCE_DOMAIN, body
+            )
+            return body
+
+        patcher = mock.patch.object(
+            canary,
+            "_candidate_provenance",
+            side_effect=synthetic_provenance,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_candidate_provenance_requires_exact_clean_runtime_worktree(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = (
+                root
+                / "codex-loop-prompt-architect"
+                / "scripts"
+                / "loop_architect"
+                / "v4_entry"
+                / "canary.py"
+            )
+            source.parent.mkdir(parents=True)
+            source.write_text("fixture runtime\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.name", "LoopSkill Test"],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "config",
+                    "user.email",
+                    "loopskill-test@example.invalid",
+                ],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-qm", "fixture"], check=True
+            )
+            candidate = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout.strip()
+            provenance = REAL_CANDIDATE_PROVENANCE(
+                candidate, root, runtime_source=source
+            )
+            self.assertEqual(provenance["candidate_sha"], candidate)
+            self.assertEqual(
+                provenance["candidate_execution_mode"], "CLEAN_GIT_WORKTREE"
+            )
+            source.write_text("dirty runtime\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                canary.CanaryError, "CANARY_CANDIDATE_WORKTREE_DIRTY"
+            ):
+                REAL_CANDIDATE_PROVENANCE(candidate, root, runtime_source=source)
+
     def test_semantic_request_contains_only_locally_verifiable_work(self):
         request = canary._request()
         semantic_text = json.dumps(
@@ -413,13 +487,16 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
             self.assertEqual(receipt["host_task_readback_count"], 2)
             self.assertEqual(receipt["host_terminal_wait_readback_count"], 2)
             self.assertEqual(receipt["host_lifecycle_readback_count"], 1)
-            validator.validate_live_canary(
-                receipt,
-                CANDIDATE,
-                ROOT,
-                (evidence / "store").resolve(),
-                expected_goal_count=2,
-            )
+            with mock.patch.object(
+                validator, "_run", return_value=("b" * 40 + "\n").encode()
+            ):
+                validator.validate_live_canary(
+                    receipt,
+                    CANDIDATE,
+                    ROOT,
+                    (evidence / "store").resolve(),
+                    expected_goal_count=2,
+                )
             self.assertEqual(
                 {path.name for path in (evidence / "workspace").iterdir()},
                 set(canary._canary_filenames(2)),

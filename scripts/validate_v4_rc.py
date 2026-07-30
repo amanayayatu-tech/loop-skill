@@ -64,6 +64,9 @@ CANARY_WORKSPACE_DOMAIN = b"loopskill.v4.exec-canary.workspace.v1\0"
 CANARY_PROVIDER_DIAGNOSTIC_DOMAIN = (
     b"loopskill.v4.exec-canary.provider-diagnostic.v1\0"
 )
+CANARY_CANDIDATE_PROVENANCE_DOMAIN = (
+    b"loopskill.v4.exec-canary.candidate-provenance.v1\0"
+)
 HOST_CONFIG_DELTA_NONE = "NONE"
 HOST_CONFIG_DELTA_TRUST_APPEND = "CODEX_WORKSPACE_TRUST_APPEND_V1"
 CANARY_INTEGRITY_BEFORE_FILENAME = "canary-integrity-before.json"
@@ -646,7 +649,10 @@ def validate_canary_receipt(
         raise RcValidationError("RC_CANARY_GOAL_COUNT_INVALID")
     expected_keys = {
         "artifact",
+        "candidate_execution_mode",
+        "candidate_provenance_digest",
         "candidate_sha",
+        "candidate_tree_sha",
         "candidate_goal_digest",
         "confirmation_count",
         "confirmation_digest_bound",
@@ -706,6 +712,7 @@ def validate_canary_receipt(
         raise RcValidationError("RC_CANARY_RECEIPT_SHAPE_INVALID")
     required = {
         "artifact": CANARY_ARTIFACT,
+        "candidate_execution_mode": "CLEAN_GIT_WORKTREE",
         "candidate_sha": candidate,
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
@@ -793,6 +800,20 @@ def validate_canary_receipt(
     for field in ("host_task_identity_digest", "host_result_digest"):
         if not isinstance(value.get(field), str) or not re.fullmatch(r"[0-9a-f]{64}", value[field]):
             raise RcValidationError(f"RC_CANARY_RECEIPT_INVALID: {field}")
+    tree = value.get("candidate_tree_sha")
+    if not isinstance(tree, str) or SHA_RE.fullmatch(tree) is None:
+        raise RcValidationError("RC_CANARY_RECEIPT_INVALID: candidate_tree_sha")
+    candidate_provenance = {
+        "candidate_execution_mode": value["candidate_execution_mode"],
+        "candidate_sha": value["candidate_sha"],
+        "candidate_tree_sha": tree,
+    }
+    if value.get("candidate_provenance_digest") != _domain_digest(
+        CANARY_CANDIDATE_PROVENANCE_DOMAIN, candidate_provenance
+    ):
+        raise RcValidationError(
+            "RC_CANARY_RECEIPT_INVALID: candidate_provenance_digest"
+        )
     for field in (
         "canary_workspace_identity_digest",
         "host_auth_after_digest",
@@ -835,6 +856,40 @@ def validate_canary_receipt(
     expected_provenance = _domain_digest(CANARY_PROVENANCE_DOMAIN, provenance)
     if claimed_provenance != expected_provenance:
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: provenance_digest")
+
+
+def validate_canary_pair(
+    two_goal: dict[str, Any],
+    eight_goal: dict[str, Any],
+    candidate: str,
+) -> None:
+    validate_canary_receipt(two_goal, candidate, expected_goal_count=2)
+    validate_canary_receipt(eight_goal, candidate, expected_goal_count=8)
+    try:
+        two_observed = datetime.fromisoformat(
+            two_goal["observed_at"].replace("Z", "+00:00")
+        )
+        eight_issued = datetime.fromisoformat(
+            eight_goal["issued_at"].replace("Z", "+00:00")
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RcValidationError("RC_CANARY_SEQUENCE_INVALID") from exc
+    if (
+        two_observed.tzinfo is None
+        or eight_issued.tzinfo is None
+        or two_observed > eight_issued
+        or two_goal["host_task_create_count"]
+        + eight_goal["host_task_create_count"]
+        != 10
+        or two_goal["candidate_tree_sha"] != eight_goal["candidate_tree_sha"]
+        or two_goal["candidate_provenance_digest"]
+        != eight_goal["candidate_provenance_digest"]
+        or two_goal["canary_workspace_identity_digest"]
+        == eight_goal["canary_workspace_identity_digest"]
+        or two_goal["host_task_identity_digest"]
+        == eight_goal["host_task_identity_digest"]
+    ):
+        raise RcValidationError("RC_CANARY_SEQUENCE_INVALID")
 
 
 def _read_canonical_object(path: Path, code: str) -> dict[str, Any]:
@@ -960,13 +1015,21 @@ def _validate_canary_integrity_evidence(
     workspace_identity, expected_stanza = _canary_workspace_contract(evidence_root)
     if set(before) != {
         "artifact",
+        "candidate_execution_mode",
+        "candidate_provenance_digest",
         "candidate_sha",
+        "candidate_tree_sha",
         "inputs",
         "issued_at",
         "workspace_identity_digest",
     } or (
         before["artifact"] != "loopskill-v4-canary-integrity-before-v1"
         or before["candidate_sha"] != candidate
+        or before["candidate_execution_mode"]
+        != receipt["candidate_execution_mode"]
+        or before["candidate_provenance_digest"]
+        != receipt["candidate_provenance_digest"]
+        or before["candidate_tree_sha"] != receipt["candidate_tree_sha"]
         or before["issued_at"] != receipt["issued_at"]
         or before["workspace_identity_digest"] != workspace_identity
     ):
@@ -1172,6 +1235,11 @@ def validate_live_canary(
     validate_canary_receipt(
         value, candidate, expected_goal_count=expected_goal_count
     )
+    candidate_tree = _run(
+        root, "git", "rev-parse", f"{candidate}^{{tree}}"
+    ).decode("ascii", "strict").strip()
+    if value["candidate_tree_sha"] != candidate_tree:
+        raise RcValidationError("RC_CANARY_CANDIDATE_PROVENANCE_INVALID")
     _validate_canary_integrity_evidence(
         value,
         candidate,
@@ -1203,18 +1271,20 @@ def validate_conformance_receipt(
     candidate: str,
     root: Path,
     *,
-    expected_canary_sha256: str | None = None,
+    expected_canary_sha256: Mapping[int, str] | None = None,
 ) -> None:
     if (
         value.get("artifact") != "loopskill-v4-conformance-execution-v2"
         or value.get("candidate_sha") != candidate
         or value.get("status") != "PASS"
+        or value.get("bound_real_canary_count") != 2
+        or value.get("bound_real_host_invocations") != 10
         or value.get("case_count") != 349
         or value.get("mapped") != 349
         or value.get("semantic_coverage_mapping_count") != 349
         or value.get("passed_test_methods") != 74
         or value.get("failed") != 0
-        or value.get("real_external_effects") != 1
+        or value.get("real_external_effects") != 0
         or value.get("canonical_case_ids") is not True
         or value.get("evidence_profile")
         != "SEMANTIC_MAPPINGS_TO_UNIQUE_EXECUTED_ASSERTIONS"
@@ -1259,7 +1329,8 @@ def validate_conformance_receipt(
         ):
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
         tests_by_id[test_id] = item
-    canary_sha = None
+    observed_canary_sha: dict[int, str] = {}
+    real_canary_cases = {"UX-009-a": 2, "CAP-RELEASE-CANARY": 8}
     binding_rows = []
     for item in results:
         case_id = item.get("case_id")
@@ -1304,19 +1375,23 @@ def validate_conformance_receipt(
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
         expected_kind = (
             "REAL_APP_RECEIPT+TEST_COVERAGE_MAPPING"
-            if case_id in {"UX-009-a", "CAP-RELEASE-CANARY"}
+            if case_id in real_canary_cases
             else "TEST_COVERAGE_MAPPING"
         )
         if item.get("evidence_kind") != expected_kind:
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
         if expected_kind.startswith("REAL_APP"):
             current = item.get("canary_receipt_sha256")
-            if not isinstance(current, str) or not re.fullmatch(r"[0-9a-f]{64}", current):
+            goal_count = real_canary_cases[case_id]
+            if (
+                item.get("canary_goal_count") != goal_count
+                or not isinstance(current, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", current)
+                or goal_count in observed_canary_sha
+            ):
                 raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
-            if canary_sha is not None and current != canary_sha:
-                raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
-            canary_sha = current
-        elif "canary_receipt_sha256" in item:
+            observed_canary_sha[goal_count] = current
+        elif "canary_receipt_sha256" in item or "canary_goal_count" in item:
             raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
         binding_rows.append(
             {"case_id": case_id, "case_contract_digest": item["case_contract_digest"], "test_id": test_id}
@@ -1324,9 +1399,10 @@ def validate_conformance_receipt(
     if (
         set(tests_by_id) != {item["assertion_test_id"] for item in results}
         or value.get("passed_test_methods") != len(tests_by_id)
+        or set(observed_canary_sha) != {2, 8}
         or (
             expected_canary_sha256 is not None
-            and canary_sha != expected_canary_sha256
+            and observed_canary_sha != dict(expected_canary_sha256)
         )
     ):
         raise RcValidationError("RC_CONFORMANCE_RECEIPT_INVALID")
@@ -1416,6 +1492,10 @@ def validate_author_packet(
             evidence_values[key] = receipt_value
     except builder.AuthorPacketError as exc:
         raise RcValidationError(f"RC_AUTHOR_PACKET_EVIDENCE_INVALID: {exc}") from exc
+    try:
+        builder._validate_canary_pair(evidence_values)
+    except builder.AuthorPacketError as exc:
+        raise RcValidationError(f"RC_AUTHOR_PACKET_EVIDENCE_INVALID: {exc}") from exc
     preflight = evidence_values["release_identity_preflight"]
     try:
         origin_main = _run(
@@ -1460,11 +1540,10 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--canary-receipt", type=Path)
-    parser.add_argument("--canary-store", type=Path)
-    parser.add_argument(
-        "--expected-canary-goals", type=int, choices=(1, 2, 8), default=1
-    )
+    parser.add_argument("--canary-2-receipt", type=Path)
+    parser.add_argument("--canary-2-store", type=Path)
+    parser.add_argument("--canary-8-receipt", type=Path)
+    parser.add_argument("--canary-8-store", type=Path)
     parser.add_argument("--conformance-receipt", type=Path)
     parser.add_argument("--author-packet", type=Path)
     parser.add_argument("--evidence", action="append", default=[])
@@ -1484,8 +1563,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         ).hexdigest()
         if args.static_only:
             if (
-                args.canary_receipt
-                or args.canary_store
+                args.canary_2_receipt
+                or args.canary_2_store
+                or args.canary_8_receipt
+                or args.canary_8_store
                 or args.conformance_receipt
                 or args.author_packet
                 or args.evidence
@@ -1494,34 +1575,47 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt["gate_status"] = "PRE_CANARY_STATIC_ONLY"
         else:
             if (
-                not args.canary_receipt
-                or not args.canary_store
+                not args.canary_2_receipt
+                or not args.canary_2_store
+                or not args.canary_8_receipt
+                or not args.canary_8_store
                 or not args.conformance_receipt
                 or not args.author_packet
                 or not args.evidence
             ):
                 raise RcValidationError("RC_FINAL_RECEIPTS_REQUIRED")
-            canary_raw = args.canary_receipt.read_bytes()
-            canary = json.loads(canary_raw.decode("utf-8", "strict"))
-            if canary_raw != _canonical(canary):
-                raise RcValidationError("RC_CANARY_RECEIPT_NOT_CANONICAL")
-            live_digest = validate_live_canary(
-                canary,
-                args.candidate,
-                args.root,
-                args.canary_store,
-                expected_goal_count=args.expected_canary_goals,
-            )
-            canary_digest = hashlib.sha256(canary_raw).hexdigest()
-            receipt["canary_receipt_digest"] = canary_digest
-            receipt["live_canary_attestation_digest"] = live_digest
+            canaries: dict[int, dict[str, Any]] = {}
+            canary_digests: dict[int, str] = {}
+            live_digests: dict[int, str] = {}
+            for goal_count, canary_path, store_path in (
+                (2, args.canary_2_receipt, args.canary_2_store),
+                (8, args.canary_8_receipt, args.canary_8_store),
+            ):
+                canary_raw = canary_path.read_bytes()
+                canary = json.loads(canary_raw.decode("utf-8", "strict"))
+                if canary_raw != _canonical(canary):
+                    raise RcValidationError("RC_CANARY_RECEIPT_NOT_CANONICAL")
+                canaries[goal_count] = canary
+                canary_digests[goal_count] = hashlib.sha256(canary_raw).hexdigest()
+                live_digests[goal_count] = validate_live_canary(
+                    canary,
+                    args.candidate,
+                    args.root,
+                    store_path,
+                    expected_goal_count=goal_count,
+                )
+            validate_canary_pair(canaries[2], canaries[8], args.candidate)
+            receipt["canary_2_goal_receipt_digest"] = canary_digests[2]
+            receipt["canary_8_goal_receipt_digest"] = canary_digests[8]
+            receipt["live_canary_2_goal_attestation_digest"] = live_digests[2]
+            receipt["live_canary_8_goal_attestation_digest"] = live_digests[8]
             conformance_raw = args.conformance_receipt.read_bytes()
             conformance = json.loads(conformance_raw.decode("utf-8", "strict"))
             validate_conformance_receipt(
                 conformance,
                 args.candidate,
                 args.root,
-                expected_canary_sha256=canary_digest,
+                expected_canary_sha256=canary_digests,
             )
             receipt["conformance_receipt_digest"] = hashlib.sha256(
                 conformance_raw
@@ -1541,7 +1635,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 packet, args.candidate, args.root, evidence_paths
             )
             if (
-                evidence_values["exec_canary"] != canary
+                evidence_values["exec_canary_2_goal"] != canaries[2]
+                or evidence_values["exec_canary_8_goal"] != canaries[8]
                 or evidence_values["final_conformance"] != conformance
                 or evidence_values["static_validation"] != exact_static_receipt
             ):

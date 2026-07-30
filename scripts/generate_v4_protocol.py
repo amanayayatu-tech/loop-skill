@@ -116,6 +116,12 @@ def python_tuple(values: list[str]) -> str:
 
 
 def generate_python(manifest: dict[str, Any], digest: str) -> bytes:
+    plan_source_field = next(
+        field
+        for field in manifest["wire_types"]["PlanDocument"]
+        if field[0] == "source"
+    )
+    plan_source_kinds = plan_source_field[2]["properties"]["kind"]["enum"]
     lines = [
         '"""Generated from protocol/v4/loopskill-v4.protocol.json; do not edit."""',
         "",
@@ -127,6 +133,7 @@ def generate_python(manifest: dict[str, Any], digest: str) -> bytes:
         f"MANIFEST_SHA256 = {digest!r}",
         f"PROTOCOL_VERSION = {manifest['protocol_version']!r}",
         f"CAPACITY_CONTRACT = {manifest['capacity_contract']!r}",
+        f"PLAN_SOURCE_KINDS = {python_tuple(plan_source_kinds)}",
         f"COMMAND_TYPES = {python_tuple(list(manifest['commands']))}",
         f"EVENT_TYPES = {python_tuple(manifest['events'])}",
         f"ERROR_CODES = {python_tuple(manifest['errors'])}",

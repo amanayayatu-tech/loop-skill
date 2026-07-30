@@ -11,6 +11,7 @@ import hashlib
 import os
 import re
 import stat
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -50,6 +51,9 @@ CANARY_CONFIG_DELTA_DOMAIN = b"loopskill.v4.exec-canary.config-delta.v1\0"
 CANARY_WORKSPACE_DOMAIN = b"loopskill.v4.exec-canary.workspace.v1\0"
 CANARY_PROVIDER_DIAGNOSTIC_DOMAIN = (
     b"loopskill.v4.exec-canary.provider-diagnostic.v1\0"
+)
+CANARY_CANDIDATE_PROVENANCE_DOMAIN = (
+    b"loopskill.v4.exec-canary.candidate-provenance.v1\0"
 )
 
 HOST_CONFIG_DELTA_NONE = "NONE"
@@ -321,6 +325,89 @@ def _validate_candidate(candidate_sha: str) -> str:
     if not isinstance(candidate_sha, str) or _SHA_RE.fullmatch(candidate_sha) is None:
         raise CanaryError("CANARY_CANDIDATE_SHA_INVALID")
     return candidate_sha
+
+
+def _candidate_provenance(
+    candidate_sha: str,
+    candidate_root: Path | str | None,
+    *,
+    runtime_source: Path | str | None = None,
+) -> dict[str, str]:
+    if candidate_root is None:
+        raise CanaryError("CANARY_CANDIDATE_ROOT_INVALID")
+    supplied_root = Path(candidate_root)
+    try:
+        root = supplied_root.resolve(strict=True)
+        metadata = root.stat()
+        if (
+            not supplied_root.is_absolute()
+            or supplied_root != root
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+        ):
+            raise OSError("unsafe candidate root")
+        top = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).stdout.strip()
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).stdout.strip()
+        tree = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CanaryError("CANARY_CANDIDATE_ROOT_INVALID") from exc
+    if Path(top).resolve() != root:
+        raise CanaryError("CANARY_CANDIDATE_ROOT_INVALID")
+    if head != candidate_sha:
+        raise CanaryError("CANARY_CANDIDATE_HEAD_MISMATCH")
+    if status:
+        raise CanaryError("CANARY_CANDIDATE_WORKTREE_DIRTY")
+    source = Path(__file__ if runtime_source is None else runtime_source).resolve()
+    expected_source = (
+        root
+        / "codex-loop-prompt-architect"
+        / "scripts"
+        / "loop_architect"
+        / "v4_entry"
+        / "canary.py"
+    ).resolve()
+    if source != expected_source or not source.is_file():
+        raise CanaryError("CANARY_RUNTIME_PAYLOAD_MISMATCH")
+    body = {
+        "candidate_execution_mode": "CLEAN_GIT_WORKTREE",
+        "candidate_sha": candidate_sha,
+        "candidate_tree_sha": tree,
+    }
+    body["candidate_provenance_digest"] = _domain_digest(
+        CANARY_CANDIDATE_PROVENANCE_DOMAIN, body
+    )
+    return body
 
 
 def _ensure_empty_private_root(path: Path | str) -> Path:
@@ -727,11 +814,19 @@ def _receipt(
     issued_at: datetime,
     observed_at: datetime,
     provider_diagnostic: Any,
+    candidate_provenance: Mapping[str, str],
     goal_count: int = 1,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "artifact": CANARY_ARTIFACT,
+        "candidate_execution_mode": candidate_provenance[
+            "candidate_execution_mode"
+        ],
+        "candidate_provenance_digest": candidate_provenance[
+            "candidate_provenance_digest"
+        ],
         "candidate_sha": candidate_sha,
+        "candidate_tree_sha": candidate_provenance["candidate_tree_sha"],
         "candidate_goal_digest": live["candidate_goal_digest"],
         "canary_output_sha256": live["canary_output_sha256"],
         "confirmation_count": 1,
@@ -846,6 +941,7 @@ def run_canary(
     candidate_sha: str,
     evidence_root: Path | str,
     *,
+    candidate_root: Path | str | None = None,
     confirmation_callback: Callable[[Mapping[str, Any]], bool],
     goal_count: int = 1,
     integrity_inputs: Mapping[str, Path | str] | None = None,
@@ -861,6 +957,7 @@ def run_canary(
     producing ``canary-receipt.json``.
     """
     candidate = _validate_candidate(candidate_sha)
+    candidate_provenance = _candidate_provenance(candidate, candidate_root)
     root = _ensure_empty_private_root(evidence_root).resolve(strict=True)
     workspace = root / "workspace"
     workspace.mkdir(mode=0o700)
@@ -893,6 +990,7 @@ def run_canary(
         CANARY_INTEGRITY_BEFORE_FILENAME,
         {
             "artifact": "loopskill-v4-canary-integrity-before-v1",
+            **candidate_provenance,
             "candidate_sha": candidate,
             "inputs": _integrity_public(before_integrity),
             "issued_at": _iso(issued_at),
@@ -1015,6 +1113,7 @@ def run_canary(
         issued_at,
         integrity_observed_at,
         diagnostic_evidence,
+        candidate_provenance,
         goal_count,
     )
     _write_receipt(root, receipt)

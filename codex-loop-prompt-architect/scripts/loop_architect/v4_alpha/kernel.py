@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from .protocol import (
     CONTENT_STORAGE_MODE,
     MAX_EVENTS_PER_COMMAND,
+    PROTOCOL_VERSION,
     ActorRef,
     AuthorityGrant,
     AuthorityGrantV2,
@@ -448,8 +449,12 @@ def reduce_command(
     snapshot: Mapping[str, Any] | None,
     command: CommandEnvelope,
     context: AuthorityContext,
+    *,
+    expected_protocol_version: str = PROTOCOL_VERSION,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    validate_command(command)
+    validate_command(
+        command, expected_protocol_version=expected_protocol_version
+    )
     validate_authority(command, context, snapshot)
     if snapshot is None and command.command_type != "CreateLoop":
         raise ProtocolRejection("INVALID_TRANSITION", "loop does not exist")
@@ -1539,17 +1544,58 @@ def _advance_goal(
     goal_ref = str(command.subject["subject_ref"])
     review_ref = _binding(command, "resolved_refs", "review_ref")
     disposition = command.semantic_payload.get("disposition")
-    result = snapshot["results"][snapshot["reviews"][review_ref]["result_ref"]]
+    goal = snapshot["goals"].get(goal_ref)
+    review = snapshot["reviews"].get(review_ref)
+    if not isinstance(goal, Mapping) or not isinstance(review, Mapping):
+        raise ProtocolRejection("INVALID_TRANSITION", "Goal review is unavailable")
+    result_ref = review.get("result_ref")
+    if not isinstance(result_ref, str):
+        raise ProtocolRejection("INVALID_TRANSITION", "Goal result is unavailable")
+    result = snapshot["results"].get(result_ref)
+    if not isinstance(result, Mapping):
+        raise ProtocolRejection("INVALID_TRANSITION", "Goal result is unavailable")
+    if goal.get("state") != "ACTIVE":
+        raise ProtocolRejection("INVALID_TRANSITION", "Goal is not active")
+    if (
+        result.get("state") != "ACKNOWLEDGED"
+        or review.get("report_ref") != result.get("report_ref")
+        or review.get("artifact_ref") != result.get("artifact_ref")
+    ):
+        raise ProtocolRejection(
+            "INVALID_TRANSITION", "Review does not bind an acknowledged Result"
+        )
+    bound_goal_refs: list[str] = []
+    if isinstance(result.get("goal_ref"), str):
+        bound_goal_refs.append(str(result["goal_ref"]))
+    route_ref = result.get("route_ref")
+    if isinstance(route_ref, str):
+        route = snapshot["routes"].get(route_ref)
+        if not isinstance(route, Mapping) or not isinstance(route.get("goal_ref"), str):
+            raise ProtocolRejection(
+                "INVALID_TRANSITION", "Result route does not bind a Goal"
+            )
+        bound_goal_refs.append(str(route["goal_ref"]))
+    effect_ref = result.get("external_effect_ref")
+    if isinstance(effect_ref, str):
+        effect = snapshot["external_effects"].get(effect_ref)
+        if not isinstance(effect, Mapping) or not isinstance(effect.get("goal_ref"), str):
+            raise ProtocolRejection(
+                "INVALID_TRANSITION", "Result effect does not bind a Goal"
+            )
+        bound_goal_refs.append(str(effect["goal_ref"]))
+    if not bound_goal_refs or any(reference != goal_ref for reference in bound_goal_refs):
+        raise ProtocolRejection(
+            "INVALID_TRANSITION", "Review Result does not bind the subject Goal"
+        )
     allowed = {
-        "DONE": result["outcome"] == "PASS"
-        and snapshot["reviews"][review_ref]["state"] == "PASS",
-        "FAILED": result["outcome"] == "FAILED"
-        and snapshot["reviews"][review_ref]["state"] in {"PASS", "LIMITATION"},
-        "LIMITATION": snapshot["reviews"][review_ref]["state"] == "LIMITATION",
+        "DONE": result.get("outcome") == "PASS"
+        and review.get("state") == "PASS",
+        "FAILED": result.get("outcome") == "FAILED"
+        and review.get("state") in {"PASS", "LIMITATION"},
+        "LIMITATION": review.get("state") == "LIMITATION",
     }
     if disposition not in allowed or not allowed[disposition]:
         raise ProtocolRejection("INVALID_TRANSITION", "Goal cannot advance")
-    goal = snapshot["goals"][goal_ref]
     goal.update({"revision": goal["revision"] + 1, "state": disposition})
     events = [_event("GoalAdvanced", goal_ref=goal_ref)]
     plan = snapshot.get("goal_plan")

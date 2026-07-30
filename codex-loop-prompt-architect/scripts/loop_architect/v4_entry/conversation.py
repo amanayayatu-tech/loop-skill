@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from loop_architect.v4_alpha.protocol import LoopIntakeInput
+from loop_architect.v4_alpha.protocol import LoopIntakeInput, canonical_bytes
 
 
 SLOT_NAMES = frozenset(
@@ -68,10 +68,13 @@ class ConversationIntakeSession:
             raise ConversationIntakeError("revision declaration drift")
         for name, value in updates.items():
             existing = self._slots.get(name)
-            if existing is not None and existing.value != value and name not in revision_set:
-                raise ConversationIntakeError(
-                    f"confirmed slot conflict requires explicit revision: {name}"
-                )
+            if existing is not None:
+                if existing.value != value and name not in revision_set:
+                    raise ConversationIntakeError(
+                        f"confirmed slot conflict requires explicit revision: {name}"
+                    )
+                if existing.value == value and name not in revision_set:
+                    continue
             self._slots[name] = SlotAnswer(
                 value=value,
                 source_kind=source_kind,
@@ -117,19 +120,26 @@ class ConversationIntakeSession:
         if not isinstance(source, Mapping):
             raise ConversationIntakeError("source binding must be a mapping")
         authorization_boundaries = [
-            str(item) for item in value("forbidden_scope", ())
+            f"forbidden_path:{item}" for item in value("forbidden_scope", ())
         ]
         authorization_boundaries.append(
             "destructive:allowed"
             if value("destructive_actions_allowed") is True
             else "destructive:forbidden"
         )
+        budget = value("budget")
+        if isinstance(budget, Mapping):
+            budget_text = canonical_bytes(dict(budget)).decode("utf-8")
+        elif isinstance(budget, str) and budget.strip():
+            budget_text = budget.strip()
+        else:
+            raise ConversationIntakeError("budget must be text or a structured mapping")
         return LoopIntakeInput(
             goal=result,
             goal_plan=goals,
             task_horizon=str(value("task_horizon", "long")),
             write_scope=tuple(str(item) for item in value("allow_scope")),
-            budget=str(value("budget")),
+            budget=budget_text,
             external_actions=tuple(
                 str(item) for item in value("external_actions", ())
             ),

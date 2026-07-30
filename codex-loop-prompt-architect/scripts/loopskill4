@@ -89,6 +89,7 @@ def parser() -> PublicParser:
     doctor.add_argument("--diagnostics", action="store_true")
     canary = subcommands.add_parser("canary")
     canary.add_argument("--candidate", required=True)
+    canary.add_argument("--candidate-root", type=Path, required=True)
     canary.add_argument("--evidence-root", type=Path, required=True)
     canary.add_argument("--goals", type=int, choices=(1, 2, 8), default=1)
     canary.add_argument("--diagnostics", action="store_true")
@@ -189,6 +190,17 @@ def _canonical_plan_input(document, raw: bytes) -> LoopIntakeInput:
             "The canonical plan does not satisfy the closed v4.1 contract.",
             f"Repair the plan and try again ({exc.reason}).",
         ) from exc
+    admitted_digest = raw_domain_digest("loopskill-prd-source-v1\n", raw)
+    plan = canonicalize_plan(
+        {
+            **plan,
+            "source": {
+                **plan["source"],
+                "kind": "canonical_plan_json",
+                "source_digest": admitted_digest,
+            },
+        }
+    )
     boundaries = plan["boundaries"]
     return LoopIntakeInput(
         goal=plan["objective"],
@@ -202,15 +214,37 @@ def _canonical_plan_input(document, raw: bytes) -> LoopIntakeInput:
         authorization_boundaries=tuple(boundaries["forbidden_actions"]),
         canonical_plan=plan,
         source_kind="canonical_plan_json",
-        source_digest=raw_domain_digest("loopskill-prd-source-v1\n", raw),
+        source_digest=admitted_digest,
         source_bytes=len(raw),
     )
 
 
 def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    absolute = path if path.is_absolute() else Path.cwd() / path
+    # macOS exposes root-owned compatibility aliases such as /var -> /private/var.
+    # The caller rejects every non-root-owned symlink component first; resolving
+    # the remaining immutable system alias lets descriptor traversal retain
+    # O_NOFOLLOW without rejecting ordinary files created by tempfile.
+    canonical = absolute.resolve(strict=True)
+    parts = canonical.parts[1:]
+    flags_directory = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    flags_file = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptors = []
     try:
-        before = path.lstat()
+        if not parts or ".." in parts:
+            raise OSError("invalid source path")
+        directory_fd = os.open(canonical.anchor, flags_directory)
+        descriptors.append(directory_fd)
+        for component in parts[:-1]:
+            directory_fd = os.open(
+                component, flags_directory, dir_fd=directory_fd
+            )
+            descriptors.append(directory_fd)
+        before = os.stat(
+            parts[-1], dir_fd=directory_fd, follow_symlinks=False
+        )
         if before.st_size > maximum:
             raise EntryError(
                 "RESOURCE_LIMIT_EXCEEDED",
@@ -229,30 +263,45 @@ def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
                 "The source is not a regular file.",
                 "Provide one regular UTF-8 JSON, text, or Markdown file.",
             )
-        descriptor = os.open(path, flags)
-        try:
-            opened = os.fstat(descriptor)
-            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-                raise OSError("source identity changed")
-            chunks = []
-            remaining = maximum + 1
-            while remaining:
-                chunk = os.read(descriptor, min(65_536, remaining))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                remaining -= len(chunk)
-            raw = b"".join(chunks)
-            after = os.fstat(descriptor)
-            if (
-                len(raw) > maximum
-                or (after.st_dev, after.st_ino, after.st_size)
-                != (opened.st_dev, opened.st_ino, opened.st_size)
-            ):
-                raise OSError("source changed while reading")
-            return raw
-        finally:
-            os.close(descriptor)
+        descriptor = os.open(parts[-1], flags_file, dir_fd=directory_fd)
+        descriptors.append(descriptor)
+        opened = os.fstat(descriptor)
+        before_identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_size,
+            before.st_mtime_ns,
+        )
+        opened_identity = (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+            opened.st_size,
+            opened.st_mtime_ns,
+        )
+        if opened_identity != before_identity:
+            raise OSError("source identity changed")
+        chunks = []
+        remaining = maximum + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        after_identity = (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_size,
+            after.st_mtime_ns,
+        )
+        if len(raw) > maximum or after_identity != opened_identity:
+            raise OSError("source changed while reading")
+        return raw
     except EntryError:
         raise
     except OSError as exc:
@@ -261,15 +310,22 @@ def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
             "The requested source is unavailable, unsafe, or changed while reading.",
             "Provide one stable regular UTF-8 file without symlinks.",
         ) from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
-def _has_symlink_component(path: Path) -> bool:
+def _has_untrusted_symlink_component(path: Path) -> bool:
     absolute = path if path.is_absolute() else Path.cwd() / path
     current = Path(absolute.anchor)
     for part in absolute.parts[1:]:
         current /= part
         try:
-            if stat.S_ISLNK(current.lstat().st_mode):
+            metadata = current.lstat()
+            if stat.S_ISLNK(metadata.st_mode) and metadata.st_uid != 0:
                 return True
         except OSError:
             return False
@@ -281,9 +337,15 @@ def read_intake_input(value: str) -> LoopIntakeInput:
     if value == "-":
         raw = sys.stdin.buffer.read(int(CAPACITY_CONTRACT["expert_json_max_bytes"]) + 1)
         return _decode_intake_bytes(raw, json_document=True)
-    if path.is_dir() and is_legacy_input(path):
-        raise EntryError(*unsupported_legacy_error())
     if path.exists() or path.is_symlink():
+        if _has_untrusted_symlink_component(path):
+            raise EntryError(
+                "PATH_CONFINEMENT_VIOLATION",
+                "The source path contains a symlink.",
+                "Provide one stable regular file without symlink components.",
+            )
+        if path.is_dir() and is_legacy_input(path):
+            raise EntryError(*unsupported_legacy_error())
         suffix = path.suffix.lower()
         if suffix not in {".json", ".md", ".txt"}:
             raise EntryError(
@@ -292,29 +354,14 @@ def read_intake_input(value: str) -> LoopIntakeInput:
                 "Use one UTF-8 JSON, text, or Markdown file.",
             )
         if not path.is_absolute():
-            if _has_symlink_component(path):
-                raise EntryError(
-                    "PATH_CONFINEMENT_VIOLATION",
-                    "The source path contains a symlink.",
-                    "Provide one stable regular file without symlink components.",
-                )
-            workspace = Path.cwd().resolve(strict=True)
-            try:
-                resolved = path.resolve(strict=True)
-                resolved.relative_to(workspace)
-            except (OSError, ValueError) as exc:
+            if ".." in path.parts:
                 raise EntryError(
                     "PATH_CONFINEMENT_VIOLATION",
                     "The relative source is outside the bound workspace.",
                     "Choose one regular file inside the current workspace.",
-                ) from exc
-            path = resolved
-        elif path.is_symlink():
-            raise EntryError(
-                "PATH_CONFINEMENT_VIOLATION",
-                "The source path is a symlink.",
-                "Provide one stable regular file.",
-            )
+                )
+            workspace = Path.cwd().resolve(strict=True)
+            path = workspace / path
         maximum = int(
             CAPACITY_CONTRACT[
                 "expert_json_max_bytes"
@@ -654,6 +701,7 @@ def _interactive_canary(args):
         return run_canary(
             args.candidate,
             args.evidence_root,
+            candidate_root=args.candidate_root,
             confirmation_callback=confirm,
             goal_count=args.goals,
             integrity_inputs={

@@ -544,15 +544,27 @@ def _catalog_and_bindings(root: Path, candidate: str):
     return corpus, catalog, bindings
 
 
-def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
+def run(
+    root: Path,
+    candidate: str,
+    canary_2_path: Path,
+    canary_8_path: Path,
+) -> dict[str, Any]:
     corpus, catalog, bindings = _catalog_and_bindings(root, candidate)
-    canary_raw = canary_path.read_bytes()
-    canary = json.loads(canary_raw.decode("utf-8", "strict"))
-    if canary_raw != rc._canonical(canary):
-        raise RuntimeError("CONFORMANCE_CANARY_RECEIPT_NOT_CANONICAL")
-    rc.validate_canary_receipt(canary, candidate)
-    canary_sha256 = hashlib.sha256(canary_raw).hexdigest()
-    real_canary_cases = {"UX-009-a", "CAP-RELEASE-CANARY"}
+    canaries = {}
+    canary_sha256 = {}
+    for goal_count, path in ((2, canary_2_path), (8, canary_8_path)):
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8", "strict"))
+        if raw != rc._canonical(value):
+            raise RuntimeError("CONFORMANCE_CANARY_RECEIPT_NOT_CANONICAL")
+        rc.validate_canary_receipt(
+            value, candidate, expected_goal_count=goal_count
+        )
+        canaries[goal_count] = value
+        canary_sha256[goal_count] = hashlib.sha256(raw).hexdigest()
+    rc.validate_canary_pair(canaries[2], canaries[8], candidate)
+    real_canary_cases = {"UX-009-a": 2, "CAP-RELEASE-CANARY": 8}
     corpus_digest = hashlib.sha256(corpus.encode("utf-8")).hexdigest()
     results = []
     target_executions: dict[str, dict[str, Any]] = {}
@@ -591,13 +603,17 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
             "replay_expectation": receipt_contract["replay_expectation"],
         }
         if case_id in real_canary_cases:
-            result["canary_receipt_sha256"] = canary_sha256
+            goal_count = real_canary_cases[case_id]
+            result["canary_goal_count"] = goal_count
+            result["canary_receipt_sha256"] = canary_sha256[goal_count]
         results.append(result)
     test_method_results = [target_executions[key] for key in sorted(target_executions)]
     if len(test_method_results) != EXPECTED_EXECUTED_ASSERTION_METHOD_COUNT:
         raise RuntimeError("CONFORMANCE_EXECUTED_ASSERTION_COUNT_DRIFT")
     body = {
         "artifact": "loopskill-v4-conformance-execution-v2",
+        "bound_real_canary_count": 2,
+        "bound_real_host_invocations": 10,
         "candidate_sha": candidate,
         "case_catalog_digest": preservation.EXACT_CASE_CATALOG_SHA256,
         "canonical_case_ids": True,
@@ -609,7 +625,7 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
         "independent_case_observation_claimed": False,
         "mapped": len(results),
         "passed_test_methods": len(test_method_results),
-        "real_external_effects": 1,
+        "real_external_effects": 0,
         "semantic_coverage_mapping_count": len(results),
         "status": "PASS",
         "test_method_count": len(test_method_results),
@@ -677,19 +693,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--candidate", required=True)
-    parser.add_argument("--canary-receipt", type=Path)
+    parser.add_argument("--canary-2-receipt", type=Path)
+    parser.add_argument("--canary-8-receipt", type=Path)
     parser.add_argument("--hosted-unit-only", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     try:
         if args.hosted_unit_only:
-            if args.canary_receipt:
+            if args.canary_2_receipt or args.canary_8_receipt:
                 raise RuntimeError("CONFORMANCE_HOSTED_CANARY_FORBIDDEN")
             value = hosted_run(args.root.resolve(), args.candidate)
         else:
-            if not args.canary_receipt or not args.output:
+            if (
+                not args.canary_2_receipt
+                or not args.canary_8_receipt
+                or not args.output
+            ):
                 raise RuntimeError("CONFORMANCE_FINAL_RECEIPTS_REQUIRED")
-            value = run(args.root.resolve(), args.candidate, args.canary_receipt)
+            value = run(
+                args.root.resolve(),
+                args.candidate,
+                args.canary_2_receipt,
+                args.canary_8_receipt,
+            )
         if args.output:
             args.output.write_bytes(rc._canonical(value) + b"\n")
         summary = {"status": value["status"], "case_count": value["case_count"]}

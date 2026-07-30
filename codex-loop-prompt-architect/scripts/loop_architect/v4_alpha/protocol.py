@@ -15,6 +15,7 @@ from .generated_protocol import (
     ERROR_CODES,
     EVENT_TYPES,
     MANIFEST_SHA256,
+    PLAN_SOURCE_KINDS,
     PROTOCOL_VERSION,
     REFERENCE_KINDS,
     RESULT_STATES,
@@ -446,8 +447,12 @@ def validate_capability_record(capability: CapabilityRecord) -> None:
         raise ProtocolRejection("CAPABILITY_UNVERIFIABLE", "invalid assurance")
 
 
-def validate_command(command: CommandEnvelope) -> None:
-    if command.protocol_version != PROTOCOL_VERSION:
+def validate_command(
+    command: CommandEnvelope,
+    *,
+    expected_protocol_version: str = PROTOCOL_VERSION,
+) -> None:
+    if command.protocol_version != expected_protocol_version:
         raise ProtocolRejection(
             "UNSUPPORTED_PROTOCOL_VERSION", command.protocol_version
         )

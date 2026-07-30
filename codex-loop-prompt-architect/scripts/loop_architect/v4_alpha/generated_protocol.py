@@ -8,6 +8,13 @@ from typing import Any, Mapping
 MANIFEST_SHA256 = '89053bfb45c3eb46b0f4194cd14be8b8295c932e6e0d09e411ffc23d8161a437'
 PROTOCOL_VERSION = '4.1.0'
 CAPACITY_CONTRACT = {'array_limits': {'authorization_boundaries': 32, 'completion_evidence': 32, 'external_actions': 16, 'forbidden_actions': 16, 'forbidden_paths': 32, 'goal_acceptance_criteria': 16, 'goals': 32, 'stop_conditions': 16, 'write_scope': 32}, 'canonical_plan_max_bytes': 131072, 'collection_hard_items': 128, 'create_loop_hard_bytes': 16384, 'create_loop_target_bytes': 8192, 'create_loop_target_collection_members': 64, 'expert_json_max_bytes': 131072, 'goal_count_max': 32, 'goal_count_min': 1, 'host_prompt_hard_bytes': 32768, 'host_prompt_target_bytes': 24576, 'item_max_bytes': 1024, 'objective_max_bytes': 2048, 'source_text_max_bytes': 262144, 'version': 'loopskill-capacity-v1'}
+PLAN_SOURCE_KINDS = (
+    'literal_text',
+    'pasted_text',
+    'authorized_file',
+    'expert_semantic_json',
+    'canonical_plan_json',
+)
 COMMAND_TYPES = (
     'AcknowledgeResult',
     'AdvanceGoal',

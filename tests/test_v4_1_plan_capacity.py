@@ -1,8 +1,10 @@
 import importlib.machinery
 import importlib.util
+import hashlib
 import json
 import os
 import random
+import sqlite3
 import stat
 import subprocess
 import tempfile
@@ -24,7 +26,10 @@ from loop_architect.v4_adapters.codex.adapter import HOST_SCHEMA_VERSION  # noqa
 from loop_architect.v4_alpha.generated_protocol import (  # noqa: E402
     CAPACITY_CONTRACT,
     PROTOCOL_VERSION,
+    ActorRef,
+    AuthorityGrant,
     AuthorityGrantV2,
+    CommandEnvelope,
     LoopIntakeInput,
     Receipt,
 )
@@ -50,7 +55,9 @@ from loop_architect.v4_alpha.protocol import (  # noqa: E402
     canonical_bytes,
     command_without_digest,
     domain_digest,
+    raw_domain_digest,
     result_payload_schema,
+    snapshot_digest,
     with_command_change,
 )
 from loop_architect.v4_alpha.store import InMemoryStore  # noqa: E402
@@ -141,7 +148,7 @@ def canonical_request(goal_count=2, *, acceptance="machine evidence", mode="ADAP
         authorization_boundaries=("deploy",),
         canonical_plan=plan,
         source_kind="canonical_plan_json",
-        source_digest="b" * 64,
+        source_digest=str(plan["source"]["source_digest"]),
         source_bytes=len(canonical_bytes(plan)),
     )
 
@@ -535,6 +542,89 @@ class V41PlanCapacityTests(unittest.TestCase):
             with self.assertRaises(ProtocolRejection) as rejected:
                 store.apply(stale)
             self.assertEqual(rejected.exception.code, "STALE_LOOP_REVISION")
+            store.verify_integrity()
+
+    def test_advance_goal_rejects_cross_goal_review_and_inactive_subject(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            prepared = confirm_loop(
+                prepare_loop(
+                    canonical_request(2, mode="STANDARD"),
+                    root / "prepared",
+                    clock=lambda: NOW,
+                    token_factory=lambda: "2" * 24,
+                    workspace_root=workspace,
+                ).directory,
+                confirmed=True,
+                clock=lambda: NOW,
+            )
+            store, first_advance = pure_content_ready_to_advance(prepared)
+            first_goal_ref = str(first_advance.subject["subject_ref"])
+            first_review_ref = first_advance.machine_bindings["resolved_refs"][
+                "review_ref"
+            ]
+            store.apply(first_advance)
+            snapshot = store.snapshot(prepared.manifest.loop_ref)
+            second_goal_ref = snapshot["goal_plan"]["active_goal_ref"]
+            first_result = snapshot["results"][
+                snapshot["reviews"][first_review_ref]["result_ref"]
+            ]
+            self.assertEqual(first_result["goal_ref"], first_goal_ref)
+            self.assertNotEqual(first_result["goal_ref"], second_goal_ref)
+
+            def forged_advance(subject_ref, operation_label):
+                current = store.snapshot(prepared.manifest.loop_ref)
+                return _machine_command(
+                    store,
+                    current,
+                    command_type="AdvanceGoal",
+                    operation_label=operation_label,
+                    subject_kind="GoalRef",
+                    subject_ref=subject_ref,
+                    expected_subject_revisions={
+                        subject_ref: current["goals"][subject_ref]["revision"],
+                        first_review_ref: current["reviews"][first_review_ref][
+                            "revision"
+                        ],
+                        "goal_plan": current["goal_plan"]["revision"],
+                    },
+                    machine_bindings={
+                        "allocate_refs": {},
+                        "receipt_refs": {},
+                        "resolved_refs": {"review_ref": first_review_ref},
+                    },
+                    semantic_payload={"disposition": "DONE"},
+                    clock=lambda: NOW,
+                )
+
+            before_cross_goal = store.snapshot(prepared.manifest.loop_ref)
+            with self.assertRaises(ProtocolRejection) as cross_goal:
+                store.apply(
+                    forged_advance(second_goal_ref, "cross-goal-review-forgery")
+                )
+            self.assertEqual(cross_goal.exception.code, "INVALID_TRANSITION")
+            self.assertEqual(
+                cross_goal.exception.detail,
+                "Review Result does not bind the subject Goal",
+            )
+            self.assertEqual(
+                store.snapshot(prepared.manifest.loop_ref), before_cross_goal
+            )
+            self.assertEqual(
+                before_cross_goal["goals"][second_goal_ref]["state"], "ACTIVE"
+            )
+
+            with self.assertRaises(ProtocolRejection) as inactive:
+                store.apply(
+                    forged_advance(first_goal_ref, "inactive-goal-review-replay")
+                )
+            self.assertEqual(inactive.exception.code, "INVALID_TRANSITION")
+            self.assertEqual(inactive.exception.detail, "Goal is not active")
+            self.assertEqual(
+                store.snapshot(prepared.manifest.loop_ref), before_cross_goal
+            )
             store.verify_integrity()
 
     def test_authority_selector_binds_plan_namespace_kind_and_slice(self):
@@ -1028,12 +1118,53 @@ except ProtocolRejection as exc:
                 )
 
     def test_capacity_corpus_and_command_growth_invariant(self):
+        corpus = json.loads(
+            (ROOT / "tests" / "fixtures" / "v4_1_capacity" / "corpus.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(corpus["schema"], "loopskill-v4.1-capacity-corpus-v1")
+        self.assertEqual(corpus["goal_counts"], [1, 4, 8, 16, 32])
+        self.assertEqual(
+            corpus["admission_limits"],
+            {
+                "canonical_plan_max_bytes": int(
+                    CAPACITY_CONTRACT["canonical_plan_max_bytes"]
+                ),
+                "create_loop_target_bytes": int(
+                    CAPACITY_CONTRACT["create_loop_target_bytes"]
+                ),
+                "create_loop_target_collection_members": int(
+                    CAPACITY_CONTRACT["create_loop_target_collection_members"]
+                ),
+                "goal_count_max": int(CAPACITY_CONTRACT["goal_count_max"]),
+                "host_prompt_target_bytes": int(
+                    CAPACITY_CONTRACT["host_prompt_target_bytes"]
+                ),
+                "source_text_max_bytes": int(
+                    CAPACITY_CONTRACT["source_text_max_bytes"]
+                ),
+            },
+        )
+        self.assertEqual(
+            set(corpus["negative_cases"]),
+            {
+                "goal_count_0",
+                "goal_count_33",
+                "plan_128k_plus_1",
+                "source_256k_plus_1",
+                "create_loop_over_8k",
+                "create_loop_collection_over_64",
+                "current_prompt_over_24k",
+                "duplicate_goal_id",
+                "tampered_slice_digest",
+            },
+        )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workspace = root / "workspace"
             workspace.mkdir()
             reports = []
-            for goal_count in (1, 4, 8, 16, 32):
+            for goal_count in corpus["goal_counts"]:
                 prepared = prepare_loop(
                     canonical_request(goal_count),
                     root / f"prepared-{goal_count}",
@@ -1085,6 +1216,90 @@ except ProtocolRejection as exc:
         self.assertLessEqual(
             max_collection_members(command_without_digest(large_command)), 64
         )
+
+    def test_capacity_corpus_missing_negative_gates_write_nothing(self):
+        target = int(CAPACITY_CONTRACT["canonical_plan_max_bytes"]) + 1
+        oversized_plan = canonical_plan(32, mode="STANDARD")
+        added = []
+        while len(canonical_bytes(oversized_plan)) < target:
+            index = len(added)
+            goal = oversized_plan["goals"][index % len(oversized_plan["goals"])]
+            item = f"capacity-{index:03d}-" + "x" * 1000
+            goal["acceptance_criteria"].append(item)
+            added.append((goal, item))
+        excess = len(canonical_bytes(oversized_plan)) - target
+        if excess:
+            goal, item = added[-1]
+            self.assertLess(excess, len(item))
+            goal["acceptance_criteria"][-1] = item[:-excess]
+        self.assertEqual(len(canonical_bytes(oversized_plan)), target)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            plan_output = root / "plan-128k-plus-1"
+            request = replace(
+                canonical_request(32, mode="STANDARD"),
+                canonical_plan=oversized_plan,
+                source_bytes=target,
+            )
+            with self.assertRaises(EntryError) as plan_limit:
+                prepare_loop(
+                    request,
+                    plan_output,
+                    clock=lambda: NOW,
+                    token_factory=lambda: "a" * 24,
+                    workspace_root=workspace,
+                )
+            self.assertEqual(plan_limit.exception.code, "RESOURCE_LIMIT_EXCEEDED")
+            self.assertFalse(plan_output.exists())
+
+            original_content_create_command = content_create_command
+
+            def fault_injected_prepare(label, semantic_payload):
+                output = root / label
+
+                def oversized_command(**kwargs):
+                    command = original_content_create_command(**kwargs)
+                    return with_command_change(
+                        command,
+                        lambda values: values.update(
+                            semantic_payload=semantic_payload
+                        ),
+                    )
+
+                with mock.patch(
+                    "loop_architect.v4_entry.preparation.content_create_command",
+                    side_effect=oversized_command,
+                ):
+                    with self.assertRaises(EntryError) as blocked:
+                        prepare_loop(
+                            canonical_request(1, mode="STANDARD"),
+                            output,
+                            clock=lambda: NOW,
+                            token_factory=lambda: "b" * 24,
+                            workspace_root=workspace,
+                        )
+                self.assertEqual(blocked.exception.code, "RESOURCE_LIMIT_EXCEEDED")
+                self.assertFalse(output.exists())
+                return blocked.exception
+
+            command_bytes = fault_injected_prepare(
+                "create-loop-over-8k",
+                {f"padding-{index:02d}": "x" * 1000 for index in range(10)},
+            )
+            self.assertIn(
+                "create_loop_target_bytes", command_bytes.view.next_action
+            )
+            collection_members = fault_injected_prepare(
+                "create-loop-collection-over-64",
+                {"members": [str(index) for index in range(65)]},
+            )
+            self.assertIn(
+                "create_loop_target_collection_members",
+                collection_members.view.next_action,
+            )
 
     def test_installed_entry_fake_provider_matrix_is_lazy_and_exact(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1222,6 +1437,48 @@ except ProtocolRejection as exc:
                 )
             self.assertEqual(raised.exception.code, "RESOURCE_LIMIT_EXCEEDED")
             self.assertFalse(output.exists())
+
+    def test_human_budget_compiles_to_the_displayed_canonical_contract(self):
+        request = replace(
+            canonical_request(2, mode="STANDARD"),
+            canonical_plan=None,
+            budget="最多 2 小时、最多 2 次 Host 调用、费用 0 元",
+            source_kind="literal_text",
+        )
+        compiled = compile_plan(
+            request,
+            loop_ref="loop-" + "4" * 24,
+            workspace_binding="5" * 64,
+        )
+        expected = {
+            "currency": None,
+            "max_cost_minor_units": 0,
+            "max_host_invocations": 2,
+            "wall_clock_seconds": 7200,
+        }
+        self.assertEqual(compiled.plan["budget"], expected)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            prepared = prepare_loop(
+                request,
+                root / "prepared",
+                clock=lambda: NOW,
+                token_factory=lambda: "5" * 24,
+                workspace_root=workspace,
+            )
+            self.assertEqual(json.loads(prepared.manifest.budget), expected)
+            self.assertEqual(prepared.boundary["budget"], prepared.manifest.budget)
+        with self.assertRaises(PlanCodecError) as ambiguous_cost:
+            compile_plan(
+                replace(request, budget="2 hours, 2 Host calls, CNY 25"),
+                loop_ref="loop-" + "4" * 24,
+                workspace_binding="5" * 64,
+            )
+        self.assertEqual(
+            ambiguous_cost.exception.reason, "structured_cost_budget_required"
+        )
 
     def test_two_goal_lazy_activation_and_fixed_grants(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1445,28 +1702,107 @@ except ProtocolRejection as exc:
             self.assertEqual(provider.invoke_count, 1)
 
     def test_closed_eager_v4_0_store_status_export_and_continuation(self):
-        commands = vertical_commands()
+        fixture_path = (
+            ROOT / "tests" / "fixtures" / "v4_0_eager" / "eager-store.json"
+        )
+        fixture_raw = fixture_path.read_bytes()
+        self.assertEqual(
+            hashlib.sha256(fixture_raw).hexdigest(),
+            "a7bd3d03529de67e0e0a336f1004ce436a544bd2405e26c867ab8d4031845a09",
+        )
+        fixture = json.loads(fixture_raw.decode("utf-8"))
+        self.assertEqual(
+            fixture["baseline_commit"],
+            "f7b62cb2fd9bd6ab4b038a8384bced4b7e74cbd9",
+        )
+        self.assertEqual(
+            fixture["baseline_tag_object"],
+            "eb42b904b6973cab5ad0ed586aa4137a8c20943b",
+        )
+        self.assertEqual(
+            fixture["schema"], "loopskill-v4.0.0-eager-store-fixture-v1"
+        )
+        commands = [
+            CommandEnvelope(**value) for value in fixture["continuation_commands"]
+        ]
+        authority_value = fixture["authority"]
+        grants = {}
+        for value in authority_value["grants"]:
+            value = dict(value)
+            value["allowed_commands"] = tuple(value["allowed_commands"])
+            value["subject_kinds"] = tuple(value["subject_kinds"])
+            value["exact_subjects"] = tuple(value["exact_subjects"])
+            grant = AuthorityGrant(**value)
+            grants[grant.grant_ref] = grant
+        legacy_authority = AuthorityContext(
+            actors={
+                value["actor_ref"]: ActorRef(**value)
+                for value in authority_value["actors"]
+            },
+            grants=grants,
+            receipts={
+                value["receipt_ref"]: Receipt(**value)
+                for value in authority_value["receipts"]
+            },
+            trusted_actor_issuers=authority_value["trusted_actor_issuers"],
+            trusted_grant_issuers=authority_value["trusted_grant_issuers"],
+            trusted_receipt_issuers=authority_value["trusted_receipt_issuers"],
+        )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = root / STORE_FILENAME
-            with SQLiteStore(path, fixture_authority()) as store:
-                for command in commands[:5]:
-                    store.apply(command)
-                snapshot = store.snapshot(commands[0].subject["loop_ref"])
+            connection = sqlite3.connect(path)
+            connection.executescript(fixture["sqlite_logical_dump"])
+            connection.close()
+            path.chmod(0o600)
+
+            def schema_rows():
+                readback = sqlite3.connect(path)
+                try:
+                    return readback.execute(
+                        "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                        "ORDER BY type, name"
+                    ).fetchall()
+                finally:
+                    readback.close()
+
+            schema_before = schema_rows()
+            with SQLiteStore(path) as store:
+                snapshot = store.snapshot(fixture["loop_ref"])
+                self.assertEqual(
+                    snapshot_digest(snapshot), fixture["checkpoint_snapshot_digest"]
+                )
+                self.assertEqual(
+                    snapshot["loop_revision"], fixture["checkpoint_loop_revision"]
+                )
                 self.assertNotIn("storage_mode", snapshot.get("goal_plan", {}))
                 legacy_private = store.canonical_export()
+                self.assertEqual(
+                    hashlib.sha256(legacy_private).hexdigest(),
+                    fixture["checkpoint_export_sha256"],
+                )
                 store.verify_integrity()
+            self.assertEqual(schema_rows(), schema_before)
             view = status(root=root)
             self.assertNotEqual(view.progress, "Finished")
             public = privacy_export(legacy_private)
             self.assertNotIn("source_digest", canonical_bytes(public).decode("utf-8"))
-            with SQLiteStore(path, fixture_authority()) as store:
-                for command in commands[5:]:
+            with SQLiteStore(path, legacy_authority) as store:
+                for command in commands:
                     store.apply(command)
                 store.verify_integrity()
-                terminal = store.snapshot(commands[0].subject["loop_ref"])
+                terminal = store.snapshot(fixture["loop_ref"])
+                self.assertEqual(
+                    snapshot_digest(terminal),
+                    fixture["expected_terminal_snapshot_digest"],
+                )
+                self.assertEqual(
+                    terminal["loop_revision"],
+                    fixture["expected_terminal_loop_revision"],
+                )
                 self.assertNotIn("storage_mode", terminal.get("goal_plan", {}))
             self.assertEqual(status(root=root).result, "SUCCEEDED")
+            self.assertEqual(schema_rows(), schema_before)
 
     def test_source_admission_and_session_only_confirmation(self):
         cli = load_cli()
@@ -1523,6 +1859,66 @@ except ProtocolRejection as exc:
             )
         )
 
+    def test_canonical_plan_source_binding_uses_exact_admitted_bytes(self):
+        cli = load_cli()
+        plan = canonical_plan(2, mode="STANDARD")
+        plan["boundaries"]["destructive_actions_allowed"] = True
+        plan["boundaries"]["forbidden_paths"] = ["secrets/"]
+        plan["source"]["source_digest"] = "0" * 64
+        raw = json.dumps(plan, ensure_ascii=False, indent=2).encode("utf-8")
+        expected = raw_domain_digest("loopskill-prd-source-v1\n", raw)
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            source = Path(temporary) / "expert-plan.json"
+            source.write_bytes(raw)
+            request = cli.read_intake_input(str(source))
+        self.assertEqual(request.source_kind, "canonical_plan_json")
+        self.assertEqual(request.source_digest, expected)
+        self.assertEqual(request.canonical_plan["source"]["kind"], request.source_kind)
+        self.assertEqual(
+            request.canonical_plan["source"]["source_digest"], expected
+        )
+        compiled = compile_plan(
+            request,
+            loop_ref="loop-" + "f" * 24,
+            workspace_binding="e" * 64,
+        )
+        self.assertEqual(compiled.plan["source"]["source_digest"], expected)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            prepared = prepare_loop(
+                request,
+                root / "prepared",
+                clock=lambda: NOW,
+                token_factory=lambda: "f" * 24,
+                workspace_root=workspace,
+            )
+            self.assertTrue(prepared.boundary["destructive_actions_allowed"])
+            self.assertEqual(prepared.boundary["forbidden_paths"], ["secrets/"])
+            self.assertEqual(prepared.boundary["plan_revision"], 0)
+            self.assertEqual(
+                prepared.boundary["workspace_identity_digest"],
+                prepared.manifest.workspace_identity_digest,
+            )
+            card = (prepared.directory / "CONTROLLER_PLAN.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("## Forbidden paths\n\n- secrets/", card)
+            self.assertIn("## Destructive actions\n\n- Allowed: true", card)
+            self.assertIn("- Plan revision: `0`", card)
+            self.assertIn(
+                f"- Workspace identity: `{prepared.manifest.workspace_identity_digest}`",
+                card,
+            )
+        with self.assertRaises(PlanCodecError) as mismatch:
+            compile_plan(
+                replace(request, source_digest="f" * 64),
+                loop_ref="loop-" + "f" * 24,
+                workspace_binding="e" * 64,
+            )
+        self.assertEqual(mismatch.exception.reason, "source_binding_mismatch")
+
     def test_source_negative_matrix_and_owner_only_preparation(self):
         cli = load_cli()
         with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
@@ -1531,6 +1927,18 @@ except ProtocolRejection as exc:
             unicode_source.write_text("中英 mixed requirement", encoding="utf-8")
             admitted = cli.read_intake_input(str(unicode_source))
             self.assertEqual(admitted.goal, "中英 mixed requirement")
+
+            actual_parent = root / "actual-parent"
+            actual_parent.mkdir()
+            absolute_source = actual_parent / "source.md"
+            absolute_source.write_text("must not cross a parent symlink", encoding="utf-8")
+            alias_parent = root / "alias-parent"
+            alias_parent.symlink_to(actual_parent, target_is_directory=True)
+            with self.assertRaises(Exception) as parent_symlink:
+                cli.read_intake_input(str(alias_parent / absolute_source.name))
+            self.assertEqual(
+                parent_symlink.exception.code, "PATH_CONFINEMENT_VIOLATION"
+            )
 
             directory = root / "not-regular.txt"
             directory.mkdir()
@@ -1632,10 +2040,25 @@ except ProtocolRejection as exc:
             self.assertEqual(len(session.blocking_questions()), 3)
             retained = session.answers["result"]
             session.apply_candidate(
+                {"result": "交付 portable RC"},
+                source_kind="inferred_repeat",
+                source_digest="9" * 64,
+                source_summary="same value appeared again",
+                round_number=2,
+            )
+            self.assertEqual(session.answers["result"], retained)
+            structured_budget = {
+                "currency": "CNY",
+                "max_cost_minor_units": 2500,
+                "max_host_invocations": 2,
+                "wall_clock_seconds": 7200,
+            }
+            session.apply_candidate(
                 {
                     "allow_scope": ("workspace/",),
+                    "forbidden_scope": ("secrets/",),
                     "completion_evidence": ("tests pass",),
-                    "budget": "2 hours and 2 Host calls",
+                    "budget": structured_budget,
                     "source_binding": {
                         "kind": "pasted_text",
                         "source_bytes": 20,
@@ -1653,7 +2076,25 @@ except ProtocolRejection as exc:
             intake = session.to_intake_input()
             self.assertEqual(intake.goal_plan[1], "验证 evidence")
             self.assertIn("destructive:forbidden", intake.authorization_boundaries)
+            self.assertIn("forbidden_path:secrets/", intake.authorization_boundaries)
+            compiled = compile_plan(
+                intake,
+                loop_ref="loop-" + "1" * 24,
+                workspace_binding="2" * 64,
+            )
+            self.assertEqual(compiled.plan["budget"], structured_budget)
+            self.assertEqual(compiled.plan["boundaries"]["forbidden_paths"], ["secrets/"])
             self.assertEqual(tuple(root.iterdir()), before)
+            prepared = prepare_loop(
+                intake,
+                root / "prepared",
+                clock=lambda: NOW,
+                token_factory=lambda: "3" * 24,
+                workspace_root=root,
+            )
+            self.assertEqual(json.loads(prepared.manifest.budget), structured_budget)
+            self.assertEqual(prepared.boundary["budget"], prepared.manifest.budget)
+            self.assertEqual(prepared.boundary["forbidden_paths"], ["secrets/"])
             self.assertFalse(hasattr(session, "save"))
             self.assertFalse(hasattr(session, "load"))
             self.assertFalse(

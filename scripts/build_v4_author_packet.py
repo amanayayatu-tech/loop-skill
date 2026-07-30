@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -19,6 +20,9 @@ from typing import Any, Mapping, Sequence
 ARTIFACT = "loopskill-v4-publication-packet-v2"
 STATUS = "PUBLICATION_CANDIDATE_VALIDATED"
 PACKET_DIGEST_DOMAIN = b"loopskill.v4.publication-packet.v2\0"
+CANARY_CANDIDATE_PROVENANCE_DOMAIN = (
+    b"loopskill.v4.exec-canary.candidate-provenance.v1\0"
+)
 MAX_EVIDENCE_BYTES = 1024 * 1024
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -47,7 +51,8 @@ REQUIRED_TRACKED_FILES = (
 )
 
 REQUIRED_EVIDENCE_RECEIPTS = (
-    "exec_canary",
+    "exec_canary_2_goal",
+    "exec_canary_8_goal",
     "coverage",
     "distribution",
     "final_conformance",
@@ -126,7 +131,8 @@ _SECRET_TEXT_PATTERNS = (
 )
 
 _EVIDENCE_ARTIFACTS = {
-    "exec_canary": "loopskill-v4-disposable-codex-exec-canary-v1",
+    "exec_canary_2_goal": "loopskill-v4-disposable-codex-exec-canary-v1",
+    "exec_canary_8_goal": "loopskill-v4-disposable-codex-exec-canary-v1",
     "coverage": "loopskill-v4-coverage-receipt-v1",
     "distribution": "loopskill-v4-distribution-receipt-v1",
     "final_conformance": "loopskill-v4-conformance-execution-v2",
@@ -301,14 +307,17 @@ def _require_fields(value: Mapping[str, Any], expected: Mapping[str, Any]) -> No
         raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
 
 
-def _validate_exec_canary(value: Mapping[str, Any]) -> None:
+def _validate_exec_canary(
+    value: Mapping[str, Any], *, expected_goal_count: int
+) -> None:
     goal_count = value.get("host_task_create_count")
-    if goal_count not in {1, 2, 8}:
+    if goal_count != expected_goal_count:
         raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
     _require_fields(
         value,
         {
             "app_restart_count": 0,
+            "candidate_execution_mode": "CLEAN_GIT_WORKTREE",
             "confirmation_count": 1,
             "confirmation_digest_bound": True,
             "finalization": "ACKNOWLEDGED",
@@ -374,6 +383,7 @@ def _validate_exec_canary(value: Mapping[str, Any]) -> None:
     ):
         raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
     for field in (
+        "candidate_provenance_digest",
         "candidate_goal_digest",
         "canary_workspace_identity_digest",
         "canary_output_sha256",
@@ -388,6 +398,56 @@ def _validate_exec_canary(value: Mapping[str, Any]) -> None:
         "provenance_digest",
     ):
         _require_digest(value, field)
+    tree = value.get("candidate_tree_sha")
+    if not isinstance(tree, str) or not SHA_RE.fullmatch(tree):
+        raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
+    candidate_provenance = {
+        "candidate_execution_mode": value["candidate_execution_mode"],
+        "candidate_sha": value.get("candidate_sha"),
+        "candidate_tree_sha": tree,
+    }
+    if value.get("candidate_provenance_digest") != hashlib.sha256(
+        CANARY_CANDIDATE_PROVENANCE_DOMAIN + _canonical(candidate_provenance)
+    ).hexdigest():
+        raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
+
+
+def _validate_exec_canary_2_goal(value: Mapping[str, Any]) -> None:
+    _validate_exec_canary(value, expected_goal_count=2)
+
+
+def _validate_exec_canary_8_goal(value: Mapping[str, Any]) -> None:
+    _validate_exec_canary(value, expected_goal_count=8)
+
+
+def _validate_canary_pair(values: Mapping[str, Mapping[str, Any]]) -> None:
+    two = values["exec_canary_2_goal"]
+    eight = values["exec_canary_8_goal"]
+    try:
+        two_observed = datetime.fromisoformat(
+            str(two["observed_at"]).replace("Z", "+00:00")
+        )
+        eight_issued = datetime.fromisoformat(
+            str(eight["issued_at"]).replace("Z", "+00:00")
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AuthorPacketError(
+            "AUTHOR_PACKET_CANARY_SEQUENCE_INVALID"
+        ) from exc
+    if (
+        two_observed.tzinfo is None
+        or eight_issued.tzinfo is None
+        or two_observed > eight_issued
+        or two["host_task_create_count"] + eight["host_task_create_count"] != 10
+        or two.get("candidate_tree_sha") != eight.get("candidate_tree_sha")
+        or two.get("candidate_provenance_digest")
+        != eight.get("candidate_provenance_digest")
+        or two.get("canary_workspace_identity_digest")
+        == eight.get("canary_workspace_identity_digest")
+        or two.get("host_task_identity_digest")
+        == eight.get("host_task_identity_digest")
+    ):
+        raise AuthorPacketError("AUTHOR_PACKET_CANARY_SEQUENCE_INVALID")
 
 
 def _validate_coverage(value: Mapping[str, Any]) -> None:
@@ -447,13 +507,15 @@ def _validate_final_conformance(value: Mapping[str, Any]) -> None:
         value,
         {
             "canonical_case_ids": True,
+            "bound_real_canary_count": 2,
+            "bound_real_host_invocations": 10,
             "case_count": 349,
             "evidence_profile": _PROFILE_A,
             "failed": 0,
             "independent_case_observation_claimed": False,
             "mapped": 349,
             "passed_test_methods": 74,
-            "real_external_effects": 1,
+            "real_external_effects": 0,
             "semantic_coverage_mapping_count": 349,
             "status": "PASS",
             "test_method_count": 74,
@@ -560,7 +622,8 @@ def _validate_test_fault_matrix(value: Mapping[str, Any]) -> None:
 
 
 _EVIDENCE_VALIDATORS = {
-    "exec_canary": _validate_exec_canary,
+    "exec_canary_2_goal": _validate_exec_canary_2_goal,
+    "exec_canary_8_goal": _validate_exec_canary_8_goal,
     "coverage": _validate_coverage,
     "distribution": _validate_distribution,
     "final_conformance": _validate_final_conformance,
@@ -649,9 +712,12 @@ def build_packet(
         raise AuthorPacketError("AUTHOR_PACKET_TRACKED_FILE_SET_INVALID")
 
     evidence_receipts: dict[str, str] = {}
+    evidence_values: dict[str, dict[str, Any]] = {}
     for key in REQUIRED_EVIDENCE_RECEIPTS:
-        _value, digest = _read_evidence(key, Path(evidence_paths[key]), candidate)
+        value, digest = _read_evidence(key, Path(evidence_paths[key]), candidate)
+        evidence_values[key] = value
         evidence_receipts[key] = digest
+    _validate_canary_pair(evidence_values)
 
     body: dict[str, Any] = {
         "artifact": ARTIFACT,

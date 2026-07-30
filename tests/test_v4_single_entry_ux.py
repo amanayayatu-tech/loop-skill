@@ -186,11 +186,20 @@ def ready_request(goal="Ship a bounded public change", *, horizon="long"):
     )
 
 
-def prepare_confirm(root, goal="Ship a bounded public change", *, token="000000000000000000000001"):
+def prepare_confirm(
+    root,
+    goal="Ship a bounded public change",
+    *,
+    token="000000000000000000000001",
+    goal_plan=None,
+):
     workspace = Path(root) / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
+    request = ready_request(goal)
+    if goal_plan is not None:
+        request = replace(request, goal_plan=tuple(goal_plan))
     prepared = prepare_loop(
-        ready_request(goal),
+        request,
         Path(root) / "prepared",
         clock=lambda: NOW,
         token_factory=lambda: token,
@@ -390,6 +399,8 @@ class V4SingleEntryUXTests(unittest.TestCase):
                         "canary",
                         "--candidate",
                         "a" * 40,
+                        "--candidate-root",
+                        str(ROOT),
                         "--evidence-root",
                         str(root / "canary"),
                     ]
@@ -552,13 +563,18 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 "authorization_boundaries",
                 "budget",
                 "capacity",
+                "destructive_actions_allowed",
                 "external_actions",
                 "execution_mode",
+                "forbidden_actions",
+                "forbidden_paths",
                 "goal",
                 "goal_count",
+                "plan_revision",
                 "selection_reason",
                 "stop_conditions",
                 "write_scope",
+                "workspace_identity_digest",
             })
             with self.assertRaises(EntryError) as unconfirmed:
                 start_loop(prepared, root=root / "data", clock=lambda: NOW)
@@ -701,11 +717,11 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertIn("Confirmation: accepted", stdout.getvalue())
             self.assertTrue((prepared.directory / CONFIRMATION_FILENAME).is_file())
 
-    def test_minimal_profile_runs_without_policy_and_compat_runtime_absent(self):
+    def test_standard_two_goal_path_closes_with_optional_modules_unavailable(self):
         original_import = __import__
 
         def deny_optional(name, globals=None, locals=None, fromlist=(), level=0):
-            if name.startswith("loop_architect.v4_policy"):
+            if name.startswith(("loop_architect.v4_policy", "loop_architect.v4_eager_v40")):
                 raise ImportError("optional module unavailable")
             return original_import(name, globals, locals, fromlist, level)
 
@@ -715,8 +731,12 @@ class V4SingleEntryUXTests(unittest.TestCase):
             root = Path(temporary)
             prepared = prepare_confirm(
                 root,
-                "Minimal profile loop",
+                "Minimal profile first goal",
                 token="444444444444444444444444",
+                goal_plan=(
+                    "Minimal profile first goal",
+                    "Minimal profile second goal",
+                ),
             )
             data = root / "data"
             start_loop(prepared, root=data, clock=lambda: NOW)

@@ -7,7 +7,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from .generated_protocol import CAPACITY_CONTRACT
+from .generated_protocol import CAPACITY_CONTRACT, PLAN_SOURCE_KINDS
 from .protocol import (
     CONTENT_STORAGE_MODE,
     EAGER_STORAGE_MODE,
@@ -25,15 +25,7 @@ from .protocol import (
 
 PLAN_SCHEMA = "loopskill-plan-v1"
 PLAN_INDEX_SCHEMA = "loopskill-plan-index-v1"
-SOURCE_KINDS = frozenset(
-    {
-        "literal_text",
-        "pasted_text",
-        "authorized_file",
-        "expert_semantic_json",
-        "canonical_plan_json",
-    }
-)
+SOURCE_KINDS = frozenset(PLAN_SOURCE_KINDS)
 PLAN_FIELDS = frozenset(
     {
         "schema",
@@ -342,14 +334,38 @@ def parse_plan_bytes(raw: bytes) -> dict[str, Any]:
 
 
 def _legacy_budget(text: str, goal_count: int) -> dict[str, Any]:
-    lower = text.casefold()
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            value = parse_json_bytes(stripped.encode("utf-8"))
+        except Exception as exc:
+            raise PlanCodecError(
+                "USER_CLARIFICATION_REQUIRED", "structured_budget_json"
+            ) from exc
+        if not isinstance(value, Mapping) or set(value) != BUDGET_FIELDS:
+            raise PlanCodecError(
+                "USER_CLARIFICATION_REQUIRED", "structured_budget_shape"
+            )
+        return dict(value)
+
+    lower = stripped.casefold()
     number_words = {"one": 1, "two": 2, "three": 3, "four": 4}
     wall = 3600
-    match = re.search(r"\b(\d+)\s*(minutes?|mins?|hours?|hrs?|days?)\b", lower)
+    match = re.search(
+        r"\b(\d+|one|two|three|four)\s*(minutes?|mins?|hours?|hrs?|days?)\b",
+        lower,
+    )
     if match:
-        amount = int(match.group(1))
+        token = match.group(1)
+        amount = int(token) if token.isdigit() else number_words[token]
         unit = match.group(2)
         wall = amount * (86_400 if unit.startswith("day") else 3_600 if unit.startswith(("hour", "hr")) else 60)
+    else:
+        match = re.search(r"(\d+)\s*(分钟|小时|天)", stripped)
+        if match:
+            amount = int(match.group(1))
+            unit = match.group(2)
+            wall = amount * (86_400 if unit == "天" else 3_600 if unit == "小时" else 60)
     invocations = goal_count
     match = re.search(
         r"\b(\d+|one|two|three|four)\s+(?:host\s+)?(?:invocations?|turns?|attempts?|calls?)\b",
@@ -358,6 +374,19 @@ def _legacy_budget(text: str, goal_count: int) -> dict[str, Any]:
     if match:
         token = match.group(1)
         invocations = int(token) if token.isdigit() else number_words[token]
+    else:
+        match = re.search(r"(?:最多|至多|不超过)?\s*(\d+)\s*次?\s*(?:Host|主机)\s*(?:调用|运行)", stripped, re.IGNORECASE)
+        if match:
+            invocations = int(match.group(1))
+    positive_cost = re.search(
+        r"(?:USD|CNY|RMB|[$¥￥])\s*[1-9]|[1-9][0-9]*(?:\.[0-9]+)?\s*(?:元|美元|人民币)",
+        stripped,
+        re.IGNORECASE,
+    )
+    if positive_cost:
+        raise PlanCodecError(
+            "USER_CLARIFICATION_REQUIRED", "structured_cost_budget_required"
+        )
     return {
         "currency": None,
         "max_cost_minor_units": 0,
@@ -386,6 +415,17 @@ def legacy_plan_from_request(request: Any) -> dict[str, Any]:
         )
     mode = "ADAPTIVE" if str(request.task_horizon).strip().casefold() == "adaptive" else "STANDARD"
     acceptance = list(request.acceptance_criteria)
+    boundary_values = [str(item) for item in request.authorization_boundaries]
+    forbidden_paths = [
+        item.split(":", 1)[1]
+        for item in boundary_values
+        if item.casefold().startswith("forbidden_path:")
+    ]
+    forbidden_actions = [
+        item
+        for item in boundary_values
+        if not item.casefold().startswith(("forbidden_path:", "destructive:"))
+    ]
     plan = {
         "boundaries": {
             "destructive_actions_allowed": any(
@@ -393,8 +433,8 @@ def legacy_plan_from_request(request: Any) -> dict[str, Any]:
                 for item in request.authorization_boundaries
             ),
             "external_actions": list(request.external_actions),
-            "forbidden_actions": list(request.authorization_boundaries),
-            "forbidden_paths": [],
+            "forbidden_actions": forbidden_actions,
+            "forbidden_paths": forbidden_paths,
             "write_scope": list(request.write_scope),
         },
         "budget": _legacy_budget(str(request.budget), len(goals)),
@@ -515,8 +555,18 @@ def compile_plan(
     workspace_binding: str,
     authority_digest: str | None = None,
 ) -> CompiledPlan:
-    source = request.canonical_plan if request.canonical_plan is not None else legacy_plan_from_request(request)
-    plan = canonicalize_plan(source)
+    if request.canonical_plan is None:
+        plan = legacy_plan_from_request(request)
+    else:
+        plan = canonicalize_plan(request.canonical_plan)
+        source = plan["source"]
+        if (
+            source["kind"] != request.source_kind
+            or source["source_digest"] != request.source_digest
+        ):
+            raise PlanCodecError(
+                "USER_PREPARATION_INVALID", "source_binding_mismatch"
+            )
     raw = canonical_bytes(plan)
     identity = plan_digest(raw)
     if authority_digest is None:

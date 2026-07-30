@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping
 from loop_architect.v4_alpha.protocol import (
     CAPACITY_CONTRACT,
     MANIFEST_SHA256,
+    PLAN_SOURCE_KINDS,
     LoopIntakeDecision,
     LoopIntakeInput,
     PlanCapacityReport,
@@ -390,7 +391,12 @@ def _manifest_value(manifest: PreparedLoopManifest) -> dict[str, Any]:
     return asdict(manifest)
 
 
-def _boundary_value(manifest: PreparedLoopManifest) -> dict[str, Any]:
+def _boundary_value(
+    manifest: PreparedLoopManifest,
+    plan: Mapping[str, Any],
+    index: Mapping[str, Any],
+) -> dict[str, Any]:
+    plan_boundaries = plan["boundaries"]
     return {
         "acceptance_criteria": list(manifest.acceptance_criteria),
         "authorization_boundaries": list(manifest.authorization_boundaries),
@@ -405,17 +411,32 @@ def _boundary_value(manifest: PreparedLoopManifest) -> dict[str, Any]:
         "plan_index_digest": manifest.plan_index_digest,
         "plan_storage_mode": manifest.plan_storage_mode,
         "capacity_contract_version": manifest.capacity_contract_version,
+        "destructive_actions_allowed": plan_boundaries[
+            "destructive_actions_allowed"
+        ],
+        "forbidden_actions": list(plan_boundaries["forbidden_actions"]),
+        "forbidden_paths": list(plan_boundaries["forbidden_paths"]),
+        "plan_revision": index["revision"],
         "product_version": manifest.product_version,
         "protocol_manifest_digest": manifest.protocol_manifest_digest,
         "selection_reason": manifest.selection_reason,
         "stop_conditions": list(manifest.stop_conditions),
         "write_scope": list(manifest.write_scope),
+        "workspace_identity_digest": manifest.workspace_identity_digest,
     }
 
 
-def _render_plan(manifest: PreparedLoopManifest, manifest_digest: str, boundary_digest: str) -> bytes:
-    def lines(values: tuple[str, ...]) -> str:
+def _render_plan(
+    manifest: PreparedLoopManifest,
+    manifest_digest: str,
+    boundary_digest: str,
+    plan: Mapping[str, Any],
+    index: Mapping[str, Any],
+) -> bytes:
+    def lines(values: tuple[str, ...] | list[str]) -> str:
         return "\n".join(f"- {value}" for value in values) or "- None"
+
+    plan_boundaries = plan["boundaries"]
 
     text = f"""# LoopSkill 4.1 任务卡
 
@@ -458,12 +479,22 @@ This is a human review/export view. `loop-manifest.json` is the machine source.
 
 {lines(manifest.authorization_boundaries)}
 
+## Forbidden paths
+
+{lines(plan_boundaries["forbidden_paths"])}
+
+## Destructive actions
+
+- Allowed: {str(plan_boundaries["destructive_actions_allowed"]).lower()}
+
 ## Machine binding
 
 - Manifest digest: `{manifest_digest}`
 - Boundary digest: `{boundary_digest}`
 - Plan digest: `{manifest.plan_digest}`
 - PlanIndex digest: `{manifest.plan_index_digest}`
+- Plan revision: `{index["revision"]}`
+- Workspace identity: `{manifest.workspace_identity_digest}`
 - Capacity contract: `{manifest.capacity_contract_version}`
 - No Host task, heartbeat, delivery, or execution was created by this plan.
 """
@@ -596,7 +627,7 @@ def _capacity_report(
     if source_bytes > (
         int(CAPACITY_CONTRACT["source_text_max_bytes"])
         if compiled.plan["source"]["kind"]
-        in {"literal_text", "pasted_text", "authorized_file"}
+        in set(PLAN_SOURCE_KINDS) - {"expert_semantic_json", "canonical_plan_json"}
         else int(CAPACITY_CONTRACT["expert_json_max_bytes"])
     ):
         reasons.append("source_bytes")
@@ -766,10 +797,7 @@ def prepare(
         ),
         selection_reason=decision.reason,
         write_scope=tuple(compiled.plan["boundaries"]["write_scope"]),
-        budget=(
-            request.budget.strip()
-            or canonical_bytes(compiled.plan["budget"]).decode("utf-8")
-        ),
+        budget=canonical_bytes(compiled.plan["budget"]).decode("utf-8"),
         external_actions=tuple(compiled.plan["boundaries"]["external_actions"]),
         acceptance_criteria=tuple(compiled.plan["completion_evidence"]),
         stop_conditions=tuple(compiled.plan["stop_conditions"]),
@@ -790,7 +818,7 @@ def prepare(
         protocol_manifest_digest=MANIFEST_SHA256,
     )
     manifest_value = _manifest_value(manifest)
-    boundary = _boundary_value(manifest)
+    boundary = _boundary_value(manifest, compiled.plan, compiled.index)
     manifest_bytes = canonical_bytes(manifest_value)
     boundary_bytes = canonical_bytes(boundary)
     manifest_digest = domain_digest(
@@ -799,7 +827,13 @@ def prepare(
     boundary_digest = domain_digest(
         "loopskill-prepared-boundary-v1\n", boundary
     )
-    plan_bytes = _render_plan(manifest, manifest_digest, boundary_digest)
+    plan_bytes = _render_plan(
+        manifest,
+        manifest_digest,
+        boundary_digest,
+        compiled.plan,
+        compiled.index,
+    )
     instructions_bytes = _render_instructions()
     bundle_base = {
         "boundary_digest": boundary_digest,
@@ -1030,7 +1064,7 @@ def load_prepared(
     )
     if (
         bundle != expected_bundle
-        or boundary != _boundary_value(manifest)
+        or boundary != _boundary_value(manifest, compiled.plan, compiled.index)
         or canonical_bytes(capacity) != canonical_bytes(expected_capacity)
         or capacity.get("capacity_status") != "PASS"
         or not identities_match
@@ -1140,6 +1174,9 @@ def boundary_display(context: PreparedContext) -> Mapping[str, Any]:
         "acceptance_criteria": context.manifest.acceptance_criteria,
         "authorization_boundaries": context.manifest.authorization_boundaries,
         "budget": context.manifest.budget,
+        "destructive_actions_allowed": context.boundary[
+            "destructive_actions_allowed"
+        ],
         "capacity": {
             key: context.capacity_report[key]
             for key in (
@@ -1154,9 +1191,13 @@ def boundary_display(context: PreparedContext) -> Mapping[str, Any]:
         },
         "external_actions": context.manifest.external_actions,
         "execution_mode": context.manifest.execution_mode,
+        "forbidden_actions": tuple(context.boundary["forbidden_actions"]),
+        "forbidden_paths": tuple(context.boundary["forbidden_paths"]),
         "goal": context.manifest.goal,
         "goal_count": context.capacity_report["goal_count"],
+        "plan_revision": context.boundary["plan_revision"],
         "selection_reason": context.manifest.selection_reason,
         "stop_conditions": context.manifest.stop_conditions,
         "write_scope": context.manifest.write_scope,
+        "workspace_identity_digest": context.manifest.workspace_identity_digest,
     }

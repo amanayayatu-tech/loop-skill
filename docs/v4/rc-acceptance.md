@@ -29,9 +29,11 @@ alone is not a release.
   prepare, explicit digest-bound confirmation, one fresh Provider per Goal,
   minimal artifact/review/finalization, no
   MCP, no restart, no provider resend, and no real v3/user/private data. The
-  entry is installed and uninstalled in an isolated home, while the sole model
-  turn uses an already-authenticated official Host context without copying
-  credentials; Host auth must remain unchanged, while Host config may either
+  distribution is independently installed and uninstalled in an isolated home,
+  while the ten bounded model turns use an already-authenticated official Host
+  context without copying credentials. Before any Host effect, each route binds
+  the live canary module to the clean exact commit tree. Host auth must remain
+  unchanged, while Host config may either
   remain unchanged or gain exactly one EOF-appended trusted-project stanza for
   the exact canonical disposable workspace, with the real nonzero delta bound
   into private measurement and the minimized receipt;
@@ -51,8 +53,10 @@ It sets `independent_case_observation_claimed=false`; the mappings are not 349
 independent executions or runtime observations. Zero-test loads, skipped
 required tests, foreign case IDs, changed catalog digests, mapping or executed-
 method count drift, stronger observation claims, and missing results fail. The
-real exec canary consumes typed fixture authorities instead of reconstructing
-protocol literals, and its public receipt contains no absolute private path,
+two real exec canaries consume typed fixture authorities instead of
+reconstructing protocol literals. `UX-009-a` binds the 2-Goal receipt and
+`CAP-RELEASE-CANARY` binds the 8-Goal receipt; their total Host invocation count
+is exactly 10. Their public receipts contain no absolute private path,
 task/thread/turn identity, prompt, transcript, secret, or raw log.
 
 That minimized JSON is not self-authenticating and cannot satisfy the final

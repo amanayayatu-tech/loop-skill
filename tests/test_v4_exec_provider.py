@@ -48,6 +48,18 @@ RESULT = {"outcome": "PASS", "summary": "complete"}
 RESULT_TEXT = canonical_bytes(RESULT).decode("utf-8")
 
 
+def fake_candidate_provenance(candidate):
+    body = {
+        "candidate_execution_mode": "CLEAN_GIT_WORKTREE",
+        "candidate_sha": candidate,
+        "candidate_tree_sha": "c" * 40,
+    }
+    body["candidate_provenance_digest"] = canary._domain_digest(
+        canary.CANARY_CANDIDATE_PROVENANCE_DOMAIN, body
+    )
+    return body
+
+
 def payload():
     return {
         "acceptance_criteria": ["one file"],
@@ -822,6 +834,10 @@ class ExecProviderTests(unittest.TestCase):
         candidate = "b" * 40
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
             canary, "_validate_candidate", return_value=candidate
+        ), mock.patch.object(
+            canary,
+            "_candidate_provenance",
+            return_value=fake_candidate_provenance(candidate),
         ):
             root = Path(temporary)
             inputs = root / "host-inputs"
@@ -960,6 +976,10 @@ class ExecProviderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
             canary, "_validate_candidate", return_value=candidate
+        ), mock.patch.object(
+            canary,
+            "_candidate_provenance",
+            return_value=fake_candidate_provenance(candidate),
         ):
             host_inputs = Path(temporary) / "host-inputs"
             host_inputs.mkdir()

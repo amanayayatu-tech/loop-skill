@@ -190,8 +190,8 @@ are predecessor evidence, not release artifacts.
 ## Gate 2: exact-SHA local foreground Codex exec canary
 
 After freezing the candidate SHA, run exactly two new non-scored, non-research,
-disposable routes through the receipt-bound public entry installed from that
-exact commit: a fresh 2-Goal route, then only after it passes, a fresh 8-Goal
+disposable routes through the public source-tree entry from that exact clean
+commit: a fresh 2-Goal route, then only after it passes, a fresh 8-Goal
 route. Together they authorize at most 10 Host invocations and two hours.
 Install, uninstall, config-integrity, and independent-v3 sentinel checks use a
 new isolated `CODEX_HOME`. The authenticated model turns use
@@ -201,9 +201,10 @@ hashed before and after the turn; the canary never inspects the operator's real
 v3 installation or data. The evidence root must not already exist. The command
 stops for the exact interactive phrase
 `START THIS LOOP` once for each route before constructing its first provider.
-Each Goal uses one fresh one-invocation Provider. In other words, the release
-invocations use the installed, receipt-checked `loopskill4 canary`, not the
-source-tree entry:
+Each Goal uses one fresh one-invocation Provider. The release invocations use
+the candidate's own `loopskill4 canary` entry and bind its live module path,
+commit tree, and clean-worktree state before any Host effect. The separately
+required distribution gate still proves the isolated installed entry.
 
 The exact candidate must first prove that preflight requires the official
 `--output-schema` and `--output-last-message` flags. The private schema and
@@ -221,6 +222,7 @@ umask 077
 CANARY_CODEX_HOME="$RELEASE_TMP/canary-codex-home"
 CANARY_ROOT_2="$RELEASE_TMP/exec-canary-2-goal"
 CANARY_ROOT_8="$RELEASE_TMP/exec-canary-8-goal"
+CANDIDATE_ROOT="$(pwd -P)"
 HOST_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 HOST_CONFIG="$HOST_CODEX_HOME/config.toml"
 HOST_AUTH="$HOST_CODEX_HOME/auth.json"
@@ -270,7 +272,7 @@ CODEX_HOME="$HOST_CODEX_HOME" codex login status 2>&1 | grep -F 'Logged in' >/de
 export CODEX_HOME="$CANARY_CODEX_HOME"
 LOOP_RELEASE_COMMIT="$CANDIDATE" PYTHON="$PY" bash scripts/install.sh \
   >"$RELEASE_TMP/canary-install.log"
-CANARY_ENTRY="$CANARY_CODEX_HOME/skills/loopskill4/scripts/loopskill4"
+CANARY_ENTRY="$CANDIDATE_ROOT/codex-loop-prompt-architect/scripts/loopskill4"
 CANARY_UNINSTALL="$CANARY_CODEX_HOME/install-receipts/loopskill4/uninstall_v4.py"
 INSTALL_READBACK="$("$PY" "$CANARY_UNINSTALL" --codex-home "$CANARY_CODEX_HOME" --check)"
 printf '%s\n' "$INSTALL_READBACK" >"$RELEASE_TMP/canary-install-readback.json"
@@ -286,15 +288,15 @@ trap cleanup_canary_install EXIT
 
 CODEX_HOME="$HOST_CODEX_HOME" "$CANARY_ENTRY" canary \
   --candidate "$CANDIDATE" \
+  --candidate-root "$CANDIDATE_ROOT" \
   --goals 2 \
   --evidence-root "$CANARY_ROOT_2"
 
 CODEX_HOME="$HOST_CODEX_HOME" "$CANARY_ENTRY" canary \
   --candidate "$CANDIDATE" \
+  --candidate-root "$CANDIDATE_ROOT" \
   --goals 8 \
   --evidence-root "$CANARY_ROOT_8"
-
-CANARY_ROOT="$CANARY_ROOT_8"
 
 UNINSTALL_FIRST="$("$PY" "$CANARY_UNINSTALL" --codex-home "$CANARY_CODEX_HOME")"
 grep -F '"status":"UNINSTALLED"' <<<"$UNINSTALL_FIRST" >/dev/null
@@ -435,16 +437,17 @@ post-process readback. A locally constructed receipt JSON alone cannot
 substitute for the bound store/artifact evidence. The disposable store and raw
 Host identity remain outside the repository and release packet.
 
-After both PASS receipts exist, bind the existing real-exec corpus mappings to
-the 8-Goal receipt while the RC evidence index separately binds both route
-receipts. This remains profile A: 349 semantic mappings to 74 unique executed
-assertion methods, not 349 independent observations.
+After both PASS receipts exist, bind `UX-009-a` to the 2-Goal receipt and
+`CAP-RELEASE-CANARY` to the 8-Goal receipt. The RC evidence index separately
+binds both routes. This remains profile A: 349 semantic mappings to 74 unique
+executed assertion methods, not 349 independent observations.
 
 ```bash
 set -euo pipefail
 "$PY" scripts/run_v4_conformance.py \
   --candidate "$CANDIDATE" \
-  --canary-receipt "$CANARY_ROOT/canary-receipt.json" \
+  --canary-2-receipt "$CANARY_ROOT_2/canary-receipt.json" \
+  --canary-8-receipt "$CANARY_ROOT_8/canary-receipt.json" \
   --output "$EVIDENCE/final-conformance.json"
 ```
 
@@ -564,7 +567,8 @@ PY
 
 "$PY" scripts/build_v4_author_packet.py \
   --root . --candidate "$CANDIDATE" \
-  --evidence "exec_canary=$CANARY_ROOT/canary-receipt.json" \
+  --evidence "exec_canary_2_goal=$CANARY_ROOT_2/canary-receipt.json" \
+  --evidence "exec_canary_8_goal=$CANARY_ROOT_8/canary-receipt.json" \
   --evidence "coverage=$EVIDENCE/coverage.json" \
   --evidence "distribution=$EVIDENCE/distribution.json" \
   --evidence "final_conformance=$EVIDENCE/final-conformance.json" \
@@ -577,12 +581,14 @@ PY
 
 "$PY" scripts/validate_v4_rc.py \
   --candidate "$CANDIDATE" \
-  --canary-receipt "$CANARY_ROOT/canary-receipt.json" \
-  --canary-store "$CANARY_ROOT/store" \
-  --expected-canary-goals 8 \
+  --canary-2-receipt "$CANARY_ROOT_2/canary-receipt.json" \
+  --canary-2-store "$CANARY_ROOT_2/store" \
+  --canary-8-receipt "$CANARY_ROOT_8/canary-receipt.json" \
+  --canary-8-store "$CANARY_ROOT_8/store" \
   --conformance-receipt "$EVIDENCE/final-conformance.json" \
   --author-packet "$EVIDENCE/author-packet.json" \
-  --evidence "exec_canary=$CANARY_ROOT/canary-receipt.json" \
+  --evidence "exec_canary_2_goal=$CANARY_ROOT_2/canary-receipt.json" \
+  --evidence "exec_canary_8_goal=$CANARY_ROOT_8/canary-receipt.json" \
   --evidence "coverage=$EVIDENCE/coverage.json" \
   --evidence "distribution=$EVIDENCE/distribution.json" \
   --evidence "final_conformance=$EVIDENCE/final-conformance.json" \

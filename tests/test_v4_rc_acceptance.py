@@ -71,21 +71,49 @@ def provider_diagnostic() -> dict:
     }
 
 
-def canary(candidate: str) -> dict:
+def canary(
+    candidate: str,
+    *,
+    goal_count: int = 1,
+    route_digit: str | None = None,
+    issued: datetime | None = None,
+) -> dict:
+    if goal_count not in {1, 2, 8}:
+        raise AssertionError(goal_count)
+    if route_digit is None:
+        route_digit = str(goal_count)
     live = live_observation(candidate)
-    issued = datetime.now(timezone.utc).replace(microsecond=0)
-    fresh_until = issued + timedelta(minutes=5)
+    live["host_task_identity_digest"] = (
+        "c" * 64 if goal_count == 1 else route_digit * 64
+    )
+    issued = (issued or datetime.now(timezone.utc)).replace(microsecond=0)
+    fresh_until = issued + timedelta(minutes=5 if goal_count == 1 else 60)
     issued_text = issued.isoformat().replace("+00:00", "Z")
     fresh_text = fresh_until.isoformat().replace("+00:00", "Z")
+    candidate_provenance = {
+        "candidate_execution_mode": "CLEAN_GIT_WORKTREE",
+        "candidate_sha": candidate,
+        "candidate_tree_sha": candidate,
+    }
+    diagnostic_evidence = (
+        provider_diagnostic()
+        if goal_count == 1
+        else [provider_diagnostic() for _ in range(goal_count)]
+    )
     value = {
         "artifact": validator.CANARY_ARTIFACT,
+        **candidate_provenance,
+        "candidate_provenance_digest": validator._domain_digest(
+            validator.CANARY_CANDIDATE_PROVENANCE_DOMAIN,
+            candidate_provenance,
+        ),
         "candidate_sha": candidate,
         "candidate_goal_digest": live["candidate_goal_digest"],
         "canary_output_sha256": live["canary_output_sha256"],
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
         "allowed_host_managed_delta_count": 0,
-        "canary_workspace_identity_digest": "3" * 64,
+        "canary_workspace_identity_digest": route_digit * 64,
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
         "fresh_until": fresh_text,
@@ -96,14 +124,14 @@ def canary(candidate: str) -> dict:
         "host_config_delta_kind": validator.HOST_CONFIG_DELTA_NONE,
         "host_receipt_issuer": validator.CANARY_ISSUER,
         "host_receipt_trust": validator.CANARY_TRUST,
-        "host_create_readback_count": 1,
+        "host_create_readback_count": goal_count,
         "host_lifecycle_readback_count": 1,
         "host_result_digest": live["result_digest"],
-        "host_task_create_count": 1,
+        "host_task_create_count": goal_count,
         "host_task_identity_digest": live["host_task_identity_digest"],
-        "host_task_readback_count": 1,
-        "host_terminal_wait_readback_count": 1,
-        "host_total_read_count": 4,
+        "host_task_readback_count": goal_count,
+        "host_terminal_wait_readback_count": goal_count,
+        "host_total_read_count": 3 * goal_count + 1,
         "intake_external_effects": 0,
         "intake_heartbeat_count": 0,
         "intake_host_task_count": 0,
@@ -124,7 +152,7 @@ def canary(candidate: str) -> dict:
         "private_data_used": False,
         "provider_resend_count": 0,
         "provider_terminal_diagnostic_digest": validator._domain_digest(
-            validator.CANARY_PROVIDER_DIAGNOSTIC_DOMAIN, provider_diagnostic()
+            validator.CANARY_PROVIDER_DIAGNOSTIC_DOMAIN, diagnostic_evidence
         ),
         "research_scored": False,
         "result": "ACKNOWLEDGED",
@@ -150,12 +178,20 @@ def write_integrity_evidence(
     candidate: str,
     *,
     trust_append: bool = False,
+    goal_count: int = 1,
 ) -> tuple[dict, dict]:
     workspace = root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    (root / validator.CANARY_PROVIDER_DIAGNOSTIC_FILENAME).write_bytes(
-        validator._canonical(provider_diagnostic())
+    diagnostic_paths = (
+        (root / validator.CANARY_PROVIDER_DIAGNOSTIC_FILENAME,)
+        if goal_count == 1
+        else tuple(
+            root / f"canary-provider-diagnostic-{index:02d}.json"
+            for index in range(1, goal_count + 1)
+        )
     )
+    for diagnostic_path in diagnostic_paths:
+        diagnostic_path.write_bytes(validator._canonical(provider_diagnostic()))
     identity, stanza = validator._canary_workspace_contract(root.resolve())
     config = b'model = "synthetic"\n'
     prefix_digest = hashlib.sha256(
@@ -198,7 +234,10 @@ def write_integrity_evidence(
     }
     before = {
         "artifact": "loopskill-v4-canary-integrity-before-v1",
+        "candidate_execution_mode": value["candidate_execution_mode"],
+        "candidate_provenance_digest": value["candidate_provenance_digest"],
         "candidate_sha": candidate,
+        "candidate_tree_sha": value["candidate_tree_sha"],
         "inputs": before_inputs,
         "issued_at": value["issued_at"],
         "workspace_identity_digest": identity,
@@ -286,7 +325,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
                         str(ROOT),
                         "--candidate",
                         candidate,
-                        "--canary-receipt",
+                        "--canary-2-receipt",
                         str(paths[0]),
                         "--conformance-receipt",
                         str(paths[1]),
@@ -404,6 +443,44 @@ class V4RcAcceptanceTests(unittest.TestCase):
             ):
                 validator.validate_canary_receipt(value, candidate)
 
+    def test_canary_pair_requires_order_same_candidate_and_distinct_routes(self) -> None:
+        candidate = "a" * 40
+        issued = datetime.now(timezone.utc).replace(microsecond=0)
+        two = canary(candidate, goal_count=2, route_digit="2", issued=issued)
+        eight = canary(
+            candidate,
+            goal_count=8,
+            route_digit="8",
+            issued=issued + timedelta(minutes=1),
+        )
+        validator.validate_canary_pair(two, eight, candidate)
+        for mutation in ("sequence", "tree", "workspace", "task"):
+            with self.subTest(mutation=mutation):
+                changed = dict(eight)
+                if mutation == "sequence":
+                    changed["issued_at"] = (
+                        issued - timedelta(minutes=1)
+                    ).isoformat().replace("+00:00", "Z")
+                elif mutation == "tree":
+                    changed["candidate_tree_sha"] = "b" * 40
+                elif mutation == "workspace":
+                    changed["canary_workspace_identity_digest"] = two[
+                        "canary_workspace_identity_digest"
+                    ]
+                else:
+                    changed["host_task_identity_digest"] = two[
+                        "host_task_identity_digest"
+                    ]
+                if mutation in {"sequence", "tree", "workspace", "task"}:
+                    provenance = dict(changed)
+                    provenance.pop("provenance_digest")
+                    provenance.pop("host_receipt_digest")
+                    changed["provenance_digest"] = validator._domain_digest(
+                        validator.CANARY_PROVENANCE_DOMAIN, provenance
+                    )
+                with self.assertRaises(validator.RcValidationError):
+                    validator.validate_canary_pair(two, changed, candidate)
+
     def test_canary_integrity_measurement_missing_mutated_and_mismatched_fail(self) -> None:
         candidate = "a" * 40
         value = canary(candidate)
@@ -514,7 +591,9 @@ class V4RcAcceptanceTests(unittest.TestCase):
             return_value=live_observation(candidate),
         ), mock.patch.object(
             validator, "_validate_canary_integrity_evidence"
-        ) as readback:
+        ) as readback, mock.patch.object(
+            validator, "_run", return_value=(candidate + "\n").encode()
+        ):
             digest = validator.validate_live_canary(
                 value,
                 candidate,
@@ -552,12 +631,15 @@ class V4RcAcceptanceTests(unittest.TestCase):
                     validator.RcValidationError,
                     "RC_CANARY_LIVE_BINDING_INVALID",
                 ):
-                    validator.validate_live_canary(
-                        changed,
-                        candidate,
-                        ROOT,
-                        Path("synthetic-live-store"),
-                    )
+                    with mock.patch.object(
+                        validator, "_run", return_value=(candidate + "\n").encode()
+                    ):
+                        validator.validate_live_canary(
+                            changed,
+                            candidate,
+                            ROOT,
+                            Path("synthetic-live-store"),
+                        )
 
     def test_publication_packet_requires_exact_files_evidence_and_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as evidence_directory:
@@ -662,8 +744,24 @@ class V4RcAcceptanceTests(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "canary.json"
-            path.write_bytes(validator._canonical(canary(candidate)))
+            issued = datetime.now(timezone.utc).replace(microsecond=0)
+            path_2 = Path(directory) / "canary-2.json"
+            path_8 = Path(directory) / "canary-8.json"
+            path_2.write_bytes(
+                validator._canonical(
+                    canary(candidate, goal_count=2, route_digit="2", issued=issued)
+                )
+            )
+            path_8.write_bytes(
+                validator._canonical(
+                    canary(
+                        candidate,
+                        goal_count=8,
+                        route_digit="8",
+                        issued=issued + timedelta(minutes=1),
+                    )
+                )
+            )
             with mock.patch.object(
                 runner,
                 "_run_test",
@@ -678,7 +776,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
                     "tests_run": 1,
                 },
             ):
-                value = runner.run(ROOT, candidate, path)
+                value = runner.run(ROOT, candidate, path_2, path_8)
         validator.validate_conformance_receipt(value, candidate, ROOT)
         changed_profile = dict(value)
         changed_profile["evidence_profile"] = "SELECTOR_SPECIFIC_OBSERVATIONS"

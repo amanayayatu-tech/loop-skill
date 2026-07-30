@@ -11,6 +11,8 @@ from .kernel import AuthorityContext, reduce_command
 from .protocol import (
     ApplyResult,
     CommandEnvelope,
+    CONTENT_STORAGE_MODE,
+    PROTOCOL_VERSION,
     InjectedCrash,
     ProtocolRejection,
     command_digest,
@@ -213,8 +215,20 @@ class InMemoryStore:
             raise ProtocolRejection(error["code"], error["detail"])
 
         try:
-            validate_command(command)
             current = self._snapshots.get(loop_ref)
+            eager_v4_0 = (
+                current is not None
+                and current.get("goal_plan", {}).get("storage_mode")
+                != CONTENT_STORAGE_MODE
+                and command.protocol_version != PROTOCOL_VERSION
+            )
+            if eager_v4_0:
+                from loop_architect.v4_eager_v40 import reduce_eager_command
+
+                reducer = reduce_eager_command
+            else:
+                validate_command(command)
+                reducer = reduce_command
             actual_revision = 0 if current is None else current["loop_revision"]
             if actual_revision != command.expected_loop_revision:
                 raise ProtocolRejection(
@@ -223,8 +237,10 @@ class InMemoryStore:
                 )
             if fault_at == "before_reduce":
                 raise InjectedCrash(fault_at)
-            candidate, pending_events, response = reduce_command(
-                current, command, self.authority
+            candidate, pending_events, response = reducer(
+                current,
+                command,
+                self.authority,
             )
             if fault_at == "after_reduce_before_commit":
                 raise InjectedCrash(fault_at)

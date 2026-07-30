@@ -26,6 +26,7 @@ from loop_architect.v4_alpha.protocol import (
     AuthorityGrantV2,
     CommandEnvelope,
     EffectAttempt,
+    PROTOCOL_VERSION,
     Receipt,
     InjectedCrash,
     ProtocolRejection,
@@ -589,16 +590,30 @@ class SQLiteStore:
                     return _apply_result(outcome, replayed=True)
                 raise ProtocolRejection(outcome["code"], outcome["detail"])
 
-            validate_command(command)
             current = self._snapshot_in_transaction(loop_ref)
+            eager_v4_0 = (
+                current is not None
+                and current.get("goal_plan", {}).get("storage_mode")
+                != CONTENT_STORAGE_MODE
+                and command.protocol_version != PROTOCOL_VERSION
+            )
+            if eager_v4_0:
+                from loop_architect.v4_eager_v40 import reduce_eager_command
+
+                reducer = reduce_eager_command
+            else:
+                validate_command(command)
+                reducer = reduce_command
             actual_revision = 0 if current is None else current["loop_revision"]
             if actual_revision != command.expected_loop_revision:
                 raise ProtocolRejection(
                     "STALE_LOOP_REVISION",
                     f"expected {command.expected_loop_revision}, actual {actual_revision}",
                 )
-            candidate, pending_events, response = reduce_command(
-                current, command, self.authority
+            candidate, pending_events, response = reducer(
+                current,
+                command,
+                self.authority,
             )
             if fault_at == "after_reduce_before_write":
                 raise InjectedCrash(fault_at)
