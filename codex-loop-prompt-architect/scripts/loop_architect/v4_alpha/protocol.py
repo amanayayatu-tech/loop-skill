@@ -58,6 +58,7 @@ CONTENT_STORAGE_MODE = "CONTENT_ADDRESSED_V1"
 EAGER_STORAGE_MODE = "EAGER_V4_0"
 LEGACY_ABSENT_STORAGE_MODE = "LEGACY_ABSENT"
 MALFORMED_STORAGE_MODE = "MALFORMED"
+EAGER_PROTOCOL_VERSION = "4.0.0"
 
 PROTOCOL_MANIFEST = {
     "assurance_strengths": ASSURANCE_STRENGTHS,
@@ -119,7 +120,7 @@ class InjectedCrash(RuntimeError):
 
 
 def classify_persisted_storage_mode(snapshot: Mapping[str, Any] | None) -> str:
-    """Purely classify the one persisted/new-loop reducer route."""
+    """Purely select the one persisted/new-loop reducer route."""
 
     if snapshot is None:
         return CONTENT_STORAGE_MODE
@@ -142,53 +143,62 @@ def classify_persisted_storage_mode(snapshot: Mapping[str, Any] | None) -> str:
         "reviews",
         "routes",
     }
-    optional_legacy_sections = {
+    optional_sections = {
         "current_result_ref",
         "external_effects",
         "goal_plan",
+        "policy",
         "start_authorization",
     }
-    common_legacy_shape = (
+    mapping_sections = required_sections - {"loop_ref", "loop_revision"}
+    common_shape = (
         required_sections <= set(snapshot)
-        and set(snapshot) <= required_sections | optional_legacy_sections
+        and set(snapshot) <= required_sections | optional_sections
         and isinstance(snapshot.get("loop_ref"), str)
-        and bool(snapshot.get("loop_ref"))
+        and bool(snapshot["loop_ref"])
         and not isinstance(snapshot.get("loop_revision"), bool)
         and isinstance(snapshot.get("loop_revision"), int)
         and snapshot["loop_revision"] >= 1
-        and isinstance(snapshot.get("goals"), Mapping)
-        and (
-            "current_result_ref" not in snapshot
-            or isinstance(snapshot["current_result_ref"], str)
+        and all(
+            isinstance(snapshot.get(section), Mapping)
+            for section in mapping_sections
         )
         and all(
-            name not in snapshot or isinstance(snapshot[name], Mapping)
-            for name in ("external_effects", "start_authorization")
+            section not in snapshot or isinstance(snapshot[section], Mapping)
+            for section in ("external_effects", "policy", "start_authorization")
+        )
+        and (
+            "current_result_ref" not in snapshot
+            or (
+                isinstance(snapshot["current_result_ref"], str)
+                and bool(snapshot["current_result_ref"])
+            )
         )
     )
+    if not common_shape:
+        return MALFORMED_STORAGE_MODE
+
+    goals = snapshot["goals"]
     if "goal_plan" not in snapshot:
-        goals = snapshot.get("goals")
-        legacy_goal_shape = (
-            isinstance(goals, Mapping)
-            and len(goals) == 1
+        legacy_goal_keys = {"objective_digest", "revision", "state"}
+        exact_single_goal = (
+            len(goals) == 1
             and all(
                 isinstance(goal, Mapping)
-                and set(goal) == {"objective_digest", "revision", "state"}
+                and set(goal) == legacy_goal_keys
                 for goal in goals.values()
             )
         )
         return (
             LEGACY_ABSENT_STORAGE_MODE
-            if common_legacy_shape and legacy_goal_shape
+            if exact_single_goal
             else MALFORMED_STORAGE_MODE
         )
 
-    goal_plan = snapshot["goal_plan"]
-    if not isinstance(goal_plan, Mapping):
+    plan = snapshot["goal_plan"]
+    if not isinstance(plan, Mapping):
         return MALFORMED_STORAGE_MODE
-    mode = goal_plan.get("storage_mode", LEGACY_ABSENT_STORAGE_MODE)
-    if mode == CONTENT_STORAGE_MODE:
-        return CONTENT_STORAGE_MODE
+    mode = plan.get("storage_mode", LEGACY_ABSENT_STORAGE_MODE)
 
     legacy_plan_keys = {
         "active_goal_ref",
@@ -199,41 +209,144 @@ def classify_persisted_storage_mode(snapshot: Mapping[str, Any] | None) -> str:
         "plan_digest",
         "revision",
     }
-    actual_plan_keys = set(goal_plan)
-    legacy_plan_shape = (
-        common_legacy_shape
-        and actual_plan_keys
-        in (legacy_plan_keys, legacy_plan_keys | {"storage_mode"})
-        and mode in (LEGACY_ABSENT_STORAGE_MODE, EAGER_STORAGE_MODE)
-        and isinstance(goal_plan.get("active_goal_ref"), str)
-        and isinstance(goal_plan.get("ordered_goal_refs"), (list, tuple))
-        and len(goal_plan.get("ordered_goal_refs")) >= 2
-        and all(
-            isinstance(reference, str)
-            for reference in goal_plan["ordered_goal_refs"]
+    content_plan_discriminants = {
+        "active_goal_ref",
+        "active_index",
+        "goal_count",
+        "ordered_goal_ids",
+        "ordered_goal_slice_digests",
+        "plan_digest",
+        "plan_index_digest",
+        "storage_mode",
+    }
+    legacy_goal_keys = {
+        "chain_refs",
+        "depends_on",
+        "objective",
+        "objective_digest",
+        "order",
+        "revision",
+        "state",
+    }
+    content_goal_discriminants = {
+        "chain_refs",
+        "depends_on",
+        "goal_id",
+        "goal_slice_digest",
+        "objective_digest",
+        "order",
+        "revision",
+        "state",
+    }
+
+    if mode == CONTENT_STORAGE_MODE:
+        ordered_ids = plan.get("ordered_goal_ids")
+        ordered_digests = plan.get("ordered_goal_slice_digests")
+        goal_count = plan.get("goal_count")
+        active_index = plan.get("active_index")
+        if (
+            not content_plan_discriminants <= set(plan)
+            or {"ordered_goal_refs", "envelope_digest"} & set(plan)
+            or not isinstance(ordered_ids, (list, tuple))
+            or not isinstance(ordered_digests, (list, tuple))
+            or isinstance(goal_count, bool)
+            or not isinstance(goal_count, int)
+            or isinstance(active_index, bool)
+            or not isinstance(active_index, int)
+            or goal_count < 1
+            or not 0 <= active_index < goal_count
+            or len(ordered_ids) != goal_count
+            or len(ordered_digests) != goal_count
+            or not all(isinstance(value, str) and value for value in ordered_ids)
+            or not all(
+                isinstance(value, str) and value for value in ordered_digests
+            )
+            or len(set(ordered_ids)) != goal_count
+            or len(goals) != active_index + 1
+        ):
+            return MALFORMED_STORAGE_MODE
+
+        by_order: dict[int, tuple[str, Mapping[str, Any]]] = {}
+        for goal_ref, goal in goals.items():
+            chain = goal.get("chain_refs") if isinstance(goal, Mapping) else None
+            order = goal.get("order") if isinstance(goal, Mapping) else None
+            if (
+                not isinstance(goal, Mapping)
+                or not content_goal_discriminants <= set(goal)
+                or {"ordered_goal_refs", "envelope_digest"} & set(goal)
+                or isinstance(order, bool)
+                or not isinstance(order, int)
+                or not isinstance(chain, Mapping)
+                or chain.get("goal_ref") != goal_ref
+                or not isinstance(goal.get("goal_id"), str)
+                or not isinstance(goal.get("goal_slice_digest"), str)
+                or order in by_order
+            ):
+                return MALFORMED_STORAGE_MODE
+            by_order[order] = (str(goal_ref), goal)
+        if set(by_order) != set(range(active_index + 1)):
+            return MALFORMED_STORAGE_MODE
+        for index in range(active_index + 1):
+            _, goal = by_order[index]
+            if (
+                goal["goal_id"] != ordered_ids[index]
+                or goal["goal_slice_digest"] != ordered_digests[index]
+            ):
+                return MALFORMED_STORAGE_MODE
+        active_goal_ref, _ = by_order[active_index]
+        return (
+            CONTENT_STORAGE_MODE
+            if plan.get("active_goal_ref") == active_goal_ref
+            else MALFORMED_STORAGE_MODE
         )
-        and len(set(goal_plan["ordered_goal_refs"]))
-        == len(goal_plan["ordered_goal_refs"])
-        and goal_plan["active_goal_ref"] in goal_plan["ordered_goal_refs"]
-        and set(goal_plan["ordered_goal_refs"]) == set(snapshot["goals"])
-        and all(
-            isinstance(goal, Mapping)
-            and "goal_id" not in goal
-            and "goal_slice_digest" not in goal
-            for goal in snapshot["goals"].values()
-        )
-        and goal_plan.get("mode") in {"STANDARD", "ADAPTIVE"}
-        and not isinstance(goal_plan.get("max_roadmap_revisions"), bool)
-        and isinstance(goal_plan.get("max_roadmap_revisions"), int)
-        and not isinstance(goal_plan.get("revision"), bool)
-        and isinstance(goal_plan.get("revision"), int)
-        and all(
-            isinstance(goal_plan.get(name), str)
-            and len(goal_plan[name]) == 64
-            for name in ("envelope_digest", "plan_digest")
-        )
+
+    if mode not in (LEGACY_ABSENT_STORAGE_MODE, EAGER_STORAGE_MODE):
+        return MALFORMED_STORAGE_MODE
+    expected_plan_keys = (
+        legacy_plan_keys
+        if "storage_mode" not in plan
+        else legacy_plan_keys | {"storage_mode"}
     )
-    return EAGER_STORAGE_MODE if legacy_plan_shape else MALFORMED_STORAGE_MODE
+    ordered_refs = plan.get("ordered_goal_refs")
+    legacy_only_discriminants = {
+        "envelope_digest",
+        "ordered_goal_refs",
+    }
+    content_only_discriminants = {
+        "active_index",
+        "goal_count",
+        "ordered_goal_ids",
+        "ordered_goal_slice_digests",
+        "plan_index_digest",
+    }
+    if (
+        set(plan) != expected_plan_keys
+        or not legacy_only_discriminants <= set(plan)
+        or content_only_discriminants & set(plan)
+        or not isinstance(ordered_refs, (list, tuple))
+        or len(ordered_refs) < 2
+        or not all(
+            isinstance(reference, str) and reference
+            for reference in ordered_refs
+        )
+        or len(set(ordered_refs)) != len(ordered_refs)
+        or set(ordered_refs) != set(goals)
+        or plan.get("active_goal_ref") not in ordered_refs
+    ):
+        return MALFORMED_STORAGE_MODE
+    for index, goal_ref in enumerate(ordered_refs):
+        goal = goals.get(goal_ref)
+        chain = goal.get("chain_refs") if isinstance(goal, Mapping) else None
+        if (
+            not isinstance(goal, Mapping)
+            or set(goal) != legacy_goal_keys
+            or {"goal_id", "goal_slice_digest"} & set(goal)
+            or goal.get("order") != index
+            or not isinstance(chain, Mapping)
+            or chain.get("goal_ref") != goal_ref
+        ):
+            return MALFORMED_STORAGE_MODE
+    return EAGER_STORAGE_MODE
 
 
 def _validate_value(value: Any) -> None:
@@ -656,11 +769,24 @@ def build_command(
     issued_at: str,
     machine_bindings: Mapping[str, Mapping[str, str]],
     semantic_payload: Mapping[str, Any],
+    persisted_storage_mode: str = CONTENT_STORAGE_MODE,
 ) -> CommandEnvelope:
+    if persisted_storage_mode == CONTENT_STORAGE_MODE:
+        protocol_version = PROTOCOL_VERSION
+    elif persisted_storage_mode in {
+        EAGER_STORAGE_MODE,
+        LEGACY_ABSENT_STORAGE_MODE,
+    }:
+        protocol_version = EAGER_PROTOCOL_VERSION
+    else:
+        raise ProtocolRejection(
+            "INTERNAL_INVARIANT_VIOLATION",
+            "persisted storage mode is malformed",
+        )
     provisional = CommandEnvelope(
         operation_id=operation_id,
         command_type=command_type,
-        protocol_version=PROTOCOL_VERSION,
+        protocol_version=protocol_version,
         actor_ref=actor_ref,
         authority_grant_ref=authority_grant_ref,
         subject=dict(subject),

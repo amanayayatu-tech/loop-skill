@@ -295,19 +295,14 @@ def _admit_source(
             directory_fd = child_fd
 
         leaf = components[-1]
-        before = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+        descriptor = os.open(leaf, flags_file, dir_fd=directory_fd)
+        descriptors.append(descriptor)
         leaf_observed = True
-        if stat.S_ISLNK(before.st_mode):
-            raise OSError("source path is a symlink")
+        opened = os.fstat(descriptor)
 
         limit_exceeded = False
-        if stat.S_ISDIR(before.st_mode):
-            descriptor = os.open(leaf, flags_directory, dir_fd=directory_fd)
-            descriptors.append(descriptor)
-            opened = os.fstat(descriptor)
+        if stat.S_ISDIR(opened.st_mode):
             directory_identity = _directory_identity(opened)
-            if directory_identity != _directory_identity(before):
-                raise OSError("source directory identity changed")
             entries = tuple(sorted(os.listdir(descriptor)))
             after = os.fstat(descriptor)
             if _directory_identity(after) != directory_identity:
@@ -317,23 +312,18 @@ def _admit_source(
                 "directory",
                 entries,
             )
-        elif not stat.S_ISREG(before.st_mode):
+        elif not stat.S_ISREG(opened.st_mode):
             current = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
-            if _file_identity(current) != _file_identity(before):
+            if _file_identity(current) != _file_identity(opened):
                 raise OSError("source identity changed")
             result = ("other", None)
         elif maximum is None:
             current = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
-            if _file_identity(current) != _file_identity(before):
+            if _file_identity(current) != _file_identity(opened):
                 raise OSError("source identity changed")
             result = ("file", None)
         else:
-            descriptor = os.open(leaf, flags_file, dir_fd=directory_fd)
-            descriptors.append(descriptor)
-            opened = os.fstat(descriptor)
             opened_identity = _file_identity(opened)
-            if opened_identity != _file_identity(before):
-                raise OSError("source identity changed")
             limit_exceeded = opened.st_size > maximum
             chunks = []
             remaining = 0 if limit_exceeded else maximum + 1

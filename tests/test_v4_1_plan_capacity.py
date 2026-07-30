@@ -72,15 +72,20 @@ from loop_architect.v4_entry import (  # noqa: E402
     ConversationIntakeSession,
     accepts_conversation_confirmation,
     confirm_loop,
+    control_loop,
     policy_view,
     prepare_loop,
+    record_external_observation,
     revise_goal_plan,
     start_loop,
     status,
+    steer_loop,
     sync_loop,
 )
 from loop_architect.v4_entry.preparation import _capacity_report  # noqa: E402
 from loop_architect.v4_entry.service import (  # noqa: E402
+    DEFAULT_CODEX_RECEIPT_ISSUER,
+    DEFAULT_CODEX_RECEIPT_TRUST,
     EntryError,
     LOCAL_ARTIFACT_ISSUER,
     LOCAL_ARTIFACT_TRUST,
@@ -1809,6 +1814,206 @@ except ProtocolRejection as exc:
             self.assertEqual(status(root=root).result, "SUCCEEDED")
             self.assertEqual(schema_rows(), schema_before)
 
+            policy = fixture["policy_checkpoint"]
+            policy_commands = eager_continuation_commands(policy=True)
+            policy_authority = eager_authority(policy=True)
+            memory = InMemoryStore(policy_authority)
+            seed_eager_memory(memory, policy=True)
+            self.assertEqual(
+                classify_persisted_storage_mode(memory.snapshot(fixture["loop_ref"])),
+                LEGACY_ABSENT_STORAGE_MODE,
+            )
+            for command in policy_commands:
+                memory.apply(command)
+            memory_terminal = memory.snapshot(fixture["loop_ref"])
+            self.assertEqual(
+                snapshot_digest(memory_terminal),
+                policy["expected_terminal_snapshot_digest"],
+            )
+            self.assertEqual(
+                memory_terminal["loop_revision"],
+                policy["expected_terminal_loop_revision"],
+            )
+
+            policy_root = root / "policy-checkpoint"
+            policy_root.mkdir(mode=0o700)
+            policy_path = policy_root / STORE_FILENAME
+            with SQLiteStore(policy_path, policy_authority) as store:
+                seed_eager_sqlite(store, policy=True)
+                self.assertEqual(
+                    hashlib.sha256(store.canonical_export()).hexdigest(),
+                    policy["checkpoint_export_sha256"],
+                )
+                self.assertEqual(
+                    classify_persisted_storage_mode(
+                        store.snapshot(fixture["loop_ref"])
+                    ),
+                    LEGACY_ABSENT_STORAGE_MODE,
+                )
+            self.assertNotEqual(status(root=policy_root).progress, "Finished")
+            with SQLiteStore(policy_path, policy_authority) as store:
+                for command in policy_commands:
+                    store.apply(command)
+                store.verify_integrity()
+                terminal = store.snapshot(fixture["loop_ref"])
+                self.assertEqual(
+                    snapshot_digest(terminal),
+                    policy["expected_terminal_snapshot_digest"],
+                )
+                self.assertEqual(
+                    terminal["loop_revision"],
+                    policy["expected_terminal_loop_revision"],
+                )
+            self.assertEqual(status(root=policy_root).result, "SUCCEEDED")
+
+    def test_exact_v4_0_public_store_selects_legacy_protocol_at_composition_root(self):
+        checkpoint = eager_fixture()["public_start_checkpoint"]
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+
+            def seed_case(name):
+                root = base / name
+                root.mkdir(mode=0o700)
+                path = root / STORE_FILENAME
+                connection = sqlite3.connect(path)
+                try:
+                    connection.executescript(checkpoint["sqlite_logical_dump"])
+                finally:
+                    connection.close()
+                path.chmod(0o600)
+                return root, path
+
+            lifecycle_root, lifecycle_path = seed_case("lifecycle")
+            self.assertNotEqual(status(root=lifecycle_root).progress, "Finished")
+            with SQLiteStore(lifecycle_path) as store:
+                snapshot = store.snapshot(checkpoint["loop_ref"])
+                self.assertEqual(
+                    snapshot_digest(snapshot), checkpoint["checkpoint_snapshot_digest"]
+                )
+                self.assertEqual(
+                    hashlib.sha256(store.canonical_export()).hexdigest(),
+                    checkpoint["checkpoint_export_sha256"],
+                )
+            control_loop("pause", root=lifecycle_root, clock=lambda: NOW)
+            with SQLiteStore(lifecycle_path) as store:
+                snapshot = store.snapshot(checkpoint["loop_ref"])
+                self.assertEqual(snapshot["execution"]["state"], "PAUSED")
+                self.assertEqual(
+                    classify_persisted_storage_mode(snapshot),
+                    LEGACY_ABSENT_STORAGE_MODE,
+                )
+            control_loop("resume", root=lifecycle_root, clock=lambda: NOW)
+            with SQLiteStore(lifecycle_path) as store:
+                self.assertEqual(
+                    store.snapshot(checkpoint["loop_ref"])["execution"]["state"],
+                    "ACTIVE",
+                )
+
+            stop_root, stop_path = seed_case("stop")
+            control_loop("stop", root=stop_root, clock=lambda: NOW)
+            with SQLiteStore(stop_path) as store:
+                terminal = store.snapshot(checkpoint["loop_ref"])
+                self.assertEqual(terminal["execution"]["state"], "TERMINAL")
+                self.assertEqual(
+                    next(iter(terminal["goals"].values()))["state"], "STOPPED"
+                )
+                self.assertEqual(
+                    classify_persisted_storage_mode(terminal),
+                    LEGACY_ABSENT_STORAGE_MODE,
+                )
+
+            policy_root, policy_path = seed_case("policy")
+            steer_loop("WAIT", root=policy_root, clock=lambda: NOW)
+            with SQLiteStore(policy_path) as store:
+                waiting = store.snapshot(checkpoint["loop_ref"])
+                self.assertIn("policy", waiting)
+                self.assertEqual(waiting["execution"]["state"], "PAUSED")
+                self.assertEqual(
+                    classify_persisted_storage_mode(waiting),
+                    LEGACY_ABSENT_STORAGE_MODE,
+                )
+            control_loop("resume", root=policy_root, clock=lambda: NOW)
+            with SQLiteStore(policy_path) as store:
+                self.assertEqual(
+                    store.snapshot(checkpoint["loop_ref"])["execution"]["state"],
+                    "ACTIVE",
+                )
+
+            observation_root, observation_path = seed_case("observation")
+            with SQLiteStore(observation_path) as store:
+                snapshot = store.snapshot(checkpoint["loop_ref"])
+                effect_ref, effect = next(iter(snapshot["external_effects"].items()))
+                attempt = snapshot["attempts"][effect["attempt_ref"]]
+            receipt = Receipt(
+                receipt_ref="receipt-exact-v4-public-observation",
+                issuer_ref=DEFAULT_CODEX_RECEIPT_ISSUER,
+                issuer_trust=DEFAULT_CODEX_RECEIPT_TRUST,
+                trust_class="strict",
+                action=attempt["action"],
+                loop_ref=checkpoint["loop_ref"],
+                subject_ref=effect_ref,
+                attempt_ref=effect["attempt_ref"],
+                target_ref=attempt["target_ref"],
+                request_digest=attempt["provider_request_digest"],
+                provider_idempotency_key=attempt["provider_idempotency_key"],
+                provider_resource_ref="exact-v4-public-provider-task",
+                outcome="observed",
+                issued_at=NOW.isoformat().replace("+00:00", "Z"),
+                expires_at=(NOW + timedelta(minutes=5)).isoformat().replace(
+                    "+00:00", "Z"
+                ),
+                evidence_digest="e" * 64,
+            )
+            record_external_observation(receipt, root=observation_root)
+            with SQLiteStore(observation_path) as store:
+                observed = store.snapshot(checkpoint["loop_ref"])
+                self.assertEqual(
+                    observed["external_effects"][effect_ref]["state"], "OBSERVED"
+                )
+                self.assertEqual(
+                    classify_persisted_storage_mode(observed),
+                    LEGACY_ABSENT_STORAGE_MODE,
+                )
+
+            content_root = base / "content"
+            workspace = content_root / "workspace"
+            workspace.mkdir(parents=True)
+            prepared = confirm_loop(
+                prepare_loop(
+                    canonical_request(1, mode="STANDARD"),
+                    content_root / "prepared",
+                    clock=lambda: NOW,
+                    token_factory=lambda: "e" * 24,
+                    workspace_root=workspace,
+                ).directory,
+                confirmed=True,
+                clock=lambda: NOW,
+            )
+            content_data = content_root / "data"
+            start_loop(
+                prepared,
+                root=content_data,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            steer_loop("WAIT", root=content_data, clock=lambda: NOW)
+            with SQLiteStore(content_data / STORE_FILENAME) as store:
+                waiting = store.snapshot(prepared.manifest.loop_ref)
+                self.assertIn("policy", waiting)
+                self.assertEqual(
+                    classify_persisted_storage_mode(waiting), CONTENT_STORAGE_MODE
+                )
+            control_loop("resume", root=content_data, clock=lambda: NOW)
+            control_loop("stop", root=content_data, clock=lambda: NOW)
+            with SQLiteStore(content_data / STORE_FILENAME) as store:
+                terminal = store.snapshot(prepared.manifest.loop_ref)
+                self.assertEqual(
+                    next(iter(terminal["goals"].values()))["state"], "STOPPED"
+                )
+                self.assertEqual(
+                    classify_persisted_storage_mode(terminal), CONTENT_STORAGE_MODE
+                )
+
     def test_new_loop_requires_content_mode_and_persisted_classifier_is_total(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1841,25 +2046,13 @@ except ProtocolRejection as exc:
             legacy_absent = legacy_store.snapshot(
                 str(eager_continuation_commands()[0].subject["loop_ref"])
             )
-            legacy_plan = json.loads(json.dumps(legacy_absent))
-            first_goal_ref = next(iter(legacy_plan["goals"]))
-            second_goal_ref = "goal-legacy-0002"
-            legacy_plan["goals"][second_goal_ref] = {
-                "depends_on": first_goal_ref,
-                "objective_digest": "2" * 64,
-                "order": 1,
-                "revision": 1,
-                "state": "PENDING",
-            }
-            legacy_plan["goal_plan"] = {
-                "active_goal_ref": first_goal_ref,
-                "envelope_digest": "3" * 64,
-                "max_roadmap_revisions": 1,
-                "mode": "STANDARD",
-                "ordered_goal_refs": [first_goal_ref, second_goal_ref],
-                "plan_digest": "4" * 64,
-                "revision": 1,
-            }
+            legacy_plan = json.loads(
+                json.dumps(
+                    eager_fixture()["eager_plan_checkpoint"][
+                        "checkpoint_snapshot"
+                    ]
+                )
+            )
             explicit_eager = json.loads(json.dumps(legacy_plan))
             explicit_eager["goal_plan"]["storage_mode"] = EAGER_STORAGE_MODE
             started_legacy_absent = json.loads(json.dumps(legacy_absent))
@@ -1869,21 +2062,28 @@ except ProtocolRejection as exc:
             started_legacy_absent["start_authorization"] = {
                 "receipt_ref": "receipt-legacy-start-0001"
             }
-            started_legacy_plan = json.loads(json.dumps(legacy_plan))
-            started_legacy_plan["external_effects"] = {
-                "effect-legacy-0001": {"state": "ATTEMPT_COMMITTED"}
-            }
-            started_legacy_plan["start_authorization"] = {
-                "receipt_ref": "receipt-legacy-start-0001"
-            }
             legacy_absent_with_unknown_section = json.loads(
                 json.dumps(legacy_absent)
             )
             legacy_absent_with_unknown_section["unknown_v4_9_state"] = {}
             unknown_mode = json.loads(json.dumps(legacy_plan))
             unknown_mode["goal_plan"]["storage_mode"] = "UNKNOWN_V9"
+            legacy_marked_content = json.loads(json.dumps(legacy_absent))
+            legacy_marked_content["goal_plan"] = {
+                "storage_mode": CONTENT_STORAGE_MODE
+            }
             content_marked_eager = json.loads(json.dumps(content_snapshot))
             content_marked_eager["goal_plan"]["storage_mode"] = EAGER_STORAGE_MODE
+            content_nested_goal_id = json.loads(json.dumps(content_snapshot))
+            content_nested_goal_id["goal_plan"]["ordered_goal_ids"][0] = []
+            content_nested_slice = json.loads(json.dumps(content_snapshot))
+            content_nested_slice["goal_plan"][
+                "ordered_goal_slice_digests"
+            ][0] = {}
+            legacy_nested_ref_list = json.loads(json.dumps(legacy_plan))
+            legacy_nested_ref_list["goal_plan"]["ordered_goal_refs"][0] = []
+            legacy_nested_ref_mapping = json.loads(json.dumps(legacy_plan))
+            legacy_nested_ref_mapping["goal_plan"]["ordered_goal_refs"][0] = {}
             malformed_goal_plans = (
                 ("null", None),
                 ("bool", True),
@@ -1909,13 +2109,38 @@ except ProtocolRejection as exc:
                     MALFORMED_STORAGE_MODE,
                 ),
                 ("v4.0-plan-mode-absent", legacy_plan, EAGER_STORAGE_MODE),
-                (
-                    "v4.0-started-plan-mode-absent",
-                    started_legacy_plan,
-                    EAGER_STORAGE_MODE,
-                ),
                 ("v4.0-plan-explicit-eager", explicit_eager, EAGER_STORAGE_MODE),
+                (
+                    "exact-v4.0-policy-checkpoint",
+                    eager_fixture()["policy_checkpoint"]["checkpoint_snapshot"],
+                    LEGACY_ABSENT_STORAGE_MODE,
+                ),
+                (
+                    "legacy-marker-only-content-crossgrade",
+                    legacy_marked_content,
+                    MALFORMED_STORAGE_MODE,
+                ),
                 ("v4.1-content", content_snapshot, CONTENT_STORAGE_MODE),
+                (
+                    "v4.1-nested-goal-id",
+                    content_nested_goal_id,
+                    MALFORMED_STORAGE_MODE,
+                ),
+                (
+                    "v4.1-nested-slice-digest",
+                    content_nested_slice,
+                    MALFORMED_STORAGE_MODE,
+                ),
+                (
+                    "v4.0-nested-goal-ref-list",
+                    legacy_nested_ref_list,
+                    MALFORMED_STORAGE_MODE,
+                ),
+                (
+                    "v4.0-nested-goal-ref-mapping",
+                    legacy_nested_ref_mapping,
+                    MALFORMED_STORAGE_MODE,
+                ),
                 ("unknown-mode", unknown_mode, MALFORMED_STORAGE_MODE),
                 (
                     "content-shape-explicit-eager",
@@ -1984,7 +2209,21 @@ except ProtocolRejection as exc:
                         self.assertIsNone(store.snapshot(eager_loop_ref))
                         self.assertEqual(store.commit_count, 0)
 
-            for label in ("EAGER_V4_0", "UNKNOWN_V9"):
+            persisted_corruptions = {
+                "EAGER_V4_0": lambda plan: plan.update(
+                    storage_mode="EAGER_V4_0"
+                ),
+                "UNKNOWN_V9": lambda plan: plan.update(
+                    storage_mode="UNKNOWN_V9"
+                ),
+                "nested-goal-id-list": lambda plan: plan[
+                    "ordered_goal_ids"
+                ].__setitem__(0, []),
+                "nested-slice-mapping": lambda plan: plan[
+                    "ordered_goal_slice_digests"
+                ].__setitem__(0, {}),
+            }
+            for label, corrupt in persisted_corruptions.items():
                 with self.subTest(store="memory", persisted=label):
                     store = InMemoryStore(authority)
                     store.put_blob(canonical_bytes(prepared.plan))
@@ -2007,7 +2246,7 @@ except ProtocolRejection as exc:
                         semantic_payload={"reason": "mode corruption test"},
                         clock=lambda: NOW,
                     )
-                    snapshot["goal_plan"]["storage_mode"] = label
+                    corrupt(snapshot["goal_plan"])
                     store._snapshots[loop_ref] = snapshot
                     with self.assertRaises(ProtocolRejection) as rejected:
                         store.apply(pause)
@@ -2038,7 +2277,7 @@ except ProtocolRejection as exc:
                             semantic_payload={"reason": "mode corruption test"},
                             clock=lambda: NOW,
                         )
-                        snapshot["goal_plan"]["storage_mode"] = label
+                        corrupt(snapshot["goal_plan"])
                         store._connection.execute(
                             "UPDATE loops SET snapshot_json = ?, snapshot_digest = ? "
                             "WHERE loop_ref = ?",
@@ -2101,6 +2340,105 @@ except ProtocolRejection as exc:
                     sqlite_null.exception.code, "INTERNAL_INVARIANT_VIOLATION"
                 )
                 self.assertEqual(store.commit_count, 5)
+
+            crossgrade = with_command_change(
+                legacy_command,
+                lambda values: values.update(
+                    operation_id="operation-legacy-marker-crossgrade-v41",
+                    protocol_version=PROTOCOL_VERSION,
+                ),
+            )
+            marker_loop_ref = str(legacy_command.subject["loop_ref"])
+            memory = InMemoryStore(legacy_authority)
+            seed_eager_memory(memory)
+            corrupted = memory.snapshot(marker_loop_ref)
+            corrupted["goal_plan"] = {"storage_mode": CONTENT_STORAGE_MODE}
+            memory._snapshots[marker_loop_ref] = corrupted
+            before = memory.snapshot(marker_loop_ref)
+            with self.assertRaises(ProtocolRejection) as memory_crossgrade:
+                memory.apply(crossgrade)
+            self.assertEqual(
+                memory_crossgrade.exception.code,
+                "INTERNAL_INVARIANT_VIOLATION",
+            )
+            self.assertEqual(memory.snapshot(marker_loop_ref), before)
+            self.assertEqual(memory.commit_count, 5)
+
+            marker_path = root / "persisted-legacy-marker-crossgrade.sqlite3"
+            with SQLiteStore(marker_path, legacy_authority) as store:
+                seed_eager_sqlite(store)
+                corrupted = store.snapshot(marker_loop_ref)
+                corrupted["goal_plan"] = {"storage_mode": CONTENT_STORAGE_MODE}
+                store._connection.execute(
+                    "UPDATE loops SET snapshot_json = ?, snapshot_digest = ? "
+                    "WHERE loop_ref = ?",
+                    (
+                        canonical_bytes(corrupted),
+                        snapshot_digest(corrupted),
+                        marker_loop_ref,
+                    ),
+                )
+                store._connection.commit()
+                before = store.snapshot(marker_loop_ref)
+                with self.assertRaises(ProtocolRejection) as sqlite_crossgrade:
+                    store.apply(crossgrade)
+                self.assertEqual(
+                    sqlite_crossgrade.exception.code,
+                    "INTERNAL_INVARIANT_VIOLATION",
+                )
+                self.assertEqual(store.snapshot(marker_loop_ref), before)
+                self.assertEqual(store.commit_count, 5)
+
+            for label, nested_ref in (
+                ("list", []),
+                ("mapping", {}),
+            ):
+                malformed = json.loads(
+                    json.dumps(
+                        eager_fixture()["eager_plan_checkpoint"][
+                            "checkpoint_snapshot"
+                        ]
+                    )
+                )
+                malformed["loop_ref"] = marker_loop_ref
+                malformed["goal_plan"]["ordered_goal_refs"][0] = nested_ref
+                with self.subTest(store="memory", legacy_nested=label):
+                    memory = InMemoryStore(legacy_authority)
+                    seed_eager_memory(memory)
+                    memory._snapshots[marker_loop_ref] = malformed
+                    before = memory.snapshot(marker_loop_ref)
+                    with self.assertRaises(ProtocolRejection) as rejected:
+                        memory.apply(legacy_command)
+                    self.assertEqual(
+                        rejected.exception.code,
+                        "INTERNAL_INVARIANT_VIOLATION",
+                    )
+                    self.assertEqual(memory.snapshot(marker_loop_ref), before)
+                    self.assertEqual(memory.commit_count, 5)
+                with self.subTest(store="sqlite", legacy_nested=label):
+                    path = root / f"persisted-legacy-nested-{label}.sqlite3"
+                    with SQLiteStore(path, legacy_authority) as store:
+                        seed_eager_sqlite(store)
+                        store._connection.execute(
+                            "UPDATE loops SET loop_revision = ?, snapshot_json = ?, "
+                            "snapshot_digest = ? WHERE loop_ref = ?",
+                            (
+                                malformed["loop_revision"],
+                                canonical_bytes(malformed),
+                                snapshot_digest(malformed),
+                                marker_loop_ref,
+                            ),
+                        )
+                        store._connection.commit()
+                        before = store.snapshot(marker_loop_ref)
+                        with self.assertRaises(ProtocolRejection) as rejected:
+                            store.apply(legacy_command)
+                        self.assertEqual(
+                            rejected.exception.code,
+                            "INTERNAL_INVARIANT_VIOLATION",
+                        )
+                        self.assertEqual(store.snapshot(marker_loop_ref), before)
+                        self.assertEqual(store.commit_count, 5)
 
     def test_source_admission_and_session_only_confirmation(self):
         cli = load_cli()
@@ -2491,7 +2829,7 @@ except ProtocolRejection as exc:
         self.assertEqual(rejected.exception.code, "PATH_CONFINEMENT_VIOLATION")
         opened.assert_not_called()
 
-    def test_source_admission_rejects_leaf_replacement_before_open(self):
+    def test_source_admission_returns_bytes_from_the_single_open_descriptor(self):
         cli = load_cli()
         with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
             root = Path(temporary)
@@ -2501,7 +2839,7 @@ except ProtocolRejection as exc:
             original_stat = os.stat
             replaced = False
 
-            def replace_after_classification(name, *args, **kwargs):
+            def replace_after_mapping_check(name, *args, **kwargs):
                 nonlocal replaced
                 metadata = original_stat(name, *args, **kwargs)
                 if name == source.name and kwargs.get("dir_fd") is not None and not replaced:
@@ -2512,13 +2850,10 @@ except ProtocolRejection as exc:
 
             try:
                 with mock.patch.object(
-                    cli.os, "stat", side_effect=replace_after_classification
+                    cli.os, "stat", side_effect=replace_after_mapping_check
                 ):
-                    with self.assertRaises(Exception) as rejected:
-                        cli.read_intake_input(str(source))
-                self.assertEqual(
-                    rejected.exception.code, "PATH_CONFINEMENT_VIOLATION"
-                )
+                    admitted = cli.read_intake_input(str(source))
+                self.assertEqual(admitted.goal, "AUTHORIZED")
             finally:
                 if source.exists():
                     source.unlink()

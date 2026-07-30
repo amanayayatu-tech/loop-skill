@@ -9,12 +9,12 @@ from .protocol import (
     ActorRef,
     AuthorityGrant,
     CommandEnvelope,
+    EAGER_STORAGE_MODE,
     Receipt,
     authority_grant_digest,
     build_command,
     canonical_bytes,
     snapshot_digest,
-    with_command_change,
 )
 
 
@@ -283,14 +283,12 @@ def _command(
         issued_at=f"2026-07-27T00:00:{step - 1:02d}Z",
         machine_bindings=bindings,
         semantic_payload=payload,
+        persisted_storage_mode=EAGER_STORAGE_MODE,
     )
     # Historical EAGER envelopes are data for the exact v4.0 persisted
-    # fixture.  The current Store may continue them only after that fixture has
+    # fixture. The current Store may continue them only after that fixture has
     # supplied a persisted snapshot; it must never execute this CreateLoop.
-    return with_command_change(
-        command,
-        lambda values: values.update(protocol_version="4.0.0"),
-    )
+    return command
 
 
 def vertical_commands() -> tuple[CommandEnvelope, ...]:

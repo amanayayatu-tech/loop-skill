@@ -28,6 +28,7 @@ from loop_architect.v4_alpha.protocol import (
     AuthorityGrantV2,
     CAPACITY_CONTRACT,
     CommandEnvelope,
+    classify_persisted_storage_mode,
     ERROR_CODES,
     LoopIntakeDecision,
     LoopIntakeInput,
@@ -1364,6 +1365,7 @@ def record_external_observation(
                     "resolved_refs": {},
                 },
                 semantic_payload={},
+                persisted_storage_mode=classify_persisted_storage_mode(snapshot),
             )
             store.apply(command)
             store.verify_integrity()
@@ -1500,6 +1502,7 @@ def _machine_command(
         issued_at=_iso(clock()),
         machine_bindings=machine_bindings,
         semantic_payload=semantic_payload,
+        persisted_storage_mode=classify_persisted_storage_mode(snapshot),
     )
 
 

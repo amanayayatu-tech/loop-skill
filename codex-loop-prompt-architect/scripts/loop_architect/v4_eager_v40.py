@@ -8,14 +8,12 @@ from .v4_alpha.kernel import AuthorityContext, reduce_command
 from .v4_alpha.protocol import (
     CommandEnvelope,
     EAGER_STORAGE_MODE,
+    EAGER_PROTOCOL_VERSION,
     LEGACY_ABSENT_STORAGE_MODE,
     MALFORMED_STORAGE_MODE,
     ProtocolRejection,
     classify_persisted_storage_mode,
 )
-
-
-EAGER_PROTOCOL_VERSION = "4.0.0"
 
 
 def reduce_eager_command(
