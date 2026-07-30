@@ -12,11 +12,13 @@ from .protocol import (
     ApplyResult,
     CommandEnvelope,
     EAGER_STORAGE_MODE,
+    LEGACY_ABSENT_STORAGE_MODE,
+    MALFORMED_STORAGE_MODE,
     InjectedCrash,
     ProtocolRejection,
     canonical_bytes,
+    classify_persisted_storage_mode,
     command_digest,
-    persisted_storage_mode,
     raw_domain_digest,
     snapshot_digest,
     validate_command,
@@ -216,8 +218,16 @@ class InMemoryStore:
 
         try:
             current = self._snapshots.get(loop_ref)
-            storage_mode = persisted_storage_mode(current)
-            if storage_mode == EAGER_STORAGE_MODE:
+            storage_mode = classify_persisted_storage_mode(current)
+            if storage_mode == MALFORMED_STORAGE_MODE:
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION",
+                    "persisted storage mode is malformed",
+                )
+            if storage_mode in {
+                LEGACY_ABSENT_STORAGE_MODE,
+                EAGER_STORAGE_MODE,
+            }:
                 from loop_architect.v4_eager_v40 import reduce_eager_command
 
                 reducer = reduce_eager_command

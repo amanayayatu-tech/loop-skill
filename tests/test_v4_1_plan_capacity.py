@@ -50,10 +50,15 @@ from loop_architect.v4_alpha.plan_codec import (  # noqa: E402
     validate_plan_index,
 )
 from loop_architect.v4_alpha.protocol import (  # noqa: E402
+    CONTENT_STORAGE_MODE,
+    EAGER_STORAGE_MODE,
+    LEGACY_ABSENT_STORAGE_MODE,
+    MALFORMED_STORAGE_MODE,
     InjectedCrash,
     ProtocolRejection,
     authority_grant_digest,
     canonical_bytes,
+    classify_persisted_storage_mode,
     command_without_digest,
     domain_digest,
     raw_domain_digest,
@@ -95,6 +100,7 @@ from tests.v4_eager_fixture import (  # noqa: E402
     eager_continuation_commands,
     eager_fixture,
     seed_eager_memory,
+    seed_eager_sqlite,
 )
 
 
@@ -1803,7 +1809,7 @@ except ProtocolRejection as exc:
             self.assertEqual(status(root=root).result, "SUCCEEDED")
             self.assertEqual(schema_rows(), schema_before)
 
-    def test_new_loop_requires_content_mode_and_persisted_mode_is_tri_state(self):
+    def test_new_loop_requires_content_mode_and_persisted_classifier_is_total(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workspace = root / "workspace"
@@ -1824,6 +1830,121 @@ except ProtocolRejection as exc:
                 now=NOW,
                 receipt_trust_roots={},
             )
+            content_store = InMemoryStore(authority)
+            content_store.put_blob(canonical_bytes(prepared.plan))
+            content_store.put_blob(canonical_bytes(prepared.plan_index))
+            content_store.apply(create)
+            content_snapshot = content_store.snapshot(loop_ref)
+
+            legacy_store = InMemoryStore(eager_authority())
+            seed_eager_memory(legacy_store)
+            legacy_absent = legacy_store.snapshot(
+                str(eager_continuation_commands()[0].subject["loop_ref"])
+            )
+            legacy_plan = json.loads(json.dumps(legacy_absent))
+            first_goal_ref = next(iter(legacy_plan["goals"]))
+            second_goal_ref = "goal-legacy-0002"
+            legacy_plan["goals"][second_goal_ref] = {
+                "depends_on": first_goal_ref,
+                "objective_digest": "2" * 64,
+                "order": 1,
+                "revision": 1,
+                "state": "PENDING",
+            }
+            legacy_plan["goal_plan"] = {
+                "active_goal_ref": first_goal_ref,
+                "envelope_digest": "3" * 64,
+                "max_roadmap_revisions": 1,
+                "mode": "STANDARD",
+                "ordered_goal_refs": [first_goal_ref, second_goal_ref],
+                "plan_digest": "4" * 64,
+                "revision": 1,
+            }
+            explicit_eager = json.loads(json.dumps(legacy_plan))
+            explicit_eager["goal_plan"]["storage_mode"] = EAGER_STORAGE_MODE
+            started_legacy_absent = json.loads(json.dumps(legacy_absent))
+            started_legacy_absent["external_effects"] = {
+                "effect-legacy-0001": {"state": "ATTEMPT_COMMITTED"}
+            }
+            started_legacy_absent["start_authorization"] = {
+                "receipt_ref": "receipt-legacy-start-0001"
+            }
+            started_legacy_plan = json.loads(json.dumps(legacy_plan))
+            started_legacy_plan["external_effects"] = {
+                "effect-legacy-0001": {"state": "ATTEMPT_COMMITTED"}
+            }
+            started_legacy_plan["start_authorization"] = {
+                "receipt_ref": "receipt-legacy-start-0001"
+            }
+            legacy_absent_with_unknown_section = json.loads(
+                json.dumps(legacy_absent)
+            )
+            legacy_absent_with_unknown_section["unknown_v4_9_state"] = {}
+            unknown_mode = json.loads(json.dumps(legacy_plan))
+            unknown_mode["goal_plan"]["storage_mode"] = "UNKNOWN_V9"
+            content_marked_eager = json.loads(json.dumps(content_snapshot))
+            content_marked_eager["goal_plan"]["storage_mode"] = EAGER_STORAGE_MODE
+            malformed_goal_plans = (
+                ("null", None),
+                ("bool", True),
+                ("list", []),
+                ("string", "UNKNOWN_V9"),
+                ("mapping-empty", {}),
+            )
+            classification_cases = [
+                ("new-loop", None, CONTENT_STORAGE_MODE),
+                (
+                    "exact-v4.0-key-absent",
+                    legacy_absent,
+                    LEGACY_ABSENT_STORAGE_MODE,
+                ),
+                (
+                    "v4.0-started-key-absent",
+                    started_legacy_absent,
+                    LEGACY_ABSENT_STORAGE_MODE,
+                ),
+                (
+                    "key-absent-non-v4.0-shape",
+                    legacy_absent_with_unknown_section,
+                    MALFORMED_STORAGE_MODE,
+                ),
+                ("v4.0-plan-mode-absent", legacy_plan, EAGER_STORAGE_MODE),
+                (
+                    "v4.0-started-plan-mode-absent",
+                    started_legacy_plan,
+                    EAGER_STORAGE_MODE,
+                ),
+                ("v4.0-plan-explicit-eager", explicit_eager, EAGER_STORAGE_MODE),
+                ("v4.1-content", content_snapshot, CONTENT_STORAGE_MODE),
+                ("unknown-mode", unknown_mode, MALFORMED_STORAGE_MODE),
+                (
+                    "content-shape-explicit-eager",
+                    content_marked_eager,
+                    MALFORMED_STORAGE_MODE,
+                ),
+            ]
+            for label, goal_plan in malformed_goal_plans:
+                malformed = json.loads(json.dumps(legacy_absent))
+                malformed["goal_plan"] = goal_plan
+                classification_cases.append(
+                    (label, malformed, MALFORMED_STORAGE_MODE)
+                )
+            for label, mode in (
+                ("mode-null", None),
+                ("mode-bool", True),
+                ("mode-list", []),
+            ):
+                malformed = json.loads(json.dumps(legacy_plan))
+                malformed["goal_plan"]["storage_mode"] = mode
+                classification_cases.append(
+                    (label, malformed, MALFORMED_STORAGE_MODE)
+                )
+            for label, snapshot, expected in classification_cases:
+                with self.subTest(classification=label):
+                    self.assertEqual(
+                        classify_persisted_storage_mode(snapshot), expected
+                    )
+
             variants = {
                 "missing": lambda payload: payload.pop("storage_mode", None),
                 "explicit-eager": lambda payload: payload.update(
@@ -1834,7 +1955,7 @@ except ProtocolRejection as exc:
                 vertical_commands()[0],
                 lambda values: values.update(protocol_version=PROTOCOL_VERSION),
             )
-            eager_authority = fixture_authority()
+            create_authority = fixture_authority()
             eager_loop_ref = str(eager_create.subject["loop_ref"])
             for label, mutate in variants.items():
                 def update(values, mutate=mutate):
@@ -1845,10 +1966,10 @@ except ProtocolRejection as exc:
                 invalid = with_command_change(eager_create, update)
                 with self.subTest(store="kernel", case=label):
                     with self.assertRaises(ProtocolRejection) as rejected:
-                        _create_loop(None, invalid, eager_authority)
+                        _create_loop(None, invalid, create_authority)
                     self.assertEqual(rejected.exception.code, "INVALID_COMMAND")
                 with self.subTest(store="memory", case=label):
-                    store = InMemoryStore(eager_authority)
+                    store = InMemoryStore(create_authority)
                     with self.assertRaises(ProtocolRejection) as rejected:
                         store.apply(invalid)
                     self.assertEqual(rejected.exception.code, "INVALID_COMMAND")
@@ -1856,7 +1977,7 @@ except ProtocolRejection as exc:
                     self.assertEqual(store.commit_count, 0)
                 with self.subTest(store="sqlite", case=label):
                     path = root / f"{label}.sqlite3"
-                    with SQLiteStore(path, eager_authority) as store:
+                    with SQLiteStore(path, create_authority) as store:
                         with self.assertRaises(ProtocolRejection) as rejected:
                             store.apply(invalid)
                         self.assertEqual(rejected.exception.code, "INVALID_COMMAND")
@@ -1935,6 +2056,51 @@ except ProtocolRejection as exc:
                             "INTERNAL_INVARIANT_VIOLATION",
                         )
                         self.assertEqual(store.commit_count, 1)
+
+            legacy_command = eager_continuation_commands()[0]
+            legacy_authority = eager_authority()
+            memory = InMemoryStore(legacy_authority)
+            seed_eager_memory(memory)
+            corrupted = memory.snapshot(str(legacy_command.subject["loop_ref"]))
+            corrupted["goal_plan"] = None
+            memory._snapshots[str(legacy_command.subject["loop_ref"])] = corrupted
+            from loop_architect.v4_eager_v40 import reduce_eager_command
+
+            with self.assertRaises(ProtocolRejection) as adapter_null:
+                reduce_eager_command(
+                    corrupted, legacy_command, legacy_authority
+                )
+            self.assertEqual(
+                adapter_null.exception.code, "INTERNAL_INVARIANT_VIOLATION"
+            )
+            with self.assertRaises(ProtocolRejection) as memory_null:
+                memory.apply(legacy_command)
+            self.assertEqual(
+                memory_null.exception.code, "INTERNAL_INVARIANT_VIOLATION"
+            )
+            self.assertEqual(memory.commit_count, 5)
+
+            null_path = root / "persisted-goal-plan-null.sqlite3"
+            with SQLiteStore(null_path, legacy_authority) as store:
+                seed_eager_sqlite(store)
+                corrupted = store.snapshot(str(legacy_command.subject["loop_ref"]))
+                corrupted["goal_plan"] = None
+                store._connection.execute(
+                    "UPDATE loops SET snapshot_json = ?, snapshot_digest = ? "
+                    "WHERE loop_ref = ?",
+                    (
+                        canonical_bytes(corrupted),
+                        snapshot_digest(corrupted),
+                        str(legacy_command.subject["loop_ref"]),
+                    ),
+                )
+                store._connection.commit()
+                with self.assertRaises(ProtocolRejection) as sqlite_null:
+                    store.apply(legacy_command)
+                self.assertEqual(
+                    sqlite_null.exception.code, "INTERNAL_INVARIANT_VIOLATION"
+                )
+                self.assertEqual(store.commit_count, 5)
 
     def test_source_admission_and_session_only_confirmation(self):
         cli = load_cli()

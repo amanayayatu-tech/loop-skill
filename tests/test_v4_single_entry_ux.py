@@ -715,34 +715,37 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 ),
             )
             data = root / "data"
-            start_loop(prepared, root=data, clock=lambda: NOW)
-            self.assertEqual(status(root=data).progress, "Starting")
-            with SQLiteStore(data / STORE_FILENAME) as store:
-                attempt = store.ready_effect_attempts()[0]
-            receipt = Receipt(
-                receipt_ref="receipt-minimal-profile-unknown",
-                issuer_ref="loopskill-codex-adapter-v1",
-                issuer_trust="local-codex-adapter",
-                trust_class="cooperative",
-                action=attempt.action,
-                loop_ref=attempt.loop_ref,
-                subject_ref=attempt.subject_ref,
-                attempt_ref=attempt.attempt_ref,
-                target_ref=attempt.target_ref,
-                request_digest=attempt.provider_request_digest,
-                provider_idempotency_key=attempt.provider_idempotency_key,
-                provider_resource_ref=None,
-                outcome="unknown",
-                issued_at=NOW.isoformat().replace("+00:00", "Z"),
-                expires_at=(NOW + timedelta(minutes=5)).isoformat().replace(
-                    "+00:00", "Z"
-                ),
-                evidence_digest="minimal-profile-no-readback",
+            provider = EntryProviderFixture(now=NOW)
+            started = start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=root / "workspace",
             )
-            unknown = record_external_observation(receipt, root=data)
-            self.assertEqual(unknown.progress, "Needs attention")
-            self.assertIn("unknown", unknown.limitations[0].lower())
-            self.assertNotIn("resend", " ".join(unknown.next_actions).lower())
+            self.assertEqual(started.progress, "Active")
+            activated_second = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=root / "workspace",
+            )
+            self.assertEqual(activated_second.progress, "Starting")
+            closed = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=root / "workspace",
+            )
+            self.assertEqual(closed.progress, "Finished")
+            self.assertEqual(closed.result, "SUCCEEDED")
+            self.assertEqual(provider.invoke_count, 2)
+            self.assertEqual(provider.result_read_count, 2)
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                self.assertEqual(len(snapshot["goals"]), 2)
+                self.assertEqual(len(snapshot["attempts"]), 2)
+                self.assertEqual(snapshot["execution"]["state"], "TERMINAL")
             self.assertFalse((SCRIPTS / "loop_architect/v4_compat").exists())
 
     def test_confirmed_preparation_creates_and_starts_without_control_identity(self):

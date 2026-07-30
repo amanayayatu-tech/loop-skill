@@ -27,14 +27,16 @@ from loop_architect.v4_alpha.protocol import (
     CommandEnvelope,
     EffectAttempt,
     EAGER_STORAGE_MODE,
+    LEGACY_ABSENT_STORAGE_MODE,
+    MALFORMED_STORAGE_MODE,
     Receipt,
     InjectedCrash,
     ProtocolRejection,
     canonical_bytes,
     authority_grant_digest,
+    classify_persisted_storage_mode,
     command_digest,
     domain_digest,
-    persisted_storage_mode,
     raw_domain_digest,
     snapshot_digest,
     validate_command,
@@ -592,8 +594,16 @@ class SQLiteStore:
                 raise ProtocolRejection(outcome["code"], outcome["detail"])
 
             current = self._snapshot_in_transaction(loop_ref)
-            storage_mode = persisted_storage_mode(current)
-            if storage_mode == EAGER_STORAGE_MODE:
+            storage_mode = classify_persisted_storage_mode(current)
+            if storage_mode == MALFORMED_STORAGE_MODE:
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION",
+                    "persisted storage mode is malformed",
+                )
+            if storage_mode in {
+                LEGACY_ABSENT_STORAGE_MODE,
+                EAGER_STORAGE_MODE,
+            }:
                 from loop_architect.v4_eager_v40 import reduce_eager_command
 
                 reducer = reduce_eager_command
