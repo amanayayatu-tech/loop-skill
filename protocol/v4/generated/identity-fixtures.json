@@ -1,0 +1,82 @@
+{
+  "authority_grant_v2_selector": {
+    "goal_index_max": 0,
+    "goal_index_min": 0,
+    "include_loop_scope": true,
+    "mode": "PLAN_DERIVED_V1",
+    "plan_digest": "74b320f691fbb6697d5520ab5e36671a2b22d0b1767c55ae38d55b021ab2a281"
+  },
+  "capacity_contract_version": "loopskill-capacity-v1",
+  "goal_slice": {
+    "acceptance_criteria": [
+      "machine fixture remains canonical"
+    ],
+    "goal_id": "g000",
+    "objective": "verify generated protocol identity"
+  },
+  "goal_slice_digest": "db3a31a10b9e91e19e8f0bc2c0a3465605ca4d1c5046ba3eeadfb87794e69d0f",
+  "manifest_sha256": "89053bfb45c3eb46b0f4194cd14be8b8295c932e6e0d09e411ffc23d8161a437",
+  "plan_digest": "74b320f691fbb6697d5520ab5e36671a2b22d0b1767c55ae38d55b021ab2a281",
+  "plan_document": {
+    "boundaries": {
+      "destructive_actions_allowed": false,
+      "external_actions": [],
+      "forbidden_actions": [
+        "deploy"
+      ],
+      "forbidden_paths": [],
+      "write_scope": [
+        "tests/"
+      ]
+    },
+    "budget": {
+      "currency": null,
+      "max_cost_minor_units": 0,
+      "max_host_invocations": 1,
+      "wall_clock_seconds": 600
+    },
+    "completion_evidence": [
+      "generated fixture check passes"
+    ],
+    "goals": [
+      {
+        "acceptance_criteria": [
+          "machine fixture remains canonical"
+        ],
+        "goal_id": "g000",
+        "objective": "verify generated protocol identity"
+      }
+    ],
+    "objective": "verify generated protocol identity",
+    "roadmap_policy": {
+      "max_reorders": 0,
+      "mode": "STANDARD"
+    },
+    "schema": "loopskill-plan-v1",
+    "source": {
+      "kind": "expert_semantic_json",
+      "source_content_retained": false,
+      "source_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "stop_conditions": [
+      "identity mismatch"
+    ]
+  },
+  "plan_index": {
+    "authority_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+    "capacity_contract_version": "loopskill-capacity-v1",
+    "goal_count": 1,
+    "ordered_goal_ids": [
+      "g000"
+    ],
+    "ordered_goal_slice_digests": [
+      "db3a31a10b9e91e19e8f0bc2c0a3465605ca4d1c5046ba3eeadfb87794e69d0f"
+    ],
+    "plan_digest": "74b320f691fbb6697d5520ab5e36671a2b22d0b1767c55ae38d55b021ab2a281",
+    "revision": 0,
+    "schema": "loopskill-plan-index-v1",
+    "workspace_binding": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "plan_index_digest": "5868666b38dc1e2c8898c2ddc92f642a4477257049b3bbe901399b644e1a5f9c",
+  "protocol_version": "4.1.0"
+}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 from dataclasses import replace
 from typing import Any
@@ -16,6 +17,7 @@ from .protocol import (
     snapshot_digest,
     canonical_bytes,
     validate_command,
+    raw_domain_digest,
 )
 
 
@@ -65,6 +67,7 @@ class InMemoryStore:
         self._rejected: dict[
             tuple[str, str], tuple[str, dict[str, str]]
         ] = {}
+        self._blobs: dict[str, bytes] = {}
         self.commit_count = 0
 
     def snapshot(self, loop_ref: str) -> dict[str, Any] | None:
@@ -73,6 +76,22 @@ class InMemoryStore:
 
     def events(self, loop_ref: str) -> list[dict[str, Any]]:
         return copy.deepcopy(self._events.get(loop_ref, []))
+
+    def put_blob(self, content: bytes) -> str:
+        if not isinstance(content, bytes):
+            raise TypeError("blob content must be bytes")
+        digest = raw_domain_digest("loopskill-blob-v1\n", content)
+        existing = self._blobs.get(digest)
+        if existing is not None and existing != content:
+            raise ProtocolRejection(
+                "INTERNAL_INVARIANT_VIOLATION", "immutable blob digest collision"
+            )
+        self._blobs[digest] = content
+        return digest
+
+    def get_blob(self, digest: str) -> bytes | None:
+        value = self._blobs.get(digest)
+        return None if value is None else bytes(value)
 
     @property
     def rejection_count(self) -> int:
@@ -99,6 +118,14 @@ class InMemoryStore:
                         request_digest,
                         result,
                     ) in sorted(self._accepted.items())
+                ],
+                "blobs": [
+                    {
+                        "blob_digest": digest,
+                        "content_base64": base64.b64encode(content).decode("ascii"),
+                        "content_bytes": len(content),
+                    }
+                    for digest, content in sorted(self._blobs.items())
                 ],
                 "events": {
                     loop_ref: copy.deepcopy(events)
@@ -130,6 +157,11 @@ class InMemoryStore:
         )
 
     def verify_integrity(self) -> None:
+        for digest, content in self._blobs.items():
+            if raw_domain_digest("loopskill-blob-v1\n", content) != digest:
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION", "blob digest mismatch"
+                )
         for loop_ref, snapshot in self._snapshots.items():
             expected_sequence = list(range(1, len(self._events.get(loop_ref, [])) + 1))
             actual_sequence = [

@@ -498,7 +498,7 @@ def _spdx_sbom(
             "licenseDeclared": "MIT",
             "name": "LoopSkill",
             "primaryPackagePurpose": "APPLICATION",
-            "versionInfo": "4.0.0",
+            "versionInfo": "4.1.0",
         }
     ]
     relationships = [
@@ -539,10 +539,10 @@ def _spdx_sbom(
         },
         "dataLicense": "CC0-1.0",
         "documentNamespace": (
-            "https://github.com/amanayayatu-tech/loop-skill/sbom/v4.0.0/"
+            "https://github.com/amanayayatu-tech/loop-skill/sbom/v4.1.0/"
             + candidate
         ),
-        "name": f"LoopSkill-4.0.0-{candidate[:12]}",
+        "name": f"LoopSkill-4.1.0-{candidate[:12]}",
         "packages": packages,
         "relationships": relationships,
         "spdxVersion": "SPDX-2.3",
@@ -596,7 +596,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
     version = _run(root, "git", "show", f"{candidate}:VERSION").decode(
         "utf-8", "strict"
     ).strip()
-    if version != "4.0.0":
+    if version != "4.1.0":
         raise RcValidationError("RC_VERSION_INVALID")
     dependencies = _dependency_inventory()
     runtime_identity = _runtime_identity(dependencies)
@@ -639,7 +639,11 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
 def validate_canary_receipt(
     value: dict[str, Any],
     candidate: str,
+    *,
+    expected_goal_count: int = 1,
 ) -> None:
+    if expected_goal_count not in {1, 2, 8}:
+        raise RcValidationError("RC_CANARY_GOAL_COUNT_INVALID")
     expected_keys = {
         "artifact",
         "candidate_sha",
@@ -707,8 +711,8 @@ def validate_canary_receipt(
         "confirmation_digest_bound": True,
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
-        "host_task_create_count": 1,
-        "host_task_readback_count": 1,
+        "host_task_create_count": expected_goal_count,
+        "host_task_readback_count": expected_goal_count,
         "host_receipt_issuer": CANARY_ISSUER,
         "host_receipt_trust": CANARY_TRUST,
         "host_lifecycle_readback_count": 1,
@@ -763,7 +767,7 @@ def validate_canary_receipt(
     if (
         isinstance(create_readbacks, bool)
         or not isinstance(create_readbacks, int)
-        or create_readbacks not in {1, 2, 3}
+        or not expected_goal_count <= create_readbacks <= 3 * expected_goal_count
     ):
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: host_create_readback_count")
     terminal_readbacks = value.get("host_terminal_wait_readback_count")
@@ -771,7 +775,7 @@ def validate_canary_receipt(
     if (
         isinstance(terminal_readbacks, bool)
         or not isinstance(terminal_readbacks, int)
-        or not 1 <= terminal_readbacks <= 1_200
+        or terminal_readbacks != expected_goal_count
         or isinstance(total_readbacks, bool)
         or not isinstance(total_readbacks, int)
         or total_readbacks
@@ -817,7 +821,8 @@ def validate_canary_receipt(
         or fresh_until.tzinfo is None
         or not issued_utc <= observed_utc <= fresh_until_utc
         or not issued_utc < fresh_until_utc
-        or (fresh_until_utc - issued_utc).total_seconds() > 600
+        or (fresh_until_utc - issued_utc).total_seconds()
+        > (600 if expected_goal_count == 1 else 7_200)
     ):
         raise RcValidationError("RC_CANARY_RECEIPT_INVALID: freshness")
     if not isinstance(value.get("candidate_goal_digest"), str) or not re.fullmatch(
@@ -867,7 +872,11 @@ def _canary_workspace_contract(evidence_root: Path) -> tuple[str, bytes]:
 
 
 def _validate_canary_integrity_evidence(
-    receipt: Mapping[str, Any], candidate: str, evidence_root: Path
+    receipt: Mapping[str, Any],
+    candidate: str,
+    evidence_root: Path,
+    *,
+    expected_goal_count: int = 1,
 ) -> None:
     before = _read_canonical_object(
         evidence_root / CANARY_INTEGRITY_BEFORE_FILENAME,
@@ -877,10 +886,18 @@ def _validate_canary_integrity_evidence(
         evidence_root / CANARY_INTEGRITY_FILENAME,
         "RC_CANARY_INTEGRITY_INVALID",
     )
-    provider_diagnostic = _read_canonical_object(
-        evidence_root / CANARY_PROVIDER_DIAGNOSTIC_FILENAME,
-        "RC_CANARY_PROVIDER_DIAGNOSTIC_INVALID",
+    diagnostic_paths = (
+        (evidence_root / CANARY_PROVIDER_DIAGNOSTIC_FILENAME,)
+        if expected_goal_count == 1
+        else tuple(
+            evidence_root / f"canary-provider-diagnostic-{index:02d}.json"
+            for index in range(1, expected_goal_count + 1)
+        )
     )
+    provider_diagnostics = [
+        _read_canonical_object(path, "RC_CANARY_PROVIDER_DIAGNOSTIC_INVALID")
+        for path in diagnostic_paths
+    ]
     expected_provider_keys = {
         "artifact",
         "code",
@@ -897,7 +914,7 @@ def _validate_canary_integrity_evidence(
         "terminal_event_count",
         "terminal_event_type",
     }
-    if (
+    invalid_diagnostic = any(
         set(provider_diagnostic) != expected_provider_keys
         or provider_diagnostic["artifact"]
         != "loopskill-codex-exec-terminal-diagnostic-v1"
@@ -926,8 +943,18 @@ def _validate_canary_integrity_evidence(
         or provider_diagnostic["result_bytes"] <= 0
         or provider_diagnostic["result_control_digest"]
         != provider_diagnostic["result_sha256"]
+        for provider_diagnostic in provider_diagnostics
+    )
+    diagnostic_evidence: Any = (
+        provider_diagnostics[0]
+        if expected_goal_count == 1
+        else provider_diagnostics
+    )
+    if (
+        invalid_diagnostic
+        or len(provider_diagnostics) != expected_goal_count
         or receipt.get("provider_terminal_diagnostic_digest")
-        != _domain_digest(CANARY_PROVIDER_DIAGNOSTIC_DOMAIN, provider_diagnostic)
+        != _domain_digest(CANARY_PROVIDER_DIAGNOSTIC_DOMAIN, diagnostic_evidence)
     ):
         raise RcValidationError("RC_CANARY_PROVIDER_DIAGNOSTIC_INVALID")
     workspace_identity, expected_stanza = _canary_workspace_contract(evidence_root)
@@ -1111,114 +1138,26 @@ def _live_canary_observation(
     root: Path,
     candidate: str,
     store_root: Path,
+    *,
+    expected_goal_count: int = 1,
 ) -> dict[str, Any]:
     scripts = root / "codex-loop-prompt-architect" / "scripts"
     if str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
     try:
-        from loop_architect.v4_alpha.protocol import snapshot_digest
-        from loop_architect.v4_entry.service import STORE_FILENAME
-        from loop_architect.v4_entry.canary import CANARY_GOAL
-        from loop_architect.v4_persistence.sqlite_store import SQLiteStore
+        from loop_architect.v4_entry.canary import _live_summary
     except ImportError as exc:
         raise RcValidationError("RC_CANARY_LIVE_RUNTIME_UNAVAILABLE") from exc
-
-    evidence_root = store_root.parent
-    workspace = evidence_root / "workspace"
-    output = workspace / CANARY_OUTPUT_FILENAME
     try:
-        workspace_metadata = workspace.lstat()
-        entries = list(workspace.iterdir())
-        output_metadata = output.lstat()
-        if (
-            workspace.is_symlink()
-            or not workspace.is_dir()
-            or workspace_metadata.st_uid != os.getuid()
-            or workspace_metadata.st_mode & 0o077
-            or len(entries) != 1
-            or entries[0].name != CANARY_OUTPUT_FILENAME
-            or stat.S_ISLNK(output_metadata.st_mode)
-            or not stat.S_ISREG(output_metadata.st_mode)
-            or output_metadata.st_size != len(CANARY_OUTPUT_BYTES)
-        ):
-            raise OSError("invalid canary output")
-        descriptor = os.open(output, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            opened = os.fstat(descriptor)
-            raw = os.read(descriptor, len(CANARY_OUTPUT_BYTES) + 1)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or (opened.st_dev, opened.st_ino)
-                != (output_metadata.st_dev, output_metadata.st_ino)
-                or raw != CANARY_OUTPUT_BYTES
-            ):
-                raise OSError("canary output changed during read")
-        finally:
-            os.close(descriptor)
-    except OSError as exc:
-        raise RcValidationError("RC_CANARY_LIVE_OUTPUT_INVALID") from exc
-
-    store_path = store_root / STORE_FILENAME
-    if not store_path.is_file() or store_path.is_symlink():
-        raise RcValidationError("RC_CANARY_LIVE_STORE_INVALID")
-    with SQLiteStore(store_path) as store:
-        store.verify_integrity()
-        descriptors = store.loop_descriptors()
-        if len(descriptors) != 1 or descriptors[0]["goal"] != CANARY_GOAL:
-            raise RcValidationError("RC_CANARY_LIVE_CANDIDATE_BINDING_INVALID")
-        loop_ref = descriptors[0]["loop_ref"]
-        snapshot = store.snapshot(loop_ref)
-        if snapshot is None or len(snapshot["external_effects"]) != 1:
-            raise RcValidationError("RC_CANARY_LIVE_STATE_INVALID")
-        effect = next(iter(snapshot["external_effects"].values()))
-        host_resource = snapshot["host_resources"].get(effect["host_resource_ref"])
-        provider_id = None if host_resource is None else host_resource.get(
-            "provider_resource_ref"
+        observation, _goal_digest = _live_summary(
+            candidate,
+            store_root,
+            store_root.parent / "workspace",
+            expected_goal_count,
         )
-        if not isinstance(provider_id, str) or not provider_id:
-            raise RcValidationError("RC_CANARY_LIVE_HOST_IDENTITY_INVALID")
-        results = list(snapshot["results"].values())
-        reports = list(snapshot["reports"].values())
-        reviews = list(snapshot["reviews"].values())
-        finalizations = list(snapshot["finalizations"].values())
-        artifacts = list(snapshot["artifacts"].values())
-        if (
-            len(results) != 1
-            or results[0].get("state") != "ACKNOWLEDGED"
-            or results[0].get("outcome") != "PASS"
-            or len(reports) != 1
-            or reports[0].get("state") != "ACCEPTED"
-            or len(artifacts) != 1
-            or artifacts[0].get("state") != "VERIFIED"
-            or len(reviews) != 1
-            or reviews[0].get("state") != "PASS"
-            or len(finalizations) != 1
-            or finalizations[0].get("state") != "EXECUTION_CLOSED"
-            or snapshot["execution"].get("state") != "TERMINAL"
-            or snapshot["execution"].get("disposition") != "SUCCEEDED"
-            or snapshot["closure_assurance"].get("strength") != "STRICT"
-        ):
-            raise RcValidationError("RC_CANARY_LIVE_CLOSURE_INVALID")
-        return {
-            "artifact_state": artifacts[0]["state"],
-            "assurance": snapshot["closure_assurance"]["strength"],
-            "canary_output_sha256": CANARY_OUTPUT_SHA256,
-            "candidate_goal_digest": descriptors[0]["goal_digest"],
-            "candidate_sha": candidate,
-            "execution_disposition": snapshot["execution"]["disposition"],
-            "execution_state": snapshot["execution"]["state"],
-            "finalization_state": finalizations[0]["state"],
-            "host_task_identity_digest": _domain_digest(
-                CANARY_HOST_ID_DOMAIN, provider_id
-            ),
-            "lifecycle_state": "TERMINAL",
-            "result_digest": results[0]["source_observation_digest"],
-            "result_outcome": results[0]["outcome"],
-            "result_state": results[0]["state"],
-            "report_state": reports[0]["state"],
-            "review_state": reviews[0]["state"],
-            "snapshot_digest": snapshot_digest(snapshot),
-        }
+    except Exception as exc:
+        raise RcValidationError("RC_CANARY_LIVE_STATE_INVALID") from exc
+    return observation
 
 
 def validate_live_canary(
@@ -1226,11 +1165,25 @@ def validate_live_canary(
     candidate: str,
     root: Path,
     store_root: Path,
+    *,
+    expected_goal_count: int = 1,
 ) -> str:
     """Bind the receipt to the closed same-process transcript and local state."""
-    validate_canary_receipt(value, candidate)
-    _validate_canary_integrity_evidence(value, candidate, store_root.parent)
-    observation = _live_canary_observation(root, candidate, store_root)
+    validate_canary_receipt(
+        value, candidate, expected_goal_count=expected_goal_count
+    )
+    _validate_canary_integrity_evidence(
+        value,
+        candidate,
+        store_root.parent,
+        expected_goal_count=expected_goal_count,
+    )
+    observation = _live_canary_observation(
+        root,
+        candidate,
+        store_root,
+        expected_goal_count=expected_goal_count,
+    )
     digest = _domain_digest(CANARY_LIVE_DOMAIN, observation)
     if (
         value["host_receipt_digest"] != digest
@@ -1475,7 +1428,7 @@ def validate_author_packet(
             root, "git", "rev-parse", "paper-treatment-v3.3.12^{commit}"
         ).decode("ascii", "strict").strip()
         _run(root, "git", "merge-base", "--is-ancestor", origin_main, candidate)
-        local_v4_tag = _run(root, "git", "tag", "--list", "v4.0.0").strip()
+        local_v4_tag = _run(root, "git", "tag", "--list", "v4.1.0").strip()
     except UnicodeDecodeError as exc:
         raise RcValidationError("RC_AUTHOR_PACKET_PREFLIGHT_IDENTITY_INVALID") from exc
     if (
@@ -1509,6 +1462,9 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--canary-receipt", type=Path)
     parser.add_argument("--canary-store", type=Path)
+    parser.add_argument(
+        "--expected-canary-goals", type=int, choices=(1, 2, 8), default=1
+    )
     parser.add_argument("--conformance-receipt", type=Path)
     parser.add_argument("--author-packet", type=Path)
     parser.add_argument("--evidence", action="append", default=[])
@@ -1554,6 +1510,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.candidate,
                 args.root,
                 args.canary_store,
+                expected_goal_count=args.expected_canary_goals,
             )
             canary_digest = hashlib.sha256(canary_raw).hexdigest()
             receipt["canary_receipt_digest"] = canary_digest
@@ -1590,7 +1547,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ):
                 raise RcValidationError("RC_AUTHOR_PACKET_PRIMARY_EVIDENCE_MISMATCH")
             receipt["author_packet_digest"] = hashlib.sha256(packet_raw).hexdigest()
-            receipt["gate_status"] = "LOOPSKILL_4_0_PUBLICATION_CANDIDATE_VALIDATED"
+            receipt["gate_status"] = "LOOPSKILL_4_1_PUBLICATION_CANDIDATE_VALIDATED"
             receipt["publication_ready"] = True
         receipt.pop("receipt_digest", None)
         receipt["receipt_digest"] = hashlib.sha256(_canonical(receipt)).hexdigest()

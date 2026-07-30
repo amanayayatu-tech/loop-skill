@@ -23,7 +23,8 @@ class V4DocsTests(unittest.TestCase):
         self.assertGreaterEqual(result["bash_command_blocks"], 6)
         self.assertEqual(result["readme_asset_count"], 2)
         self.assertEqual(docs.validate(ROOT, mode="candidate")["status"], "PASS")
-        self.assertEqual(docs.validate(ROOT, mode="release")["status"], "PASS")
+        with self.assertRaisesRegex(docs.DocsError, "DOC_RELEASE_STATUS_PARITY_DRIFT"):
+            docs.validate(ROOT, mode="release")
         smoke = docs.smoke_public_commands(ROOT)
         self.assertEqual(smoke["status"], "PASS")
         self.assertEqual(smoke["command_count"], 5)
@@ -50,10 +51,13 @@ class V4DocsTests(unittest.TestCase):
                 "docs/v4/known-limitations.md",
                 "docs/v4/architecture-map.md",
                 "docs/v4/release-notes.md",
+                "docs/v4/release-notes-v4.1.md",
                 "docs/readme-assets/durable-handoff.png",
                 "docs/readme-assets/evidence-before-closure.png",
                 "docs/RELEASING.md",
                 "docs/adr/0011-loopskill-4-compatible-kernel-refactor.md",
+                "docs/adr/0013-content-addressed-plan-capacity.md",
+                "docs/v4/compatibility-matrix-v4.1.md",
                 "protocol/v4/README.md",
                 "examples/v4-standard-input.json",
                 "codex-loop-prompt-architect/scripts/loop_architect/v4_entry/canary.py",
@@ -81,8 +85,29 @@ class V4DocsTests(unittest.TestCase):
                 ignore=shutil.ignore_patterns(".git", "__pycache__"),
             )
             self.assertEqual(docs.validate(root)["status"], "PASS")
-            self.assertEqual(docs.validate(root, mode="release")["status"], "PASS")
             self.assertEqual(docs.validate(root, mode="candidate")["status"], "PASS")
+            replacements = {
+                docs.README_CANDIDATE_STATUS_ZH: docs.README_RELEASE_STATUS_ZH,
+                docs.README_CANDIDATE_STATUS_EN: docs.README_RELEASE_STATUS_EN,
+                docs.QUICKSTART_CANDIDATE_STATUS_ZH: docs.QUICKSTART_RELEASE_STATUS_ZH,
+                docs.QUICKSTART_CANDIDATE_STATUS_EN: docs.QUICKSTART_RELEASE_STATUS_EN,
+                docs.SECURITY_CANDIDATE_STATUS: docs.SECURITY_RELEASE_STATUS,
+                "## [4.1.0] - Unreleased": "## [4.1.0] - 2026-07-30",
+            }
+            for relative in (
+                "README.md",
+                "README.en.md",
+                "docs/v4/quickstart.zh-CN.md",
+                "docs/v4/quickstart.en.md",
+                "SECURITY.md",
+                "CHANGELOG.md",
+            ):
+                path = root / relative
+                text = path.read_text(encoding="utf-8")
+                for old, new in replacements.items():
+                    text = text.replace(old, new)
+                path.write_text(text, encoding="utf-8")
+            self.assertEqual(docs.validate(root, mode="release")["status"], "PASS")
             stale_zh = root / "README.md"
             stale_zh.write_text(
                 stale_zh.read_text(encoding="utf-8") + "\n此源码树是稳定发行\n",

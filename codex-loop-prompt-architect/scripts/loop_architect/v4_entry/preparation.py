@@ -12,14 +12,37 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from loop_architect.v4_alpha.protocol import (
+    CAPACITY_CONTRACT,
+    MANIFEST_SHA256,
     LoopIntakeDecision,
     LoopIntakeInput,
+    PlanCapacityReport,
     PreparedLoopBundle,
     PreparedLoopManifest,
     Receipt,
     canonical_bytes,
     domain_digest,
     raw_domain_digest,
+    command_without_digest,
+)
+from loop_architect.v4_alpha.plan_codec import (
+    CONTENT_STORAGE_MODE,
+    CompiledPlan,
+    PlanCodecError,
+    authority_binding_digest,
+    canonicalize_plan,
+    compile_plan,
+    content_create_command,
+    goal_chain,
+    materialize_provider_request,
+    max_collection_members,
+    parse_plan_bytes,
+    plan_digest,
+    validate_plan_index,
+)
+from loop_architect.v4_adapters.codex.prompt import (
+    PromptMaterializationError,
+    prompt_bytes,
 )
 from loop_architect.v4_artifacts import (
     ArtifactCaptureError,
@@ -31,13 +54,17 @@ from loop_architect.v4_artifacts import (
 MANIFEST_FILENAME = "loop-manifest.json"
 BOUNDARY_FILENAME = "boundary-summary.json"
 PLAN_FILENAME = "CONTROLLER_PLAN.md"
+PLAN_DOCUMENT_FILENAME = "plan-document.json"
+PLAN_INDEX_FILENAME = "plan-index.json"
+CAPACITY_FILENAME = "capacity-report.json"
 INSTRUCTIONS_FILENAME = "使用说明.md"
 BUNDLE_FILENAME = "prepared-bundle.json"
 CONFIRMATION_FILENAME = "start-confirmation.json"
-MANIFEST_VERSION = "loopskill-prepared-loop-v1"
+MANIFEST_VERSION = "loopskill-prepared-loop-v2"
+PRODUCT_VERSION = "4.1.0"
 CONFIRMATION_ISSUER = "loopskill-local-confirmation-v1"
 CONFIRMATION_TRUST = "local-explicit-confirmation"
-_MAX_PREPARED_FILE_BYTES = 64 * 1024
+_MAX_PREPARED_FILE_BYTES = 132 * 1024
 _TUPLE_FIELDS = (
     "goal_plan",
     "write_scope",
@@ -64,6 +91,9 @@ class PreparedContext:
     manifest: PreparedLoopManifest
     bundle: PreparedLoopBundle
     boundary: Mapping[str, Any]
+    plan: Mapping[str, Any]
+    plan_index: Mapping[str, Any]
+    capacity_report: Mapping[str, Any]
     confirmation: Receipt | None
 
 
@@ -92,7 +122,22 @@ def _parse_time(value: str) -> datetime:
 
 def intake(request: LoopIntakeInput) -> LoopIntakeDecision:
     """Classify one request without writing state or invoking any provider."""
-    goal = request.goal.strip() if isinstance(request.goal, str) else ""
+    canonical_plan = None
+    if request.canonical_plan is not None:
+        try:
+            canonical_plan = canonicalize_plan(request.canonical_plan)
+        except PlanCodecError as exc:
+            return LoopIntakeDecision(
+                disposition="BLOCKED",
+                route="UNDETERMINED",
+                reason=f"The canonical plan is invalid ({exc.reason}).",
+                questions=(),
+            )
+    goal = (
+        str(canonical_plan["objective"])
+        if canonical_plan is not None
+        else request.goal.strip() if isinstance(request.goal, str) else ""
+    )
     if not goal:
         return LoopIntakeDecision(
             disposition="NEEDS_CLARIFICATION",
@@ -100,21 +145,34 @@ def intake(request: LoopIntakeInput) -> LoopIntakeDecision:
             reason="The intended outcome is missing.",
             questions=("What observable outcome should the work produce?",),
         )
-    plan = tuple(item.strip() for item in request.goal_plan if item.strip())
+    plan = (
+        tuple(str(item["objective"]) for item in canonical_plan["goals"])
+        if canonical_plan is not None
+        else tuple(item.strip() for item in request.goal_plan if item.strip())
+    )
     if (
         not plan
         or plan[0] != goal
-        or len(plan) > 16
-        or len(set(plan)) != len(plan)
+        or len(plan) > int(CAPACITY_CONTRACT["goal_count_max"])
+        or (canonical_plan is None and len(set(plan)) != len(plan))
     ):
         return LoopIntakeDecision(
             disposition="NEEDS_CLARIFICATION",
             route="UNDETERMINED",
-            reason="The Goal plan must contain 1–16 unique objectives and start with the primary Goal.",
+            reason="The Goal plan must contain 1–32 Goals and start with the primary Goal.",
             questions=("Provide an ordered Goal plan whose first item is the primary Goal.",),
         )
-    horizon = request.task_horizon.strip().lower()
-    if horizon in {"one_off", "short", "single_step"} and not request.external_actions:
+    horizon = (
+        str(canonical_plan["roadmap_policy"]["mode"]).lower()
+        if canonical_plan is not None
+        else request.task_horizon.strip().lower()
+    )
+    external_actions = (
+        tuple(canonical_plan["boundaries"]["external_actions"])
+        if canonical_plan is not None
+        else request.external_actions
+    )
+    if horizon in {"one_off", "short", "single_step"} and not external_actions:
         return LoopIntakeDecision(
             disposition="DIRECT_TASK_RECOMMENDED",
             route="DIRECT_TASK",
@@ -124,7 +182,7 @@ def intake(request: LoopIntakeInput) -> LoopIntakeDecision:
     boundaries = {item.strip().lower() for item in request.authorization_boundaries}
     high_impact = {
         action.strip().lower()
-        for action in request.external_actions
+        for action in external_actions
         if action.strip().lower() in {"commit", "push", "publish", "deploy"}
     }
     missing_authority = sorted(
@@ -139,11 +197,26 @@ def intake(request: LoopIntakeInput) -> LoopIntakeDecision:
             questions=(),
         )
     questions: list[str] = []
-    if not request.write_scope:
+    write_scope = (
+        tuple(canonical_plan["boundaries"]["write_scope"])
+        if canonical_plan is not None
+        else request.write_scope
+    )
+    completion = (
+        tuple(canonical_plan["completion_evidence"])
+        if canonical_plan is not None
+        else request.acceptance_criteria
+    )
+    stops = (
+        tuple(canonical_plan["stop_conditions"])
+        if canonical_plan is not None
+        else request.stop_conditions
+    )
+    if not write_scope:
         questions.append("What exact paths or surfaces may the loop modify?")
-    if not request.budget.strip():
+    if canonical_plan is None and not request.budget.strip():
         questions.append("What time, call, token, or cost budget applies?")
-    if not request.acceptance_criteria or not request.stop_conditions:
+    if not completion or not stops:
         questions.append(
             "What observable acceptance criteria and stop conditions must be used?"
         )
@@ -267,6 +340,52 @@ def _write_once(path: Path, content: bytes) -> None:
         ) from exc
 
 
+def _read_prepared_bytes(path: Path, *, maximum: int = _MAX_PREPARED_FILE_BYTES) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        before = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_mode & 0o077
+            or before.st_size > maximum
+        ):
+            raise OSError("unsafe prepared file")
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                or not stat.S_ISREG(opened.st_mode)
+            ):
+                raise OSError("prepared file identity changed")
+            chunks: list[bytes] = []
+            remaining = maximum + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65_536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            after = os.fstat(descriptor)
+            if (
+                len(raw) > maximum
+                or (after.st_dev, after.st_ino, after.st_size)
+                != (opened.st_dev, opened.st_ino, opened.st_size)
+            ):
+                raise OSError("prepared file changed while reading")
+            return raw
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise PreparationError(
+            "USER_PREPARATION_INVALID",
+            "A prepared artifact is missing, unsafe, or changed while reading.",
+            "Preserve the directory and prepare again in a new location.",
+        ) from exc
+
+
 def _manifest_value(manifest: PreparedLoopManifest) -> dict[str, Any]:
     return asdict(manifest)
 
@@ -282,6 +401,12 @@ def _boundary_value(manifest: PreparedLoopManifest) -> dict[str, Any]:
         "max_roadmap_revisions": manifest.max_roadmap_revisions,
         "goal": manifest.goal,
         "goal_plan": list(manifest.goal_plan),
+        "plan_digest": manifest.plan_digest,
+        "plan_index_digest": manifest.plan_index_digest,
+        "plan_storage_mode": manifest.plan_storage_mode,
+        "capacity_contract_version": manifest.capacity_contract_version,
+        "product_version": manifest.product_version,
+        "protocol_manifest_digest": manifest.protocol_manifest_digest,
         "selection_reason": manifest.selection_reason,
         "stop_conditions": list(manifest.stop_conditions),
         "write_scope": list(manifest.write_scope),
@@ -292,7 +417,7 @@ def _render_plan(manifest: PreparedLoopManifest, manifest_digest: str, boundary_
     def lines(values: tuple[str, ...]) -> str:
         return "\n".join(f"- {value}" for value in values) or "- None"
 
-    text = f"""# LoopSkill 4 Controller Plan
+    text = f"""# LoopSkill 4.1 任务卡
 
 This is a human review/export view. `loop-manifest.json` is the machine source.
 
@@ -337,6 +462,9 @@ This is a human review/export view. `loop-manifest.json` is the machine source.
 
 - Manifest digest: `{manifest_digest}`
 - Boundary digest: `{boundary_digest}`
+- Plan digest: `{manifest.plan_digest}`
+- PlanIndex digest: `{manifest.plan_index_digest}`
+- Capacity contract: `{manifest.capacity_contract_version}`
 - No Host task, heartbeat, delivery, or execution was created by this plan.
 """
     return text.encode("utf-8")
@@ -344,12 +472,180 @@ This is a human review/export view. `loop-manifest.json` is the machine source.
 
 def _render_instructions() -> bytes:
     return (
-        "# LoopSkill 4 使用说明\n\n"
+        "# LoopSkill 4.1 使用说明\n\n"
         "1. 先审阅 Controller Plan 中的 Goal、写入范围、预算、外部动作、验收和停止条件。\n"
         "2. 只有内容准确时才执行显式确认；准备阶段不会创建任何 Host task 或 heartbeat。\n"
         "3. 任一准备文件变化都会使旧确认失效；请重新 prepare/confirm。\n"
-        "4. 普通用户无需填写 thread、task、route、receipt、SHA 或 Host 参数。\n"
+        "4. 容量报告必须为 PASS；普通用户无需填写 thread、task、route、receipt、SHA 或 Host 参数。\n"
     ).encode("utf-8")
+
+
+def _request_source_bytes(request: LoopIntakeInput) -> int:
+    if request.source_bytes:
+        if isinstance(request.source_bytes, bool) or request.source_bytes < 0:
+            raise PreparationError(
+                "USER_INPUT_INVALID",
+                "The admitted source byte count is invalid.",
+                "Provide the source again through the supported intake path.",
+            )
+        return request.source_bytes
+    if request.canonical_plan is not None:
+        return len(canonical_bytes(request.canonical_plan))
+    return len(
+        canonical_bytes(
+            {
+                "acceptance_criteria": list(request.acceptance_criteria),
+                "authorization_boundaries": list(request.authorization_boundaries),
+                "budget": request.budget,
+                "external_actions": list(request.external_actions),
+                "goal": request.goal,
+                "goal_plan": list(request.goal_plan),
+                "stop_conditions": list(request.stop_conditions),
+                "task_horizon": request.task_horizon,
+                "write_scope": list(request.write_scope),
+            }
+        )
+    )
+
+
+def _compiled_from_bytes(plan_raw: bytes, index_raw: bytes) -> CompiledPlan:
+    plan = parse_plan_bytes(plan_raw)
+    try:
+        index_value = json.loads(index_raw.decode("utf-8", "strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PreparationError(
+            "USER_PREPARATION_INVALID",
+            "The prepared PlanIndex is invalid.",
+            "Preserve the directory and prepare again.",
+        ) from exc
+    index = validate_plan_index(index_value, plan)
+    if canonical_bytes(index) != index_raw:
+        raise PreparationError(
+            "USER_PREPARATION_INVALID",
+            "The prepared PlanIndex is not canonical.",
+            "Preserve the directory and prepare again.",
+        )
+    return CompiledPlan(
+        plan=plan,
+        plan_bytes=plan_raw,
+        plan_digest=plan_digest(plan_raw),
+        goal_slice_digests=tuple(index["ordered_goal_slice_digests"]),
+        index=index,
+        index_bytes=index_raw,
+        index_digest=plan_digest(index_raw),
+    )
+
+
+def _capacity_report(
+    compiled: CompiledPlan,
+    *,
+    namespace: str,
+    loop_ref: str,
+    issued_at: str,
+    artifact_profile: str,
+    source_bytes: int,
+) -> dict[str, Any]:
+    placeholder_digest = "0" * 64
+    command = content_create_command(
+        namespace=namespace,
+        loop_ref=loop_ref,
+        compiled=compiled,
+        issued_at=issued_at,
+        confirmation_receipt_ref="receipt-confirm-" + "0" * 24,
+        manifest_digest=placeholder_digest,
+        boundary_digest=placeholder_digest,
+        bundle_digest=placeholder_digest,
+        artifact_profile=artifact_profile,
+        artifact_baseline_blob_digest=(
+            None if artifact_profile == "UNBOUND" else placeholder_digest
+        ),
+    )
+    command_value = command_without_digest(command)
+    command_bytes = len(canonical_bytes(command_value))
+    collection_members = max_collection_members(command_value)
+    prompt_sizes: list[int] = []
+    hard_prompt_failure = False
+    for position, (goal_id, slice_digest) in enumerate(
+        zip(
+            compiled.index["ordered_goal_ids"],
+            compiled.index["ordered_goal_slice_digests"],
+        )
+    ):
+        chain = goal_chain(
+            loop_ref,
+            compiled.plan_digest,
+            str(goal_id),
+            str(slice_digest),
+        )
+        payload = materialize_provider_request(
+            compiled.plan,
+            compiled.index,
+            position,
+            target_ref=chain["provider_target"],
+            artifact_digest=placeholder_digest,
+            prior_disposition="" if position == 0 else "DONE",
+        )
+        try:
+            prompt_sizes.append(prompt_bytes(payload, chain["provider_key"]))
+        except PromptMaterializationError:
+            prompt_sizes.append(int(CAPACITY_CONTRACT["host_prompt_hard_bytes"]) + 1)
+            hard_prompt_failure = True
+    maximum_prompt = max(prompt_sizes)
+    maximum_position = prompt_sizes.index(maximum_prompt)
+    reasons = []
+    if source_bytes > (
+        int(CAPACITY_CONTRACT["source_text_max_bytes"])
+        if compiled.plan["source"]["kind"]
+        in {"literal_text", "pasted_text", "authorized_file"}
+        else int(CAPACITY_CONTRACT["expert_json_max_bytes"])
+    ):
+        reasons.append("source_bytes")
+    if len(compiled.plan_bytes) > int(CAPACITY_CONTRACT["canonical_plan_max_bytes"]):
+        reasons.append("canonical_plan_bytes")
+    if command_bytes > int(CAPACITY_CONTRACT["create_loop_target_bytes"]):
+        reasons.append("create_loop_target_bytes")
+    if collection_members > int(
+        CAPACITY_CONTRACT["create_loop_target_collection_members"]
+    ):
+        reasons.append("create_loop_target_collection_members")
+    if maximum_prompt > int(CAPACITY_CONTRACT["host_prompt_target_bytes"]):
+        reasons.append("host_prompt_target_bytes")
+    if hard_prompt_failure:
+        reasons.append("host_prompt_hard_bytes")
+    if int(compiled.plan["budget"]["max_host_invocations"]) < len(
+        compiled.plan["goals"]
+    ):
+        reasons.append("budget_host_invocations_below_goal_count")
+    report = PlanCapacityReport(
+        source_kind=str(compiled.plan["source"]["kind"]),
+        source_bytes=source_bytes,
+        source_digest=str(compiled.plan["source"]["source_digest"]),
+        goal_count=len(compiled.plan["goals"]),
+        plan_bytes=len(compiled.plan_bytes),
+        plan_digest=compiled.plan_digest,
+        plan_index_digest=compiled.index_digest,
+        create_loop_command_bytes=command_bytes,
+        create_loop_max_collection_members=collection_members,
+        max_materialized_goal_prompt_bytes=maximum_prompt,
+        max_materialized_goal_id=str(
+            compiled.index["ordered_goal_ids"][maximum_position]
+        ),
+        create_loop_byte_headroom=int(
+            CAPACITY_CONTRACT["create_loop_target_bytes"]
+        )
+        - command_bytes,
+        create_loop_collection_headroom=int(
+            CAPACITY_CONTRACT["create_loop_target_collection_members"]
+        )
+        - collection_members,
+        provider_prompt_headroom=int(CAPACITY_CONTRACT["host_prompt_target_bytes"])
+        - maximum_prompt,
+        capacity_contract_version=str(CAPACITY_CONTRACT["version"]),
+        capacity_status="PASS" if not reasons else "BLOCKED",
+        blocking_reason=",".join(reasons),
+        materialized_goal_prompt_bytes=tuple(prompt_sizes),
+    )
+    return asdict(report)
 
 
 def prepare(
@@ -360,6 +656,21 @@ def prepare(
     token_factory: Callable[[], str] = _token,
     workspace_root: Path | str | None = None,
 ) -> PreparedContext:
+    if request.canonical_plan is not None:
+        try:
+            canonicalize_plan(request.canonical_plan)
+        except PlanCodecError as exc:
+            raise PreparationError(
+                exc.code,
+                "The execution plan does not satisfy the closed v4.1 plan contract.",
+                f"Revise the request and prepare again ({exc.reason}).",
+            ) from exc
+    elif len(request.goal_plan) > int(CAPACITY_CONTRACT["goal_count_max"]):
+        raise PreparationError(
+            "RESOURCE_LIMIT_EXCEEDED",
+            "The Goal plan exceeds the frozen v4.1 capacity contract.",
+            "Split the work into a plan with at most 32 Goals.",
+        )
     decision = intake(request)
     if decision.disposition == "DIRECT_TASK_RECOMMENDED":
         raise PreparationError(
@@ -389,8 +700,7 @@ def prepare(
             "LoopSkill could not allocate a preparation identity.",
             "Retry in a new empty output directory.",
         )
-    output = Path(output_directory)
-    _ensure_output_directory(output)
+    loop_ref = f"loop-{namespace}"
     if workspace_root is None:
         artifact_profile = "UNBOUND"
         workspace_identity_digest = domain_digest(
@@ -408,27 +718,76 @@ def prepare(
                 "The selected workspace cannot be safely bound for artifact capture.",
                 "Choose one confined regular workspace and prepare again.",
             ) from exc
+    prepared_at = _iso(clock())
+    try:
+        compiled = compile_plan(
+            request,
+            loop_ref=loop_ref,
+            workspace_binding=workspace_identity_digest,
+        )
+        source_bytes = _request_source_bytes(request)
+        capacity = _capacity_report(
+            compiled,
+            namespace=namespace,
+            loop_ref=loop_ref,
+            issued_at=prepared_at,
+            artifact_profile=artifact_profile,
+            source_bytes=source_bytes,
+        )
+    except PlanCodecError as exc:
+        raise PreparationError(
+            exc.code,
+            "The execution plan does not satisfy the closed v4.1 plan contract.",
+            f"Revise the request and prepare again ({exc.reason}).",
+        ) from exc
+    if capacity["capacity_status"] != "PASS":
+        raise PreparationError(
+            "RESOURCE_LIMIT_EXCEEDED",
+            "The prepared loop exceeds the frozen v4.1 release capacity target.",
+            "Reduce or split the indicated Goal or boundary, then prepare again: "
+            + str(capacity["blocking_reason"]),
+        )
+    capacity_bytes = canonical_bytes(capacity)
+    capacity_digest = raw_domain_digest(
+        "loopskill-prepared-artifact-v1\n", capacity_bytes
+    )
     manifest = PreparedLoopManifest(
         manifest_version=MANIFEST_VERSION,
         control_namespace=namespace,
-        loop_ref=f"loop-{namespace}",
-        goal=request.goal.strip(),
-        goal_plan=tuple(item.strip() for item in request.goal_plan),
-        task_horizon=request.task_horizon.strip().lower(),
-        execution_mode=(
-            "ADAPTIVE" if decision.route == "ADAPTIVE_LOOP" else "STANDARD"
+        loop_ref=loop_ref,
+        goal=str(compiled.plan["objective"]),
+        goal_plan=tuple(
+            str(goal["objective"]) for goal in compiled.plan["goals"]
         ),
-        max_roadmap_revisions=(4 if decision.route == "ADAPTIVE_LOOP" else 1),
+        task_horizon=str(compiled.plan["roadmap_policy"]["mode"]).lower(),
+        execution_mode=str(compiled.plan["roadmap_policy"]["mode"]),
+        max_roadmap_revisions=(
+            int(compiled.plan["roadmap_policy"]["max_reorders"]) + 1
+        ),
         selection_reason=decision.reason,
-        write_scope=tuple(request.write_scope),
-        budget=request.budget.strip(),
-        external_actions=tuple(request.external_actions),
-        acceptance_criteria=tuple(request.acceptance_criteria),
-        stop_conditions=tuple(request.stop_conditions),
-        authorization_boundaries=tuple(request.authorization_boundaries),
+        write_scope=tuple(compiled.plan["boundaries"]["write_scope"]),
+        budget=(
+            request.budget.strip()
+            or canonical_bytes(compiled.plan["budget"]).decode("utf-8")
+        ),
+        external_actions=tuple(compiled.plan["boundaries"]["external_actions"]),
+        acceptance_criteria=tuple(compiled.plan["completion_evidence"]),
+        stop_conditions=tuple(compiled.plan["stop_conditions"]),
+        authorization_boundaries=(
+            tuple(request.authorization_boundaries)
+            or tuple(compiled.plan["boundaries"]["forbidden_actions"])
+        ),
         artifact_profile=artifact_profile,
         workspace_identity_digest=workspace_identity_digest,
-        prepared_at=_iso(clock()),
+        prepared_at=prepared_at,
+        plan_storage_mode=CONTENT_STORAGE_MODE,
+        plan_digest=compiled.plan_digest,
+        plan_index_digest=compiled.index_digest,
+        capacity_report_digest=capacity_digest,
+        capacity_contract_version=str(CAPACITY_CONTRACT["version"]),
+        source_digest=str(compiled.plan["source"]["source_digest"]),
+        product_version=PRODUCT_VERSION,
+        protocol_manifest_digest=MANIFEST_SHA256,
     )
     manifest_value = _manifest_value(manifest)
     boundary = _boundary_value(manifest)
@@ -444,6 +803,7 @@ def prepare(
     instructions_bytes = _render_instructions()
     bundle_base = {
         "boundary_digest": boundary_digest,
+        "capacity_report_digest": capacity_digest,
         "controller_plan_digest": raw_domain_digest(
             "loopskill-prepared-artifact-v1\n", plan_bytes
         ),
@@ -451,16 +811,23 @@ def prepare(
             "loopskill-prepared-artifact-v1\n", instructions_bytes
         ),
         "manifest_digest": manifest_digest,
+        "plan_digest": compiled.plan_digest,
+        "plan_index_digest": compiled.index_digest,
     }
     bundle = PreparedLoopBundle(
-        **bundle_base,
         bundle_digest=domain_digest(
             "loopskill-prepared-bundle-v1\n", bundle_base
         ),
+        **bundle_base,
     )
+    output = Path(output_directory)
+    _ensure_output_directory(output)
     _write_once(output / MANIFEST_FILENAME, manifest_bytes)
     _write_once(output / BOUNDARY_FILENAME, boundary_bytes)
     _write_once(output / PLAN_FILENAME, plan_bytes)
+    _write_once(output / PLAN_DOCUMENT_FILENAME, compiled.plan_bytes)
+    _write_once(output / PLAN_INDEX_FILENAME, compiled.index_bytes)
+    _write_once(output / CAPACITY_FILENAME, capacity_bytes)
     _write_once(output / INSTRUCTIONS_FILENAME, instructions_bytes)
     _write_once(output / BUNDLE_FILENAME, canonical_bytes(asdict(bundle)))
     directory_fd = os.open(output, os.O_RDONLY)
@@ -473,15 +840,16 @@ def prepare(
         manifest=manifest,
         bundle=bundle,
         boundary=boundary,
+        plan=compiled.plan,
+        plan_index=compiled.index,
+        capacity_report=capacity,
         confirmation=None,
     )
 
 
 def _load_json(path: Path) -> Mapping[str, Any]:
     try:
-        raw = path.read_bytes()
-        if len(raw) > _MAX_PREPARED_FILE_BYTES:
-            raise ValueError("file bound")
+        raw = _read_prepared_bytes(path)
         value = json.loads(raw.decode("utf-8", "strict"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise PreparationError(
@@ -564,6 +932,9 @@ def load_prepared(
         MANIFEST_FILENAME,
         BOUNDARY_FILENAME,
         PLAN_FILENAME,
+        PLAN_DOCUMENT_FILENAME,
+        PLAN_INDEX_FILENAME,
+        CAPACITY_FILENAME,
         INSTRUCTIONS_FILENAME,
         BUNDLE_FILENAME,
     }
@@ -577,6 +948,17 @@ def load_prepared(
     manifest_value = _load_json(root / MANIFEST_FILENAME)
     boundary = _load_json(root / BOUNDARY_FILENAME)
     bundle_value = _load_json(root / BUNDLE_FILENAME)
+    plan_raw = _read_prepared_bytes(root / PLAN_DOCUMENT_FILENAME)
+    index_raw = _read_prepared_bytes(root / PLAN_INDEX_FILENAME)
+    capacity = _load_json(root / CAPACITY_FILENAME)
+    try:
+        compiled = _compiled_from_bytes(plan_raw, index_raw)
+    except PlanCodecError as exc:
+        raise PreparationError(
+            "USER_PREPARATION_INVALID",
+            "The prepared plan identity is invalid.",
+            f"Preserve the directory and prepare again ({exc.reason}).",
+        ) from exc
     try:
         bundle = PreparedLoopBundle(**bundle_value)
     except TypeError as exc:
@@ -586,28 +968,73 @@ def load_prepared(
             "Run prepare again in a new empty directory.",
         ) from exc
     manifest = _manifest_from_value(manifest_value)
+    expected_authority = authority_binding_digest(
+        loop_ref=manifest.loop_ref,
+        plan_identity=compiled.plan_digest,
+        goal_count=len(compiled.plan["goals"]),
+        workspace_binding=manifest.workspace_identity_digest,
+        roadmap_mode=manifest.execution_mode,
+    )
+    if compiled.index["authority_digest"] != expected_authority:
+        raise PreparationError(
+            "USER_PREPARATION_INVALID",
+            "The prepared authority binding is invalid.",
+            "Preserve the directory and prepare again.",
+        )
+    expected_capacity = _capacity_report(
+        compiled,
+        namespace=manifest.control_namespace,
+        loop_ref=manifest.loop_ref,
+        issued_at=manifest.prepared_at,
+        artifact_profile=manifest.artifact_profile,
+        source_bytes=int(capacity.get("source_bytes", -1)),
+    )
     expected_base = {
         "boundary_digest": domain_digest(
             "loopskill-prepared-boundary-v1\n", boundary
         ),
         "controller_plan_digest": raw_domain_digest(
-            "loopskill-prepared-artifact-v1\n", (root / PLAN_FILENAME).read_bytes()
+            "loopskill-prepared-artifact-v1\n",
+            _read_prepared_bytes(root / PLAN_FILENAME),
         ),
         "instructions_digest": raw_domain_digest(
             "loopskill-prepared-artifact-v1\n",
-            (root / INSTRUCTIONS_FILENAME).read_bytes(),
+            _read_prepared_bytes(root / INSTRUCTIONS_FILENAME),
         ),
         "manifest_digest": domain_digest(
             "loopskill-prepared-manifest-v1\n", manifest_value
         ),
+        "capacity_report_digest": raw_domain_digest(
+            "loopskill-prepared-artifact-v1\n",
+            canonical_bytes(capacity),
+        ),
+        "plan_digest": compiled.plan_digest,
+        "plan_index_digest": compiled.index_digest,
     }
     expected_bundle = PreparedLoopBundle(
-        **expected_base,
         bundle_digest=domain_digest(
             "loopskill-prepared-bundle-v1\n", expected_base
         ),
+        **expected_base,
     )
-    if bundle != expected_bundle or boundary != _boundary_value(manifest):
+    identities_match = (
+        manifest.plan_storage_mode == CONTENT_STORAGE_MODE
+        and manifest.plan_digest == compiled.plan_digest
+        and manifest.plan_index_digest == compiled.index_digest
+        and manifest.capacity_report_digest == expected_base["capacity_report_digest"]
+        and manifest.capacity_contract_version == CAPACITY_CONTRACT["version"]
+        and manifest.product_version == PRODUCT_VERSION
+        and manifest.protocol_manifest_digest == MANIFEST_SHA256
+        and manifest.source_digest == compiled.plan["source"]["source_digest"]
+        and manifest.workspace_identity_digest == compiled.index["workspace_binding"]
+    )
+    if (
+        bundle != expected_bundle
+        or boundary != _boundary_value(manifest)
+        or canonical_bytes(capacity) != canonical_bytes(expected_capacity)
+        or capacity.get("capacity_status") != "PASS"
+        or not identities_match
+    ):
         code = (
             "USER_CONFIRMATION_STALE"
             if CONFIRMATION_FILENAME in entries
@@ -662,6 +1089,9 @@ def load_prepared(
         manifest=manifest,
         bundle=bundle,
         boundary=boundary,
+        plan=compiled.plan,
+        plan_index=compiled.index,
+        capacity_report=capacity,
         confirmation=confirmation,
     )
 
@@ -710,9 +1140,22 @@ def boundary_display(context: PreparedContext) -> Mapping[str, Any]:
         "acceptance_criteria": context.manifest.acceptance_criteria,
         "authorization_boundaries": context.manifest.authorization_boundaries,
         "budget": context.manifest.budget,
+        "capacity": {
+            key: context.capacity_report[key]
+            for key in (
+                "capacity_status",
+                "goal_count",
+                "plan_bytes",
+                "create_loop_command_bytes",
+                "create_loop_max_collection_members",
+                "max_materialized_goal_prompt_bytes",
+                "capacity_contract_version",
+            )
+        },
         "external_actions": context.manifest.external_actions,
         "execution_mode": context.manifest.execution_mode,
         "goal": context.manifest.goal,
+        "goal_count": context.capacity_report["goal_count"],
         "selection_reason": context.manifest.selection_reason,
         "stop_conditions": context.manifest.stop_conditions,
         "write_scope": context.manifest.write_scope,

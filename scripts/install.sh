@@ -555,8 +555,8 @@ maybe_fault() {
   fi
 }
 
-if [[ "$VERSION" != "4.0.0" ]]; then
-  echo "V4_VERSION_INVALID: expected 4.0.0, got $VERSION" >&2
+if [[ "$VERSION" != "4.1.0" ]]; then
+  echo "V4_VERSION_INVALID: expected 4.1.0, got $VERSION" >&2
   exit 1
 fi
 for required in \
@@ -830,7 +830,7 @@ if [[ -e "$TARGET_DIR" || -L "$TARGET_DIR" ]]; then
       echo "V4_INSTALL_ACTIVE_RECEIPT_INVALID" >&2
       exit 1
     fi
-    echo "LoopSkill 4.0.0 is already installed at $TARGET_DIR"
+    echo "LoopSkill 4.1.0 is already installed at $TARGET_DIR"
     echo "No files or Codex configuration changed."
     safe_remove_tree "$transaction" "$STAGING_ROOT"
     transaction=""
@@ -1033,7 +1033,7 @@ else
   legacy_message="No v3 installation was changed or created."
 fi
 trap - EXIT
-echo "Installed LoopSkill 4.0.0 to $TARGET_DIR"
+echo "Installed LoopSkill 4.1.0 to $TARGET_DIR"
 echo "$legacy_message"
 echo "Codex config.toml is byte-identical; no MCP entry was registered."
 echo "LoopSkill 4 itself does not require a Codex App restart."

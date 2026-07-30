@@ -7,11 +7,19 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from loop_architect.v4_alpha.protocol import LoopIntakeInput
+from loop_architect.v4_alpha.generated_protocol import CAPACITY_CONTRACT
+from loop_architect.v4_alpha.plan_codec import PlanCodecError, canonicalize_plan
+from loop_architect.v4_alpha.protocol import (
+    LoopIntakeInput,
+    canonical_bytes,
+    parse_json_bytes,
+    raw_domain_digest,
+)
 from loop_architect.v4_adapters.codex import CodexExecProvider, HostUnavailable
 from loop_architect.v4_entry import (
     EntryError,
@@ -82,6 +90,7 @@ def parser() -> PublicParser:
     canary = subcommands.add_parser("canary")
     canary.add_argument("--candidate", required=True)
     canary.add_argument("--evidence-root", type=Path, required=True)
+    canary.add_argument("--goals", type=int, choices=(1, 2, 8), default=1)
     canary.add_argument("--diagnostics", action="store_true")
     compile_prepared = subcommands.add_parser("compile")
     compile_prepared.add_argument("prepared_directory", type=Path)
@@ -119,7 +128,12 @@ _SEQUENCE_FIELDS = {
 }
 
 
-def _intake_value(document) -> LoopIntakeInput:
+def _intake_value(
+    document,
+    *,
+    source_kind="expert_semantic_json",
+    source_raw: bytes | None = None,
+) -> LoopIntakeInput:
     if not isinstance(document, dict) or not set(document) <= _INTAKE_FIELDS:
         raise EntryError(
             "USER_INPUT_INVALID",
@@ -157,75 +171,233 @@ def _intake_value(document) -> LoopIntakeInput:
                 "Use arrays containing only UTF-8 strings.",
             )
         values[field] = tuple(value)
-    return LoopIntakeInput(**values)
+    raw = canonical_bytes(document) if source_raw is None else source_raw
+    return LoopIntakeInput(
+        **values,
+        source_kind=source_kind,
+        source_digest=raw_domain_digest("loopskill-prd-source-v1\n", raw),
+        source_bytes=len(raw),
+    )
+
+
+def _canonical_plan_input(document, raw: bytes) -> LoopIntakeInput:
+    try:
+        plan = canonicalize_plan(document)
+    except PlanCodecError as exc:
+        raise EntryError(
+            exc.code,
+            "The canonical plan does not satisfy the closed v4.1 contract.",
+            f"Repair the plan and try again ({exc.reason}).",
+        ) from exc
+    boundaries = plan["boundaries"]
+    return LoopIntakeInput(
+        goal=plan["objective"],
+        goal_plan=tuple(goal["objective"] for goal in plan["goals"]),
+        task_horizon=plan["roadmap_policy"]["mode"].lower(),
+        write_scope=tuple(boundaries["write_scope"]),
+        budget=canonical_bytes(plan["budget"]).decode("utf-8"),
+        external_actions=tuple(boundaries["external_actions"]),
+        acceptance_criteria=tuple(plan["completion_evidence"]),
+        stop_conditions=tuple(plan["stop_conditions"]),
+        authorization_boundaries=tuple(boundaries["forbidden_actions"]),
+        canonical_plan=plan,
+        source_kind="canonical_plan_json",
+        source_digest=raw_domain_digest("loopskill-prd-source-v1\n", raw),
+        source_bytes=len(raw),
+    )
+
+
+def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        before = path.lstat()
+        if before.st_size > maximum:
+            raise EntryError(
+                "RESOURCE_LIMIT_EXCEEDED",
+                "The input file exceeds the supported byte boundary.",
+                f"Reduce the input to at most {maximum} UTF-8 bytes.",
+            )
+        if stat.S_ISLNK(before.st_mode):
+            raise EntryError(
+                "PATH_CONFINEMENT_VIOLATION",
+                "The source path is a symlink.",
+                "Provide one stable regular file.",
+            )
+        if not stat.S_ISREG(before.st_mode):
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The source is not a regular file.",
+                "Provide one regular UTF-8 JSON, text, or Markdown file.",
+            )
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise OSError("source identity changed")
+            chunks = []
+            remaining = maximum + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65_536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            after = os.fstat(descriptor)
+            if (
+                len(raw) > maximum
+                or (after.st_dev, after.st_ino, after.st_size)
+                != (opened.st_dev, opened.st_ino, opened.st_size)
+            ):
+                raise OSError("source changed while reading")
+            return raw
+        finally:
+            os.close(descriptor)
+    except EntryError:
+        raise
+    except OSError as exc:
+        raise EntryError(
+            "PATH_CONFINEMENT_VIOLATION",
+            "The requested source is unavailable, unsafe, or changed while reading.",
+            "Provide one stable regular UTF-8 file without symlinks.",
+        ) from exc
+
+
+def _has_symlink_component(path: Path) -> bool:
+    absolute = path if path.is_absolute() else Path.cwd() / path
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        try:
+            if stat.S_ISLNK(current.lstat().st_mode):
+                return True
+        except OSError:
+            return False
+    return False
 
 
 def read_intake_input(value: str) -> LoopIntakeInput:
     path = Path(value)
     if value == "-":
-        raw = sys.stdin.buffer.read(32769)
+        raw = sys.stdin.buffer.read(int(CAPACITY_CONTRACT["expert_json_max_bytes"]) + 1)
         return _decode_intake_bytes(raw, json_document=True)
     if path.is_dir() and is_legacy_input(path):
         raise EntryError(*unsupported_legacy_error())
-    if path.is_file():
-        try:
-            raw = path.read_bytes()
-        except OSError as exc:
+    if path.exists() or path.is_symlink():
+        suffix = path.suffix.lower()
+        if suffix not in {".json", ".md", ".txt"}:
             raise EntryError(
                 "USER_INPUT_INVALID",
-                "The goal file could not be read.",
-                "Provide one readable UTF-8 goal file.",
-            ) from exc
-        if len(raw) > 32768:
-            raise EntryError(
-                "USER_INPUT_INVALID",
-                "The goal file is too large.",
-                "Reduce the semantic input to at most 32768 UTF-8 bytes.",
+                "The source type is unsupported.",
+                "Use one UTF-8 JSON, text, or Markdown file.",
             )
+        if not path.is_absolute():
+            if _has_symlink_component(path):
+                raise EntryError(
+                    "PATH_CONFINEMENT_VIOLATION",
+                    "The source path contains a symlink.",
+                    "Provide one stable regular file without symlink components.",
+                )
+            workspace = Path.cwd().resolve(strict=True)
+            try:
+                resolved = path.resolve(strict=True)
+                resolved.relative_to(workspace)
+            except (OSError, ValueError) as exc:
+                raise EntryError(
+                    "PATH_CONFINEMENT_VIOLATION",
+                    "The relative source is outside the bound workspace.",
+                    "Choose one regular file inside the current workspace.",
+                ) from exc
+            path = resolved
+        elif path.is_symlink():
+            raise EntryError(
+                "PATH_CONFINEMENT_VIOLATION",
+                "The source path is a symlink.",
+                "Provide one stable regular file.",
+            )
+        maximum = int(
+            CAPACITY_CONTRACT[
+                "expert_json_max_bytes"
+                if suffix == ".json"
+                else "source_text_max_bytes"
+            ]
+        )
+        raw = _read_admitted_file(path, maximum=maximum)
         if is_legacy_input(path, raw):
             raise EntryError(*unsupported_legacy_error())
-        if path.suffix.lower() == ".json":
+        if suffix == ".json":
             return _decode_intake_bytes(raw, json_document=True)
-        return _intake_value({"goal": _decode_text(raw)})
-    if path.suffix.lower() in {".json", ".txt"} or "/" in value:
+        return _intake_value(
+            {"goal": _decode_text(raw)},
+            source_kind="authorized_file",
+            source_raw=raw,
+        )
+    if path.suffix.lower() in {".json", ".md", ".txt"} or value.startswith(
+        ("./", "../", "/")
+    ):
         raise EntryError(
             "USER_INPUT_INVALID",
             "The goal file was not found.",
             "Provide one readable goal file or literal goal text.",
         )
-    return _intake_value({"goal": value})
+    raw = value.encode("utf-8", "strict")
+    if b"\x00" in raw or len(raw) > int(CAPACITY_CONTRACT["source_text_max_bytes"]):
+        raise EntryError(
+            "RESOURCE_LIMIT_EXCEEDED",
+            "The literal request exceeds the supported text boundary.",
+            "Reduce the request or provide one smaller authorized file.",
+        )
+    return _intake_value(
+        {"goal": value}, source_kind="literal_text", source_raw=raw
+    )
 
 
 def _decode_intake_bytes(raw: bytes, *, json_document: bool) -> LoopIntakeInput:
-    if len(raw) > 32768:
+    maximum = int(
+        CAPACITY_CONTRACT[
+            "expert_json_max_bytes" if json_document else "source_text_max_bytes"
+        ]
+    )
+    if len(raw) > maximum:
         raise EntryError(
-            "USER_INPUT_INVALID",
+            "RESOURCE_LIMIT_EXCEEDED",
             "The input is too large.",
-            "Reduce the semantic input to at most 32768 UTF-8 bytes.",
+            f"Reduce the input to at most {maximum} UTF-8 bytes.",
         )
     text = _decode_text(raw)
     if not json_document:
-        return _intake_value({"goal": text})
+        return _intake_value(
+            {"goal": text}, source_kind="pasted_text", source_raw=raw
+        )
     try:
-        document = json.loads(text)
-    except json.JSONDecodeError as exc:
+        document = parse_json_bytes(raw)
+    except Exception as exc:
         raise EntryError(
             "USER_INPUT_INVALID",
             "The input file is not valid UTF-8 JSON.",
             "Use one JSON object containing documented semantic intake fields.",
         ) from exc
-    return _intake_value(document)
+    if isinstance(document, dict) and document.get("schema") == "loopskill-plan-v1":
+        return _canonical_plan_input(document, raw)
+    return _intake_value(document, source_raw=raw)
 
 
 def _decode_text(raw: bytes) -> str:
     try:
-        return raw.decode("utf-8", "strict")
+        text = raw.decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
         raise EntryError(
             "USER_INPUT_INVALID",
             "The goal file is not valid UTF-8.",
             "Save the file as UTF-8 and try again.",
         ) from exc
+    if "\x00" in text:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The source contains a NUL byte.",
+            "Provide plain UTF-8 text without embedded NUL bytes.",
+        )
+    return text
 
 
 def print_status(value) -> None:
@@ -382,7 +554,9 @@ def _close_provider(provider) -> None:
         close()
 
 
-def _finish_owned_provider_task(value, provider, *, root: Path):
+def _finish_owned_provider_task(
+    value, provider, *, root: Path, synchronize_after_wait: bool = True
+):
     """Finish this process's one created task without a daemon or resend."""
 
     metrics = getattr(provider, "metrics", None)
@@ -408,11 +582,13 @@ def _finish_owned_provider_task(value, provider, *, root: Path):
         )
     try:
         waiter(timeout_seconds=300.0)
-        return sync_loop(
-            root=root,
-            host_provider=provider,
-            workspace_root=Path.cwd(),
-        )
+        if synchronize_after_wait:
+            return sync_loop(
+                root=root,
+                host_provider=provider,
+                workspace_root=Path.cwd(),
+            )
+        return value
     except (HostUnavailable, ValueError) as exc:
         raise EntryError(
             "USER_INTERNAL_ERROR",
@@ -443,7 +619,9 @@ def _refresh_with_owned_provider(*, root: Path):
             host_provider=provider,
             workspace_root=Path.cwd(),
         )
-        return _finish_owned_provider_task(value, provider, root=root)
+        return _finish_owned_provider_task(
+            value, provider, root=root, synchronize_after_wait=False
+        )
     finally:
         _close_provider(provider)
 
@@ -463,8 +641,11 @@ def _interactive_canary(args):
         )
         if not sys.stdin.isatty():
             return False
-        answer = input('Type "RUN THIS CANARY" to authorize one disposable Codex invocation: ')
-        return answer == "RUN THIS CANARY"
+        answer = input(
+            f'Type "START THIS LOOP" to confirm this {args.goals}-Goal '
+            "disposable canary boundary: "
+        )
+        return answer == "START THIS LOOP"
 
     try:
         host_codex_home = Path(
@@ -474,6 +655,7 @@ def _interactive_canary(args):
             args.candidate,
             args.evidence_root,
             confirmation_callback=confirm,
+            goal_count=args.goals,
             integrity_inputs={
                 "host_auth": host_codex_home / "auth.json",
                 "host_config": host_codex_home / "config.toml",

@@ -25,6 +25,8 @@ from loop_architect.v4_artifacts import (
 from loop_architect.v4_alpha.protocol import (
     ActorRef,
     AuthorityGrant,
+    AuthorityGrantV2,
+    CAPACITY_CONTRACT,
     CommandEnvelope,
     ERROR_CODES,
     LoopIntakeDecision,
@@ -35,9 +37,28 @@ from loop_architect.v4_alpha.protocol import (
     UserFacingStatus,
     authority_grant_digest,
     build_command,
+    canonical_bytes,
+    command_without_digest,
     domain_digest,
+    parse_json_bytes,
     snapshot_digest,
     validate_result_payload,
+)
+from loop_architect.v4_alpha.plan_codec import (
+    CompiledPlan,
+    PlanCodecError,
+    authority_binding_digest,
+    authority_role_policy,
+    build_plan_index,
+    content_create_command,
+    control_identity,
+    derive_loop_plan_ref,
+    goal_chain,
+    materialize_provider_request,
+    max_collection_members,
+    parse_plan_bytes,
+    plan_digest,
+    validate_plan_index,
 )
 from loop_architect.v4_entry.preparation import (
     CONFIRMATION_ISSUER,
@@ -70,7 +91,13 @@ class EntryError(Exception):
     """Exception transport around the manifest-generated public error shape."""
 
     def __init__(self, code: str, message: str, next_action: str) -> None:
-        if code not in ERROR_CODES or not code.startswith("USER_"):
+        public_codes = {
+            "PATH_CONFINEMENT_VIOLATION",
+            "RESOURCE_LIMIT_EXCEEDED",
+            "STORE_RECOVERY_REQUIRED",
+            *(item for item in ERROR_CODES if item.startswith("USER_")),
+        }
+        if code not in public_codes:
             raise ValueError("public error code is absent from typed manifest")
         self.view = UserFacingError(
             code=code, message=message, next_action=next_action
@@ -105,10 +132,12 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _with_digest(grant: AuthorityGrant) -> AuthorityGrant:
+def _with_digest(
+    grant: AuthorityGrant | AuthorityGrantV2,
+) -> AuthorityGrant | AuthorityGrantV2:
     values = dict(grant.__dict__)
     values["canonical_digest"] = authority_grant_digest(grant)
-    return AuthorityGrant(**values)
+    return type(grant)(**values)
 
 
 def _machine_bootstrap(
@@ -129,12 +158,6 @@ def _machine_bootstrap(
             "LoopSkill could not allocate a local identity.",
             "Retry after checking the local runtime.",
         )
-    def identity(label: str) -> str:
-        return domain_digest(
-            "loopskill-local-control-id-v1\n",
-            {"label": label, "namespace": namespace},
-        )[:24]
-
     loop_ref = prepared.manifest.loop_ref
     if loop_ref != f"loop-{namespace}" or prepared.confirmation is None:
         raise EntryError(
@@ -142,57 +165,51 @@ def _machine_bootstrap(
             "A valid prepared confirmation is required before starting.",
             "Review the current boundary summary and confirm it explicitly.",
         )
-    objectives = tuple(prepared.manifest.goal_plan)
-    if not objectives or objectives[0] != prepared.manifest.goal:
+    plan_raw = canonical_bytes(prepared.plan)
+    index_raw = canonical_bytes(prepared.plan_index)
+    compiled = CompiledPlan(
+        plan=prepared.plan,
+        plan_bytes=plan_raw,
+        plan_digest=plan_digest(plan_raw),
+        goal_slice_digests=tuple(
+            str(item) for item in prepared.plan_index["ordered_goal_slice_digests"]
+        ),
+        index=prepared.plan_index,
+        index_bytes=index_raw,
+        index_digest=plan_digest(index_raw),
+    )
+    if (
+        compiled.plan_digest != prepared.manifest.plan_digest
+        or compiled.index_digest != prepared.manifest.plan_index_digest
+        or prepared.plan_index["workspace_binding"]
+        != prepared.manifest.workspace_identity_digest
+    ):
         raise EntryError(
             "USER_PREPARATION_INVALID",
-            "The prepared Goal plan no longer matches its primary Goal.",
+            "The prepared plan identity no longer matches its confirmation.",
+            "Prepare and confirm the loop again.",
+        )
+    expected_authority_digest = authority_binding_digest(
+        loop_ref=loop_ref,
+        plan_identity=compiled.plan_digest,
+        goal_count=len(compiled.plan["goals"]),
+        workspace_binding=prepared.manifest.workspace_identity_digest,
+        roadmap_mode=prepared.manifest.execution_mode,
+    )
+    if prepared.plan_index["authority_digest"] != expected_authority_digest:
+        raise EntryError(
+            "USER_CONFIRMATION_STALE",
+            "The prepared authority binding no longer matches this plan.",
             "Prepare and confirm the loop again.",
         )
 
-    def chain_identity(kind: str, index: int) -> str:
-        label = kind if index == 0 else f"{kind}-{index:03d}"
-        return identity(label)
+    def identity(label: str) -> str:
+        return control_identity(namespace, label)
 
-    goal_chains = []
-    for index, objective in enumerate(objectives):
-        goal_chains.append(
-            {
-                "artifact_ref": f"artifact-{chain_identity('startup-artifact', index)}",
-                "attempt_ref": f"attempt-{chain_identity('startup-attempt', index)}",
-                "external_effect_ref": f"external-effect-{chain_identity('startup-effect', index)}",
-                "goal_ref": f"goal-{chain_identity('goal', index)}",
-                "host_resource_ref": f"host-target-{chain_identity('primary-host-resource', index)}",
-                "objective": objective,
-                "provider_key": f"effect-{chain_identity('provider-idempotency', index)}",
-                "provider_target": f"codex-bootstrap-{chain_identity('provider-target', index)}",
-                "report_ref": f"report-{chain_identity('startup-report', index)}",
-                "result_ref": f"result-{chain_identity('startup-result', index)}",
-                "review_ref": f"review-{chain_identity('startup-review', index)}",
-            }
-        )
-    primary_chain = goal_chains[0]
-    goal_ref = primary_chain["goal_ref"]
     author_ref = f"actor-author-{identity('author')}"
     system_ref = f"actor-system-{identity('system')}"
     verifier_ref = f"actor-verifier-{identity('verifier')}"
     reviewer_ref = f"actor-reviewer-{identity('reviewer')}"
-    create_grant_ref = f"grant-create-{identity('create-grant')}"
-    observe_grant_ref = f"grant-observe-{identity('observe-grant')}"
-    worker_grant_ref = f"grant-worker-{identity('worker-grant')}"
-    reviewer_grant_ref = f"grant-reviewer-{identity('reviewer-grant')}"
-    lifecycle_grant_ref = f"grant-lifecycle-{identity('lifecycle-grant')}"
-    operation_id = f"operation-create-{identity('create-operation')}"
-    external_effect_ref = primary_chain["external_effect_ref"]
-    attempt_ref = primary_chain["attempt_ref"]
-    host_resource_ref = primary_chain["host_resource_ref"]
-    provider_key = primary_chain["provider_key"]
-    provider_target = primary_chain["provider_target"]
-    result_ref = primary_chain["result_ref"]
-    report_ref = primary_chain["report_ref"]
-    artifact_ref = primary_chain["artifact_ref"]
-    review_ref = primary_chain["review_ref"]
-    finalization_ref = f"finalization-{identity('startup-finalization')}"
     actors = {
         author_ref: ActorRef(
             actor_ref=author_ref,
@@ -239,139 +256,69 @@ def _machine_bootstrap(
             issuer_trust=LOCAL_AUTHORITY_TRUST,
         ),
     }
-    issued_at = _iso(now)
-    create_grant = _with_digest(
-        AuthorityGrant(
-            grant_ref=create_grant_ref,
-            actor_ref=author_ref,
+    issued_at = prepared.manifest.prepared_at
+    try:
+        issued_time = datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise EntryError(
+            "USER_PREPARATION_INVALID",
+            "The prepared authority timestamp is invalid.",
+            "Prepare and confirm the loop again.",
+        ) from exc
+    selector_base = {
+        "goal_index_max": len(compiled.plan["goals"]) - 1,
+        "goal_index_min": 0,
+        "mode": "PLAN_DERIVED_V1",
+        "plan_digest": compiled.plan_digest,
+    }
+
+    def grant(
+        role: str,
+        actor_ref: str,
+        commands: tuple[str, ...],
+        kinds: tuple[str, ...],
+        *,
+        include_loop_scope: bool,
+    ) -> AuthorityGrantV2:
+        value = AuthorityGrantV2(
+            schema="loopskill-authority-grant-v2",
+            grant_ref=f"grant-{role}-{identity(role + '-grant')}",
+            actor_ref=actor_ref,
             issuer_actor_ref=system_ref,
             issuer_trust=LOCAL_AUTHORITY_TRUST,
-            allowed_commands=("CreateLoop",),
+            allowed_commands=commands,
             loop_scope=loop_ref,
-            subject_kinds=("LoopRef",),
-            exact_subjects=(loop_ref,),
+            subject_kinds=kinds,
+            subject_selector={
+                **selector_base,
+                "include_loop_scope": include_loop_scope,
+            },
             not_before=issued_at,
-            expires_at=_iso(now + timedelta(minutes=5)),
-            nonce=f"nonce-{identity('create-nonce')}",
+            expires_at=_iso(issued_time + timedelta(days=30)),
+            nonce=f"nonce-{identity(role + '-nonce')}",
             canonical_digest="",
         )
-    )
-    observe_grant = _with_digest(
-        AuthorityGrant(
-            grant_ref=observe_grant_ref,
-            actor_ref=system_ref,
-            issuer_actor_ref=system_ref,
-            issuer_trust=LOCAL_AUTHORITY_TRUST,
-            allowed_commands=("RecordExternalEffectObservation",),
-            loop_scope=loop_ref,
-            subject_kinds=("ExternalEffectRef",),
-            exact_subjects=tuple(chain["external_effect_ref"] for chain in goal_chains),
-            not_before=issued_at,
-            expires_at=_iso(now + timedelta(days=30)),
-            nonce=f"nonce-{identity('observe-nonce')}",
-            canonical_digest="",
+        result = _with_digest(value)
+        assert isinstance(result, AuthorityGrantV2)
+        return result
+
+    actor_roles = {
+        "author": author_ref,
+        "reviewer": reviewer_ref,
+        "system": system_ref,
+        "verifier": verifier_ref,
+    }
+    grants_by_role = {
+        role: grant(
+            role,
+            actor_roles[str(policy["actor"])],
+            tuple(policy["commands"]),
+            tuple(policy["kinds"]),
+            include_loop_scope=bool(policy["include_loop_scope"]),
         )
-    )
-    worker_grant = _with_digest(
-        AuthorityGrant(
-            grant_ref=worker_grant_ref,
-            actor_ref=system_ref,
-            issuer_actor_ref=system_ref,
-            issuer_trust=LOCAL_AUTHORITY_TRUST,
-            allowed_commands=("StageExternalResult",),
-            loop_scope=loop_ref,
-            subject_kinds=("ExternalEffectRef",),
-            exact_subjects=tuple(chain["external_effect_ref"] for chain in goal_chains),
-            not_before=issued_at,
-            expires_at=_iso(now + timedelta(days=30)),
-            nonce=f"nonce-{identity('worker-nonce')}",
-            canonical_digest="",
-        )
-    )
-    reviewer_grant = _with_digest(
-        AuthorityGrant(
-            grant_ref=reviewer_grant_ref,
-            actor_ref=reviewer_ref,
-            issuer_actor_ref=system_ref,
-            issuer_trust=LOCAL_AUTHORITY_TRUST,
-            allowed_commands=("RecordReview",),
-            loop_scope=loop_ref,
-            subject_kinds=("ResultRef",),
-            exact_subjects=tuple(chain["result_ref"] for chain in goal_chains),
-            not_before=issued_at,
-            expires_at=_iso(now + timedelta(days=30)),
-            nonce=f"nonce-{identity('reviewer-nonce')}",
-            canonical_digest="",
-        )
-    )
-    artifact_grant_ref = f"grant-artifact-{identity('artifact-grant')}"
-    artifact_grant = _with_digest(
-        AuthorityGrant(
-            grant_ref=artifact_grant_ref,
-            actor_ref=verifier_ref,
-            issuer_actor_ref=system_ref,
-            issuer_trust=LOCAL_AUTHORITY_TRUST,
-            allowed_commands=("AcknowledgeResult",),
-            loop_scope=loop_ref,
-            subject_kinds=("ResultRef",),
-            exact_subjects=tuple(chain["result_ref"] for chain in goal_chains),
-            not_before=issued_at,
-            expires_at=_iso(now + timedelta(days=30)),
-            nonce=f"nonce-{identity('artifact-nonce')}",
-            canonical_digest="",
-        )
-    )
-    lifecycle_grant = _with_digest(
-        AuthorityGrant(
-            grant_ref=lifecycle_grant_ref,
-            actor_ref=author_ref,
-            issuer_actor_ref=system_ref,
-            issuer_trust=LOCAL_AUTHORITY_TRUST,
-            allowed_commands=(
-                "AdvanceGoal",
-                "PauseLoop",
-                "PrepareFinalization",
-                "RecordPolicyDecision",
-                "ResumeLoop",
-                "ReviseGoalPlan",
-                "StopLoop",
-            ),
-            loop_scope=loop_ref,
-            subject_kinds=("ResultRef", "GoalRef", "LoopRef"),
-            exact_subjects=tuple(
-                ref
-                for chain in goal_chains
-                for ref in (
-                    chain["result_ref"],
-                    chain["report_ref"],
-                    chain["artifact_ref"],
-                    chain["review_ref"],
-                    chain["goal_ref"],
-                )
-            ) + (loop_ref,),
-            not_before=issued_at,
-            expires_at=_iso(now + timedelta(days=30)),
-            nonce=f"nonce-{identity('lifecycle-nonce')}",
-            canonical_digest="",
-        )
-    )
-    close_grant_ref = f"grant-close-{identity('close-grant')}"
-    close_grant = _with_digest(
-        AuthorityGrant(
-            grant_ref=close_grant_ref,
-            actor_ref=system_ref,
-            issuer_actor_ref=system_ref,
-            issuer_trust=LOCAL_AUTHORITY_TRUST,
-            allowed_commands=("CloseExecution", "StrengthenClosureAssurance"),
-            loop_scope=loop_ref,
-            subject_kinds=("FinalizationRef",),
-            exact_subjects=(finalization_ref,),
-            not_before=issued_at,
-            expires_at=_iso(now + timedelta(days=30)),
-            nonce=f"nonce-{identity('close-nonce')}",
-            canonical_digest="",
-        )
-    )
+        for role, policy in authority_role_policy().items()
+    }
+    create_grant = grants_by_role["create"]
     trusted_receipts = dict(receipt_trust_roots)
     existing_confirmation_trust = trusted_receipts.get(CONFIRMATION_ISSUER)
     if existing_confirmation_trust not in (None, CONFIRMATION_TRUST):
@@ -392,79 +339,37 @@ def _machine_bootstrap(
     authority = AuthorityContext(
         actors=actors,
         grants={
-            create_grant_ref: create_grant,
-            observe_grant_ref: observe_grant,
-            worker_grant_ref: worker_grant,
-            reviewer_grant_ref: reviewer_grant,
-            artifact_grant_ref: artifact_grant,
-            lifecycle_grant_ref: lifecycle_grant,
-            close_grant_ref: close_grant,
+            item.grant_ref: item for item in grants_by_role.values()
         },
         receipts={prepared.confirmation.receipt_ref: prepared.confirmation},
         trusted_actor_issuers={LOCAL_AUTHORITY_ISSUER: LOCAL_AUTHORITY_TRUST},
         trusted_grant_issuers={system_ref: LOCAL_AUTHORITY_TRUST},
         trusted_receipt_issuers=trusted_receipts,
     )
-    command = build_command(
-        operation_id=operation_id,
-        command_type="CreateLoop",
-        actor_ref=author_ref,
-        authority_grant_ref=create_grant_ref,
-        subject={
-            "loop_ref": loop_ref,
-            "subject_kind": "LoopRef",
-            "subject_ref": loop_ref,
-        },
-        expected_loop_revision=0,
-        expected_subject_revisions={},
-        issued_at=issued_at,
-        machine_bindings={
-            "allocate_refs": {
-                "new_attempt_ref": attempt_ref,
-                "new_external_effect_ref": external_effect_ref,
-                "new_goal_ref": goal_ref,
-                "new_host_resource_ref": host_resource_ref,
-                "provider_idempotency_key": provider_key,
-                **{
-                    f"goal_chain_{index:03d}_{name}": value
-                    for index, chain in enumerate(goal_chains)
-                    for name, value in chain.items()
-                    if name != "objective"
-                },
-            },
-            "receipt_refs": {"receipt": prepared.confirmation.receipt_ref},
-            "resolved_refs": {
-                "boundary_digest": prepared.bundle.boundary_digest,
-                "prepared_bundle_digest": prepared.bundle.bundle_digest,
-                "prepared_manifest_digest": prepared.bundle.manifest_digest,
-                "provider_action": "create_task",
-                "target_ref": provider_target,
-                **(
-                    {
-                        "artifact_baseline_blob_digest": artifact_baseline_blob_digest,
-                        "artifact_profile": artifact_profile,
-                        "workspace_identity_digest": workspace_identity_digest,
-                    }
-                    if artifact_profile
-                    and artifact_baseline_blob_digest
-                    and workspace_identity_digest
-                    else {}
-                ),
-            },
-        },
-        semantic_payload={
-            "acceptance_criteria": prepared.manifest.acceptance_criteria,
-            "authorization_boundaries": prepared.manifest.authorization_boundaries,
-            "budget": prepared.manifest.budget,
-            "execution_mode": prepared.manifest.execution_mode,
-            "goal_plan": prepared.manifest.goal_plan,
-            "max_roadmap_revisions": prepared.manifest.max_roadmap_revisions,
-            "external_actions": prepared.manifest.external_actions,
-            "objective": prepared.manifest.goal,
-            "stop_conditions": prepared.manifest.stop_conditions,
-            "write_scope": prepared.manifest.write_scope,
-        },
+    command = content_create_command(
+        namespace=namespace,
+        loop_ref=loop_ref,
+        compiled=compiled,
+        issued_at=_iso(now),
+        confirmation_receipt_ref=prepared.confirmation.receipt_ref,
+        manifest_digest=prepared.bundle.manifest_digest,
+        boundary_digest=prepared.bundle.boundary_digest,
+        bundle_digest=prepared.bundle.bundle_digest,
+        artifact_profile=artifact_profile or "UNBOUND",
+        artifact_baseline_blob_digest=artifact_baseline_blob_digest,
     )
+    raw_command = command_without_digest(command)
+    if (
+        len(canonical_bytes(raw_command))
+        > int(CAPACITY_CONTRACT["create_loop_target_bytes"])
+        or max_collection_members(raw_command)
+        > int(CAPACITY_CONTRACT["create_loop_target_collection_members"])
+    ):
+        raise EntryError(
+            "RESOURCE_LIMIT_EXCEEDED",
+            "The exact START command exceeds the confirmed release target.",
+            "Preserve the preparation and report this preparation drift.",
+        )
     return loop_ref, authority, command
 
 
@@ -630,14 +535,58 @@ def start_loop(
         with SQLiteStore(path) as store:
             descriptors = store.loop_descriptors()
             if descriptors:
-                if len(descriptors) != 1 or descriptors[0]["goal"] != goal:
+                if (
+                    len(descriptors) != 1
+                    or descriptors[0]["goal"] != goal
+                    or descriptors[0]["loop_ref"]
+                    != prepared_context.manifest.loop_ref
+                ):
                     raise EntryError(
                         "USER_LOOP_EXISTS",
                         "A different loop already exists in this data location.",
                         "Run status, or choose a new data location.",
                     )
                 loop_ref = descriptors[0]["loop_ref"]
+                existing = store.snapshot(loop_ref)
+                plan_state = None if existing is None else existing.get("goal_plan")
+                if (
+                    not isinstance(plan_state, Mapping)
+                    or plan_state.get("plan_digest")
+                    != prepared_context.manifest.plan_digest
+                    or plan_state.get("storage_mode") != "CONTENT_ADDRESSED_V1"
+                    or plan_state.get("workspace_binding")
+                    != prepared_context.manifest.workspace_identity_digest
+                    or plan_state.get("authority_digest")
+                    != prepared_context.plan_index["authority_digest"]
+                    or set(plan_state.get("ordered_goal_ids", ()))
+                    != set(prepared_context.plan_index["ordered_goal_ids"])
+                    or store.get_blob(prepared_context.manifest.plan_digest)
+                    != canonical_bytes(prepared_context.plan)
+                    or store.get_blob(prepared_context.manifest.plan_index_digest)
+                    != canonical_bytes(prepared_context.plan_index)
+                ):
+                    raise EntryError(
+                        "STORE_RECOVERY_REQUIRED",
+                        "The existing loop cannot read back its confirmed plan blobs.",
+                        "Preserve the store and restore an exact private backup.",
+                    )
+                store.verify_integrity()
             else:
+                plan_raw = canonical_bytes(prepared_context.plan)
+                index_raw = canonical_bytes(prepared_context.plan_index)
+                stored_plan = store.put_blob(plan_raw)
+                stored_index = store.put_blob(index_raw)
+                if (
+                    stored_plan != prepared_context.manifest.plan_digest
+                    or stored_index != prepared_context.manifest.plan_index_digest
+                    or store.get_blob(stored_plan) != plan_raw
+                    or store.get_blob(stored_index) != index_raw
+                ):
+                    raise EntryError(
+                        "STORE_RECOVERY_REQUIRED",
+                        "The runtime Store could not verify the confirmed plan blobs.",
+                        "Preserve the store and inspect local storage integrity.",
+                    )
                 baseline = None
                 baseline_digest = None
                 if workspace_root is not None:
@@ -947,6 +896,48 @@ def policy_view(*, root: Path | str) -> Mapping[str, Any]:
                 "Preserve the store and inspect diagnostics.",
             )
         plan = snapshot.get("goal_plan")
+        if (
+            isinstance(plan, Mapping)
+            and plan.get("storage_mode") == "CONTENT_ADDRESSED_V1"
+        ):
+            registered = {
+                str(goal.get("goal_id")): str(goal.get("state"))
+                for goal in snapshot["goals"].values()
+            }
+            ordered_states = tuple(
+                registered.get(str(goal_id), "PENDING")
+                for goal_id in plan["ordered_goal_ids"]
+            )
+            if plan["mode"] == "ADAPTIVE":
+                policy_shape = {
+                    "active_goal_count": sum(
+                        state == "ACTIVE" for state in ordered_states
+                    ),
+                    "goal_count": int(plan["goal_count"]),
+                    "kind": "ADAPTIVE",
+                    "revision": int(plan["revision"]),
+                }
+            else:
+                policy_shape = {
+                    "goal_count": int(plan["goal_count"]),
+                    "kind": "STANDARD",
+                    "ordered_states": ordered_states,
+                }
+            action = next_action(snapshot)
+            roles = role_requirements(
+                snapshot,
+                local_verification_required=any(
+                    artifact.get("state") != "VERIFIED"
+                    for artifact in snapshot.get("artifacts", {}).values()
+                ),
+            )
+            return {
+                "decision_options": _policy_options(snapshot),
+                "next_action": {"kind": action.kind, "reason": action.reason},
+                "policy": policy_shape,
+                "repair": dict(snapshot.get("policy", {})),
+                "roles": tuple(requirement.role for requirement in roles),
+            }
         ordered_refs = (
             tuple(plan["ordered_goal_refs"])
             if isinstance(plan, Mapping)
@@ -1055,12 +1046,83 @@ def revise_goal_plan(
                     "Use policy status to inspect the current mode.",
                 )
             plan = snapshot["goal_plan"]
+            if plan.get("storage_mode") == "CONTENT_ADDRESSED_V1":
+                plan_raw = store.get_blob(str(plan["plan_digest"]))
+                index_raw = store.get_blob(str(plan["plan_index_digest"]))
+                if plan_raw is None or index_raw is None:
+                    raise EntryError(
+                        "STORE_RECOVERY_REQUIRED",
+                        "The Adaptive plan blobs are unavailable.",
+                        "Preserve the Store and restore an exact private backup.",
+                    )
+                plan_document = parse_plan_bytes(plan_raw)
+                current_index = validate_plan_index(
+                    parse_json_bytes(index_raw), plan_document
+                )
+                objective_to_id: dict[str, str] = {}
+                for goal in plan_document["goals"]:
+                    objective = str(goal["objective"])
+                    if objective in objective_to_id:
+                        raise EntryError(
+                            "USER_INPUT_INVALID",
+                            "Objective text is ambiguous in this plan.",
+                            "Use distinct Goal objectives before preparing the loop.",
+                        )
+                    objective_to_id[objective] = str(goal["goal_id"])
+                try:
+                    ordered_ids = [objective_to_id[item] for item in normalized]
+                except KeyError as exc:
+                    raise EntryError(
+                        "USER_INPUT_INVALID",
+                        "The revision contains a Goal outside the confirmed plan.",
+                        "Reorder only the complete confirmed Goal set.",
+                    ) from exc
+                next_revision = int(plan["revision"]) + 1
+                revised_index = build_plan_index(
+                    plan_document,
+                    plan_identity=str(plan["plan_digest"]),
+                    workspace_binding=str(plan["workspace_binding"]),
+                    authority_digest=str(plan["authority_digest"]),
+                    revision=next_revision,
+                    ordered_goal_ids=ordered_ids,
+                )
+                revised_raw = canonical_bytes(revised_index)
+                revised_digest = store.put_blob(revised_raw)
+                if store.get_blob(revised_digest) != revised_raw:
+                    raise EntryError(
+                        "STORE_RECOVERY_REQUIRED",
+                        "The revised PlanIndex failed immutable readback.",
+                        "Preserve the Store and inspect local storage integrity.",
+                    )
+                semantic_payload = {
+                    "ordered_goal_ids": list(revised_index["ordered_goal_ids"]),
+                    "ordered_goal_slice_digests": list(
+                        revised_index["ordered_goal_slice_digests"]
+                    ),
+                    "plan_index_digest": revised_digest,
+                    "plan_revision": next_revision,
+                    "reason": reason.strip(),
+                }
+                operation_label = "revise-goal-plan-" + domain_digest(
+                    "loopskill-plan-index-revision-operation-v1\n",
+                    {
+                        "from_index_digest": str(plan["plan_index_digest"]),
+                        "loop_ref": loop_ref,
+                        "to_index_digest": revised_digest,
+                    },
+                )[:24]
+            else:
+                semantic_payload = {
+                    "objective_order": list(normalized),
+                    "reason": reason.strip(),
+                }
+                operation_label = f"revise-goal-plan-{plan['revision']}"
             store.apply(
                 _machine_command(
                     store,
                     snapshot,
                     command_type="ReviseGoalPlan",
-                    operation_label=f"revise-goal-plan-{plan['revision']}",
+                    operation_label=operation_label,
                     subject_kind="LoopRef",
                     subject_ref=loop_ref,
                     expected_subject_revisions={"goal_plan": int(plan["revision"])},
@@ -1069,10 +1131,7 @@ def revise_goal_plan(
                         "receipt_refs": {},
                         "resolved_refs": {},
                     },
-                    semantic_payload={
-                        "objective_order": list(normalized),
-                        "reason": reason.strip(),
-                    },
+                    semantic_payload=semantic_payload,
                     clock=clock,
                 )
             )
@@ -1080,7 +1139,7 @@ def revise_goal_plan(
         return policy_view(root=root)
     except EntryError:
         raise
-    except (OSError, PersistenceError, ProtocolRejection) as exc:
+    except (OSError, PersistenceError, PlanCodecError, ProtocolRejection) as exc:
         raise EntryError(
             "USER_INPUT_INVALID",
             "The roadmap revision is outside the confirmed policy envelope.",
@@ -1253,7 +1312,10 @@ def record_external_observation(
                 for grant in store.authority.grants.values()
                 if grant.actor_ref in store.authority.actors
                 and "RecordExternalEffectObservation" in grant.allowed_commands
-                and receipt.subject_ref in grant.exact_subjects
+                and (
+                    isinstance(grant, AuthorityGrantV2)
+                    or receipt.subject_ref in grant.exact_subjects
+                )
             ]
             if len(grants) != 1:
                 raise EntryError(
@@ -1316,12 +1378,18 @@ def record_external_observation(
         ) from exc
 
 
-def _grant_for(store: SQLiteStore, command_type: str, subject_ref: str) -> AuthorityGrant:
+def _grant_for(
+    store: SQLiteStore, command_type: str, subject_ref: str
+) -> AuthorityGrant | AuthorityGrantV2:
     matches = [
         grant
         for grant in store.authority.grants.values()
         if command_type in grant.allowed_commands
-        and (not grant.exact_subjects or subject_ref in grant.exact_subjects)
+        and (
+            isinstance(grant, AuthorityGrantV2)
+            or not grant.exact_subjects
+            or subject_ref in grant.exact_subjects
+        )
     ]
     if len(matches) != 1:
         raise EntryError(
@@ -1358,25 +1426,38 @@ def _allocated_subjects(
                     kind: str(chain[f"{kind}_ref"])
                     for kind in ("result", "report", "artifact", "review")
                 }
-                finalizations = {
-                    subject
-                    for grant in store.authority.grants.values()
-                    for subject in grant.exact_subjects
-                    if subject.startswith("finalization-")
-                }
-                if len(finalizations) != 1:
-                    raise EntryError(
-                        "USER_STORE_UNAVAILABLE",
-                        "The machine-owned finalization identity is unavailable.",
-                        "Preserve the store and inspect diagnostics.",
+                plan = snapshot.get("goal_plan")
+                if (
+                    isinstance(plan, Mapping)
+                    and plan.get("storage_mode") == "CONTENT_ADDRESSED_V1"
+                ):
+                    values["finalization"] = derive_loop_plan_ref(
+                        str(snapshot["loop_ref"]),
+                        str(plan["plan_digest"]),
+                        "FinalizationRef",
                     )
-                values["finalization"] = finalizations.pop()
+                else:
+                    finalizations = {
+                        subject
+                        for grant in store.authority.grants.values()
+                        if isinstance(grant, AuthorityGrant)
+                        for subject in grant.exact_subjects
+                        if subject.startswith("finalization-")
+                    }
+                    if len(finalizations) != 1:
+                        raise EntryError(
+                            "USER_STORE_UNAVAILABLE",
+                            "The machine-owned finalization identity is unavailable.",
+                            "Preserve the store and inspect diagnostics.",
+                        )
+                    values["finalization"] = finalizations.pop()
                 return values
     values: dict[str, str] = {}
     for kind in ("result", "report", "artifact", "review", "finalization"):
         matches = {
             subject
             for grant in store.authority.grants.values()
+            if isinstance(grant, AuthorityGrant)
             for subject in grant.exact_subjects
             if subject.startswith(kind + "-")
         }
@@ -1703,7 +1784,14 @@ def sync_loop(
             outcome = result["outcome"]
             if result["state"] == "STAGED":
                 attempt = snapshot["attempts"][effect["attempt_ref"]]
-                criteria = tuple(attempt["provider_request"]["acceptance_criteria"])
+                materialized_attempt = store.effect_attempt(effect["attempt_ref"])
+                if materialized_attempt is None:
+                    raise EntryError(
+                        "STORE_RECOVERY_REQUIRED",
+                        "The current Goal request cannot be materialized.",
+                        "Preserve the Store and restore its exact plan blobs.",
+                    )
+                criteria = tuple(materialized_attempt.payload["acceptance_criteria"])
                 artifact_receipt, artifact_bindings, _ = _local_artifact_receipt(
                     store,
                     effect=effect,
@@ -1785,9 +1873,131 @@ def sync_loop(
                     if outcome == "FAILED"
                     else "LIMITATION"
                 )
-                next_baseline_bindings = {}
+                next_allocate: dict[str, str] = {}
+                next_resolved: dict[str, str] = {"review_ref": review_ref}
+                advance_operation_label = "advance"
+                expected_plan_revision: dict[str, int] = {}
                 plan = snapshot.get("goal_plan")
-                if isinstance(plan, Mapping):
+                if (
+                    goal_disposition == "DONE"
+                    and isinstance(plan, Mapping)
+                    and plan.get("storage_mode") == "CONTENT_ADDRESSED_V1"
+                ):
+                    active_index = int(plan["active_index"])
+                    next_index = active_index + 1
+                    ordered_ids = list(plan["ordered_goal_ids"])
+                    if next_index < len(ordered_ids):
+                        if workspace_root is None:
+                            raise EntryError(
+                                "USER_STORE_UNAVAILABLE",
+                                "The next Goal artifact workspace is unavailable.",
+                                "Preserve the loop and restore its confirmed workspace.",
+                            )
+                        plan_raw = store.get_blob(str(plan["plan_digest"]))
+                        index_raw = store.get_blob(str(plan["plan_index_digest"]))
+                        if plan_raw is None or index_raw is None:
+                            raise EntryError(
+                                "STORE_RECOVERY_REQUIRED",
+                                "The next Goal plan blobs are unavailable.",
+                                "Preserve the Store and restore an exact private backup.",
+                            )
+                        plan_document = parse_plan_bytes(plan_raw)
+                        index_document = validate_plan_index(
+                            parse_json_bytes(index_raw), plan_document
+                        )
+                        if (
+                            index_document["revision"] != plan["revision"]
+                            or index_document["ordered_goal_ids"]
+                            != list(plan["ordered_goal_ids"])
+                            or index_document["ordered_goal_slice_digests"]
+                            != list(plan["ordered_goal_slice_digests"])
+                        ):
+                            raise EntryError(
+                                "STORE_RECOVERY_REQUIRED",
+                                "The active PlanIndex does not match the canonical snapshot.",
+                                "Preserve the Store and inspect its immutable evidence.",
+                            )
+                        next_goal_id = str(ordered_ids[next_index])
+                        next_slice_digest = str(
+                            index_document["ordered_goal_slice_digests"][next_index]
+                        )
+                        next_goal = next(
+                            item
+                            for item in plan_document["goals"]
+                            if item["goal_id"] == next_goal_id
+                        )
+                        next_chain = goal_chain(
+                            loop_ref,
+                            str(plan["plan_digest"]),
+                            next_goal_id,
+                            next_slice_digest,
+                        )
+                        next_baseline = prepare_artifact_baseline(
+                            workspace_root,
+                            expected_profile=str(effect["artifact_profile"]),
+                            expected_workspace_identity_digest=str(
+                                effect["workspace_identity_digest"]
+                            ),
+                        )
+                        next_baseline_digest = persist_baseline_blobs(
+                            store, next_baseline
+                        )
+                        provider_request = materialize_provider_request(
+                            plan_document,
+                            index_document,
+                            next_index,
+                            target_ref=next_chain["provider_target"],
+                            artifact_digest=next_baseline_digest,
+                            prior_disposition="DONE",
+                        )
+                        next_allocate = {
+                            "new_attempt_ref": next_chain["attempt_ref"],
+                            "new_external_effect_ref": next_chain[
+                                "external_effect_ref"
+                            ],
+                            "new_goal_ref": next_chain["goal_ref"],
+                            "new_host_resource_ref": next_chain[
+                                "host_resource_ref"
+                            ],
+                            "provider_idempotency_key": next_chain["provider_key"],
+                        }
+                        next_resolved.update(
+                            {
+                                "artifact_baseline_blob_digest": next_baseline_digest,
+                                "artifact_profile": next_baseline.profile,
+                                "next_goal_id": next_goal_id,
+                                "next_goal_slice_digest": next_slice_digest,
+                                "next_objective_digest": domain_digest(
+                                    "loopskill-goal-objective-v1\n",
+                                    next_goal["objective"],
+                                ),
+                                "plan_digest": str(plan["plan_digest"]),
+                                "plan_index_digest": str(
+                                    plan["plan_index_digest"]
+                                ),
+                                "provider_request_digest": domain_digest(
+                                    "loopskill-provider-request-v1\n",
+                                    provider_request,
+                                ),
+                                "provider_target": next_chain["provider_target"],
+                                "workspace_identity_digest": (
+                                    next_baseline.workspace_identity_digest
+                                ),
+                            }
+                        )
+                    expected_plan_revision = {"goal_plan": int(plan["revision"])}
+                    advance_operation_label = "advance-" + domain_digest(
+                        "loopskill-advance-operation-v1\n",
+                        {
+                            "current_goal_ref": goal_ref,
+                            "loop_ref": loop_ref,
+                            "next_goal_ref": next_allocate.get("new_goal_ref"),
+                            "plan_digest": plan["plan_digest"],
+                            "plan_index_digest": plan["plan_index_digest"],
+                            "plan_revision": plan["revision"],
+                        },
+                    )[:24]
+                elif goal_disposition == "DONE" and isinstance(plan, Mapping):
                     ordered = list(plan["ordered_goal_refs"])
                     if ordered.index(goal_ref) + 1 < len(ordered):
                         if workspace_root is None:
@@ -1803,32 +2013,30 @@ def sync_loop(
                                 effect["workspace_identity_digest"]
                             ),
                         )
-                        next_baseline_bindings = {
+                        next_resolved.update({
                             "artifact_baseline_blob_digest": persist_baseline_blobs(
                                 store, next_baseline
                             ),
                             "artifact_profile": next_baseline.profile,
                             "workspace_identity_digest": next_baseline.workspace_identity_digest,
-                        }
+                        })
                 store.apply(
                     _machine_command(
                         store,
                         snapshot,
                         command_type="AdvanceGoal",
-                        operation_label="advance",
+                        operation_label=advance_operation_label,
                         subject_kind="GoalRef",
                         subject_ref=goal_ref,
                         expected_subject_revisions={
                             goal_ref: snapshot["goals"][goal_ref]["revision"],
                             review_ref: snapshot["reviews"][review_ref]["revision"],
+                            **expected_plan_revision,
                         },
                         machine_bindings={
-                            "allocate_refs": {},
+                            "allocate_refs": next_allocate,
                             "receipt_refs": {},
-                            "resolved_refs": {
-                                "review_ref": review_ref,
-                                **next_baseline_bindings,
-                            },
+                            "resolved_refs": next_resolved,
                         },
                         semantic_payload={"disposition": goal_disposition},
                         clock=clock,

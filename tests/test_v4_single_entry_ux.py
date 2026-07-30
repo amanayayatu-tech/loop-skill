@@ -27,10 +27,12 @@ if str(SCRIPTS) not in sys.path:
 
 from loop_architect.v4_alpha.kernel import AuthorityContext  # noqa: E402
 from loop_architect.v4_alpha.protocol import (  # noqa: E402
+    CAPACITY_CONTRACT,
     CAPABILITY_NAMES,
     InjectedCrash,
     LoopIntakeInput,
     Receipt,
+    canonical_bytes,
     domain_digest,
     result_payload_schema,
 )
@@ -254,7 +256,9 @@ class V4SingleEntryUXTests(unittest.TestCase):
             invalid_utf8 = root / "invalid.txt"
             invalid_utf8.write_bytes(b"\xff")
             oversized = root / "oversized.txt"
-            oversized.write_bytes(b"g" * 32769)
+            oversized.write_bytes(
+                b"g" * (int(CAPACITY_CONTRACT["source_text_max_bytes"]) + 1)
+            )
             invalid_list = root / "invalid-list.json"
             invalid_list.write_text(
                 json.dumps({"goal": "goal", "write_scope": [1]}),
@@ -269,18 +273,18 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 json.dumps({"goal": "goal", "thread_id": "model-copy"}),
                 encoding="utf-8",
             )
-            for source in (
-                invalid_json,
-                invalid_utf8,
-                oversized,
-                invalid_list,
-                invalid_scalar,
-                unknown_field,
-                root / "missing.json",
+            for source, expected_code in (
+                (invalid_json, "USER_INPUT_INVALID"),
+                (invalid_utf8, "USER_INPUT_INVALID"),
+                (oversized, "RESOURCE_LIMIT_EXCEEDED"),
+                (invalid_list, "USER_INPUT_INVALID"),
+                (invalid_scalar, "USER_INPUT_INVALID"),
+                (unknown_field, "USER_INPUT_INVALID"),
+                (root / "missing.json", "USER_INPUT_INVALID"),
             ):
                 with self.subTest(source=source.name), self.assertRaises(EntryError) as caught:
                     cli.read_intake_input(str(source))
-                self.assertEqual(caught.exception.code, "USER_INPUT_INVALID")
+                self.assertEqual(caught.exception.code, expected_code)
 
             with mock.patch.dict(os.environ, {"CODEX_HOME": str(root / "codex")}, clear=False):
                 view = cli._doctor_view(include_diagnostics=False)
@@ -541,15 +545,17 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 clock=lambda: NOW,
                 token_factory=lambda: "111111111111111111111111",
             )
-            self.assertEqual(len(tuple(prepared.directory.iterdir())), 5)
+            self.assertEqual(len(tuple(prepared.directory.iterdir())), 8)
             self.assertFalse((root / "data").exists())
             self.assertEqual(set(boundary_display(prepared)), {
                 "acceptance_criteria",
                 "authorization_boundaries",
                 "budget",
+                "capacity",
                 "external_actions",
                 "execution_mode",
                 "goal",
+                "goal_count",
                 "selection_reason",
                 "stop_conditions",
                 "write_scope",
@@ -564,7 +570,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
             confirmed = confirm_loop(
                 prepared.directory, confirmed=True, clock=lambda: NOW
             )
-            self.assertEqual(len(tuple(prepared.directory.iterdir())), 6)
+            self.assertEqual(len(tuple(prepared.directory.iterdir())), 9)
             start_loop(confirmed, root=root / "data", clock=lambda: NOW)
             with SQLiteStore(root / "data" / STORE_FILENAME) as store:
                 self.assertEqual(store.commit_count, 1)
@@ -576,6 +582,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
                         "LoopCreated",
                         "GoalRegistered",
                         "GoalActivated",
+                        "GoalPlanRegistered",
                         "StartAuthorized",
                         "ExternalEffectPrepared",
                     ),
@@ -665,7 +672,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 2)
             self.assertIn("USER_CONFIRMATION_REQUIRED", result.stderr)
-            self.assertEqual(len(tuple(prepared.iterdir())), 5)
+            self.assertEqual(len(tuple(prepared.iterdir())), 8)
             self.assertFalse((prepared / CONFIRMATION_FILENAME).exists())
             self.assertFalse(data.exists())
 
@@ -1210,7 +1217,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertEqual(projection["policy"]["kind"], "ADAPTIVE")
             self.assertEqual(projection["policy"]["active_goal_count"], 1)
             self.assertEqual(projection["policy"]["goal_count"], 3)
-            self.assertEqual(projection["policy"]["revision"], 1)
+            self.assertEqual(projection["policy"]["revision"], 0)
             revised = revise_goal_plan(
                 (
                     "Adaptive primary",
@@ -1221,7 +1228,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 reason="Reorder only pending milestones.",
                 clock=lambda: NOW,
             )
-            self.assertEqual(revised["policy"]["revision"], 2)
+            self.assertEqual(revised["policy"]["revision"], 1)
             with self.assertRaises(EntryError):
                 revise_goal_plan(
                     ("Adaptive primary", "Outside author envelope", "Adaptive verify"),
@@ -1229,7 +1236,7 @@ class V4SingleEntryUXTests(unittest.TestCase):
                     reason="Attempt scope expansion.",
                     clock=lambda: NOW,
                 )
-            self.assertEqual(policy_view(root=data)["policy"]["revision"], 2)
+            self.assertEqual(policy_view(root=data)["policy"]["revision"], 1)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1256,8 +1263,10 @@ class V4SingleEntryUXTests(unittest.TestCase):
             with SQLiteStore(data / STORE_FILENAME) as store:
                 snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
                 self.assertIsNotNone(snapshot)
-                ordered = snapshot["goal_plan"]["ordered_goal_refs"]
-                self.assertEqual(snapshot["goals"][ordered[1]]["depends_on"], ordered[0])
+                self.assertEqual(len(snapshot["goals"]), 1)
+                current = next(iter(snapshot["goals"].values()))
+                self.assertEqual(current["goal_id"], "g000")
+                self.assertIsNone(current["depends_on"])
 
     def test_confirmed_goal_plan_is_atomic_bounded_and_runs_two_goal_chains(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1299,16 +1308,21 @@ class V4SingleEntryUXTests(unittest.TestCase):
             with SQLiteStore(data / STORE_FILENAME) as store:
                 snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
                 self.assertIsNotNone(snapshot)
-                self.assertEqual(len(snapshot["goals"]), 2)
+                self.assertEqual(len(snapshot["goals"]), 1)
                 self.assertEqual(len(snapshot["attempts"]), 1)
-                self.assertEqual(snapshot["goal_plan"]["revision"], 1)
-                self.assertEqual(snapshot["goal_plan"]["max_roadmap_revisions"], 4)
-                self.assertRegex(snapshot["goal_plan"]["envelope_digest"], r"^[0-9a-f]{64}$")
+                self.assertEqual(snapshot["goal_plan"]["revision"], 0)
+                self.assertEqual(snapshot["goal_plan"]["max_roadmap_revisions"], 5)
+                self.assertRegex(snapshot["goal_plan"]["plan_digest"], r"^[0-9a-f]{64}$")
 
             first = ("Atomic primary", "Atomic dependent")
             second = ("Atomic primary", "Atomic dependent")
             third = ("Atomic primary", "Atomic dependent")
-            for expected_revision, order in ((2, first), (3, second), (4, third)):
+            for expected_revision, order in (
+                (1, first),
+                (2, second),
+                (3, third),
+                (4, first),
+            ):
                 projection = revise_goal_plan(
                     order,
                     root=data,
@@ -1360,9 +1374,11 @@ class V4SingleEntryUXTests(unittest.TestCase):
             with SQLiteStore(data / STORE_FILENAME) as store:
                 snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
                 self.assertIsNotNone(snapshot)
-                ordered = snapshot["goal_plan"]["ordered_goal_refs"]
-                self.assertEqual(snapshot["goals"][ordered[0]]["state"], "DONE")
-                self.assertEqual(snapshot["goals"][ordered[1]]["state"], "ACTIVE")
+                states = {
+                    goal["goal_id"]: goal["state"]
+                    for goal in snapshot["goals"].values()
+                }
+                self.assertEqual(states, {"g000": "DONE", "g001": "ACTIVE"})
                 self.assertEqual(len(snapshot["attempts"]), 2)
             terminal = sync_loop(
                 root=data,
@@ -1377,8 +1393,11 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
                 self.assertIsNotNone(snapshot)
                 self.assertEqual(
-                    [snapshot["goals"][ref]["state"] for ref in snapshot["goal_plan"]["ordered_goal_refs"]],
-                    ["DONE", "DONE"],
+                    {
+                        goal["goal_id"]: goal["state"]
+                        for goal in snapshot["goals"].values()
+                    },
+                    {"g000": "DONE", "g001": "DONE"},
                 )
                 for collection in (
                     "artifacts",
@@ -1602,8 +1621,12 @@ class V4SingleEntryUXTests(unittest.TestCase):
                     path = root / "subject.sqlite3"
                     clean_path = root / "clean.sqlite3"
                     with SQLiteStore(path, authority) as subject:
+                        subject.put_blob(canonical_bytes(prepared.plan))
+                        subject.put_blob(canonical_bytes(prepared.plan_index))
                         exact_pre = subject.canonical_export()
                     with SQLiteStore(clean_path, authority) as clean:
+                        clean.put_blob(canonical_bytes(prepared.plan))
+                        clean.put_blob(canonical_bytes(prepared.plan_index))
                         clean.apply(command)
                         exact_post = clean.canonical_export()
                     with SQLiteStore(path, authority) as subject:

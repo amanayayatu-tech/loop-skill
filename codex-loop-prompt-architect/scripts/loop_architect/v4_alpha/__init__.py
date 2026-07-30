@@ -1,4 +1,4 @@
-"""Disposable LoopSkill 4.0 alpha pure-kernel reference slice."""
+"""LoopSkill 4 deterministic pure-kernel runtime."""
 
 from .protocol import PROTOCOL_VERSION
 

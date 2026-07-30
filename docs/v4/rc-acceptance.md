@@ -1,7 +1,7 @@
 # LoopSkill 4 release acceptance boundary
 
-LoopSkill 4.0.0 is publicly released only after the exact merged-main commit,
-annotated `v4.0.0` tag, tag CI, and public GitHub Release have all been read
+LoopSkill 4.1.0 is publicly released only after the exact merged-main commit,
+annotated `v4.1.0` tag, tag CI, and public GitHub Release have all been read
 back. A local candidate, RC packet, exec canary, pushed branch, merged PR, or tag
 alone is not a release.
 
@@ -17,11 +17,17 @@ alone is not a release.
 - privacy-safe risk/audit/archive/metrics, secret/private-path/raw-identity/
   large-artifact scan, dependency/license inventory, and SBOM;
 - bilingual README parity, real command syntax/smoke, local links, exact
-  4.0.0 version/changelog/release-note identity, and no stale v3 current-product
+  4.1.0 version/changelog/release-note identity, and no stale v3 current-product
   wording;
-- one disposable, non-research foreground Codex exec canary on the exact candidate:
-  zero-effect intake and prepare, explicit digest-bound confirmation, one
-  machine-owned task start/readback, minimal artifact/review/finalization, no
+- content-addressed PlanDocument/PlanIndex parity, 1/4/8/16/32 Goal capacity,
+  33-Goal and prompt-overflow zero-effect rejection, canonical property/fuzz,
+  two-process activation concurrency, crash/replay, privacy, and closed
+  `EAGER_V4_0` continuation;
+- exactly two disposable, non-research foreground Codex exec routes on the same
+  exact candidate: fresh 2-Goal first, then fresh 8-Goal only after PASS, for at
+  most 10 invocations and two hours. Both require zero-effect intake and
+  prepare, explicit digest-bound confirmation, one fresh Provider per Goal,
+  minimal artifact/review/finalization, no
   MCP, no restart, no provider resend, and no real v3/user/private data. The
   entry is installed and uninstalled in an isolated home, while the sole model
   turn uses an already-authenticated official Host context without copying
@@ -65,17 +71,17 @@ acceptance. The active release gate requires the stable zero-write
 MCP/Pack/State-Writer/dual-write production surfaces.
 
 The final local validator emits
-`LOOPSKILL_4_0_PUBLICATION_CANDIDATE_VALIDATED`, not a publication claim. Only
-the GitHub readback at the end of this document establishes that 4.0.0 is
+`LOOPSKILL_4_1_PUBLICATION_CANDIDATE_VALIDATED`, not a publication claim. Only
+the GitHub readback at the end of this document establishes that 4.1.0 is
 public, latest, and non-prerelease.
 
 ## Publication gates
 
 Before external Git writes, fetch origin/tags, integrate any main drift
-non-destructively, confirm intended clean diff and no v4.0.0 tag/Release, and
+non-destructively, confirm intended clean diff and no v4.1.0 tag/Release, and
 rerun affected gates. The feature branch must pass v4 PR CI before a
 non-destructive merge. The merged-main SHA is separately verified and canaried,
-then annotated tag CI must pass before creating GitHub Release 4.0.0 as latest
+then annotated tag CI must pass before creating GitHub Release 4.1.0 as latest
 and non-prerelease.
 
 Final readback binds Release URL, tag object and peeled commit, verified main

@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping
 
 from .generated_protocol import (
     ASSURANCE_STRENGTHS,
+    CAPACITY_CONTRACT,
     CAPABILITY_NAMES,
     COMMAND_TYPES,
     DELIVERY_STATES,
@@ -22,12 +23,16 @@ from .generated_protocol import (
     ActorRef,
     ApplyResult,
     AuthorityGrant,
+    AuthorityGrantV2,
     CapabilityRecord,
     CommandEnvelope,
     EffectAttempt,
     LoopIntakeDecision,
     LoopIntakeInput,
     LoopStartInput,
+    PlanCapacityReport,
+    PlanDocument,
+    PlanIndex,
     PreparedLoopBundle,
     PreparedLoopManifest,
     Receipt,
@@ -43,9 +48,17 @@ MAX_SEMANTIC_STRING_BYTES = 4_096
 MAX_COLLECTION_ITEMS = 128
 MAX_RECEIPT_BYTES = 8_192
 MAX_EVENTS_PER_COMMAND = 16
+CREATE_LOOP_TARGET_BYTES = int(CAPACITY_CONTRACT["create_loop_target_bytes"])
+CREATE_LOOP_TARGET_COLLECTION_MEMBERS = int(
+    CAPACITY_CONTRACT["create_loop_target_collection_members"]
+)
+HOST_PROMPT_TARGET_BYTES = int(CAPACITY_CONTRACT["host_prompt_target_bytes"])
+CONTENT_STORAGE_MODE = "CONTENT_ADDRESSED_V1"
+EAGER_STORAGE_MODE = "EAGER_V4_0"
 
 PROTOCOL_MANIFEST = {
     "assurance_strengths": ASSURANCE_STRENGTHS,
+    "capacity_contract": CAPACITY_CONTRACT,
     "capabilities": CAPABILITY_NAMES,
     "commands": COMMAND_TYPES,
     "delivery_states": DELIVERY_STATES,
@@ -252,6 +265,108 @@ def raw_domain_digest(domain: str, raw: bytes) -> str:
     return hashlib.sha256(domain.encode("utf-8") + raw).hexdigest()
 
 
+_PLAN_REFERENCE_PREFIXES = {
+    "ArtifactRef": "artifact-",
+    "AttemptRef": "attempt-",
+    "ExternalEffectRef": "external-effect-",
+    "GoalRef": "goal-",
+    "HostResourceRef": "host-target-",
+    "ReportRef": "report-",
+    "ResultRef": "result-",
+    "ReviewRef": "review-",
+}
+
+
+def derive_plan_ref(
+    loop_ref: str,
+    plan_identity: str,
+    goal_id: str,
+    slice_digest: str,
+    reference_kind: str,
+) -> str:
+    try:
+        prefix = _PLAN_REFERENCE_PREFIXES[reference_kind]
+    except KeyError as exc:
+        raise ValueError("unsupported plan-derived reference kind") from exc
+    suffix = raw_domain_digest(
+        "loopskill-plan-derived-ref-v1\n",
+        canonical_bytes(
+            {
+                "goal_id": goal_id,
+                "goal_slice_digest": slice_digest,
+                "loop_ref": loop_ref,
+                "plan_digest": plan_identity,
+                "reference_kind": reference_kind,
+            }
+        ),
+    )[:24]
+    return prefix + suffix
+
+
+def derive_loop_plan_ref(
+    loop_ref: str, plan_identity: str, reference_kind: str
+) -> str:
+    if reference_kind != "FinalizationRef":
+        raise ValueError("unsupported loop-derived reference kind")
+    return "finalization-" + raw_domain_digest(
+        "loopskill-plan-loop-ref-v1\n",
+        canonical_bytes(
+            {
+                "loop_ref": loop_ref,
+                "plan_digest": plan_identity,
+                "reference_kind": reference_kind,
+            }
+        ),
+    )[:24]
+
+
+def goal_chain(
+    loop_ref: str,
+    plan_identity: str,
+    goal_id: str,
+    slice_digest: str,
+) -> dict[str, str]:
+    result = {
+        "artifact_ref": derive_plan_ref(
+            loop_ref, plan_identity, goal_id, slice_digest, "ArtifactRef"
+        ),
+        "attempt_ref": derive_plan_ref(
+            loop_ref, plan_identity, goal_id, slice_digest, "AttemptRef"
+        ),
+        "external_effect_ref": derive_plan_ref(
+            loop_ref, plan_identity, goal_id, slice_digest, "ExternalEffectRef"
+        ),
+        "goal_ref": derive_plan_ref(
+            loop_ref, plan_identity, goal_id, slice_digest, "GoalRef"
+        ),
+        "host_resource_ref": derive_plan_ref(
+            loop_ref, plan_identity, goal_id, slice_digest, "HostResourceRef"
+        ),
+        "report_ref": derive_plan_ref(
+            loop_ref, plan_identity, goal_id, slice_digest, "ReportRef"
+        ),
+        "result_ref": derive_plan_ref(
+            loop_ref, plan_identity, goal_id, slice_digest, "ResultRef"
+        ),
+        "review_ref": derive_plan_ref(
+            loop_ref, plan_identity, goal_id, slice_digest, "ReviewRef"
+        ),
+    }
+    identity = {
+        "goal_id": goal_id,
+        "goal_slice_digest": slice_digest,
+        "loop_ref": loop_ref,
+        "plan_digest": plan_identity,
+    }
+    result["provider_key"] = "effect-" + raw_domain_digest(
+        "loopskill-plan-provider-key-v1\n", canonical_bytes(identity)
+    )[:24]
+    result["provider_target"] = "codex-bootstrap-" + raw_domain_digest(
+        "loopskill-plan-provider-target-v1\n", canonical_bytes(identity)
+    )[:24]
+    return result
+
+
 def snapshot_digest(snapshot: Mapping[str, Any]) -> str:
     return domain_digest("loopskill-snapshot-v1\n", snapshot)
 
@@ -294,10 +409,15 @@ def command_digest(command: CommandEnvelope) -> str:
     return domain_digest("loopskill-command-v1\n", command_without_digest(command))
 
 
-def authority_grant_digest(grant: AuthorityGrant) -> str:
+def authority_grant_digest(grant: AuthorityGrant | AuthorityGrantV2) -> str:
     value = dict(grant.__dict__)
     value.pop("canonical_digest")
-    return domain_digest("loopskill-authority-grant-v1\n", value)
+    domain = (
+        "loopskill-authority-grant-v2\n"
+        if isinstance(grant, AuthorityGrantV2)
+        else "loopskill-authority-grant-v1\n"
+    )
+    return domain_digest(domain, value)
 
 
 def validate_receipt_size(receipt: Receipt) -> None:
@@ -362,10 +482,17 @@ def validate_command(command: CommandEnvelope) -> None:
     if injection:
         raise ProtocolRejection("CONTROL_FIELD_INJECTION", injection)
     payload_spec = SEMANTIC_PAYLOAD_SPECS[command.command_type]["semantic_payload"]
-    if set(command.semantic_payload) != set(payload_spec):
+    required = {
+        name
+        for name, specification in payload_spec.items()
+        if specification.get("required", True)
+    }
+    if not required <= set(command.semantic_payload) or not set(
+        command.semantic_payload
+    ) <= set(payload_spec):
         raise ProtocolRejection("INVALID_COMMAND", "semantic payload shape drift")
-    for name, specification in payload_spec.items():
-        value = command.semantic_payload[name]
+    for name, value in command.semantic_payload.items():
+        specification = payload_spec[name]
         if specification["type"] == "string" and not isinstance(value, str):
             raise ProtocolRejection("INVALID_COMMAND", f"{name} must be string")
         if specification["type"] == "integer" and (

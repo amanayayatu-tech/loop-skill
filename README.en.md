@@ -1,4 +1,4 @@
-# LoopSkill 4.0
+# LoopSkill 4.1
 
 [![v4 Release CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
@@ -7,7 +7,7 @@
 [中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> This document describes LoopSkill 4.0.0. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
+> This document describes the LoopSkill 4.1.0 release candidate, which is awaiting author release authorization. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
 
 **LoopSkill turns durable work that can get lost in one chat into a flow that checks the boundary first, starts once, and leaves a result with evidence.**
 
@@ -15,11 +15,11 @@ A chat can end before a long task is truly complete. Context can drift, a step c
 
 ![Durable handoff from a goal and boundary to evidence and result](docs/readme-assets/durable-handoff.png)
 
-You provide the goal. LoopSkill walks through:
+Start with one sentence, pasted PRD text, or one explicitly authorized UTF-8 `.txt` / `.md` file; ordinary users do not create JSON. LoopSkill asks only 1–3 questions that truly block start, retains confirmed answers for the current session, then walks through:
 
 `INTAKE → PREPARE → CONFIRM → START`
 
-There is no Host execution before confirmation and at most one start afterward. You see the goal, progress, result, limitations, and next action—not a wall of thread IDs, SHA values, or receipts.
+There is no Host execution before confirmation. After confirmation, only one Goal is active at a time. You see the goal, progress, result, limitations, and next action—not a wall of thread IDs, SHA values, or receipts.
 
 <!-- parity: break -->
 ## Problems it solves
@@ -49,8 +49,10 @@ Intake returns `READY_FOR_LOOP`, `NEEDS_CLARIFICATION`, `BLOCKED`, or `DIRECT_TA
 
 Prerequisites: macOS or Linux, Git, Python 3.11–3.14, and an authenticated official Codex installation. The LoopSkill 4 runtime uses only the Python standard library.
 
+The install command below applies only after the author separately authorizes and publishes `v4.1.0`; a release candidate is not a public release.
+
 ```bash
-git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
 bash scripts/install.sh
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
@@ -59,26 +61,17 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 
 The install is separate from v3. LoopSkill 4 itself **does not register MCP**, edit Codex `config.toml`, **or require a Codex App restart** for installation or use.
 
-Create `goal.json`:
+Invoke `$loopskill4` in a Codex conversation and state the goal directly, for example:
 
-```json
-{
-  "goal": "Create and verify a release checklist in the example directory",
-  "task_horizon": "long",
-  "write_scope": ["release-checklist.md"],
-  "budget": "up to 4 minutes; no network",
-  "external_actions": [],
-  "acceptance_criteria": ["artifact-changed", "file-exists:release-checklist.md"],
-  "stop_conditions": ["stop if external outcome is uncertain"],
-  "authorization_boundaries": ["no commit, push, publish, or deploy"]
-}
+```text
+Create and verify release-checklist.md in this workspace; do not use the network, delete existing content, commit, push, publish, or deploy, and use at most four Host invocations.
 ```
 
-Then use the one main entry:
+The Skill fills scope, acceptance, and stop blockers in the current session, then converges on the same machine entry. Experts may instead provide semantic JSON or a canonical PlanDocument:
 
 ```bash
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
-"$LOOPSKILL4" start goal.json
+"$LOOPSKILL4" start ./requirements.md
 ```
 
 It does not start silently. You first see the intake result and prepared boundary, then explicitly confirm. A non-interactive session stops at PREPARE; `DIRECT_TASK_RECOMMENDED` creates no loop.
@@ -88,7 +81,7 @@ It does not start silently. You first see the intake result and prepared boundar
 
 ```mermaid
 flowchart LR
-    G["Goal or goal.json"] --> I["INTAKE"]
+    G["Sentence, PRD, or expert JSON"] --> I["INTAKE"]
     I --> P["PREPARE"]
     P --> C{"CONFIRM boundary"}
     C -->|confirm| S["START one Host task"]
@@ -101,13 +94,13 @@ flowchart LR
 You can also invoke the four phases explicitly:
 
 ```bash
-"$LOOPSKILL4" intake goal.json
-"$LOOPSKILL4" prepare goal.json --output ./prepared-loop
+"$LOOPSKILL4" intake ./requirements.md
+"$LOOPSKILL4" prepare ./requirements.md --output ./prepared-loop
 "$LOOPSKILL4" confirm ./prepared-loop
 "$LOOPSKILL4" start ./prepared-loop --root ./loopskill4-data
 ```
 
-INTAKE is strictly read-only. PREPARE writes only the local manifest, boundary summary, and human-readable plan. CONFIRM binds their digests; a content change invalidates the old confirmation. Only START with a valid confirmation may claim one machine-managed Attempt.
+INTAKE is strictly read-only. PREPARE writes only an owner-only local manifest, boundary summary, human plan, canonical PlanDocument, PlanIndex, and capacity report; it does not create the runtime Store. CONFIRM binds every prepared artifact, so any change invalidates the old confirmation. Only a valid START writes content-addressed plan blobs, creates the compact Loop, and claims one machine-managed Attempt for the current Goal.
 
 ### A concrete example
 
@@ -163,21 +156,21 @@ The minimal task requires no policy pack to install, understand, or select. When
 These capabilities may submit authorized semantic commands. They cannot write the Store directly, sign Host receipts, or become a Supervisor.
 
 <!-- parity: architecture -->
-## How 4.0 is built
+## How 4.1 is built
 
-The default path stays small: Entry composes the Kernel, one SQLite Store, artifact/review/finalization libraries, and one Codex Host Adapter.
+The default path stays small: Entry composes the Kernel, one SQLite Store, a content-addressed PlanDocument, artifact/review/finalization libraries, and one Codex Host Adapter. CreateLoop registers only the current Goal; later Goals reuse atomic `AdvanceGoal` activation without a second writer, Supervisor, daemon, or queue service.
 
 ```mermaid
 flowchart LR
     E["Entry"] --> K["Deterministic Kernel"]
     K --> P["Typed protocol + ports"]
-    E --> S["SQLite Store / one writer"]
+    E --> S["SQLite Store + plan blobs / one writer"]
     E --> A["Artifact + Review + Finalization"]
     E --> H["Codex Host Adapter"]
     E -. optional .-> O["Standard / Adaptive policy"]
 ```
 
-The Store does not control the Host; Artifact and Host code do not write canonical state. See the [architecture map](docs/v4/architecture-map.md), [ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md), and [typed protocol](protocol/v4/README.md).
+The Store does not control the Host; Artifact and Host code do not write canonical state. See the [architecture map](docs/v4/architecture-map.md), [ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md), [ADR 0013](docs/adr/0013-content-addressed-plan-capacity.md), [compatibility matrix](docs/v4/compatibility-matrix-v4.1.md), and [typed protocol](protocol/v4/README.md).
 
 <!-- parity: safety -->
 ## Safety, recovery, and honest failure
@@ -220,9 +213,12 @@ python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py
 The uninstaller removes only the receipt-bound v4 installation. It does not modify `config.toml`, a v3 installation, or v3 data. Repeating the command safely returns `ALREADY_UNINSTALLED`. Fallback means uninstalling v4 and continuing with a separately installed v3.3.8; v4 does not reverse-convert data.
 
 <!-- parity: limitations -->
-## Current limitations
+## Current limitations and capacity contract
 
-- Version 4.0.0 supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
+- Version 4.1.0 supports 1–32 confirmed Goals. A canonical plan is at most 128 KiB, and one explicitly authorized UTF-8 text/Markdown source is at most 256 KiB.
+- The CreateLoop release target is 8 KiB / 64 members (hard limits remain 16 KiB / 128); the materialized Host prompt target is 24 KiB (32 KiB hard limit). Overflow is blocked before Host execution and never truncated.
+- New Loops write only `CONTENT_ADDRESSED_V1`; `EAGER_V4_0` supports status, export, and original-reducer continuation only, with no migration, rewrite, or dual write.
+- Version 4.1.0 supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
 - The default is one cwd-bound foreground Codex Host task; Desktop-visible saved projects/tasks are not promised.
 - The foreground observation window is at most 300 seconds; unlimited tasks, automatic resume, and cross-process readback are not promised.
 - There is no provider idempotency or cross-system exactly-once claim.
@@ -251,7 +247,9 @@ CI also runs the Linux/macOS × Python 3.11–3.14 install/uninstall matrix, pro
 ## Release, security, and historical versions
 
 - [v4 release process](docs/RELEASING.md)
-- [4.0.0 release notes](docs/v4/release-notes.md)
+- [4.1.0 candidate release notes](docs/v4/release-notes-v4.1.md)
+- [4.0.0 historical release notes](docs/v4/release-notes.md)
+- [v4.1 compatibility matrix](docs/v4/compatibility-matrix-v4.1.md)
 - [Security policy](SECURITY.md)
 - [MIT License](LICENSE)
 - [v3.3.8 historical release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)

@@ -1,0 +1,23 @@
+{
+  "admission_limits": {
+    "canonical_plan_max_bytes": 131072,
+    "create_loop_target_bytes": 8192,
+    "create_loop_target_collection_members": 64,
+    "goal_count_max": 32,
+    "host_prompt_target_bytes": 24576,
+    "source_text_max_bytes": 262144
+  },
+  "goal_counts": [1, 4, 8, 16, 32],
+  "negative_cases": [
+    "goal_count_0",
+    "goal_count_33",
+    "plan_128k_plus_1",
+    "source_256k_plus_1",
+    "create_loop_over_8k",
+    "create_loop_collection_over_64",
+    "current_prompt_over_24k",
+    "duplicate_goal_id",
+    "tampered_slice_digest"
+  ],
+  "schema": "loopskill-v4.1-capacity-corpus-v1"
+}

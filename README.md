@@ -1,4 +1,4 @@
-# LoopSkill 4.0
+# LoopSkill 4.1
 
 [![v4 Release CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
@@ -7,7 +7,7 @@
 [English](README.en.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> 本文档对应 LoopSkill 4.0.0；当前可用的公开版本以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
+> 本文档对应 LoopSkill 4.1.0 发布候选，正在等待作者发布授权；当前可用的公开版本仍以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
 
 **LoopSkill 帮你把一次聊天容易丢失的耐久任务，变成先看清边界、再启动一次、最后留下结果和证据的工作流程。**
 
@@ -15,11 +15,11 @@
 
 ![耐久任务从目标和边界交接到证据与结果的故事图](docs/readme-assets/durable-handoff.png)
 
-你只需要给出目标。LoopSkill 会依次完成：
+你可以直接说一句话、粘贴 PRD，或明确提供一个 UTF-8 `.txt` / `.md` 文件；普通用户不需要创建 JSON。LoopSkill 只追问真正阻断启动的 1–3 个问题，保留本次会话中已经确认的答案，然后依次完成：
 
 `INTAKE / 质检 → PREPARE / 准备 → CONFIRM / 确认边界 → START / 启动`
 
-确认之前没有 Host 执行；确认之后至多启动一次。最终你看到的是目标、进度、结果、限制和下一步，而不是一串 thread ID、SHA 或 receipt。
+确认之前没有 Host 执行；确认之后按已确认计划一次只激活一个 Goal。最终你看到的是目标、进度、结果、限制和下一步，而不是一串 thread ID、SHA 或 receipt。
 
 <!-- parity: break -->
 ## 它解决什么问题
@@ -49,8 +49,10 @@ LoopSkill 4 是 **v4-only hard break**。它保留 v3 的安全原则，但不�
 
 先决条件：macOS 或 Linux、Git、Python 3.11–3.14，以及已经登录的官方 Codex。LoopSkill 4 runtime 只依赖 Python 标准库。
 
+以下安装命令只适用于作者另行授权并发布 `v4.1.0` 之后；发布候选本身不是公开发行。
+
 ```bash
-git clone --branch v4.0.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
 bash scripts/install.sh
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
@@ -59,26 +61,17 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 
 安装位置与 v3 分离。LoopSkill 4 自身**不注册 MCP**、不编辑 Codex `config.toml`，也**不要求为安装或使用 LoopSkill 4 重启** Codex App。
 
-创建 `goal.json`：
+在 Codex 对话中调用 `$loopskill4`，然后直接提供目标，例如：
 
-```json
-{
-  "goal": "在示例目录中创建并验证一份发布检查清单",
-  "task_horizon": "long",
-  "write_scope": ["release-checklist.md"],
-  "budget": "最多 4 分钟；不访问网络",
-  "external_actions": [],
-  "acceptance_criteria": ["artifact-changed", "file-exists:release-checklist.md"],
-  "stop_conditions": ["外部结果不确定时停止"],
-  "authorization_boundaries": ["不 commit、push、publish 或 deploy"]
-}
+```text
+请在这个 workspace 创建并验证 release-checklist.md；不访问网络，不删除现有内容，不 commit、push、publish 或 deploy，最多 4 次 Host 调用。
 ```
 
-然后使用唯一主入口：
+Skill 会在当前会话补齐范围、验收和停止条件，再汇合到同一个机器入口。专家也可以直接提供语义 JSON 或 canonical PlanDocument：
 
 ```bash
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
-"$LOOPSKILL4" start goal.json
+"$LOOPSKILL4" start ./requirements.md
 ```
 
 它不会静默开跑。你会先看到质检结论和准备好的边界摘要，再明确输入确认。非交互环境会停在 PREPARE；`DIRECT_TASK_RECOMMENDED` 不会创建 loop。
@@ -88,7 +81,7 @@ LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
 
 ```mermaid
 flowchart LR
-    G["目标或 goal.json"] --> I["INTAKE 质检"]
+    G["一句话、PRD 或专家 JSON"] --> I["INTAKE 质检"]
     I --> P["PREPARE 准备"]
     P --> C{"CONFIRM 确认边界"}
     C -->|确认| S["START 一次 Host 任务"]
@@ -101,13 +94,13 @@ flowchart LR
 四个阶段也可以显式运行：
 
 ```bash
-"$LOOPSKILL4" intake goal.json
-"$LOOPSKILL4" prepare goal.json --output ./prepared-loop
+"$LOOPSKILL4" intake ./requirements.md
+"$LOOPSKILL4" prepare ./requirements.md --output ./prepared-loop
 "$LOOPSKILL4" confirm ./prepared-loop
 "$LOOPSKILL4" start ./prepared-loop --root ./loopskill4-data
 ```
 
-INTAKE 严格只读。PREPARE 只生成本地 manifest、边界摘要和人类可读计划。CONFIRM 绑定这些内容的 digest；内容改变后旧确认失效。只有有效确认后的 START 才能取得一次机器管理的 Attempt。
+INTAKE 严格只读。PREPARE 只生成 owner-only 的本地 manifest、边界摘要、人类计划、canonical PlanDocument、PlanIndex 和容量报告，不创建 runtime Store。CONFIRM 绑定全部准备产物；内容改变后旧确认失效。只有有效确认后的 START 才写入 content-addressed plan blob、创建最小 Loop，并取得当前 Goal 的一个机器管理 Attempt。
 
 ### 一个具体例子
 
@@ -163,21 +156,21 @@ INTAKE 严格只读。PREPARE 只生成本地 manifest、边界摘要和人类�
 这些能力只能提交受权 semantic command，不能直接写 Store、签 Host receipt 或成为 Supervisor。
 
 <!-- parity: architecture -->
-## 4.0 的内部结构
+## 4.1 的内部结构
 
-默认路径保持简单：Entry 组合 Kernel、一个 SQLite Store、artifact/review/finalization libraries 和一个 Codex Host Adapter。
+默认路径保持简单：Entry 组合 Kernel、一个 SQLite Store、content-addressed PlanDocument、artifact/review/finalization libraries 和一个 Codex Host Adapter。CreateLoop 只注册当前 Goal；后续 Goal 复用原子 `AdvanceGoal` 按需激活，不新增第二 writer、Supervisor、daemon 或队列服务。
 
 ```mermaid
 flowchart LR
     E["Entry"] --> K["Deterministic Kernel"]
     K --> P["Typed protocol + ports"]
-    E --> S["SQLite Store / one writer"]
+    E --> S["SQLite Store + plan blobs / one writer"]
     E --> A["Artifact + Review + Finalization"]
     E --> H["Codex Host Adapter"]
     E -. 可选 .-> O["Standard / Adaptive policy"]
 ```
 
-Store 不控制 Host；Artifact 和 Host 也不写 canonical state。进一步内容见 [架构图](docs/v4/architecture-map.md)、[ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md) 和 [typed protocol](protocol/v4/README.md)。
+Store 不控制 Host；Artifact 和 Host 也不写 canonical state。进一步内容见 [架构图](docs/v4/architecture-map.md)、[ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md)、[ADR 0013](docs/adr/0013-content-addressed-plan-capacity.md)、[兼容矩阵](docs/v4/compatibility-matrix-v4.1.md) 和 [typed protocol](protocol/v4/README.md)。
 
 <!-- parity: safety -->
 ## 安全、恢复与诚实失败
@@ -220,9 +213,12 @@ python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py
 卸载器只移除 receipt 绑定的 v4 安装，不修改 `config.toml`、v3 安装或 v3 数据。重复执行会安全返回 `ALREADY_UNINSTALLED`。回退意味着卸载 v4 后继续使用单独安装的 v3.3.8；v4 不反向转换数据。
 
 <!-- parity: limitations -->
-## 当前限制
+## 当前限制与容量合同
 
-- 4.0.0 只支持 Codex Host Adapter；Kernel host-neutral 不代表已经支持 multi-host。
+- 4.1.0 支持 1–32 个已确认 Goal；canonical plan 最大 128 KiB，明确授权的 UTF-8 text/Markdown source 最大 256 KiB。
+- CreateLoop 发布目标为 8 KiB / 64 members（硬上限仍为 16 KiB / 128）；materialized Host prompt 目标为 24 KiB（硬上限 32 KiB），超限不截断且在 Host 前阻断。
+- 新 Loop 只写 `CONTENT_ADDRESSED_V1`；`EAGER_V4_0` 仅支持 status、export 和原 reducer continuation，不迁移、不改写、不双写。
+- 4.1.0 只支持 Codex Host Adapter；Kernel host-neutral 不代表已经支持 multi-host。
 - 默认路径是一个 cwd-bound 前台 Codex Host 任务；不承诺 Desktop-visible saved project/task。
 - 单次前台观察窗口最长 300 秒；不承诺无限长任务、自动 resume 或跨进程 readback。
 - 没有 provider idempotency 或跨系统 exactly-once 承诺。
@@ -251,7 +247,9 @@ CI 还运行 Linux/macOS × Python 3.11–3.14 安装卸载矩阵、协议漂移
 ## 发布、安全与历史版本
 
 - [v4 发布流程](docs/RELEASING.md)
-- [4.0.0 release notes](docs/v4/release-notes.md)
+- [4.1.0 candidate release notes](docs/v4/release-notes-v4.1.md)
+- [4.0.0 historical release notes](docs/v4/release-notes.md)
+- [v4.1 compatibility matrix](docs/v4/compatibility-matrix-v4.1.md)
 - [Security policy](SECURITY.md)
 - [MIT License](LICENSE)
 - [v3.3.8 historical release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)

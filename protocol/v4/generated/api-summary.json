@@ -17,6 +17,33 @@
     "artifact_non_git",
     "artifact_new_git"
   ],
+  "capacity_contract": {
+    "array_limits": {
+      "authorization_boundaries": 32,
+      "completion_evidence": 32,
+      "external_actions": 16,
+      "forbidden_actions": 16,
+      "forbidden_paths": 32,
+      "goal_acceptance_criteria": 16,
+      "goals": 32,
+      "stop_conditions": 16,
+      "write_scope": 32
+    },
+    "canonical_plan_max_bytes": 131072,
+    "collection_hard_items": 128,
+    "create_loop_hard_bytes": 16384,
+    "create_loop_target_bytes": 8192,
+    "create_loop_target_collection_members": 64,
+    "expert_json_max_bytes": 131072,
+    "goal_count_max": 32,
+    "goal_count_min": 1,
+    "host_prompt_hard_bytes": 32768,
+    "host_prompt_target_bytes": 24576,
+    "item_max_bytes": 1024,
+    "objective_max_bytes": 2048,
+    "source_text_max_bytes": 262144,
+    "version": "loopskill-capacity-v1"
+  },
   "commands": {
     "AcknowledgeResult": {
       "semantic_payload": {}
@@ -54,6 +81,14 @@
           },
           "type": "array"
         },
+        "active_index": {
+          "required": false,
+          "type": "integer"
+        },
+        "authority_digest": {
+          "required": false,
+          "type": "string"
+        },
         "authorization_boundaries": {
           "items": {
             "type": "string"
@@ -61,6 +96,10 @@
           "type": "array"
         },
         "budget": {
+          "type": "string"
+        },
+        "capacity_contract_version": {
+          "required": false,
           "type": "string"
         },
         "execution_mode": {
@@ -76,11 +115,31 @@
           },
           "type": "array"
         },
+        "goal_count": {
+          "required": false,
+          "type": "integer"
+        },
+        "goal_id": {
+          "required": false,
+          "type": "string"
+        },
         "goal_plan": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "goal_slice_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "max_cost_minor_units": {
+          "required": false,
+          "type": "integer"
+        },
+        "max_host_invocations": {
+          "required": false,
+          "type": "integer"
         },
         "max_roadmap_revisions": {
           "type": "integer"
@@ -88,11 +147,57 @@
         "objective": {
           "type": "string"
         },
+        "ordered_goal_ids": {
+          "items": {
+            "type": "string"
+          },
+          "required": false,
+          "type": "array"
+        },
+        "ordered_goal_slice_digests": {
+          "items": {
+            "type": "string"
+          },
+          "required": false,
+          "type": "array"
+        },
+        "plan_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "plan_index_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "plan_revision": {
+          "required": false,
+          "type": "integer"
+        },
         "stop_conditions": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "stop_policy_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "storage_mode": {
+          "enum": [
+            "EAGER_V4_0",
+            "CONTENT_ADDRESSED_V1"
+          ],
+          "required": false,
+          "type": "string"
+        },
+        "wall_clock_seconds": {
+          "required": false,
+          "type": "integer"
+        },
+        "workspace_binding": {
+          "required": false,
+          "type": "string"
         },
         "write_scope": {
           "items": {
@@ -170,7 +275,30 @@
           "items": {
             "type": "string"
           },
+          "required": false,
           "type": "array"
+        },
+        "ordered_goal_ids": {
+          "items": {
+            "type": "string"
+          },
+          "required": false,
+          "type": "array"
+        },
+        "ordered_goal_slice_digests": {
+          "items": {
+            "type": "string"
+          },
+          "required": false,
+          "type": "array"
+        },
+        "plan_index_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "plan_revision": {
+          "required": false,
+          "type": "integer"
         },
         "reason": {
           "type": "string"
@@ -308,8 +436,8 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "manifest_sha256": "ffbc01b8d8ba881a73a27b6b3d3e789d24acccb6b340ac0840589650bcbb514f",
-  "protocol_version": "4.0.0",
+  "manifest_sha256": "89053bfb45c3eb46b0f4194cd14be8b8295c932e6e0d09e411ffc23d8161a437",
+  "protocol_version": "4.1.0",
   "reference_kinds": [
     "LoopRef",
     "ActorRef",
@@ -354,6 +482,21 @@
       "loop_scope",
       "subject_kinds",
       "exact_subjects",
+      "not_before",
+      "expires_at",
+      "nonce",
+      "canonical_digest"
+    ],
+    "AuthorityGrantV2": [
+      "schema",
+      "grant_ref",
+      "actor_ref",
+      "issuer_actor_ref",
+      "issuer_trust",
+      "allowed_commands",
+      "loop_scope",
+      "subject_kinds",
+      "subject_selector",
       "not_before",
       "expires_at",
       "nonce",
@@ -408,17 +551,66 @@
       "external_actions",
       "acceptance_criteria",
       "stop_conditions",
-      "authorization_boundaries"
+      "authorization_boundaries",
+      "canonical_plan",
+      "source_kind",
+      "source_digest",
+      "source_bytes"
     ],
     "LoopStartInput": [
       "goal"
+    ],
+    "PlanCapacityReport": [
+      "source_kind",
+      "source_bytes",
+      "source_digest",
+      "goal_count",
+      "plan_bytes",
+      "plan_digest",
+      "plan_index_digest",
+      "create_loop_command_bytes",
+      "create_loop_max_collection_members",
+      "max_materialized_goal_prompt_bytes",
+      "max_materialized_goal_id",
+      "create_loop_byte_headroom",
+      "create_loop_collection_headroom",
+      "provider_prompt_headroom",
+      "capacity_contract_version",
+      "capacity_status",
+      "blocking_reason",
+      "materialized_goal_prompt_bytes"
+    ],
+    "PlanDocument": [
+      "schema",
+      "source",
+      "objective",
+      "boundaries",
+      "budget",
+      "roadmap_policy",
+      "completion_evidence",
+      "stop_conditions",
+      "goals"
+    ],
+    "PlanIndex": [
+      "schema",
+      "plan_digest",
+      "goal_count",
+      "ordered_goal_ids",
+      "ordered_goal_slice_digests",
+      "revision",
+      "workspace_binding",
+      "authority_digest",
+      "capacity_contract_version"
     ],
     "PreparedLoopBundle": [
       "manifest_digest",
       "boundary_digest",
       "controller_plan_digest",
       "instructions_digest",
-      "bundle_digest"
+      "bundle_digest",
+      "plan_digest",
+      "plan_index_digest",
+      "capacity_report_digest"
     ],
     "PreparedLoopManifest": [
       "manifest_version",
@@ -438,7 +630,15 @@
       "authorization_boundaries",
       "artifact_profile",
       "workspace_identity_digest",
-      "prepared_at"
+      "prepared_at",
+      "plan_storage_mode",
+      "plan_digest",
+      "plan_index_digest",
+      "capacity_report_digest",
+      "capacity_contract_version",
+      "source_digest",
+      "product_version",
+      "protocol_manifest_digest"
     ],
     "Receipt": [
       "receipt_ref",

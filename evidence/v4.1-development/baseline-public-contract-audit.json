@@ -1,0 +1,36 @@
+{
+  "adapter": {
+    "boundary": "CodexHostAdapter consumes one durable EffectAttempt",
+    "provider_hard_prompt_bytes": 32768
+  },
+  "baseline_commit": "f7b62cb2fd9bd6ab4b038a8384bced4b7e74cbd9",
+  "composition_root": {
+    "finding": "v4.0 preallocates every future Goal chain and copies the full objective plan into CreateLoop",
+    "root_cause": "public bootstrap and reducer share an eager all-goal representation"
+  },
+  "installer": {
+    "default_global_config_mutation": false,
+    "default_mcp_registration": false,
+    "default_runtime_daemon": false
+  },
+  "kernel": {
+    "goal_transition": "AdvanceGoal",
+    "single_writer": true
+  },
+  "protocol": {
+    "command_hard_bytes": 16384,
+    "collection_hard_members": 128,
+    "manifest_path": "protocol/v4/loopskill-v4.protocol.json"
+  },
+  "public_entry": {
+    "confirmation_literal": "START THIS LOOP",
+    "phases": ["INTAKE", "PREPARE", "CONFIRM", "START"],
+    "source_types_at_baseline": ["semantic_json", "literal_text"]
+  },
+  "schema": "loopskill-v4.1-baseline-public-contract-audit-v1",
+  "stores": {
+    "in_memory_blob_contract_at_baseline": false,
+    "sqlite_blob_contract_at_baseline": true,
+    "store_port_blob_contract_at_baseline": false
+  }
+}

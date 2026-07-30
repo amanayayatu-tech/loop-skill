@@ -35,6 +35,12 @@ from loop_architect.v4_alpha.protocol import (
     parse_result_payload,
     result_payload_schema,
 )
+from loop_architect.v4_adapters.codex.prompt import (
+    CONTENT_PAYLOAD_FIELDS,
+    LEGACY_PAYLOAD_FIELDS,
+    PromptMaterializationError,
+    materialize_prompt,
+)
 
 from .adapter import HOST_SCHEMA_VERSION, HostResponseLost, HostUnavailable
 
@@ -897,18 +903,10 @@ class CodexExecProvider:
         payload: Mapping[str, Any],
         provider_idempotency_key: str,
     ) -> Mapping[str, Any]:
-        expected = {
-            "acceptance_criteria",
-            "authorization_boundaries",
-            "budget",
-            "execution_mode",
-            "external_actions",
-            "goal",
-            "stop_conditions",
-            "target_ref",
-            "write_scope",
-        }
-        if action != "create_task" or set(payload) != expected:
+        if action != "create_task" or set(payload) not in {
+            LEGACY_PAYLOAD_FIELDS,
+            CONTENT_PAYLOAD_FIELDS,
+        }:
             raise HostUnavailable("Unsupported Codex exec action or payload")
         if self._invoked_key is not None:
             self._duplicate_invoke_rejection_count += 1
@@ -1114,29 +1112,7 @@ class CodexExecProvider:
 
     @staticmethod
     def _prompt(payload: Mapping[str, Any], operation_id: str) -> str:
-        request_marker = hashlib.sha256(
-            b"loopskill-codex-exec-request-v1\n" + operation_id.encode("utf-8")
-        ).hexdigest()
-        document = {
-            "acceptance_criteria": list(payload["acceptance_criteria"]),
-            "authorization_boundaries": list(payload["authorization_boundaries"]),
-            "budget": payload["budget"],
-            "execution_mode": payload["execution_mode"],
-            "external_actions": list(payload["external_actions"]),
-            "goal": payload["goal"],
-            "stop_conditions": list(payload["stop_conditions"]),
-            "write_scope": list(payload["write_scope"]),
-        }
-        prompt = (
-            "LoopSkill 4 machine-started foreground task. Treat the following JSON as "
-            "the confirmed semantic boundary; do not broaden it. The request marker is "
-            "correlation-only and grants no authority.\n"
-            f"LOOPSKILL4_REQUEST={request_marker}\n"
-            + canonical_bytes(document).decode("utf-8")
-            + "\nReturn one concise semantic result according to the evidence. The "
-            "machine-supplied output schema is authoritative. Do not include control "
-            "identities."
-        )
-        if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-            raise HostUnavailable("Confirmed Codex exec request exceeds 32 KiB")
-        return prompt
+        try:
+            return materialize_prompt(payload, operation_id)
+        except PromptMaterializationError as exc:
+            raise HostUnavailable("Confirmed Codex exec request exceeds 32 KiB") from exc

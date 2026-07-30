@@ -1,4 +1,31 @@
 {
+  "capacity_contract": {
+    "array_limits": {
+      "authorization_boundaries": 32,
+      "completion_evidence": 32,
+      "external_actions": 16,
+      "forbidden_actions": 16,
+      "forbidden_paths": 32,
+      "goal_acceptance_criteria": 16,
+      "goals": 32,
+      "stop_conditions": 16,
+      "write_scope": 32
+    },
+    "canonical_plan_max_bytes": 131072,
+    "collection_hard_items": 128,
+    "create_loop_hard_bytes": 16384,
+    "create_loop_target_bytes": 8192,
+    "create_loop_target_collection_members": 64,
+    "expert_json_max_bytes": 131072,
+    "goal_count_max": 32,
+    "goal_count_min": 1,
+    "host_prompt_hard_bytes": 32768,
+    "host_prompt_target_bytes": 24576,
+    "item_max_bytes": 1024,
+    "objective_max_bytes": 2048,
+    "source_text_max_bytes": 262144,
+    "version": "loopskill-capacity-v1"
+  },
   "capability_names": [
     "project_registration",
     "task_create",
@@ -65,8 +92,79 @@
           "items": {"type": "string"},
           "type": "array"
         },
+        "active_index": {
+          "required": false,
+          "type": "integer"
+        },
+        "authority_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "capacity_contract_version": {
+          "required": false,
+          "type": "string"
+        },
+        "goal_count": {
+          "required": false,
+          "type": "integer"
+        },
+        "goal_id": {
+          "required": false,
+          "type": "string"
+        },
+        "goal_slice_digest": {
+          "required": false,
+          "type": "string"
+        },
         "max_roadmap_revisions": {
           "type": "integer"
+        },
+        "max_cost_minor_units": {
+          "required": false,
+          "type": "integer"
+        },
+        "max_host_invocations": {
+          "required": false,
+          "type": "integer"
+        },
+        "ordered_goal_ids": {
+          "items": {"type": "string"},
+          "required": false,
+          "type": "array"
+        },
+        "ordered_goal_slice_digests": {
+          "items": {"type": "string"},
+          "required": false,
+          "type": "array"
+        },
+        "plan_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "plan_index_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "plan_revision": {
+          "required": false,
+          "type": "integer"
+        },
+        "storage_mode": {
+          "enum": ["EAGER_V4_0", "CONTENT_ADDRESSED_V1"],
+          "required": false,
+          "type": "string"
+        },
+        "stop_policy_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "wall_clock_seconds": {
+          "required": false,
+          "type": "integer"
+        },
+        "workspace_binding": {
+          "required": false,
+          "type": "string"
         },
         "external_actions": {
           "items": {"type": "string"},
@@ -145,7 +243,26 @@
       "semantic_payload": {
         "objective_order": {
           "items": {"type": "string"},
+          "required": false,
           "type": "array"
+        },
+        "ordered_goal_ids": {
+          "items": {"type": "string"},
+          "required": false,
+          "type": "array"
+        },
+        "ordered_goal_slice_digests": {
+          "items": {"type": "string"},
+          "required": false,
+          "type": "array"
+        },
+        "plan_index_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "plan_revision": {
+          "required": false,
+          "type": "integer"
         },
         "reason": {"type": "string"}
       }
@@ -281,7 +398,7 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "protocol_version": "4.0.0",
+  "protocol_version": "4.1.0",
   "reference_kinds": [
     "LoopRef",
     "ActorRef",
@@ -328,6 +445,21 @@
       ["loop_scope", "str", {"type": "string"}],
       ["subject_kinds", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["exact_subjects", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["not_before", "str", {"type": "string"}],
+      ["expires_at", "str", {"type": "string"}],
+      ["nonce", "str", {"type": "string"}],
+      ["canonical_digest", "str", {"type": "string"}]
+    ],
+    "AuthorityGrantV2": [
+      ["schema", "str", {"const": "loopskill-authority-grant-v2", "type": "string"}],
+      ["grant_ref", "str", {"type": "string"}],
+      ["actor_ref", "str", {"type": "string"}],
+      ["issuer_actor_ref", "str", {"type": "string"}],
+      ["issuer_trust", "str", {"type": "string"}],
+      ["allowed_commands", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["loop_scope", "str", {"type": "string"}],
+      ["subject_kinds", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["subject_selector", "Mapping[str, Any]", {"additionalProperties": false, "properties": {"goal_index_max": {"minimum": 0, "type": "integer"}, "goal_index_min": {"const": 0, "type": "integer"}, "include_loop_scope": {"type": "boolean"}, "mode": {"const": "PLAN_DERIVED_V1", "type": "string"}, "plan_digest": {"type": "string"}}, "required": ["goal_index_max", "goal_index_min", "include_loop_scope", "mode", "plan_digest"], "type": "object"}],
       ["not_before", "str", {"type": "string"}],
       ["expires_at", "str", {"type": "string"}],
       ["nonce", "str", {"type": "string"}],
@@ -389,7 +521,11 @@
       ["external_actions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["acceptance_criteria", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["stop_conditions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
-      ["authorization_boundaries", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}]
+      ["authorization_boundaries", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["canonical_plan", "Mapping[str, Any] | None", {"type": ["object", "null"]}, null],
+      ["source_kind", "str", {"enum": ["literal_text", "pasted_text", "authorized_file", "expert_semantic_json", "canonical_plan_json"], "type": "string"}, "expert_semantic_json"],
+      ["source_digest", "str", {"type": "string"}, ""],
+      ["source_bytes", "int", {"minimum": 0, "type": "integer"}, 0]
     ],
     "LoopIntakeDecision": [
       ["disposition", "str", {"enum": ["READY_FOR_LOOP", "NEEDS_CLARIFICATION", "BLOCKED", "DIRECT_TASK_RECOMMENDED"], "type": "string"}],
@@ -415,14 +551,67 @@
       ["authorization_boundaries", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
       ["artifact_profile", "str", {"enum": ["existing_git", "non_git", "new_git", "UNBOUND"], "type": "string"}],
       ["workspace_identity_digest", "str", {"type": "string"}],
-      ["prepared_at", "str", {"type": "string"}]
+      ["prepared_at", "str", {"type": "string"}],
+      ["plan_storage_mode", "str", {"const": "CONTENT_ADDRESSED_V1", "type": "string"}],
+      ["plan_digest", "str", {"type": "string"}],
+      ["plan_index_digest", "str", {"type": "string"}],
+      ["capacity_report_digest", "str", {"type": "string"}],
+      ["capacity_contract_version", "str", {"const": "loopskill-capacity-v1", "type": "string"}],
+      ["source_digest", "str", {"type": "string"}],
+      ["product_version", "str", {"const": "4.1.0", "type": "string"}],
+      ["protocol_manifest_digest", "str", {"type": "string"}]
     ],
     "PreparedLoopBundle": [
       ["manifest_digest", "str", {"type": "string"}],
       ["boundary_digest", "str", {"type": "string"}],
       ["controller_plan_digest", "str", {"type": "string"}],
       ["instructions_digest", "str", {"type": "string"}],
-      ["bundle_digest", "str", {"type": "string"}]
+      ["bundle_digest", "str", {"type": "string"}],
+      ["plan_digest", "str", {"type": "string"}],
+      ["plan_index_digest", "str", {"type": "string"}],
+      ["capacity_report_digest", "str", {"type": "string"}]
+    ],
+    "PlanDocument": [
+      ["schema", "str", {"const": "loopskill-plan-v1", "type": "string"}],
+      ["source", "Mapping[str, Any]", {"additionalProperties": false, "properties": {"kind": {"enum": ["literal_text", "pasted_text", "authorized_file", "expert_semantic_json", "canonical_plan_json"], "type": "string"}, "source_content_retained": {"const": false, "type": "boolean"}, "source_digest": {"type": "string"}}, "required": ["kind", "source_content_retained", "source_digest"], "type": "object"}],
+      ["objective", "str", {"type": "string"}],
+      ["boundaries", "Mapping[str, Any]", {"additionalProperties": false, "properties": {"destructive_actions_allowed": {"type": "boolean"}, "external_actions": {"items": {"type": "string"}, "type": "array"}, "forbidden_actions": {"items": {"type": "string"}, "type": "array"}, "forbidden_paths": {"items": {"type": "string"}, "type": "array"}, "write_scope": {"items": {"type": "string"}, "type": "array"}}, "required": ["destructive_actions_allowed", "external_actions", "forbidden_actions", "forbidden_paths", "write_scope"], "type": "object"}],
+      ["budget", "Mapping[str, Any]", {"additionalProperties": false, "properties": {"currency": {"type": ["string", "null"]}, "max_cost_minor_units": {"minimum": 0, "type": "integer"}, "max_host_invocations": {"minimum": 0, "type": "integer"}, "wall_clock_seconds": {"minimum": 1, "type": "integer"}}, "required": ["currency", "max_cost_minor_units", "max_host_invocations", "wall_clock_seconds"], "type": "object"}],
+      ["roadmap_policy", "Mapping[str, Any]", {"additionalProperties": false, "properties": {"max_reorders": {"minimum": 0, "type": "integer"}, "mode": {"enum": ["STANDARD", "ADAPTIVE"], "type": "string"}}, "required": ["max_reorders", "mode"], "type": "object"}],
+      ["completion_evidence", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["stop_conditions", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["goals", "tuple[Mapping[str, Any], ...]", {"items": {"additionalProperties": false, "properties": {"acceptance_criteria": {"items": {"type": "string"}, "type": "array"}, "goal_id": {"pattern": "^g[0-9]{3}$", "type": "string"}, "objective": {"type": "string"}}, "required": ["acceptance_criteria", "goal_id", "objective"], "type": "object"}, "type": "array"}]
+    ],
+    "PlanIndex": [
+      ["schema", "str", {"const": "loopskill-plan-index-v1", "type": "string"}],
+      ["plan_digest", "str", {"type": "string"}],
+      ["goal_count", "int", {"minimum": 1, "type": "integer"}],
+      ["ordered_goal_ids", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["ordered_goal_slice_digests", "tuple[str, ...]", {"items": {"type": "string"}, "type": "array"}],
+      ["revision", "int", {"minimum": 0, "type": "integer"}],
+      ["workspace_binding", "str", {"type": "string"}],
+      ["authority_digest", "str", {"type": "string"}],
+      ["capacity_contract_version", "str", {"const": "loopskill-capacity-v1", "type": "string"}]
+    ],
+    "PlanCapacityReport": [
+      ["source_kind", "str", {"type": "string"}],
+      ["source_bytes", "int", {"minimum": 0, "type": "integer"}],
+      ["source_digest", "str", {"type": "string"}],
+      ["goal_count", "int", {"minimum": 1, "type": "integer"}],
+      ["plan_bytes", "int", {"minimum": 0, "type": "integer"}],
+      ["plan_digest", "str", {"type": "string"}],
+      ["plan_index_digest", "str", {"type": "string"}],
+      ["create_loop_command_bytes", "int", {"minimum": 0, "type": "integer"}],
+      ["create_loop_max_collection_members", "int", {"minimum": 0, "type": "integer"}],
+      ["max_materialized_goal_prompt_bytes", "int", {"minimum": 0, "type": "integer"}],
+      ["max_materialized_goal_id", "str", {"type": "string"}],
+      ["create_loop_byte_headroom", "int", {"type": "integer"}],
+      ["create_loop_collection_headroom", "int", {"type": "integer"}],
+      ["provider_prompt_headroom", "int", {"type": "integer"}],
+      ["capacity_contract_version", "str", {"const": "loopskill-capacity-v1", "type": "string"}],
+      ["capacity_status", "str", {"enum": ["PASS", "BLOCKED"], "type": "string"}],
+      ["blocking_reason", "str", {"type": "string"}],
+      ["materialized_goal_prompt_bytes", "tuple[int, ...]", {"items": {"minimum": 0, "type": "integer"}, "type": "array"}]
     ],
     "UserFacingStatus": [
       ["goal", "str", {"type": "string"}],

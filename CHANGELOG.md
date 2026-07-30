@@ -3,7 +3,40 @@
 All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [4.1.0] - Unreleased
+
+### Added
+
+- Added conversational intake for one sentence, pasted PRD text, and explicitly
+  authorized UTF-8 text/Markdown sources. Session-only slot retention asks at
+  most three true blockers per round and converges on the same
+  `INTAKE → PREPARE → CONFIRM → START` contract as the expert JSON entry.
+- Added canonical, content-addressed `PlanDocument` and `PlanIndex` blobs with
+  owner-only preparation, redacted public projections, and lazy activation for
+  1–32 Goals through the existing atomic `AdvanceGoal` transition.
+- Added fixed `AuthorityGrantV2` plan-derived selectors, bounded cross-Goal
+  handoff, deterministic current-slice Host materialization, Adaptive
+  pending-only reorder, and closed `EAGER_V4_0` continuation compatibility.
+
+### Capacity and safety
+
+- Canonical plans are limited to 128 KiB; explicitly authorized text/Markdown
+  sources to 256 KiB; CreateLoop to the 8 KiB / 64-member release target; and
+  materialized Host prompts to the 24 KiB admission target. Existing hard
+  limits remain 16 KiB / 128 members and 32 KiB respectively.
+- PREPARE creates no runtime Store. START writes immutable plan/index blobs and
+  creates only the current Goal and Attempt. Missing or tampered blobs, stale
+  indices, prompt overflow, replay, and conflicting concurrent activation fail
+  closed before a duplicate Host effect.
+- New Loops write only `CONTENT_ADDRESSED_V1`. There is no v4.0 migration,
+  rewrite, dual write, dynamic grant mutation, second writer, Supervisor,
+  daemon, MCP registration, Codex config edit, or LoopSkill-required restart.
+
+### Release status
+
+- This source tree is a release candidate awaiting author release
+  authorization. Local RC evidence and canaries do not authorize push, PR,
+  merge, tag, GitHub Release, global installation, or deployment.
 
 ## [4.0.0] - 2026-07-28
 
@@ -596,7 +629,7 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[Unreleased]: https://github.com/amanayayatu-tech/loop-skill/compare/v4.0.0...HEAD
+[4.1.0]: https://github.com/amanayayatu-tech/loop-skill/compare/v4.0.0...HEAD
 [4.0.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.0.0
 [3.3.8]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8
 [3.3.7]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.7

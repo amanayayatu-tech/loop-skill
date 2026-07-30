@@ -71,14 +71,14 @@ class V4CiTests(unittest.TestCase):
                 encoding="utf-8"
             )
             workflow.write_text(
-                source.replace("tags: [v4.0.0]", "tags: [v4.0.1]"),
+                source.replace("tags: [v4.1.0]", "tags: [v4.1.1]"),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ci.CiError, "CI_PUSH_SCOPE_INVALID"):
                 ci.validate(root)
             workflow.write_text(
                 source.replace(
-                    "if: github.ref == 'refs/tags/v4.0.0'",
+                    "if: github.ref == 'refs/tags/v4.1.0'",
                     "if: always()",
                     1,
                 ),

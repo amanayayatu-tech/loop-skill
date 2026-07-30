@@ -125,7 +125,13 @@ class FakeCanaryProvider:
         if self.task_create_count > 1:
             self.duplicate_invoke_rejection_count += 1
         if self.mode != "unknown":
-            (self.workspace / canary.CANARY_OUTPUT_FILENAME).write_bytes(
+            criterion = next(
+                item
+                for item in payload["acceptance_criteria"]
+                if item.startswith("file-exists:")
+            )
+            filename = criterion.split(":", 1)[1]
+            (self.workspace / filename).write_bytes(
                 canary.CANARY_OUTPUT_BYTES
             )
         self.record = {
@@ -376,6 +382,61 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
                 snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
                 self.assertEqual(snapshot["execution"]["state"], "TERMINAL")
                 self.assertEqual(snapshot["execution"]["disposition"], "SUCCEEDED")
+
+    def test_two_goal_route_uses_two_fresh_providers_and_one_confirmation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            providers = []
+
+            def factory(workspace):
+                provider = FakeCanaryProvider(workspace)
+                provider.provider_id = f"raw-disposable-host-task-{len(providers) + 1}"
+                providers.append(provider)
+                return provider
+
+            receipt = canary.run_canary(
+                CANDIDATE,
+                evidence,
+                confirmation_callback=lambda _boundary: True,
+                goal_count=2,
+                integrity_inputs=integrity_inputs(evidence.parent),
+                provider_factory=factory,
+                wait_callback=lambda provider, _workspace: provider.wait_for_terminal(),
+                clock=lambda: NOW,
+                token_factory=lambda: "000000000000000000000002",
+            )
+            self.assertEqual(len(providers), 2)
+            self.assertEqual([provider.task_create_count for provider in providers], [1, 1])
+            self.assertEqual([provider.provider_resend_count for provider in providers], [0, 0])
+            self.assertEqual(receipt["confirmation_count"], 1)
+            self.assertEqual(receipt["host_task_create_count"], 2)
+            self.assertEqual(receipt["host_task_readback_count"], 2)
+            self.assertEqual(receipt["host_terminal_wait_readback_count"], 2)
+            self.assertEqual(receipt["host_lifecycle_readback_count"], 1)
+            validator.validate_live_canary(
+                receipt,
+                CANDIDATE,
+                ROOT,
+                (evidence / "store").resolve(),
+                expected_goal_count=2,
+            )
+            self.assertEqual(
+                {path.name for path in (evidence / "workspace").iterdir()},
+                set(canary._canary_filenames(2)),
+            )
+            self.assertTrue(
+                (evidence / "canary-provider-diagnostic-01.json").is_file()
+            )
+            self.assertTrue(
+                (evidence / "canary-provider-diagnostic-02.json").is_file()
+            )
+            live, _ = canary._live_summary(
+                CANDIDATE, evidence / "store", evidence / "workspace", 2
+            )
+            self.assertEqual(
+                receipt["host_receipt_digest"],
+                canary._domain_digest(canary.CANARY_LIVE_DOMAIN, live),
+            )
 
     def test_declined_confirmation_has_zero_provider_and_no_pass_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:

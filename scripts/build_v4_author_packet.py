@@ -32,14 +32,17 @@ REQUIRED_TRACKED_FILES = (
     "VERSION",
     "docs/RELEASING.md",
     "docs/adr/0011-loopskill-4-compatible-kernel-refactor.md",
+    "docs/adr/0013-content-addressed-plan-capacity.md",
     "docs/conformance/loopskill-4-conformance-corpus-design.md",
     "docs/v4/architecture-map.md",
+    "docs/v4/compatibility-matrix-v4.1.md",
     "docs/v4/known-limitations.md",
     "docs/v4/migration-and-rollback.md",
     "docs/v4/quickstart.en.md",
     "docs/v4/quickstart.zh-CN.md",
     "docs/v4/rc-acceptance.md",
     "docs/v4/release-notes.md",
+    "docs/v4/release-notes-v4.1.md",
     "protocol/v4/loopskill-v4.protocol.json",
 )
 
@@ -299,6 +302,9 @@ def _require_fields(value: Mapping[str, Any], expected: Mapping[str, Any]) -> No
 
 
 def _validate_exec_canary(value: Mapping[str, Any]) -> None:
+    goal_count = value.get("host_task_create_count")
+    if goal_count not in {1, 2, 8}:
+        raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
     _require_fields(
         value,
         {
@@ -310,8 +316,7 @@ def _validate_exec_canary(value: Mapping[str, Any]) -> None:
             "host_lifecycle_readback_count": 1,
             "host_receipt_issuer": "codex-exec-jsonl-v1",
             "host_receipt_trust": "same-process-terminal-observed",
-            "host_task_create_count": 1,
-            "host_task_readback_count": 1,
+            "host_task_readback_count": goal_count,
             "intake_external_effects": 0,
             "intake_heartbeat_count": 0,
             "intake_host_task_count": 0,
@@ -350,13 +355,16 @@ def _validate_exec_canary(value: Mapping[str, Any]) -> None:
     ):
         raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
     create_readbacks = value.get("host_create_readback_count")
-    if not _is_int(create_readbacks, minimum=1) or create_readbacks not in {1, 2, 3}:
+    if (
+        not _is_int(create_readbacks, minimum=1)
+        or not goal_count <= create_readbacks <= 3 * goal_count
+    ):
         raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
     terminal_readbacks = value.get("host_terminal_wait_readback_count")
     total_readbacks = value.get("host_total_read_count")
     if (
         not _is_int(terminal_readbacks, minimum=1)
-        or terminal_readbacks > 1_200
+        or terminal_readbacks != goal_count
         or not _is_int(total_readbacks, minimum=4)
         or total_readbacks
         != create_readbacks
