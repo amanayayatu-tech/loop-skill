@@ -15,7 +15,7 @@
     "objective": "verify generated protocol identity"
   },
   "goal_slice_digest": "db3a31a10b9e91e19e8f0bc2c0a3465605ca4d1c5046ba3eeadfb87794e69d0f",
-  "manifest_sha256": "89053bfb45c3eb46b0f4194cd14be8b8295c932e6e0d09e411ffc23d8161a437",
+  "manifest_sha256": "5a46d9c4d31d2964821165a66a07ca67ac4eee53cd58976438ae3eb19ba9f2c2",
   "plan_digest": "74b320f691fbb6697d5520ab5e36671a2b22d0b1767c55ae38d55b021ab2a281",
   "plan_document": {
     "boundaries": {

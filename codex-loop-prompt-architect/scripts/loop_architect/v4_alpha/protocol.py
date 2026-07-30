@@ -116,6 +116,27 @@ class InjectedCrash(RuntimeError):
         self.boundary = boundary
 
 
+def persisted_storage_mode(snapshot: Mapping[str, Any] | None) -> str | None:
+    """Classify one persisted snapshot without upgrading explicit mode drift."""
+
+    if snapshot is None:
+        return None
+    goal_plan = snapshot.get("goal_plan")
+    if goal_plan is None:
+        return EAGER_STORAGE_MODE
+    if not isinstance(goal_plan, Mapping):
+        raise ProtocolRejection(
+            "INTERNAL_INVARIANT_VIOLATION", "persisted Goal plan is malformed"
+        )
+    if "storage_mode" not in goal_plan:
+        return EAGER_STORAGE_MODE
+    if goal_plan["storage_mode"] == CONTENT_STORAGE_MODE:
+        return CONTENT_STORAGE_MODE
+    raise ProtocolRejection(
+        "INTERNAL_INVARIANT_VIOLATION", "persisted storage mode is unsupported"
+    )
+
+
 def _validate_value(value: Any) -> None:
     if value is None or isinstance(value, (bool, str)):
         if isinstance(value, str):

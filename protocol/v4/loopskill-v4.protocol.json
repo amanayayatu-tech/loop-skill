@@ -150,8 +150,7 @@
           "type": "integer"
         },
         "storage_mode": {
-          "enum": ["EAGER_V4_0", "CONTENT_ADDRESSED_V1"],
-          "required": false,
+          "enum": ["CONTENT_ADDRESSED_V1"],
           "type": "string"
         },
         "stop_policy_digest": {

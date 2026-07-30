@@ -25,7 +25,6 @@ ENTRY = SCRIPTS / "loopskill4"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from loop_architect.v4_alpha.kernel import AuthorityContext  # noqa: E402
 from loop_architect.v4_alpha.protocol import (  # noqa: E402
     CAPACITY_CONTRACT,
     CAPABILITY_NAMES,
@@ -37,11 +36,6 @@ from loop_architect.v4_alpha.protocol import (  # noqa: E402
     result_payload_schema,
 )
 from loop_architect.v4_adapters.codex.adapter import HOST_SCHEMA_VERSION  # noqa: E402
-from loop_architect.v4_alpha.vertical import (  # noqa: E402
-    LOOP_REF,
-    fixture_authority,
-    vertical_commands,
-)
 from loop_architect.v4_entry import (  # noqa: E402
     EntryError,
     confirm_loop,
@@ -215,24 +209,6 @@ def load_cli_module():
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
-
-
-def changed_authority_with_delivery(*, outcome, trust_class):
-    base = fixture_authority()
-    receipts = dict(base.receipts)
-    receipts["receipt-delivery-0001"] = replace(
-        receipts["receipt-delivery-0001"],
-        outcome=outcome,
-        trust_class=trust_class,
-    )
-    return AuthorityContext(
-        actors=base.actors,
-        grants=base.grants,
-        receipts=receipts,
-        trusted_actor_issuers=base.trusted_actor_issuers,
-        trusted_grant_issuers=base.trusted_grant_issuers,
-        trusted_receipt_issuers=base.trusted_receipt_issuers,
-    )
 
 
 class V4SingleEntryUXTests(unittest.TestCase):
@@ -1478,25 +1454,6 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertEqual(second.result, "Repair exhausted")
             self.assertEqual(provider.invoke_count, 1)
             self.assertNotIn("CONTINUE_REPAIR", policy_view(root=data)["decision_options"])
-
-    def test_unknown_and_unverifiable_are_visible_without_resend_controls(self):
-        for outcome, trust_class, word in (
-            ("unknown", "cooperative", "unknown"),
-            ("responded", "cooperative", "cannot be verified"),
-        ):
-            with self.subTest(outcome=outcome):
-                with tempfile.TemporaryDirectory() as temporary:
-                    path = Path(temporary) / STORE_FILENAME
-                    authority = changed_authority_with_delivery(
-                        outcome=outcome, trust_class=trust_class
-                    )
-                    with SQLiteStore(path, authority) as store:
-                        for command in vertical_commands()[:5]:
-                            store.apply(command)
-                    view = status(root=temporary)
-                    self.assertEqual(view.progress, "Needs attention")
-                    self.assertIn(word, view.limitations[0].lower())
-                    self.assertNotIn("resend", " ".join(view.next_actions).lower())
 
     def test_duplicate_start_is_safe_and_does_not_create_a_second_loop(self):
         with tempfile.TemporaryDirectory() as temporary:

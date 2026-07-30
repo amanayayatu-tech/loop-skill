@@ -489,82 +489,85 @@ def _create_loop(
     mode = command.semantic_payload.get("execution_mode")
     max_revisions = command.semantic_payload.get("max_roadmap_revisions")
     storage_mode = command.semantic_payload.get("storage_mode")
-    content_mode = storage_mode == CONTENT_STORAGE_MODE
+    if storage_mode != CONTENT_STORAGE_MODE:
+        raise ProtocolRejection(
+            "INVALID_COMMAND",
+            "v4.1 CreateLoop requires CONTENT_ADDRESSED_V1 storage",
+        )
     common_invalid = (
         not isinstance(objectives, (list, tuple))
-        or not 1 <= len(objectives) <= (1 if content_mode else 16)
+        or len(objectives) != 1
         or not all(isinstance(item, str) and item.strip() for item in objectives)
         or len({item.strip() for item in objectives}) != len(objectives)
         or objectives[0].strip() != objective.strip()
         or mode not in {"STANDARD", "ADAPTIVE"}
         or isinstance(max_revisions, bool)
         or not isinstance(max_revisions, int)
-        or not 1 <= max_revisions <= (17 if content_mode else 16)
+        or not 1 <= max_revisions <= 17
         or (mode == "STANDARD" and max_revisions != 1)
     )
     if common_invalid:
         raise ProtocolRejection("INVALID_COMMAND", "invalid confirmed Goal plan")
-    if content_mode:
-        goal_count = command.semantic_payload.get("goal_count")
-        active_index = command.semantic_payload.get("active_index")
-        plan_revision = command.semantic_payload.get("plan_revision")
-        goal_id = command.semantic_payload.get("goal_id")
-        slice_digest = command.semantic_payload.get("goal_slice_digest")
-        ordered_ids = command.semantic_payload.get("ordered_goal_ids")
-        ordered_digests = command.semantic_payload.get(
-            "ordered_goal_slice_digests"
-        )
-        plan_identity = command.semantic_payload.get("plan_digest")
-        index_identity = command.semantic_payload.get("plan_index_digest")
-        authority_digest = command.semantic_payload.get("authority_digest")
-        workspace_binding = command.semantic_payload.get("workspace_binding")
-        max_host_invocations = command.semantic_payload.get(
-            "max_host_invocations"
-        )
-        wall_clock_seconds = command.semantic_payload.get("wall_clock_seconds")
-        max_cost_minor_units = command.semantic_payload.get(
-            "max_cost_minor_units"
-        )
-        stop_policy_digest = command.semantic_payload.get("stop_policy_digest")
-        if (
-            isinstance(goal_count, bool)
-            or not isinstance(goal_count, int)
-            or not 1 <= goal_count <= 32
-            or active_index != 0
-            or plan_revision != 0
-            or not isinstance(goal_id, str)
-            or not isinstance(slice_digest, str)
-            or not isinstance(ordered_ids, (list, tuple))
-            or not isinstance(ordered_digests, (list, tuple))
-            or len(ordered_ids) != goal_count
-            or len(ordered_digests) != goal_count
-            or len(set(ordered_ids)) != goal_count
-            or goal_id != ordered_ids[0]
-            or slice_digest != ordered_digests[0]
-            or any(
-                not isinstance(value, str) or len(value) != 64
-                for value in (
-                    plan_identity,
-                    index_identity,
-                    authority_digest,
-                    workspace_binding,
-                    *ordered_digests,
-                    stop_policy_digest,
-                )
+    goal_count = command.semantic_payload.get("goal_count")
+    active_index = command.semantic_payload.get("active_index")
+    plan_revision = command.semantic_payload.get("plan_revision")
+    goal_id = command.semantic_payload.get("goal_id")
+    slice_digest = command.semantic_payload.get("goal_slice_digest")
+    ordered_ids = command.semantic_payload.get("ordered_goal_ids")
+    ordered_digests = command.semantic_payload.get(
+        "ordered_goal_slice_digests"
+    )
+    plan_identity = command.semantic_payload.get("plan_digest")
+    index_identity = command.semantic_payload.get("plan_index_digest")
+    authority_digest = command.semantic_payload.get("authority_digest")
+    workspace_binding = command.semantic_payload.get("workspace_binding")
+    max_host_invocations = command.semantic_payload.get(
+        "max_host_invocations"
+    )
+    wall_clock_seconds = command.semantic_payload.get("wall_clock_seconds")
+    max_cost_minor_units = command.semantic_payload.get(
+        "max_cost_minor_units"
+    )
+    stop_policy_digest = command.semantic_payload.get("stop_policy_digest")
+    if (
+        isinstance(goal_count, bool)
+        or not isinstance(goal_count, int)
+        or not 1 <= goal_count <= 32
+        or active_index != 0
+        or plan_revision != 0
+        or not isinstance(goal_id, str)
+        or not isinstance(slice_digest, str)
+        or not isinstance(ordered_ids, (list, tuple))
+        or not isinstance(ordered_digests, (list, tuple))
+        or len(ordered_ids) != goal_count
+        or len(ordered_digests) != goal_count
+        or len(set(ordered_ids)) != goal_count
+        or goal_id != ordered_ids[0]
+        or slice_digest != ordered_digests[0]
+        or any(
+            not isinstance(value, str) or len(value) != 64
+            for value in (
+                plan_identity,
+                index_identity,
+                authority_digest,
+                workspace_binding,
+                *ordered_digests,
+                stop_policy_digest,
             )
-            or isinstance(max_host_invocations, bool)
-            or not isinstance(max_host_invocations, int)
-            or max_host_invocations < goal_count
-            or isinstance(wall_clock_seconds, bool)
-            or not isinstance(wall_clock_seconds, int)
-            or wall_clock_seconds < 1
-            or isinstance(max_cost_minor_units, bool)
-            or not isinstance(max_cost_minor_units, int)
-            or max_cost_minor_units < 0
-            or command.semantic_payload.get("capacity_contract_version")
-            != "loopskill-capacity-v1"
-        ):
-            raise ProtocolRejection("INVALID_COMMAND", "content plan identity drift")
+        )
+        or isinstance(max_host_invocations, bool)
+        or not isinstance(max_host_invocations, int)
+        or max_host_invocations < goal_count
+        or isinstance(wall_clock_seconds, bool)
+        or not isinstance(wall_clock_seconds, int)
+        or wall_clock_seconds < 1
+        or isinstance(max_cost_minor_units, bool)
+        or not isinstance(max_cost_minor_units, int)
+        or max_cost_minor_units < 0
+        or command.semantic_payload.get("capacity_contract_version")
+        != "loopskill-capacity-v1"
+    ):
+        raise ProtocolRejection("INVALID_COMMAND", "content plan identity drift")
     objective_digest = domain_digest("loopskill-goal-objective-v1\n", objective)
     state = {
         "artifacts": {},
@@ -594,165 +597,68 @@ def _create_loop(
         _event("GoalActivated", goal_ref=goal_ref),
     ]
     response = {"goal_ref": goal_ref, "loop_ref": loop_ref}
-    if content_mode:
-        assert isinstance(goal_id, str)
-        assert isinstance(slice_digest, str)
-        assert isinstance(plan_identity, str)
-        chain = goal_chain(loop_ref, plan_identity, goal_id, slice_digest)
-        expected = {
-            "new_attempt_ref": chain["attempt_ref"],
-            "new_external_effect_ref": chain["external_effect_ref"],
-            "new_goal_ref": chain["goal_ref"],
-            "new_host_resource_ref": chain["host_resource_ref"],
-            "provider_idempotency_key": chain["provider_key"],
-        }
-        if any(
-            command.machine_bindings["allocate_refs"].get(name) != value
-            for name, value in expected.items()
-        ) or command.machine_bindings["resolved_refs"].get(
-            "target_ref"
-        ) != chain["provider_target"]:
-            raise ProtocolRejection(
-                "INVALID_COMMAND", "current Goal derivation mismatch"
-            )
-        state["goals"][goal_ref].update(
-            {
-                "chain_refs": chain,
-                "depends_on": None,
-                "goal_id": goal_id,
-                "goal_slice_digest": slice_digest,
-                "objective": objective.strip(),
-                "order": 0,
-            }
+    assert isinstance(goal_id, str)
+    assert isinstance(slice_digest, str)
+    assert isinstance(plan_identity, str)
+    chain = goal_chain(loop_ref, plan_identity, goal_id, slice_digest)
+    expected = {
+        "new_attempt_ref": chain["attempt_ref"],
+        "new_external_effect_ref": chain["external_effect_ref"],
+        "new_goal_ref": chain["goal_ref"],
+        "new_host_resource_ref": chain["host_resource_ref"],
+        "provider_idempotency_key": chain["provider_key"],
+    }
+    if any(
+        command.machine_bindings["allocate_refs"].get(name) != value
+        for name, value in expected.items()
+    ) or command.machine_bindings["resolved_refs"].get(
+        "target_ref"
+    ) != chain["provider_target"]:
+        raise ProtocolRejection(
+            "INVALID_COMMAND", "current Goal derivation mismatch"
         )
-        state["goal_plan"] = {
-            "active_goal_ref": goal_ref,
-            "active_index": 0,
-            "authority_digest": authority_digest,
-            "budget": {
-                "max_cost_minor_units": max_cost_minor_units,
-                "max_host_invocations": max_host_invocations,
-                "wall_clock_seconds": wall_clock_seconds,
-            },
-            "capacity_contract_version": command.semantic_payload[
-                "capacity_contract_version"
-            ],
-            "goal_count": goal_count,
-            "max_roadmap_revisions": max_revisions,
-            "mode": mode,
-            "ordered_goal_ids": list(ordered_ids),
-            "ordered_goal_slice_digests": list(ordered_digests),
-            "plan_digest": plan_identity,
-            "plan_index_digest": index_identity,
-            "revision": plan_revision,
-            "storage_mode": CONTENT_STORAGE_MODE,
-            "stop_policy_digest": stop_policy_digest,
-            "workspace_binding": workspace_binding,
+    state["goals"][goal_ref].update(
+        {
+            "chain_refs": chain,
+            "depends_on": None,
+            "goal_id": goal_id,
+            "goal_slice_digest": slice_digest,
+            "objective": objective.strip(),
+            "order": 0,
         }
-        events.append(
-            _event(
-                "GoalPlanRegistered",
-                mode=mode,
-                plan_digest=plan_identity,
-                plan_index_digest=index_identity,
-            )
+    )
+    state["goal_plan"] = {
+        "active_goal_ref": goal_ref,
+        "active_index": 0,
+        "authority_digest": authority_digest,
+        "budget": {
+            "max_cost_minor_units": max_cost_minor_units,
+            "max_host_invocations": max_host_invocations,
+            "wall_clock_seconds": wall_clock_seconds,
+        },
+        "capacity_contract_version": command.semantic_payload[
+            "capacity_contract_version"
+        ],
+        "goal_count": goal_count,
+        "max_roadmap_revisions": max_revisions,
+        "mode": mode,
+        "ordered_goal_ids": list(ordered_ids),
+        "ordered_goal_slice_digests": list(ordered_digests),
+        "plan_digest": plan_identity,
+        "plan_index_digest": index_identity,
+        "revision": plan_revision,
+        "storage_mode": CONTENT_STORAGE_MODE,
+        "stop_policy_digest": stop_policy_digest,
+        "workspace_binding": workspace_binding,
+    }
+    events.append(
+        _event(
+            "GoalPlanRegistered",
+            mode=mode,
+            plan_digest=plan_identity,
+            plan_index_digest=index_identity,
         )
-    elif len(objectives) > 1:
-        chain_names = {
-            "artifact_ref": "ArtifactRef",
-            "attempt_ref": "AttemptRef",
-            "external_effect_ref": "ExternalEffectRef",
-            "goal_ref": "GoalRef",
-            "host_resource_ref": "HostResourceRef",
-            "provider_key": None,
-            "provider_target": None,
-            "report_ref": "ReportRef",
-            "result_ref": "ResultRef",
-            "review_ref": "ReviewRef",
-        }
-        chains: list[dict[str, str]] = []
-        for index in range(len(objectives)):
-            chain = {
-                name: command.machine_bindings["allocate_refs"].get(
-                    f"goal_chain_{index:03d}_{name}", ""
-                )
-                for name in chain_names
-            }
-            if not all(chain.values()):
-                raise ProtocolRejection("INVALID_COMMAND", "Goal chain allocation drift")
-            for name, kind in chain_names.items():
-                if kind is not None and _kind_for_ref(chain[name]) != kind:
-                    raise ProtocolRejection("WRONG_REFERENCE_KIND", chain[name])
-            chains.append(chain)
-        if chains[0]["goal_ref"] != goal_ref or any(
-            chains[0][key] != command.machine_bindings["allocate_refs"].get(binding)
-            for key, binding in {
-                "attempt_ref": "new_attempt_ref",
-                "external_effect_ref": "new_external_effect_ref",
-                "host_resource_ref": "new_host_resource_ref",
-                "provider_key": "provider_idempotency_key",
-            }.items()
-        ):
-            raise ProtocolRejection("INVALID_COMMAND", "primary Goal chain drift")
-        for name, kind in chain_names.items():
-            if kind is not None and len({chain[name] for chain in chains}) != len(chains):
-                raise ProtocolRejection("IDEMPOTENCY_CONFLICT", f"duplicate {name}")
-        ordered = []
-        previous = None
-        for index, (item, chain) in enumerate(zip(objectives, chains)):
-            current_ref = chain["goal_ref"]
-            record = state["goals"].get(current_ref)
-            if index == 0:
-                assert record is not None
-                record.update(
-                    {
-                        "chain_refs": chain,
-                        "depends_on": None,
-                        "objective": item.strip(),
-                        "order": 0,
-                    }
-                )
-            else:
-                if current_ref in state["goals"]:
-                    raise ProtocolRejection("FOREIGN_REFERENCE", current_ref)
-                state["goals"][current_ref] = {
-                    "chain_refs": chain,
-                    "depends_on": previous,
-                    "objective": item.strip(),
-                    "objective_digest": domain_digest(
-                        "loopskill-goal-objective-v1\n", item.strip()
-                    ),
-                    "order": index,
-                    "revision": 1,
-                    "state": "PENDING",
-                }
-                events.append(_event("GoalRegistered", goal_ref=current_ref))
-            ordered.append(current_ref)
-            previous = current_ref
-        envelope = {
-            "max_roadmap_revisions": max_revisions,
-            "mode": mode,
-            "objectives": [item.strip() for item in objectives],
-        }
-        envelope_digest = domain_digest("loopskill-goal-envelope-v1\n", envelope)
-        plan_digest = domain_digest("loopskill-goal-plan-v1\n", envelope)
-        state["goal_plan"] = {
-            "active_goal_ref": goal_ref,
-            "envelope_digest": envelope_digest,
-            "max_roadmap_revisions": max_revisions,
-            "mode": mode,
-            "ordered_goal_refs": ordered,
-            "plan_digest": plan_digest,
-            "revision": 1,
-        }
-        events.append(
-            _event(
-                "GoalPlanRegistered",
-                envelope_digest=envelope_digest,
-                mode=mode,
-                plan_digest=plan_digest,
-            )
-        )
+    )
     startup_allocate = {
         "new_attempt_ref",
         "new_external_effect_ref",
@@ -839,51 +745,31 @@ def _create_loop(
             )
         ):
             raise ProtocolRejection("INVALID_COMMAND", "empty startup effect identity")
-        if content_mode:
-            provider_digest = resolved.get("provider_request_digest")
-            if not isinstance(provider_digest, str) or len(provider_digest) != 64:
-                raise ProtocolRejection(
-                    "INVALID_COMMAND", "provider request digest is absent"
-                )
-            provider_request = {
-                "active_index": 0,
-                "artifact_digest": resolved.get(
-                    "artifact_baseline_blob_digest", "UNBOUND"
-                ),
-                "goal_id": command.semantic_payload["goal_id"],
-                "goal_slice_digest": command.semantic_payload[
-                    "goal_slice_digest"
-                ],
-                "plan_digest": command.semantic_payload["plan_digest"],
-                "plan_index_digest": command.semantic_payload[
-                    "plan_index_digest"
-                ],
-                "prior_disposition": "",
-                "storage_mode": CONTENT_STORAGE_MODE,
-                "target_ref": target_ref,
-                "workspace_binding": command.semantic_payload[
-                    "workspace_binding"
-                ],
-            }
-        else:
-            provider_request = {
-                "acceptance_criteria": list(
-                    command.semantic_payload["acceptance_criteria"]
-                ),
-                "authorization_boundaries": list(
-                    command.semantic_payload["authorization_boundaries"]
-                ),
-                "budget": command.semantic_payload["budget"],
-                "execution_mode": command.semantic_payload["execution_mode"],
-                "external_actions": list(command.semantic_payload["external_actions"]),
-                "goal": objective,
-                "stop_conditions": list(command.semantic_payload["stop_conditions"]),
-                "target_ref": target_ref,
-                "write_scope": list(command.semantic_payload["write_scope"]),
-            }
-            provider_digest = domain_digest(
-                "loopskill-provider-request-v1\n", provider_request
+        provider_digest = resolved.get("provider_request_digest")
+        if not isinstance(provider_digest, str) or len(provider_digest) != 64:
+            raise ProtocolRejection(
+                "INVALID_COMMAND", "provider request digest is absent"
             )
+        provider_request = {
+            "active_index": 0,
+            "artifact_digest": resolved.get(
+                "artifact_baseline_blob_digest", "UNBOUND"
+            ),
+            "goal_id": command.semantic_payload["goal_id"],
+            "goal_slice_digest": command.semantic_payload[
+                "goal_slice_digest"
+            ],
+            "plan_digest": command.semantic_payload["plan_digest"],
+            "plan_index_digest": command.semantic_payload[
+                "plan_index_digest"
+            ],
+            "prior_disposition": "",
+            "storage_mode": CONTENT_STORAGE_MODE,
+            "target_ref": target_ref,
+            "workspace_binding": command.semantic_payload[
+                "workspace_binding"
+            ],
+        }
         state["external_effects"] = {
             external_effect_ref: {
                 "action": action,
@@ -901,11 +787,7 @@ def _create_loop(
                     else {}
                 ),
                 "attempt_ref": attempt_ref,
-                **(
-                    {"goal_ref": goal_ref}
-                    if content_mode or len(objectives) > 1
-                    else {}
-                ),
+                "goal_ref": goal_ref,
                 "host_resource_ref": host_resource_ref,
                 "revision": 1,
                 "state": "ATTEMPT_COMMITTED",

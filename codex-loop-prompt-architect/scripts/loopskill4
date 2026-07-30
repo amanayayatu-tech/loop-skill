@@ -10,7 +10,6 @@ import os
 import stat
 import sys
 from collections.abc import Mapping
-from contextlib import contextmanager
 from pathlib import Path
 
 from loop_architect.v4_alpha.generated_protocol import CAPACITY_CONTRACT
@@ -220,13 +219,22 @@ def _canonical_plan_input(document, raw: bytes) -> LoopIntakeInput:
     )
 
 
-def _stat_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
     return (
         metadata.st_dev,
         metadata.st_ino,
         metadata.st_mode,
         metadata.st_size,
         metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        stat.S_IFMT(metadata.st_mode),
     )
 
 
@@ -264,130 +272,71 @@ def _admission_components(path: Path) -> tuple[str, tuple[str, ...]]:
     return anchor, components
 
 
-@contextmanager
-def _admission_parent(path: Path):
-    anchor, components = _admission_components(path)
-    flags_directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+def _admit_source(
+    path: Path,
+    *,
+    maximum: int | None,
+) -> tuple[str, bytes | tuple[str, ...] | None] | None:
     descriptors: list[int] = []
-    mappings: list[tuple[int, str, tuple[int, int, int, int, int]]] = []
+    mappings: list[tuple[int, str, tuple[int, int, int]]] = []
+    leaf_observed = False
+    flags_directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    flags_file = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
     try:
+        anchor, components = _admission_components(path)
         directory_fd = os.open(anchor, flags_directory)
         descriptors.append(directory_fd)
         for component in components[:-1]:
             child_fd = os.open(component, flags_directory, dir_fd=directory_fd)
             mappings.append(
-                (directory_fd, component, _stat_identity(os.fstat(child_fd)))
+                (directory_fd, component, _directory_identity(os.fstat(child_fd)))
             )
             descriptors.append(child_fd)
             directory_fd = child_fd
-        yield directory_fd, components[-1], mappings
-    finally:
-        for descriptor in reversed(descriptors):
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
 
+        leaf = components[-1]
+        before = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+        leaf_observed = True
+        if stat.S_ISLNK(before.st_mode):
+            raise OSError("source path is a symlink")
 
-def _assert_stable_mappings(
-    mappings: list[tuple[int, str, tuple[int, int, int, int, int]]],
-) -> None:
-    for parent_fd, component, expected in mappings:
-        current = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
-        if stat.S_ISLNK(current.st_mode) or _stat_identity(current) != expected:
-            raise OSError("source path component changed")
-
-
-def _admitted_path_kind(path: Path) -> str | None:
-    try:
-        with _admission_parent(path) as (directory_fd, leaf, mappings):
-            metadata = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
-            if stat.S_ISLNK(metadata.st_mode):
-                raise OSError("source path is a symlink")
-            _assert_stable_mappings(mappings)
-            if stat.S_ISREG(metadata.st_mode):
-                return "file"
-            if stat.S_ISDIR(metadata.st_mode):
-                return "directory"
-            return "other"
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise EntryError(
-            "PATH_CONFINEMENT_VIOLATION",
-            "The requested source is unavailable, unsafe, or changed while reading.",
-            "Provide one stable regular UTF-8 file without symlinks.",
-        ) from exc
-
-
-def _admitted_directory_entries(path: Path) -> tuple[str, ...]:
-    descriptors: list[int] = []
-    flags_directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    try:
-        with _admission_parent(path) as (directory_fd, leaf, mappings):
-            before = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
-            if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
-                raise OSError("source directory changed")
+        limit_exceeded = False
+        if stat.S_ISDIR(before.st_mode):
             descriptor = os.open(leaf, flags_directory, dir_fd=directory_fd)
             descriptors.append(descriptor)
             opened = os.fstat(descriptor)
-            if _stat_identity(opened) != _stat_identity(before):
+            directory_identity = _directory_identity(opened)
+            if directory_identity != _directory_identity(before):
                 raise OSError("source directory identity changed")
             entries = tuple(sorted(os.listdir(descriptor)))
             after = os.fstat(descriptor)
-            if _stat_identity(after) != _stat_identity(opened):
+            if _directory_identity(after) != directory_identity:
                 raise OSError("source directory changed while inspecting")
-            _assert_stable_mappings(
-                [*mappings, (directory_fd, leaf, _stat_identity(opened))]
+            mappings.append((directory_fd, leaf, directory_identity))
+            result: tuple[str, bytes | tuple[str, ...] | None] = (
+                "directory",
+                entries,
             )
-            return entries
-    except OSError as exc:
-        raise EntryError(
-            "PATH_CONFINEMENT_VIOLATION",
-            "The requested source is unavailable, unsafe, or changed while reading.",
-            "Provide one stable regular UTF-8 file without symlinks.",
-        ) from exc
-    finally:
-        for descriptor in reversed(descriptors):
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-
-
-def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
-    flags_file = os.O_RDONLY | os.O_NOFOLLOW
-    descriptors = []
-    try:
-        with _admission_parent(path) as (directory_fd, leaf, mappings):
-            before = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
-            if before.st_size > maximum:
-                raise EntryError(
-                    "RESOURCE_LIMIT_EXCEEDED",
-                    "The input file exceeds the supported byte boundary.",
-                    f"Reduce the input to at most {maximum} UTF-8 bytes.",
-                )
-            if stat.S_ISLNK(before.st_mode):
-                raise EntryError(
-                    "PATH_CONFINEMENT_VIOLATION",
-                    "The source path is a symlink.",
-                    "Provide one stable regular file.",
-                )
-            if not stat.S_ISREG(before.st_mode):
-                raise EntryError(
-                    "USER_INPUT_INVALID",
-                    "The source is not a regular file.",
-                    "Provide one regular UTF-8 JSON, text, or Markdown file.",
-                )
+        elif not stat.S_ISREG(before.st_mode):
+            current = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+            if _file_identity(current) != _file_identity(before):
+                raise OSError("source identity changed")
+            result = ("other", None)
+        elif maximum is None:
+            current = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+            if _file_identity(current) != _file_identity(before):
+                raise OSError("source identity changed")
+            result = ("file", None)
+        else:
             descriptor = os.open(leaf, flags_file, dir_fd=directory_fd)
             descriptors.append(descriptor)
             opened = os.fstat(descriptor)
-            before_identity = _stat_identity(before)
-            opened_identity = _stat_identity(opened)
-            if opened_identity != before_identity:
+            opened_identity = _file_identity(opened)
+            if opened_identity != _file_identity(before):
                 raise OSError("source identity changed")
+            limit_exceeded = opened.st_size > maximum
             chunks = []
-            remaining = maximum + 1
+            remaining = 0 if limit_exceeded else maximum + 1
             while remaining:
                 chunk = os.read(descriptor, min(65_536, remaining))
                 if not chunk:
@@ -396,12 +345,36 @@ def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
                 remaining -= len(chunk)
             raw = b"".join(chunks)
             after = os.fstat(descriptor)
-            if len(raw) > maximum or _stat_identity(after) != opened_identity:
+            if _file_identity(after) != opened_identity:
                 raise OSError("source changed while reading")
-            _assert_stable_mappings(
-                [*mappings, (directory_fd, leaf, opened_identity)]
+            current = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+            if _file_identity(current) != opened_identity:
+                raise OSError("source mapping changed while reading")
+            limit_exceeded = limit_exceeded or len(raw) > maximum
+            result = ("file", raw)
+
+        for parent_fd, component, expected in mappings:
+            current = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                stat.S_ISLNK(current.st_mode)
+                or _directory_identity(current) != expected
+            ):
+                raise OSError("source path component changed")
+        if limit_exceeded:
+            raise EntryError(
+                "RESOURCE_LIMIT_EXCEEDED",
+                "The input file exceeds the supported byte boundary.",
+                f"Reduce the input to at most {maximum} UTF-8 bytes.",
             )
-            return raw
+        return result
+    except FileNotFoundError as exc:
+        if not leaf_observed:
+            return None
+        raise EntryError(
+            "PATH_CONFINEMENT_VIOLATION",
+            "The requested source is unavailable, unsafe, or changed while reading.",
+            "Provide one stable regular UTF-8 file without symlinks.",
+        ) from exc
     except EntryError:
         raise
     except OSError as exc:
@@ -416,46 +389,59 @@ def _read_admitted_file(path: Path, *, maximum: int) -> bytes:
                 os.close(descriptor)
             except OSError:
                 pass
-def read_intake_input(value: str) -> LoopIntakeInput:
-    path = Path(value)
-    if value == "-":
-        raw = sys.stdin.buffer.read(int(CAPACITY_CONTRACT["expert_json_max_bytes"]) + 1)
-        return _decode_intake_bytes(raw, json_document=True)
-    path_kind = _admitted_path_kind(path)
-    if path_kind is not None:
-        if path_kind == "directory" and is_legacy_input(
-            path,
-            path_kind="directory",
-            directory_entries=_admitted_directory_entries(path),
-        ):
-            raise EntryError(*unsupported_legacy_error())
-        suffix = path.suffix.lower()
-        if suffix not in {".json", ".md", ".txt"}:
-            raise EntryError(
-                "USER_INPUT_INVALID",
-                "The source type is unsupported.",
-                "Use one UTF-8 JSON, text, or Markdown file.",
-            )
-        if not path.is_absolute():
-            if ".." in path.parts:
-                raise EntryError(
-                    "PATH_CONFINEMENT_VIOLATION",
-                    "The relative source is outside the bound workspace.",
-                    "Choose one regular file inside the current workspace.",
-                )
-            workspace = Path.cwd().resolve(strict=True)
-            path = workspace / path
-        maximum = int(
+
+
+def _source_maximum(path: Path) -> int | None:
+    suffix = path.suffix.lower()
+    return (
+        int(
             CAPACITY_CONTRACT[
                 "expert_json_max_bytes"
                 if suffix == ".json"
                 else "source_text_max_bytes"
             ]
         )
-        raw = _read_admitted_file(path, maximum=maximum)
+        if suffix in {".json", ".md", ".txt"}
+        else None
+    )
+
+
+def _decode_admitted_input(
+    value: str,
+    path: Path,
+    maximum: int | None,
+    admitted: tuple[str, bytes | tuple[str, ...] | None] | None,
+) -> LoopIntakeInput:
+    if admitted is not None:
+        path_kind, payload = admitted
+        if path_kind == "directory" and is_legacy_input(
+            path,
+            path_kind="directory",
+            directory_entries=payload,
+        ):
+            raise EntryError(*unsupported_legacy_error())
+        if path_kind != "file":
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The source is not a regular file.",
+                "Provide one regular UTF-8 JSON, text, or Markdown file.",
+            )
+        if maximum is None:
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The source type is unsupported.",
+                "Use one UTF-8 JSON, text, or Markdown file.",
+            )
+        if not isinstance(payload, bytes):
+            raise EntryError(
+                "PATH_CONFINEMENT_VIOLATION",
+                "The requested source could not be read safely.",
+                "Provide one stable regular UTF-8 file without symlinks.",
+            )
+        raw = payload
         if is_legacy_input(path, raw, path_kind="file"):
             raise EntryError(*unsupported_legacy_error())
-        if suffix == ".json":
+        if path.suffix.lower() == ".json":
             return _decode_intake_bytes(raw, json_document=True)
         return _intake_value(
             {"goal": _decode_text(raw)},
@@ -480,6 +466,16 @@ def read_intake_input(value: str) -> LoopIntakeInput:
     return _intake_value(
         {"goal": value}, source_kind="literal_text", source_raw=raw
     )
+
+
+def read_intake_input(value: str) -> LoopIntakeInput:
+    if value == "-":
+        raw = sys.stdin.buffer.read(int(CAPACITY_CONTRACT["expert_json_max_bytes"]) + 1)
+        return _decode_intake_bytes(raw, json_document=True)
+    path = Path(value)
+    maximum = _source_maximum(path)
+    admitted = _admit_source(path, maximum=maximum)
+    return _decode_admitted_input(value, path, maximum, admitted)
 
 
 def _decode_intake_bytes(raw: bytes, *, json_document: bool) -> LoopIntakeInput:
@@ -637,12 +633,22 @@ def _doctor_view(*, include_diagnostics: bool):
 
 
 def _interactive_start(args):
-    subject = Path(args.goal_file_or_prepared_directory)
-    if subject.is_dir():
-        if is_legacy_input(subject):
-            raise EntryError(*unsupported_legacy_error())
-        return _start_with_owned_provider(subject, root=args.root)
-    request = read_intake_input(args.goal_file_or_prepared_directory)
+    value = args.goal_file_or_prepared_directory
+    subject = Path(value)
+    if value == "-":
+        request = read_intake_input(value)
+    else:
+        maximum = _source_maximum(subject)
+        admitted = _admit_source(subject, maximum=maximum)
+        if admitted is not None and admitted[0] == "directory":
+            if is_legacy_input(
+                subject,
+                path_kind="directory",
+                directory_entries=admitted[1],
+            ):
+                raise EntryError(*unsupported_legacy_error())
+            return _start_with_owned_provider(subject, root=args.root)
+        request = _decode_admitted_input(value, subject, maximum, admitted)
     report = intake_report_loop(request)
     print_intake_report(report)
     disposition = report["1 最终判定"]["disposition"]

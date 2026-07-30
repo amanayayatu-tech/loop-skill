@@ -284,12 +284,9 @@ def _command(
         machine_bindings=bindings,
         semantic_payload=payload,
     )
-    if step == 1:
-        return command
-    # This frozen alpha trace creates its historical eager snapshot in step 1.
-    # Every continuation envelope is pinned to the v4.0 protocol so a missing
-    # storage_mode can never be upgraded into the current reducer by changing
-    # only the envelope version.
+    # Historical EAGER envelopes are data for the exact v4.0 persisted
+    # fixture.  The current Store may continue them only after that fixture has
+    # supplied a persisted snapshot; it must never execute this CreateLoop.
     return with_command_change(
         command,
         lambda values: values.update(protocol_version="4.0.0"),
@@ -474,19 +471,25 @@ def vertical_commands() -> tuple[CommandEnvelope, ...]:
     )
 
 
-def run_vertical():
-    """Run the fixed trace in a fresh in-memory store and return its evidence."""
-    from .store import InMemoryStore
+def run_vertical(store):
+    """Continue an externally loaded exact v4.0 persisted checkpoint."""
 
-    store = InMemoryStore(fixture_authority())
-    results = tuple(store.apply(command) for command in vertical_commands())
+    snapshot = store.snapshot(LOOP_REF)
+    if (
+        snapshot is None
+        or snapshot.get("loop_revision") != 5
+        or snapshot_digest(snapshot)
+        != "420f29093904f23eff6f73db01981774fd528107bb5e56cad7741aa06f07cb7a"
+    ):
+        raise RuntimeError("EAGER_V4_0_CHECKPOINT_REQUIRED")
+    results = tuple(store.apply(command) for command in vertical_commands()[5:])
     return store.snapshot(LOOP_REF), tuple(store.events(LOOP_REF)), results
 
 
-def verified_vertical_evidence() -> dict[str, Any]:
+def verified_vertical_evidence(store) -> dict[str, Any]:
     """Return identity-free evidence only after the frozen trace self-validates."""
 
-    snapshot, events, results = run_vertical()
+    snapshot, events, results = run_vertical(store)
     encoded = canonical_bytes(snapshot)
     event_types = tuple(event["type"] for event in events)
     digest = snapshot_digest(snapshot)
@@ -495,7 +498,7 @@ def verified_vertical_evidence() -> dict[str, Any]:
         or len(encoded) != EXPECTED_SNAPSHOT_BYTES
         or digest != EXPECTED_SNAPSHOT_DIGEST
         or event_types != EXPECTED_EVENT_TYPES
-        or len(results) != 11
+        or len(results) != 6
         or len(events) != 18
     ):
         raise RuntimeError("VERTICAL_FIXTURE_DRIFT")
@@ -521,7 +524,7 @@ def verified_vertical_evidence() -> dict[str, Any]:
         "event_count": len(events),
         "final_event_from_typed_fixture": event_types[-1],
         "finalization": finalization,
-        "operation_count": len(results),
+        "operation_count": snapshot["loop_revision"],
         "result": result,
         "review": review,
         "snapshot_bytes": len(encoded),

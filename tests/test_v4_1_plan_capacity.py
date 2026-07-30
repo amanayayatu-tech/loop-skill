@@ -35,6 +35,7 @@ from loop_architect.v4_alpha.generated_protocol import (  # noqa: E402
 )
 from loop_architect.v4_alpha.kernel import (  # noqa: E402
     AuthorityContext,
+    _create_loop,
     validate_authority,
 )
 from loop_architect.v4_alpha.plan_codec import (  # noqa: E402
@@ -88,6 +89,12 @@ from loop_architect.v4_persistence.sqlite_store import SQLiteStore  # noqa: E402
 from loop_architect.v4_alpha.vertical import (  # noqa: E402
     fixture_authority,
     vertical_commands,
+)
+from tests.v4_eager_fixture import (  # noqa: E402
+    eager_authority,
+    eager_continuation_commands,
+    eager_fixture,
+    seed_eager_memory,
 )
 
 
@@ -1702,52 +1709,12 @@ except ProtocolRejection as exc:
             self.assertEqual(provider.invoke_count, 1)
 
     def test_closed_eager_v4_0_store_status_export_and_continuation(self):
-        fixture_path = (
-            ROOT / "tests" / "fixtures" / "v4_0_eager" / "eager-store.json"
-        )
-        fixture_raw = fixture_path.read_bytes()
-        self.assertEqual(
-            hashlib.sha256(fixture_raw).hexdigest(),
-            "a7bd3d03529de67e0e0a336f1004ce436a544bd2405e26c867ab8d4031845a09",
-        )
-        fixture = json.loads(fixture_raw.decode("utf-8"))
-        self.assertEqual(
-            fixture["baseline_commit"],
-            "f7b62cb2fd9bd6ab4b038a8384bced4b7e74cbd9",
-        )
-        self.assertEqual(
-            fixture["baseline_tag_object"],
-            "eb42b904b6973cab5ad0ed586aa4137a8c20943b",
-        )
+        fixture = eager_fixture()
         self.assertEqual(
             fixture["schema"], "loopskill-v4.0.0-eager-store-fixture-v1"
         )
-        commands = [
-            CommandEnvelope(**value) for value in fixture["continuation_commands"]
-        ]
-        authority_value = fixture["authority"]
-        grants = {}
-        for value in authority_value["grants"]:
-            value = dict(value)
-            value["allowed_commands"] = tuple(value["allowed_commands"])
-            value["subject_kinds"] = tuple(value["subject_kinds"])
-            value["exact_subjects"] = tuple(value["exact_subjects"])
-            grant = AuthorityGrant(**value)
-            grants[grant.grant_ref] = grant
-        legacy_authority = AuthorityContext(
-            actors={
-                value["actor_ref"]: ActorRef(**value)
-                for value in authority_value["actors"]
-            },
-            grants=grants,
-            receipts={
-                value["receipt_ref"]: Receipt(**value)
-                for value in authority_value["receipts"]
-            },
-            trusted_actor_issuers=authority_value["trusted_actor_issuers"],
-            trusted_grant_issuers=authority_value["trusted_grant_issuers"],
-            trusted_receipt_issuers=authority_value["trusted_receipt_issuers"],
-        )
+        commands = eager_continuation_commands()
+        legacy_authority = eager_authority()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = root / STORE_FILENAME
@@ -1802,9 +1769,7 @@ except ProtocolRejection as exc:
                     store.snapshot(fixture["loop_ref"]), before_crossgrade
                 )
             memory = InMemoryStore(legacy_authority)
-            memory._snapshots[fixture["loop_ref"]] = json.loads(
-                json.dumps(snapshot)
-            )
+            seed_eager_memory(memory)
             before_memory_crossgrade = memory.snapshot(fixture["loop_ref"])
             with self.assertRaises(ProtocolRejection) as rejected_memory_crossgrade:
                 memory.apply(crossgrade)
@@ -1815,7 +1780,7 @@ except ProtocolRejection as exc:
             self.assertEqual(
                 memory.snapshot(fixture["loop_ref"]), before_memory_crossgrade
             )
-            self.assertEqual(memory.commit_count, 0)
+            self.assertEqual(memory.commit_count, 5)
             self.assertEqual(schema_rows(), schema_before)
             view = status(root=root)
             self.assertNotEqual(view.progress, "Finished")
@@ -1837,6 +1802,139 @@ except ProtocolRejection as exc:
                 self.assertNotIn("storage_mode", terminal.get("goal_plan", {}))
             self.assertEqual(status(root=root).result, "SUCCEEDED")
             self.assertEqual(schema_rows(), schema_before)
+
+    def test_new_loop_requires_content_mode_and_persisted_mode_is_tri_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            prepared = confirm_loop(
+                prepare_loop(
+                    canonical_request(1, mode="STANDARD"),
+                    root / "prepared",
+                    clock=lambda: NOW,
+                    token_factory=lambda: "d" * 24,
+                    workspace_root=workspace,
+                ).directory,
+                confirmed=True,
+                clock=lambda: NOW,
+            )
+            loop_ref, authority, create = _machine_bootstrap(
+                prepared,
+                now=NOW,
+                receipt_trust_roots={},
+            )
+            variants = {
+                "missing": lambda payload: payload.pop("storage_mode", None),
+                "explicit-eager": lambda payload: payload.update(
+                    storage_mode="EAGER_V4_0"
+                ),
+            }
+            eager_create = with_command_change(
+                vertical_commands()[0],
+                lambda values: values.update(protocol_version=PROTOCOL_VERSION),
+            )
+            eager_authority = fixture_authority()
+            eager_loop_ref = str(eager_create.subject["loop_ref"])
+            for label, mutate in variants.items():
+                def update(values, mutate=mutate):
+                    payload = dict(values["semantic_payload"])
+                    mutate(payload)
+                    values["semantic_payload"] = payload
+
+                invalid = with_command_change(eager_create, update)
+                with self.subTest(store="kernel", case=label):
+                    with self.assertRaises(ProtocolRejection) as rejected:
+                        _create_loop(None, invalid, eager_authority)
+                    self.assertEqual(rejected.exception.code, "INVALID_COMMAND")
+                with self.subTest(store="memory", case=label):
+                    store = InMemoryStore(eager_authority)
+                    with self.assertRaises(ProtocolRejection) as rejected:
+                        store.apply(invalid)
+                    self.assertEqual(rejected.exception.code, "INVALID_COMMAND")
+                    self.assertIsNone(store.snapshot(eager_loop_ref))
+                    self.assertEqual(store.commit_count, 0)
+                with self.subTest(store="sqlite", case=label):
+                    path = root / f"{label}.sqlite3"
+                    with SQLiteStore(path, eager_authority) as store:
+                        with self.assertRaises(ProtocolRejection) as rejected:
+                            store.apply(invalid)
+                        self.assertEqual(rejected.exception.code, "INVALID_COMMAND")
+                        self.assertIsNone(store.snapshot(eager_loop_ref))
+                        self.assertEqual(store.commit_count, 0)
+
+            for label in ("EAGER_V4_0", "UNKNOWN_V9"):
+                with self.subTest(store="memory", persisted=label):
+                    store = InMemoryStore(authority)
+                    store.put_blob(canonical_bytes(prepared.plan))
+                    store.put_blob(canonical_bytes(prepared.plan_index))
+                    store.apply(create)
+                    snapshot = store.snapshot(loop_ref)
+                    pause = _machine_command(
+                        store,
+                        snapshot,
+                        command_type="PauseLoop",
+                        operation_label=f"corrupt-{label.lower()}",
+                        subject_kind="LoopRef",
+                        subject_ref=loop_ref,
+                        expected_subject_revisions={},
+                        machine_bindings={
+                            "allocate_refs": {},
+                            "receipt_refs": {},
+                            "resolved_refs": {},
+                        },
+                        semantic_payload={"reason": "mode corruption test"},
+                        clock=lambda: NOW,
+                    )
+                    snapshot["goal_plan"]["storage_mode"] = label
+                    store._snapshots[loop_ref] = snapshot
+                    with self.assertRaises(ProtocolRejection) as rejected:
+                        store.apply(pause)
+                    self.assertEqual(
+                        rejected.exception.code, "INTERNAL_INVARIANT_VIOLATION"
+                    )
+                    self.assertEqual(store.commit_count, 1)
+                with self.subTest(store="sqlite", persisted=label):
+                    path = root / f"persisted-{label}.sqlite3"
+                    with SQLiteStore(path, authority) as store:
+                        store.put_blob(canonical_bytes(prepared.plan))
+                        store.put_blob(canonical_bytes(prepared.plan_index))
+                        store.apply(create)
+                        snapshot = store.snapshot(loop_ref)
+                        pause = _machine_command(
+                            store,
+                            snapshot,
+                            command_type="PauseLoop",
+                            operation_label=f"sqlite-corrupt-{label.lower()}",
+                            subject_kind="LoopRef",
+                            subject_ref=loop_ref,
+                            expected_subject_revisions={},
+                            machine_bindings={
+                                "allocate_refs": {},
+                                "receipt_refs": {},
+                                "resolved_refs": {},
+                            },
+                            semantic_payload={"reason": "mode corruption test"},
+                            clock=lambda: NOW,
+                        )
+                        snapshot["goal_plan"]["storage_mode"] = label
+                        store._connection.execute(
+                            "UPDATE loops SET snapshot_json = ?, snapshot_digest = ? "
+                            "WHERE loop_ref = ?",
+                            (
+                                canonical_bytes(snapshot),
+                                snapshot_digest(snapshot),
+                                loop_ref,
+                            ),
+                        )
+                        store._connection.commit()
+                        with self.assertRaises(ProtocolRejection) as rejected:
+                            store.apply(pause)
+                        self.assertEqual(
+                            rejected.exception.code,
+                            "INTERNAL_INVARIANT_VIOLATION",
+                        )
+                        self.assertEqual(store.commit_count, 1)
 
     def test_source_admission_and_session_only_confirmation(self):
         cli = load_cli()
@@ -2012,6 +2110,97 @@ except ProtocolRejection as exc:
                 if moved_parent.exists():
                     moved_parent.rename(race_parent)
 
+            ordinary_parent = root / "ordinary-race-parent"
+            ordinary_parent.mkdir()
+            ordinary_source = ordinary_parent / "source.md"
+            ordinary_source.write_text("AUTHORIZED", encoding="utf-8")
+            moved_ordinary_parent = root / "ordinary-race-parent-bound"
+            ordinary_replaced = False
+
+            def replace_parent_with_directory(name, flags, mode=0o777, *, dir_fd=None):
+                nonlocal ordinary_replaced
+                descriptor = original_open(name, flags, mode, dir_fd=dir_fd)
+                if name == ordinary_parent.name and not ordinary_replaced:
+                    ordinary_replaced = True
+                    ordinary_parent.rename(moved_ordinary_parent)
+                    ordinary_parent.mkdir()
+                    (ordinary_parent / ordinary_source.name).write_text(
+                        "UNAUTHORIZED", encoding="utf-8"
+                    )
+                return descriptor
+
+            try:
+                with mock.patch.object(
+                    cli.os, "open", side_effect=replace_parent_with_directory
+                ):
+                    with self.assertRaises(Exception) as directory_replacement:
+                        cli.read_intake_input(str(ordinary_source))
+                self.assertEqual(
+                    directory_replacement.exception.code,
+                    "PATH_CONFINEMENT_VIOLATION",
+                )
+            finally:
+                if ordinary_parent.exists():
+                    for child in ordinary_parent.iterdir():
+                        child.unlink()
+                    ordinary_parent.rmdir()
+                if moved_ordinary_parent.exists():
+                    moved_ordinary_parent.rename(ordinary_parent)
+
+            inode_parent = root / "inode-parent"
+            inode_parent.mkdir()
+            inode_source = inode_parent / "source.md"
+            inode_source.write_text("AUTHORIZED", encoding="utf-8")
+            moved_inode = inode_parent / "source-bound.md"
+            inode_replaced = False
+
+            def replace_leaf_after_open(name, flags, mode=0o777, *, dir_fd=None):
+                nonlocal inode_replaced
+                descriptor = original_open(name, flags, mode, dir_fd=dir_fd)
+                if name == inode_source.name and not inode_replaced:
+                    inode_replaced = True
+                    inode_source.rename(moved_inode)
+                    inode_source.write_text("UNAUTHORIZED", encoding="utf-8")
+                return descriptor
+
+            try:
+                with mock.patch.object(
+                    cli.os, "open", side_effect=replace_leaf_after_open
+                ):
+                    with self.assertRaises(Exception) as inode_replacement:
+                        cli.read_intake_input(str(inode_source))
+                self.assertEqual(
+                    inode_replacement.exception.code,
+                    "PATH_CONFINEMENT_VIOLATION",
+                )
+            finally:
+                if inode_source.exists():
+                    inode_source.unlink()
+                if moved_inode.exists():
+                    moved_inode.rename(inode_source)
+
+            sibling_parent = root / "sibling-churn-parent"
+            sibling_parent.mkdir()
+            sibling_source = sibling_parent / "source.md"
+            sibling_source.write_text("AUTHORIZED", encoding="utf-8")
+            sibling_added = False
+
+            def add_unrelated_sibling(name, flags, mode=0o777, *, dir_fd=None):
+                nonlocal sibling_added
+                descriptor = original_open(name, flags, mode, dir_fd=dir_fd)
+                if name == sibling_parent.name and not sibling_added:
+                    sibling_added = True
+                    (sibling_parent / "unrelated.tmp").write_text(
+                        "churn", encoding="utf-8"
+                    )
+                return descriptor
+
+            with mock.patch.object(
+                cli.os, "open", side_effect=add_unrelated_sibling
+            ):
+                admitted_after_churn = cli.read_intake_input(str(sibling_source))
+            self.assertEqual(admitted_after_churn.goal, "AUTHORIZED")
+
             directory = root / "not-regular.txt"
             directory.mkdir()
             binary = root / "binary.txt"
@@ -2092,6 +2281,128 @@ except ProtocolRejection as exc:
                     for path in prepared.directory.iterdir()
                 )
             )
+
+    def test_interactive_start_uses_one_file_admission(self):
+        cli = load_cli()
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            root = Path(temporary)
+            source = root / "requirements.md"
+            source.write_text("bounded goal", encoding="utf-8")
+            args = mock.Mock(
+                goal_file_or_prepared_directory=str(source),
+                prepared_output=root / "unused-prepared",
+                root=root / "unused-data",
+            )
+            report = {
+                "1 最终判定": {
+                    "disposition": "DIRECT_TASK_RECOMMENDED",
+                    "reason": "single admission regression",
+                }
+            }
+            with mock.patch.object(
+                cli, "_admit_source", wraps=cli._admit_source
+            ) as single_admission, mock.patch.object(
+                cli,
+                "read_intake_input",
+                side_effect=AssertionError("start reopened an admitted file"),
+            ), mock.patch.object(
+                cli, "intake_report_loop", return_value=report
+            ), mock.patch.object(
+                cli, "print_intake_report"
+            ):
+                with self.assertRaises(Exception) as direct:
+                    cli._interactive_start(args)
+            self.assertEqual(direct.exception.code, "USER_DIRECT_TASK_RECOMMENDED")
+            single_admission.assert_called_once()
+
+    def test_source_admission_rejects_parent_component_syntax_before_open(self):
+        cli = load_cli()
+        with mock.patch.object(
+            cli.os, "open", side_effect=AssertionError("invalid path reached open")
+        ) as opened:
+            with self.assertRaises(Exception) as rejected:
+                cli.read_intake_input("../requirements.md")
+        self.assertEqual(rejected.exception.code, "PATH_CONFINEMENT_VIOLATION")
+        opened.assert_not_called()
+
+    def test_source_admission_rejects_leaf_replacement_before_open(self):
+        cli = load_cli()
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            root = Path(temporary)
+            source = root / "source.md"
+            source.write_text("AUTHORIZED", encoding="utf-8")
+            original = root / "source-original.md"
+            original_stat = os.stat
+            replaced = False
+
+            def replace_after_classification(name, *args, **kwargs):
+                nonlocal replaced
+                metadata = original_stat(name, *args, **kwargs)
+                if name == source.name and kwargs.get("dir_fd") is not None and not replaced:
+                    replaced = True
+                    source.rename(original)
+                    source.write_text("UNAUTHORIZED", encoding="utf-8")
+                return metadata
+
+            try:
+                with mock.patch.object(
+                    cli.os, "stat", side_effect=replace_after_classification
+                ):
+                    with self.assertRaises(Exception) as rejected:
+                        cli.read_intake_input(str(source))
+                self.assertEqual(
+                    rejected.exception.code, "PATH_CONFINEMENT_VIOLATION"
+                )
+            finally:
+                if source.exists():
+                    source.unlink()
+                if original.exists():
+                    original.rename(source)
+
+    def test_source_admission_rejects_same_inode_mutation_during_read(self):
+        cli = load_cli()
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            source = Path(temporary) / "source.md"
+            source.write_text("AUTHORIZED", encoding="utf-8")
+            original_read = os.read
+            mutated = False
+
+            def mutate_after_read(descriptor, count):
+                nonlocal mutated
+                chunk = original_read(descriptor, count)
+                if chunk and not mutated:
+                    mutated = True
+                    source.write_text("TAMPERED!!", encoding="utf-8")
+                return chunk
+
+            with mock.patch.object(cli.os, "read", side_effect=mutate_after_read):
+                with self.assertRaises(Exception) as rejected:
+                    cli.read_intake_input(str(source))
+            self.assertEqual(rejected.exception.code, "PATH_CONFINEMENT_VIOLATION")
+
+    def test_eager_create_cannot_execute_without_a_persisted_checkpoint(self):
+        authority = eager_authority()
+        create = vertical_commands()[0]
+        stores = [("memory", InMemoryStore(authority))]
+        with tempfile.TemporaryDirectory() as temporary:
+            stores.append(
+                (
+                    "sqlite",
+                    SQLiteStore(Path(temporary) / "empty-eager.sqlite3", authority),
+                )
+            )
+            try:
+                for label, store in stores:
+                    with self.subTest(store=label):
+                        with self.assertRaises(ProtocolRejection) as rejected:
+                            store.apply(create)
+                        self.assertEqual(
+                            rejected.exception.code, "UNSUPPORTED_PROTOCOL_VERSION"
+                        )
+                        self.assertIsNone(store.snapshot(str(create.subject["loop_ref"])))
+                        self.assertEqual(store.commit_count, 0)
+            finally:
+                stores[-1][1].close()
 
     def test_conversation_questions_retention_and_no_durable_draft(self):
         with tempfile.TemporaryDirectory() as temporary:

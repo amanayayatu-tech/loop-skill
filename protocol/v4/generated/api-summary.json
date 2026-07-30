@@ -185,10 +185,8 @@
         },
         "storage_mode": {
           "enum": [
-            "EAGER_V4_0",
             "CONTENT_ADDRESSED_V1"
           ],
-          "required": false,
           "type": "string"
         },
         "wall_clock_seconds": {
@@ -436,7 +434,7 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "manifest_sha256": "89053bfb45c3eb46b0f4194cd14be8b8295c932e6e0d09e411ffc23d8161a437",
+  "manifest_sha256": "5a46d9c4d31d2964821165a66a07ca67ac4eee53cd58976438ae3eb19ba9f2c2",
   "protocol_version": "4.1.0",
   "reference_kinds": [
     "LoopRef",

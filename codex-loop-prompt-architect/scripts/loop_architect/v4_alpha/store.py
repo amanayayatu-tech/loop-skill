@@ -11,14 +11,15 @@ from .kernel import AuthorityContext, reduce_command
 from .protocol import (
     ApplyResult,
     CommandEnvelope,
-    CONTENT_STORAGE_MODE,
+    EAGER_STORAGE_MODE,
     InjectedCrash,
     ProtocolRejection,
-    command_digest,
-    snapshot_digest,
     canonical_bytes,
-    validate_command,
+    command_digest,
+    persisted_storage_mode,
     raw_domain_digest,
+    snapshot_digest,
+    validate_command,
 )
 
 
@@ -215,12 +216,8 @@ class InMemoryStore:
 
         try:
             current = self._snapshots.get(loop_ref)
-            eager_v4_0 = (
-                current is not None
-                and current.get("goal_plan", {}).get("storage_mode")
-                != CONTENT_STORAGE_MODE
-            )
-            if eager_v4_0:
+            storage_mode = persisted_storage_mode(current)
+            if storage_mode == EAGER_STORAGE_MODE:
                 from loop_architect.v4_eager_v40 import reduce_eager_command
 
                 reducer = reduce_eager_command

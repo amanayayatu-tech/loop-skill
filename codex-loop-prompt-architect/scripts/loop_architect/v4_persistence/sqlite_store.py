@@ -26,6 +26,7 @@ from loop_architect.v4_alpha.protocol import (
     AuthorityGrantV2,
     CommandEnvelope,
     EffectAttempt,
+    EAGER_STORAGE_MODE,
     Receipt,
     InjectedCrash,
     ProtocolRejection,
@@ -33,6 +34,7 @@ from loop_architect.v4_alpha.protocol import (
     authority_grant_digest,
     command_digest,
     domain_digest,
+    persisted_storage_mode,
     raw_domain_digest,
     snapshot_digest,
     validate_command,
@@ -590,12 +592,8 @@ class SQLiteStore:
                 raise ProtocolRejection(outcome["code"], outcome["detail"])
 
             current = self._snapshot_in_transaction(loop_ref)
-            eager_v4_0 = (
-                current is not None
-                and current.get("goal_plan", {}).get("storage_mode")
-                != CONTENT_STORAGE_MODE
-            )
-            if eager_v4_0:
+            storage_mode = persisted_storage_mode(current)
+            if storage_mode == EAGER_STORAGE_MODE:
                 from loop_architect.v4_eager_v40 import reduce_eager_command
 
                 reducer = reduce_eager_command

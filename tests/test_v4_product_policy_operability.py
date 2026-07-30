@@ -48,6 +48,7 @@ from loop_architect.v4_policy import (  # noqa: E402
     role_requirements,
     validate_manifest_mode,
 )
+from tests.v4_eager_fixture import seed_eager_memory  # noqa: E402
 
 
 def _authority_with_commands(*commands: str, cooperative_close: bool = False):
@@ -218,11 +219,8 @@ class V4ProductPolicyTests(unittest.TestCase):
 
     def test_every_vertical_nonterminal_snapshot_has_one_next_action_class(self):
         store = InMemoryStore(fixture_authority())
+        seed_eager_memory(store)
         expected = (
-            ("COMMAND", "BindHostResource"),
-            ("COMMAND", "PrepareRoute"),
-            ("COMMAND", "BeginEffectDelivery"),
-            ("EXTERNAL_WAIT", "RecordEffectObservation"),
             ("COMMAND", "StageResult"),
             ("COMMAND", "AcknowledgeResult"),
             ("POLICY_DECISION", "RecordReview"),
@@ -231,7 +229,9 @@ class V4ProductPolicyTests(unittest.TestCase):
             ("EXTERNAL_WAIT", "CloseExecution"),
             ("TERMINAL", None),
         )
-        for command, expected_action in zip(vertical_commands(), expected):
+        action = next_action(store.snapshot(LOOP_REF))
+        self.assertEqual((action.kind, action.command_type), expected[0])
+        for command, expected_action in zip(vertical_commands()[5:], expected[1:]):
             store.apply(command)
             action = next_action(store.snapshot(LOOP_REF))
             self.assertEqual((action.kind, action.command_type), expected_action)
@@ -239,14 +239,14 @@ class V4ProductPolicyTests(unittest.TestCase):
     def test_pause_resume_are_cas_mutations_without_raw_reason(self):
         authority = _authority_with_commands("PauseLoop", "ResumeLoop")
         store = InMemoryStore(authority)
-        store.apply(vertical_commands()[0])
+        seed_eager_memory(store)
         pause = _legacy_build_command(
             operation_id="op-pause-0001",
             command_type="PauseLoop",
             actor_ref="actor-author-0001",
             authority_grant_ref="grant-author-0001",
             subject={"loop_ref": LOOP_REF, "subject_kind": "LoopRef", "subject_ref": LOOP_REF},
-            expected_loop_revision=1,
+            expected_loop_revision=5,
             expected_subject_revisions={"execution": 1},
             issued_at="2026-07-27T00:00:20Z",
             machine_bindings={"allocate_refs": {}, "receipt_refs": {}, "resolved_refs": {}},
@@ -262,7 +262,7 @@ class V4ProductPolicyTests(unittest.TestCase):
             actor_ref="actor-author-0001",
             authority_grant_ref="grant-author-0001",
             subject={"loop_ref": LOOP_REF, "subject_kind": "LoopRef", "subject_ref": LOOP_REF},
-            expected_loop_revision=2,
+            expected_loop_revision=6,
             expected_subject_revisions={"execution": 2},
             issued_at="2026-07-27T00:00:21Z",
             machine_bindings={"allocate_refs": {}, "receipt_refs": {}, "resolved_refs": {}},
@@ -273,12 +273,13 @@ class V4ProductPolicyTests(unittest.TestCase):
 
     def test_uncertain_repair_paused_and_cooperative_states_are_not_dead(self):
         store = InMemoryStore(fixture_authority())
-        snapshots = []
-        for command in vertical_commands():
+        seed_eager_memory(store)
+        snapshots = [store.snapshot(LOOP_REF)]
+        for command in vertical_commands()[5:]:
             store.apply(command)
             snapshots.append(store.snapshot(LOOP_REF))
 
-        unknown = copy.deepcopy(snapshots[3])
+        unknown = copy.deepcopy(snapshots[0])
         unknown["attempts"]["attempt-0001"]["state"] = "UNKNOWN"
         unknown["deliveries"]["delivery-0001"]["state"] = "UNKNOWN"
         self.assertEqual(next_action(unknown).kind, "EXTERNAL_WAIT")
@@ -292,7 +293,7 @@ class V4ProductPolicyTests(unittest.TestCase):
         paused["execution"]["state"] = "PAUSED"
         self.assertEqual(next_action(paused).kind, "USER_DECISION")
 
-        repair = copy.deepcopy(snapshots[7])
+        repair = copy.deepcopy(snapshots[3])
         repair["reviews"]["review-0001"]["state"] = "REPAIR"
         self.assertEqual(next_action(repair).kind, "POLICY_DECISION")
 
@@ -312,11 +313,12 @@ class V4ProductPolicyTests(unittest.TestCase):
             "StrengthenClosureAssurance", cooperative_close=True
         )
         store = InMemoryStore(authority)
+        seed_eager_memory(store)
         commands = list(vertical_commands())
         commands[9] = _rebuild(
             commands[9], semantic_payload={"disposition": "LIMITATION"}
         )
-        for command in commands:
+        for command in commands[5:]:
             store.apply(command)
         snapshot = store.snapshot(LOOP_REF)
         self.assertEqual(snapshot["closure_assurance"]["strength"], "COOPERATIVE")
@@ -345,15 +347,15 @@ class V4ProductPolicyTests(unittest.TestCase):
 class V4OperabilityProjectionTests(unittest.TestCase):
     def _store_with_rejection(self):
         store = InMemoryStore(fixture_authority())
-        store.apply(vertical_commands()[0])
-        stale = _rebuild(vertical_commands()[1])
+        seed_eager_memory(store)
+        stale = _rebuild(vertical_commands()[5])
         stale = _legacy_build_command(
             operation_id="op-stale-audit",
             command_type=stale.command_type,
             actor_ref=stale.actor_ref,
             authority_grant_ref=stale.authority_grant_ref,
             subject=stale.subject,
-            expected_loop_revision=0,
+            expected_loop_revision=4,
             expected_subject_revisions=stale.expected_subject_revisions,
             issued_at=stale.issued_at,
             machine_bindings=stale.machine_bindings,
@@ -370,7 +372,7 @@ class V4OperabilityProjectionTests(unittest.TestCase):
         archive = archive_manifest(before)
         self.assertEqual(audit, audit_index(before))
         self.assertEqual(archive, archive_manifest(before))
-        self.assertEqual(len(audit["entries"]), 2)
+        self.assertEqual(len(audit["entries"]), 6)
         self.assertFalse(audit["runtime_authority"])
         self.assertFalse(archive["runtime_authority"])
         self.assertEqual(before, store.canonical_export())
