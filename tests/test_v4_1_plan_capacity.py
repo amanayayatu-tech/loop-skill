@@ -2955,9 +2955,11 @@ except ProtocolRejection as exc:
             source.write_text("AUTHORIZED", encoding="utf-8")
             original_read = os.read
             mutated = False
+            read_descriptors = []
 
             def mutate_after_read(descriptor, count):
                 nonlocal mutated
+                read_descriptors.append(descriptor)
                 chunk = original_read(descriptor, count)
                 if chunk and not mutated:
                     mutated = True
@@ -2968,6 +2970,8 @@ except ProtocolRejection as exc:
                 with self.assertRaises(Exception) as rejected:
                     cli.read_intake_input(str(source))
             self.assertEqual(rejected.exception.code, "PATH_CONFINEMENT_VIOLATION")
+            self.assertGreaterEqual(len(read_descriptors), 3)
+            self.assertEqual(len(set(read_descriptors)), 1)
 
     def test_eager_create_cannot_execute_without_a_persisted_checkpoint(self):
         authority = eager_authority()

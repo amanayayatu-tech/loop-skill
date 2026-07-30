@@ -325,18 +325,33 @@ def _admit_source(
         else:
             opened_identity = _file_identity(opened)
             limit_exceeded = opened.st_size > maximum
-            chunks = []
-            remaining = 0 if limit_exceeded else maximum + 1
-            while remaining:
-                chunk = os.read(descriptor, min(65_536, remaining))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                remaining -= len(chunk)
-            raw = b"".join(chunks)
-            after = os.fstat(descriptor)
-            if _file_identity(after) != opened_identity:
-                raise OSError("source changed while reading")
+            reads: list[bytes] = []
+            observations: list[os.stat_result] = []
+            if not limit_exceeded:
+                for pass_index in range(2):
+                    if pass_index:
+                        os.lseek(descriptor, 0, os.SEEK_SET)
+                    chunks = []
+                    remaining = maximum + 1
+                    while remaining:
+                        chunk = os.read(descriptor, min(65_536, remaining))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    reads.append(b"".join(chunks))
+                    observations.append(os.fstat(descriptor))
+                if (
+                    any(
+                        _file_identity(observation) != opened_identity
+                        for observation in observations
+                    )
+                    or reads[0] != reads[1]
+                ):
+                    raise OSError("source changed while reading")
+                raw = reads[0]
+            else:
+                raw = b""
             current = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
             if _file_identity(current) != opened_identity:
                 raise OSError("source mapping changed while reading")
