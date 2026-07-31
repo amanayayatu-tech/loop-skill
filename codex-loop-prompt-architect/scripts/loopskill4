@@ -635,6 +635,15 @@ def _doctor_view(*, include_diagnostics: bool):
     )
 
 
+def _effect_workspace_root() -> Path:
+    """Return the cwd only when v4 may safely bind effects to it."""
+
+    root = Path.cwd()
+    if is_legacy_input(root):
+        raise EntryError(*unsupported_legacy_error())
+    return root
+
+
 def _interactive_start(args):
     value = args.goal_file_or_prepared_directory
     subject = Path(value)
@@ -668,7 +677,7 @@ def _interactive_start(args):
             "Answer the listed intake questions; no loop was created.",
         )
     output = args.prepared_output or Path(str(args.root) + ".prepared")
-    prepared = prepare_loop(request, output, workspace_root=Path.cwd())
+    prepared = prepare_loop(request, output, workspace_root=_effect_workspace_root())
     print_boundary(prepared)
     if not sys.stdin.isatty():
         raise EntryError(
@@ -694,7 +703,12 @@ def _close_provider(provider) -> None:
 
 
 def _finish_owned_provider_task(
-    value, provider, *, root: Path, synchronize_after_wait: bool = True
+    value,
+    provider,
+    *,
+    root: Path,
+    workspace_root: Path,
+    synchronize_after_wait: bool = True,
 ):
     """Finish this process's one created task without a daemon or resend."""
 
@@ -725,7 +739,7 @@ def _finish_owned_provider_task(
             return sync_loop(
                 root=root,
                 host_provider=provider,
-                workspace_root=Path.cwd(),
+                workspace_root=workspace_root,
             )
         return value
     except (HostUnavailable, ValueError) as exc:
@@ -737,29 +751,40 @@ def _finish_owned_provider_task(
 
 
 def _start_with_owned_provider(prepared, *, root: Path):
-    provider = CodexExecProvider(Path.cwd())
+    workspace_root = _effect_workspace_root()
+    provider = CodexExecProvider(workspace_root)
     try:
         value = start_loop(
             prepared,
             root=root,
             host_provider=provider,
-            workspace_root=Path.cwd(),
+            workspace_root=workspace_root,
         )
-        return _finish_owned_provider_task(value, provider, root=root)
+        return _finish_owned_provider_task(
+            value,
+            provider,
+            root=root,
+            workspace_root=workspace_root,
+        )
     finally:
         _close_provider(provider)
 
 
 def _refresh_with_owned_provider(*, root: Path):
-    provider = CodexExecProvider(Path.cwd())
+    workspace_root = _effect_workspace_root()
+    provider = CodexExecProvider(workspace_root)
     try:
         value = sync_loop(
             root=root,
             host_provider=provider,
-            workspace_root=Path.cwd(),
+            workspace_root=workspace_root,
         )
         return _finish_owned_provider_task(
-            value, provider, root=root, synchronize_after_wait=False
+            value,
+            provider,
+            root=root,
+            workspace_root=workspace_root,
+            synchronize_after_wait=False,
         )
     finally:
         _close_provider(provider)
@@ -818,10 +843,11 @@ def main(argv=None) -> int:
             print_intake_report(intake_report_loop(read_intake_input(args.goal_or_file)))
             return 0
         if args.action == "prepare":
+            request = read_intake_input(args.goal_or_file)
             prepared = prepare_loop(
-                read_intake_input(args.goal_or_file),
+                request,
                 args.output,
-                workspace_root=Path.cwd(),
+                workspace_root=_effect_workspace_root(),
             )
             print_boundary(prepared)
             return 0

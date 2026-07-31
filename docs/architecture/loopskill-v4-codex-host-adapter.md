@@ -97,7 +97,7 @@ canonical `UNKNOWN` and never resends.
 
 The Provider caches the valid transcript only inside the live Provider object.
 `readback`, `read_task_result`, and lifecycle reads expose that same-process
-evidence to the existing Adapter. A new process cannot recover it, and 4.1.0
+evidence to the existing Adapter. A new process cannot recover it, and 4.1.1
 does not parse rollout files to manufacture recovery.
 
 ## Capability truth
@@ -116,8 +116,8 @@ strict directly captured terminal evidence.
 
 Codex Desktop folder-open plus exact-path project listing and project-bound
 thread creation has separately passed 23/23 historical provisioning receipts.
-That proves the Desktop route exists; it is not wired into the 4.1.0 Provider.
-Saved-project convenience and Desktop-visible task creation are not 4.1.0
+That proves the Desktop route exists; it is not wired into the 4.1.1 Provider.
+Saved-project convenience and Desktop-visible task creation are not 4.1.1
 claims.
 
 ## Predecessor transport evidence

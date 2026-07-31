@@ -1,17 +1,18 @@
 # LoopSkill 4 quickstart
 
-This document describes LoopSkill 4.1.0. See GitHub Releases for the public versions currently available.
+This document describes LoopSkill 4.1.1. See GitHub Releases for the public versions currently available.
 
 ## Install
 
 Requirements: macOS or Linux, Git, and Python 3.11–3.14. Runtime dependencies
-are standard-library only. Version 4.1.0 release validation covers all eight
+are standard-library only. Version 4.1.1 release validation covers the direct
+v3-cwd zero-write regression, the complete deterministic suite, and all eight
 Linux/macOS × Python 3.11, 3.12, 3.13, and 3.14 release-CI
-runtime/distribution lanes, real Host canaries, and independent review. The
-command below installs the published tag.
+runtime/distribution lanes. This scoped patch does not claim a new real Host
+canary. The command below installs the published tag.
 
 ```bash
-git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+git clone --branch v4.1.1 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
 bash scripts/install.sh
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
@@ -79,7 +80,7 @@ confirmed plan may contain 1–32 Goals; later Goals activate lazily through
 atomic `AdvanceGoal`. No unlimited background execution is promised.
 
 The Codex Desktop folder-open → `list_projects` → `projectId` → `create_thread`
-route has historical provisioning receipts, but it is not wired into 4.1.0. The
+route has historical provisioning receipts, but it is not wired into 4.1.1. The
 ordinary entry uses a cwd-bound foreground `codex exec` invocation and does not
 promise a Desktop-visible saved project/task.
 
@@ -114,7 +115,7 @@ See the [v4.1 compatibility matrix](compatibility-matrix-v4.1.md).
 
 Upgrade from an installed v4.0.0 by receipt-bound clean replacement, with no
 in-place overwrite or Store migration: first use that installation's own
-management uninstaller, then install v4.1.0. Real Loop data roots are outside
+management uninstaller, then install v4.1.1. Real Loop data roots are outside
 the installation and must remain unchanged.
 
 ```bash
@@ -129,6 +130,9 @@ zero writes on v3 input and links to
 [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8).
 There is no automatic migration; continue using v3.3.8 independently when old
 data is required.
+If the cwd still carries a v3 `.codex-loop` marker, 4.1.1 stops before
+PREPARE, START, or `status --refresh`; it creates no prepared artifacts, Store,
+or Host task. Switch to a new v4 workspace first.
 
 ## Uninstall
 

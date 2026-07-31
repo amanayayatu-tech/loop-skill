@@ -159,7 +159,7 @@ class V4RcDistributionTests(unittest.TestCase):
 
         receipt = json.loads(self._latest_receipt().read_text(encoding="utf-8"))
         self.assertEqual(receipt["artifact"], "loopskill4-install-receipt-v1")
-        self.assertEqual(receipt["version"], "4.1.0")
+        self.assertEqual(receipt["version"], "4.1.1")
         self.assertEqual(receipt["repo_commit"], expected_repo_commit)
         self.assertEqual(receipt["source_install_drift"], [])
         self.assertEqual(
@@ -249,7 +249,7 @@ class V4RcDistributionTests(unittest.TestCase):
         replacement = self._install()
         self.assertEqual(replacement.returncode, 0, replacement.stderr)
         current = json.loads(self._latest_receipt().read_text(encoding="utf-8"))
-        self.assertEqual(current["version"], "4.1.0")
+        self.assertEqual(current["version"], "4.1.1")
         self.assertEqual(tree_state(data_root), data_before)
         self.assertEqual((self.codex_home / "config.toml").read_bytes(), config)
         self.assertEqual(tree_bytes(self.legacy_target), legacy)

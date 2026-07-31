@@ -7,7 +7,7 @@
 [English](README.en.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> 本文档对应 LoopSkill 4.1.0；当前可用的公开版本以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
+> 本文档对应 LoopSkill 4.1.1；当前可用的公开版本以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
 
 **一句话说明要做什么，LoopSkill 帮你先锁定边界，确认后只启动一次，并用机器证据告诉你做成了什么、哪里还不确定。**
 
@@ -49,10 +49,10 @@ LoopSkill 4 是 **v4-only hard break**。它保留 v3 的安全原则，但不�
 
 先决条件：macOS 或 Linux、Git、Python 3.11–3.14，以及已经登录的官方 Codex。LoopSkill 4 runtime 只依赖 Python 标准库。
 
-以下命令安装公开发布的 `v4.1.0` tag：
+以下命令安装公开发布的 `v4.1.1` tag：
 
 ```bash
-git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+git clone --branch v4.1.1 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
 bash scripts/install.sh
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
@@ -201,6 +201,8 @@ LoopSkill 分开记录四件事：
 
 v4 遇到 v3 root、state 或 Controller Pack 时零写入，并返回 `USER_UNSUPPORTED_LEGACY_VERSION`。它不提供 importer、repair、legacy CLI alias、Pack runtime 或 v3 MCP State Gateway，也不会自动迁移。
 
+如果当前工作目录仍带有 v3 的 `.codex-loop` 标记，4.1.1 会在 `PREPARE`、`START` 或 `status --refresh` 前停止，不创建准备产物、Store 或 Host 任务。切换到新的 v4 工作目录后再运行。
+
 需要旧数据时，请继续使用独立的 [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)。
 
 <!-- parity: uninstall -->
@@ -215,10 +217,10 @@ python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py
 <!-- parity: limitations -->
 ## 当前限制与容量合同
 
-- 4.1.0 支持 1–32 个已确认 Goal；canonical plan 最大 128 KiB，明确授权的 UTF-8 text/Markdown source 最大 256 KiB。
+- 4.1.1 支持 1–32 个已确认 Goal；canonical plan 最大 128 KiB，明确授权的 UTF-8 text/Markdown source 最大 256 KiB。
 - CreateLoop 发布目标为 8 KiB / 64 members（硬上限仍为 16 KiB / 128）；materialized Host prompt 目标为 24 KiB（硬上限 32 KiB），超限不截断且在 Host 前阻断。
 - 新 Loop 只写 `CONTENT_ADDRESSED_V1`；`EAGER_V4_0` 仅支持 status、export 和原 reducer continuation，不迁移、不改写、不双写。
-- 4.1.0 只支持 Codex Host Adapter；Kernel host-neutral 不代表已经支持 multi-host。
+- 4.1.1 只支持 Codex Host Adapter；Kernel host-neutral 不代表已经支持 multi-host。
 - 默认路径是一个 cwd-bound 前台 Codex Host 任务；不承诺 Desktop-visible saved project/task。
 - 单次前台观察窗口最长 300 秒；不承诺无限长任务、自动 resume 或跨进程 readback。
 - 没有 provider idempotency 或跨系统 exactly-once 承诺。
@@ -247,7 +249,7 @@ CI 还运行 Linux/macOS × Python 3.11–3.14 安装卸载矩阵、协议漂移
 ## 发布、安全与历史版本
 
 - [v4 发布流程](docs/RELEASING.md)
-- [4.1.0 发布说明](docs/v4/release-notes-v4.1.md)
+- [4.1.1 发布说明](docs/v4/release-notes-v4.1.md)
 - [4.0.0 historical release notes](docs/v4/release-notes.md)
 - [v4.1 compatibility matrix](docs/v4/compatibility-matrix-v4.1.md)
 - [Security policy](SECURITY.md)

@@ -7,8 +7,8 @@ exposure, unresolved deterministic gates, or identity drift.
 
 ## Release identity
 
-- version file: `VERSION` = `4.1.0`;
-- release tag: annotated `v4.1.0`;
+- version file: `VERSION` = `4.1.1`;
+- release tag: annotated `v4.1.1`;
 - public repository: `amanayayatu-tech/loop-skill`;
 - default branch: `main`;
 - historical fallback: [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8);
@@ -33,13 +33,13 @@ commit that changes exactly these seven candidate/support surfaces together:
    stable notice;
 4. `docs/v4/quickstart.en.md`: candidate notice to the matching English stable
    notice;
-5. `SECURITY.md`: future support wording to “LoopSkill 4.1.0 is the currently
+5. `SECURITY.md`: future support wording to “LoopSkill 4.1.1 is the currently
    supported public line.”;
-6. `CHANGELOG.md`: the final `4.1.0` release date and release-link identity.
+6. `CHANGELOG.md`: the final `4.1.1` release date and release-link identity.
 7. `docs/v4/release-notes-v4.1.md`: candidate-only status to the reviewed
    public release notes, including the direct v3.3.8 fallback and claim limits.
 
-`VERSION` is already `4.1.0` and remains a separately validated version truth;
+`VERSION` is already `4.1.1` and remains a separately validated version truth;
 it is not an eighth candidate-to-stable text switch. Before that authorized
 commit, English copy must say “awaiting author release authorization” and must
 not claim public support. The truth switch creates a new candidate SHA, so all
@@ -190,6 +190,25 @@ allowlisted, non-installed, and non-importable by production. Old raw P8 logs
 are predecessor evidence, not release artifacts.
 
 ## Gate 2: exact-SHA local foreground Codex exec canary
+
+### v4.1.1 scoped boundary-hotfix exception
+
+Do not run this Gate for v4.1.1. The author explicitly accepts the direct
+v3-cwd zero-write subprocess regression, the complete deterministic Gate 1,
+isolated distribution validation, and exact-SHA pull-request/main/tag CI in its
+place. The changed branch fails before Provider construction, while the normal
+non-v3 Provider route is unchanged; the disposable non-v3 routes below cannot
+exercise the repaired branch. No real Host invocation or canary PASS is claimed
+for v4.1.1.
+
+Preserve the superseded development incident as terminal predecessor evidence.
+Its two semantic Goals passed, its
+shared Host config integrity check failed, no receipt was emitted, and its
+8-Goal route never started. Do not rerun it, diagnose the ambient config writer
+as part of this release, relax the validator, or relabel the failure.
+
+The remaining Gate 2 procedure applies to releases that do not carry this
+explicit version-scoped exception.
 
 After freezing the candidate SHA, run exactly two new non-scored, non-research,
 disposable routes through the public source-tree entry from that exact clean
@@ -426,7 +445,7 @@ terminal stream window is not a task budget. On timeout it must preserve
 
 The Codex Desktop folder-open → `list_projects` → `projectId` → `create_thread`
 route has separate historical provisioning receipts, but it is not wired into
-the 4.1.0 Provider. The gate validates only the cwd-bound foreground exec
+the 4.1.1 Provider. The gate validates only the cwd-bound foreground exec
 route and makes no Desktop-visible saved project/task claim.
 
 If the outcome is `UNKNOWN`/`UNVERIFIABLE`, retain it honestly. Do not retry the
@@ -508,15 +527,15 @@ test -z "$(git status --porcelain=v1 --untracked-files=all)"
 test "$(git rev-parse HEAD)" = "$CANDIDATE"
 git rev-parse origin/main >/dev/null
 git merge-base --is-ancestor origin/main HEAD
-test -z "$(git tag --list v4.1.0)"
-REMOTE_TAG_READBACK="$(git ls-remote --tags origin refs/tags/v4.1.0 'refs/tags/v4.1.0^{}')"
+test -z "$(git tag --list v4.1.1)"
+REMOTE_TAG_READBACK="$(git ls-remote --tags origin refs/tags/v4.1.1 'refs/tags/v4.1.1^{}')"
 test -z "$REMOTE_TAG_READBACK"
 set +e
-GH_RELEASE_READBACK="$(gh api --include repos/amanayayatu-tech/loop-skill/releases/tags/v4.1.0 2>&1)"
+GH_RELEASE_READBACK="$(gh api --include repos/amanayayatu-tech/loop-skill/releases/tags/v4.1.1 2>&1)"
 GH_RELEASE_STATUS=$?
 set -e
 if [[ "$GH_RELEASE_STATUS" -eq 0 ]]; then
-  echo "v4.1.0 GitHub Release already exists" >&2
+  echo "v4.1.1 GitHub Release already exists" >&2
   exit 1
 fi
 if ! grep -Eq '^HTTP/[^ ]+ 404 ' <<<"$GH_RELEASE_READBACK"; then
@@ -525,7 +544,7 @@ if ! grep -Eq '^HTTP/[^ ]+ 404 ' <<<"$GH_RELEASE_READBACK"; then
 fi
 ```
 
-Also read GitHub state and confirm no existing v4.1.0 Release. If `origin/main`
+Also read GitHub state and confirm no existing v4.1.1 Release. If `origin/main`
 drifted, integrate it non-destructively and rerun all affected release gates.
 Verify the intended diff, branch ancestry, secrets/private paths, large files,
 and predecessor evidence exclusion. Never force-push.
@@ -619,13 +638,13 @@ PY
    include every affected code gate in that rerun rather than inheriting feature-
    branch evidence.
 6. Confirm every v4 main CI job is green and all version/docs/release-note
-   surfaces say 4.1.0 consistently.
+   surfaces say 4.1.1 consistently.
 
 ## Gate 6: tag and GitHub Release
 
-Create annotated `v4.1.0` on the verified merged-main SHA and push only that
+Create annotated `v4.1.1` on the verified merged-main SHA and push only that
 tag. Wait for all v4 tag CI jobs to pass. Then create public GitHub Release
-4.1.0 from the exact tag, mark it latest and non-prerelease, and use
+4.1.1 from the exact tag, mark it latest and non-prerelease, and use
 `docs/v4/release-notes-v4.1.md` after final truth review.
 
 Release notes must prominently state:

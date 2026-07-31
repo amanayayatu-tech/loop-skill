@@ -1,11 +1,18 @@
-# LoopSkill 4.1.0 release notes
+# LoopSkill 4.1.1 release notes
 
-Status: LoopSkill 4.1.0 is the current public v4 release.
+Status: LoopSkill 4.1.1 is the current public v4 release.
 
 LoopSkill 4.1 helps turn work that can outlive one chat into a bounded process:
 state the goal, inspect the scope, confirm once, and check the result against
 machine evidence. The visible flow remains
 `INTAKE → PREPARE → CONFIRM → START`; it does not silently start a Host task.
+
+## Patch fix
+
+- When the current working directory carries a v3 `.codex-loop` marker, v4.1.1
+  stops before `PREPARE`, `START`, or `status --refresh`. It creates no prepared
+  artifacts, Store, or Host task, and returns the existing
+  `USER_UNSUPPORTED_LEGACY_VERSION` boundary.
 
 ## User-visible changes
 
@@ -42,6 +49,10 @@ require an App restart, start a daemon, restore v3 runtime, promise cross-system
 exactly-once, support multiple Hosts, or claim patch-success or proven
 long-horizon superiority.
 
-Release validation used deterministic matrices plus a fresh 2-Goal and, only
-after it passed, a fresh 8-Goal real Host canary on the same exact clean
-candidate. Those 10 invocations are product validation, not research evidence.
+The original v4.1.0 release used deterministic matrices plus fresh 2-Goal and
+8-Goal real Host canaries. For this scoped v4.1.1 boundary hotfix, the author
+explicitly replaced a new Host canary with the direct v3-cwd zero-write
+regression, the complete deterministic suite, isolated distribution tests, and
+exact-SHA pull-request/main/tag CI. A superseded candidate's two semantic Goals
+passed before its shared Host config integrity check failed; that failure is
+preserved, is not a v4.1.1 release receipt, and no fresh Host canary is claimed.

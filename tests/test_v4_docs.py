@@ -37,6 +37,13 @@ class V4DocsTests(unittest.TestCase):
         self.assertEqual(smoke["status"], "PASS")
         self.assertEqual(smoke["command_count"], 5)
         self.assertEqual(smoke["external_effect_count"], 0)
+        releasing = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
+        release_notes = (ROOT / "docs/v4/release-notes-v4.1.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("v4.1.1 scoped boundary-hotfix exception", releasing)
+        self.assertIn("Do not run this Gate for v4.1.1", releasing)
+        self.assertIn("no fresh Host canary is claimed", release_notes)
 
     def test_section_command_link_and_stale_wording_drift_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -117,8 +124,8 @@ class V4DocsTests(unittest.TestCase):
                 for old, new in candidate_replacements:
                     text = text.replace(old, new)
                 text = re.sub(
-                    r"^## \[4\.1\.0\] - 20[0-9]{2}-[0-9]{2}-[0-9]{2}$",
-                    "## [4.1.0] - Unreleased",
+                    r"^## \[4\.1\.1\] - 20[0-9]{2}-[0-9]{2}-[0-9]{2}$",
+                    "## [4.1.1] - Unreleased",
                     text,
                     count=1,
                     flags=re.MULTILINE,
@@ -137,7 +144,7 @@ class V4DocsTests(unittest.TestCase):
                 docs.QUICKSTART_CANDIDATE_STATUS_EN: docs.QUICKSTART_RELEASE_STATUS_EN,
                 docs.SECURITY_CANDIDATE_STATUS: docs.SECURITY_RELEASE_STATUS,
                 docs.RELEASE_NOTES_CANDIDATE_STATUS: docs.RELEASE_NOTES_RELEASE_STATUS,
-                "## [4.1.0] - Unreleased": "## [4.1.0] - 2026-07-30",
+                "## [4.1.1] - Unreleased": "## [4.1.1] - 2026-07-31",
             }
             for relative in (
                 "README.md",

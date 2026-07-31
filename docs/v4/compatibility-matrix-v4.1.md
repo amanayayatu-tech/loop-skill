@@ -12,5 +12,5 @@
 | v3 runtime | Unsupported | Unsupported | No restored controller, heartbeat, or State Gateway |
 
 The public v4.0.0 annotated tag and its historical evidence remain unchanged.
-This matrix describes local v4.1 release-candidate behavior; it is not a release
-claim and does not authorize migration, installation, publication, or deploy.
+This matrix describes the public v4.1.1 behavior; it does not authorize
+migration, installation, publication, or deploy of any other product line.

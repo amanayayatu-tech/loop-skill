@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
+import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 from pathlib import Path
 
 
@@ -160,6 +165,77 @@ class V4LegacyBoundaryTests(unittest.TestCase):
                 self.assertEqual(tree_bytes(root), before)
             self.assertEqual(codes, [LEGACY_ERROR_CODE] * 3)
             self.assertEqual(list(root.glob("*.sqlite3")), [])
+
+    def test_v3_cwd_rejects_only_workspace_bound_effects_before_writes(self) -> None:
+        cli = load_cli_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "legacy-workspace"
+            marker_root = workspace / ".codex-loop"
+            marker_root.mkdir(parents=True)
+            marker = marker_root / "LOOP_STATE.md"
+            marker.write_text('{"schema_version":3}\n', encoding="utf-8")
+            source = workspace / "new-v4-input.json"
+            source.write_text(
+                (ROOT / "examples/v4-standard-input.json").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            prepared_input = root / "prepared-input"
+            prepared_input.mkdir()
+            prepared_output = root / "prepared-output"
+            data_root = root / "v4-data"
+            before = tree_bytes(root)
+            visible = SimpleNamespace(
+                goal="Existing v4 loop",
+                progress="Active",
+                result="Pending",
+                limitations=(),
+                next_actions=(),
+            )
+
+            def invoke(arguments):
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = cli.main(arguments)
+                return code, stdout.getvalue(), stderr.getvalue()
+
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(workspace)
+                with mock.patch.object(
+                    cli, "prepare_loop", side_effect=AssertionError("prepare reached")
+                ) as prepare, mock.patch.object(
+                    cli,
+                    "CodexExecProvider",
+                    side_effect=AssertionError("provider reached"),
+                ) as provider:
+                    for arguments in (
+                        ["prepare", str(source), "--output", str(prepared_output)],
+                        ["start", str(source), "--root", str(data_root)],
+                        ["start", str(prepared_input), "--root", str(data_root)],
+                        ["status", "--refresh", "--root", str(data_root)],
+                    ):
+                        with self.subTest(arguments=arguments):
+                            code, _, error = invoke(arguments)
+                            self.assertEqual(code, 2)
+                            self.assertIn(LEGACY_ERROR_CODE, error)
+                    prepare.assert_not_called()
+                    provider.assert_not_called()
+
+                self.assertEqual(invoke(["intake", str(source)])[0], 0)
+                with mock.patch.object(cli, "status", return_value=visible) as status:
+                    self.assertEqual(
+                        invoke(["status", "--root", str(data_root)])[0], 0
+                    )
+                    status.assert_called_once_with(root=data_root)
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertEqual(tree_bytes(root), before)
+            self.assertEqual(marker.read_bytes(), b'{"schema_version":3}\n')
+            self.assertFalse(prepared_output.exists())
+            self.assertFalse(data_root.exists())
 
     def test_production_tree_contains_no_v4_compat_package(self) -> None:
         package = SCRIPTS / "loop_architect"

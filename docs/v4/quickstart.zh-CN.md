@@ -1,15 +1,16 @@
 # LoopSkill 4 快速开始
 
-本文档对应 LoopSkill 4.1.0；当前可用的公开版本以 GitHub Releases 页面为准。
+本文档对应 LoopSkill 4.1.1；当前可用的公开版本以 GitHub Releases 页面为准。
 
 ## 安装
 
-要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。4.1.0 的
-发布验证覆盖 Linux/macOS × Python 3.11、3.12、3.13、3.14 的八个 release-CI
-runtime/distribution lane、真实 Host canary 和独立审查。以下命令安装公开发布的 tag。
+要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。4.1.1 的
+发布验证覆盖直接 v3-cwd 零写入回归、完整确定性测试，以及 Linux/macOS ×
+Python 3.11、3.12、3.13、3.14 的八个 release-CI runtime/distribution lane。
+这个窄范围补丁不声称完成新的真实 Host canary。以下命令安装公开发布的 tag。
 
 ```bash
-git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+git clone --branch v4.1.1 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
 bash scripts/install.sh
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
@@ -63,7 +64,7 @@ canonical workspace 的单条 EOF 追加，保留真实非零 changed-byte 计�
 `AdvanceGoal` 按需激活；系统不承诺后台无限长跑。
 
 Codex Desktop 的 folder-open → `list_projects` → `projectId` → `create_thread`
-路线已有历史 provisioning receipts，但 4.1.0 不接入该路线。普通入口采用
+路线已有历史 provisioning receipts，但 4.1.1 不接入该路线。普通入口采用
 cwd-bound 前台 `codex exec` invocation，不承诺 Desktop-visible saved project/task。
 
 ## 分阶段使用
@@ -93,7 +94,7 @@ cwd-bound 前台 `codex exec` invocation，不承诺 Desktop-visible saved proje
 详见 [v4.1 compatibility matrix](compatibility-matrix-v4.1.md)。
 
 从已安装的 v4.0.0 升级采用 receipt-bound 清洁替换，不做原地覆盖或 Store 迁移：先用
-现有安装自己的管理卸载器移除 runtime，再安装 v4.1.0。真实 Loop data root 不属于
+现有安装自己的管理卸载器移除 runtime，再安装 v4.1.1。真实 Loop data root 不属于
 安装目录，必须保持不变。
 
 ```bash
@@ -106,6 +107,8 @@ bash scripts/install.sh
 v4 不打开、导入、修复或运行 v3 loop/Pack/state。遇到 v3 输入时零写入，并指向
 [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)。
 没有自动迁移；若需旧数据，继续独立使用 v3.3.8。
+如果 cwd 仍带有 v3 的 `.codex-loop` 标记，4.1.1 会在 PREPARE、START 或
+`status --refresh` 前停止，不创建准备产物、Store 或 Host 任务；请切换到新的 v4 工作目录。
 
 ## 卸载
 

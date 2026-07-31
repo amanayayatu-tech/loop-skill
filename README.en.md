@@ -7,7 +7,7 @@
 [中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> This document describes LoopSkill 4.1.0. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
+> This document describes LoopSkill 4.1.1. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
 
 **Describe the job in one sentence. LoopSkill fixes the boundary first, starts once after confirmation, and uses machine evidence to show what worked and what remains uncertain.**
 
@@ -49,10 +49,10 @@ Intake returns `READY_FOR_LOOP`, `NEEDS_CLARIFICATION`, `BLOCKED`, or `DIRECT_TA
 
 Prerequisites: macOS or Linux, Git, Python 3.11–3.14, and an authenticated official Codex installation. The LoopSkill 4 runtime uses only the Python standard library.
 
-The command below installs the published `v4.1.0` tag:
+The command below installs the published `v4.1.1` tag:
 
 ```bash
-git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+git clone --branch v4.1.1 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
 bash scripts/install.sh
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
@@ -201,6 +201,8 @@ Unit tests, fault injection, conformance, isolated installation, and disposable 
 
 When v4 encounters a v3 root, state, or Controller Pack, it performs zero writes and returns `USER_UNSUPPORTED_LEGACY_VERSION`. It ships no importer, repair path, legacy CLI alias, Pack runtime, or v3 MCP State Gateway, and it does not migrate automatically.
 
+If the current working directory still carries a v3 `.codex-loop` marker, 4.1.1 stops before `PREPARE`, `START`, or `status --refresh`; it creates no prepared artifacts, Store, or Host task. Switch to a new v4 workspace before running it.
+
 For old data, continue using the independent [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8).
 
 <!-- parity: uninstall -->
@@ -215,10 +217,10 @@ The uninstaller removes only the receipt-bound v4 installation. It does not modi
 <!-- parity: limitations -->
 ## Current limitations and capacity contract
 
-- Version 4.1.0 supports 1–32 confirmed Goals. A canonical plan is at most 128 KiB, and one explicitly authorized UTF-8 text/Markdown source is at most 256 KiB.
+- Version 4.1.1 supports 1–32 confirmed Goals. A canonical plan is at most 128 KiB, and one explicitly authorized UTF-8 text/Markdown source is at most 256 KiB.
 - The CreateLoop release target is 8 KiB / 64 members (hard limits remain 16 KiB / 128); the materialized Host prompt target is 24 KiB (32 KiB hard limit). Overflow is blocked before Host execution and never truncated.
 - New Loops write only `CONTENT_ADDRESSED_V1`; `EAGER_V4_0` supports status, export, and original-reducer continuation only, with no migration, rewrite, or dual write.
-- Version 4.1.0 supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
+- Version 4.1.1 supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
 - The default is one cwd-bound foreground Codex Host task; Desktop-visible saved projects/tasks are not promised.
 - The foreground observation window is at most 300 seconds; unlimited tasks, automatic resume, and cross-process readback are not promised.
 - There is no provider idempotency or cross-system exactly-once claim.
@@ -247,7 +249,7 @@ CI also runs the Linux/macOS × Python 3.11–3.14 install/uninstall matrix, pro
 ## Release, security, and historical versions
 
 - [v4 release process](docs/RELEASING.md)
-- [4.1.0 release notes](docs/v4/release-notes-v4.1.md)
+- [4.1.1 release notes](docs/v4/release-notes-v4.1.md)
 - [4.0.0 historical release notes](docs/v4/release-notes.md)
 - [v4.1 compatibility matrix](docs/v4/compatibility-matrix-v4.1.md)
 - [Security policy](SECURITY.md)
