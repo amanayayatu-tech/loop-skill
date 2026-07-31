@@ -726,13 +726,19 @@ INSTALL_IMAGE="$transaction/install"
 mkdir -p "$SOURCE_IMAGE" "$INSTALL_IMAGE"
 if [[ "$git_source_mode" == "exact-commit" ]]; then
   TRACKED_ARCHIVE="$transaction/tracked"
+  TRACKED_ARCHIVE_TAR="$transaction/tracked.tar"
   mkdir -p "$TRACKED_ARCHIVE"
-  git -C "$ROOT_DIR" archive --format=tar "$git_archive_commit" -- \
+  # Keep archive production and extraction sequential. Some BSD tar builds may
+  # close stdin after the end marker, which turns git archive into SIGPIPE 141
+  # under pipefail even though extraction completed successfully.
+  git -C "$ROOT_DIR" archive --format=tar --output="$TRACKED_ARCHIVE_TAR" \
+    "$git_archive_commit" -- \
     codex-loop-prompt-architect \
     protocol/v4/loopskill-v4.protocol.json \
     protocol/v4/generated/api-summary.json \
     protocol/v4/generated/loopskill-v4.schema.json \
-    VERSION | tar -xf - -C "$TRACKED_ARCHIVE"
+    VERSION
+  tar -xf "$TRACKED_ARCHIVE_TAR" -C "$TRACKED_ARCHIVE"
   cp -R "$TRACKED_ARCHIVE/codex-loop-prompt-architect/." "$SOURCE_IMAGE/"
   mkdir -p "$SOURCE_IMAGE/protocol/v4/generated"
   cp "$TRACKED_ARCHIVE/protocol/v4/loopskill-v4.protocol.json" "$SOURCE_IMAGE/protocol/v4/"
