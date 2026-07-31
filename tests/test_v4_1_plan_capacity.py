@@ -2591,7 +2591,10 @@ except ProtocolRejection as exc:
         plan["source"]["source_digest"] = "0" * 64
         raw = json.dumps(plan, ensure_ascii=False, indent=2).encode("utf-8")
         expected = raw_domain_digest("loopskill-prd-source-v1\n", raw)
-        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+        # This case verifies exact admitted bytes, not workspace-observer churn.
+        # Keep its source outside the watched worktree; mutation races have
+        # dedicated fail-closed coverage below.
+        with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "expert-plan.json"
             source.write_bytes(raw)
             request = cli.read_intake_input(str(source))
