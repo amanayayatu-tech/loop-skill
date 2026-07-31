@@ -43,6 +43,10 @@ STALE_CURRENT_PRODUCT = (
 )
 COMMON_CLAIMS = (
     "4.0.0",
+    "4.1.0",
+    "1–32",
+    "CONTENT_ADDRESSED_V1",
+    "EAGER_V4_0",
     "INTAKE",
     "PREPARE",
     "CONFIRM",
@@ -55,10 +59,18 @@ COMMON_CLAIMS = (
     "scripts/check_v4_docs.py",
 )
 LOCAL_LINK_EXCLUSIONS = {"README.md", "README.en.md"}
-README_STATUS_ZH = "本文档对应 LoopSkill 4.0.0；当前可用的公开版本以"
-README_STATUS_EN = "This document describes LoopSkill 4.0.0. See"
-QUICKSTART_STATUS_ZH = "本文档对应 LoopSkill 4.0.0；当前可用的公开版本以 GitHub Releases 页面为准"
-QUICKSTART_STATUS_EN = "This document describes LoopSkill 4.0.0. See GitHub Releases for the public"
+README_CANDIDATE_STATUS_ZH = "本文档对应 LoopSkill 4.1.0 发布候选，正在等待作者发布授权；当前可用的公开版本仍以"
+README_CANDIDATE_STATUS_EN = "This document describes the LoopSkill 4.1.0 release candidate, which is awaiting author release authorization. See"
+QUICKSTART_CANDIDATE_STATUS_ZH = "本文档对应 LoopSkill 4.1.0 发布候选，正在等待作者发布授权；当前可用的公开版本仍以 GitHub Releases 页面为准"
+QUICKSTART_CANDIDATE_STATUS_EN = "This document describes the LoopSkill 4.1.0 release candidate, which is awaiting\nauthor release authorization. See GitHub Releases for the public versions currently available."
+SECURITY_CANDIDATE_STATUS = "describes the LoopSkill 4.1.0 release-candidate security boundary"
+RELEASE_NOTES_CANDIDATE_STATUS = "Status: `V4_1_RC_READY_AWAITING_AUTHOR_RELEASE_AUTHORIZATION` is the only\npre-publication completion state."
+README_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.1.0；当前可用的公开版本以"
+README_RELEASE_STATUS_EN = "This document describes LoopSkill 4.1.0. See"
+QUICKSTART_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.1.0；当前可用的公开版本以 GitHub Releases 页面为准"
+QUICKSTART_RELEASE_STATUS_EN = "This document describes LoopSkill 4.1.0. See GitHub Releases for the public versions currently available."
+SECURITY_RELEASE_STATUS = "LoopSkill 4.1.0 is the currently supported public line."
+RELEASE_NOTES_RELEASE_STATUS = "Status: LoopSkill 4.1.0 is the current public v4 release."
 SECURITY_STATUS = "Security support follows the versions listed on GitHub Releases."
 README_ASSETS = (
     (
@@ -215,7 +227,10 @@ def smoke_public_commands(root: Path) -> dict[str, object]:
         expected_prepared = {
             "CONTROLLER_PLAN.md",
             "boundary-summary.json",
+            "capacity-report.json",
             "loop-manifest.json",
+            "plan-document.json",
+            "plan-index.json",
             "prepared-bundle.json",
             "使用说明.md",
         }
@@ -251,10 +266,13 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     quickstart_zh = (root / "docs/v4/quickstart.zh-CN.md").read_text(encoding="utf-8")
     quickstart_en = (root / "docs/v4/quickstart.en.md").read_text(encoding="utf-8")
     releasing = (root / "docs/RELEASING.md").read_text(encoding="utf-8")
+    release_notes_v41 = (root / "docs/v4/release-notes-v4.1.md").read_text(
+        encoding="utf-8"
+    )
     security = (root / "SECURITY.md").read_text(encoding="utf-8")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     version = (root / "VERSION").read_text(encoding="utf-8").strip()
-    if version != "4.0.0":
+    if version != "4.1.0":
         raise DocsError("DOC_VERSION_DRIFT")
     if _markers(zh) != EXPECTED_SECTIONS or _markers(en) != EXPECTED_SECTIONS:
         raise DocsError("DOC_SECTION_PARITY_DRIFT")
@@ -284,8 +302,10 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         "requirements-test.txt",
         "coverage report --fail-under=80",
         "loopskill4 canary",
+        "--candidate-root",
         "scripts/build_v4_author_packet.py",
-        "--canary-store",
+        "--canary-2-store",
+        "--canary-8-store",
         "349 semantic mappings to 74",
         "canary-environment-integrity.json",
         "Host config/auth",
@@ -296,6 +316,20 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     ):
         if literal not in releasing:
             raise DocsError(f"DOC_RELEASE_RUNBOOK_INCOMPLETE:{literal}")
+    for literal in (
+        "`INTAKE → PREPARE → CONFIRM → START`",
+        "v4-only hard break",
+        "https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8",
+        "does not register MCP",
+        "require an App restart",
+        "cross-system",
+        "exactly-once",
+        "support multiple Hosts",
+        "patch-success",
+        "long-horizon superiority",
+    ):
+        if literal not in release_notes_v41:
+            raise DocsError(f"DOC_RELEASE_NOTES_INCOMPLETE:{literal}")
     for claim in COMMON_CLAIMS:
         if claim not in zh or claim not in en:
             raise DocsError(f"DOC_CLAIM_PARITY_DRIFT:{claim}")
@@ -361,12 +395,27 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     for literal in retired_canary_literals:
         if any(literal in text for text in current_canary_sources):
             raise DocsError(f"DOC_RETIRED_CANARY_IDENTITY:{literal}")
+    candidate_status = (
+        README_CANDIDATE_STATUS_ZH in zh
+        and README_CANDIDATE_STATUS_EN in en
+        and QUICKSTART_CANDIDATE_STATUS_ZH in quickstart_zh
+        and QUICKSTART_CANDIDATE_STATUS_EN in quickstart_en
+        and SECURITY_CANDIDATE_STATUS in security
+        and RELEASE_NOTES_CANDIDATE_STATUS in release_notes_v41
+    )
+    release_status = (
+        README_RELEASE_STATUS_ZH in zh
+        and README_RELEASE_STATUS_EN in en
+        and QUICKSTART_RELEASE_STATUS_ZH in quickstart_zh
+        and QUICKSTART_RELEASE_STATUS_EN in quickstart_en
+        and SECURITY_RELEASE_STATUS in security
+        and RELEASE_NOTES_RELEASE_STATUS in release_notes_v41
+    )
     if (
-        README_STATUS_ZH not in zh
-        or README_STATUS_EN not in en
-        or QUICKSTART_STATUS_ZH not in quickstart_zh
-        or QUICKSTART_STATUS_EN not in quickstart_en
-        or SECURITY_STATUS not in security
+        SECURITY_STATUS not in security
+        or (mode == "candidate" and not candidate_status)
+        or (mode == "release" and not release_status)
+        or (mode == "auto" and candidate_status == release_status)
     ):
         raise DocsError("DOC_RELEASE_STATUS_PARITY_DRIFT")
     premature = (
@@ -374,11 +423,20 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         "尚未发布",
         "stable release",
         "not yet published",
-        "currently supported public line",
     )
-    if any(literal in text for literal in premature for text in (zh, en, quickstart_zh, quickstart_en, security)):
+    if any(
+        literal in text
+        for literal in premature
+        for text in (zh, en, quickstart_zh, quickstart_en, security, release_notes_v41)
+    ):
         raise DocsError("DOC_RELEASE_STATUS_PREMATURE_OR_AMBIGUOUS")
-    if mode == "release" and "## [4.0.0] - 2026-07-28" not in changelog:
+    if candidate_status and "## [4.1.0] - Unreleased" not in changelog:
+        raise DocsError("DOC_RELEASE_STATUS_NOT_CANDIDATE")
+    if mode == "release" and (
+        re.search(r"^## \[4\.1\.0\] - 20[0-9]{2}-[0-9]{2}-[0-9]{2}$", changelog, re.MULTILINE)
+        is None
+        or "## [4.1.0] - Unreleased" in changelog
+    ):
         raise DocsError("DOC_RELEASE_STATUS_NOT_STABLE")
     return {
         "bash_command_blocks": len(zh_bash),

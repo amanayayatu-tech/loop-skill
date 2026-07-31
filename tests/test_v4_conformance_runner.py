@@ -19,10 +19,16 @@ runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
 
 
-def canary(candidate: str) -> dict:
-    issued = datetime.now(timezone.utc).replace(microsecond=0)
+def canary(
+    candidate: str,
+    *,
+    goal_count: int,
+    route_digit: str,
+    issued: datetime,
+) -> dict:
+    issued = issued.replace(microsecond=0)
     issued_text = issued.isoformat().replace("+00:00", "Z")
-    fresh_text = (issued + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    fresh_text = (issued + timedelta(minutes=60)).isoformat().replace("+00:00", "Z")
     result = b'{"outcome":"PASS","summary":"complete"}'
     empty = hashlib.sha256(b"").hexdigest()
     diagnostic = {
@@ -34,6 +40,8 @@ def canary(candidate: str) -> dict:
         "result_sha256": hashlib.sha256(result).hexdigest(),
         "returncode_class": "ZERO",
         "schema_control_digest": "6" * 64,
+        "semantic_outcome": "PASS",
+        "semantic_summary": "complete",
         "stderr_bytes": 0,
         "stderr_sha256": empty,
         "stdout_bytes": 100,
@@ -41,15 +49,24 @@ def canary(candidate: str) -> dict:
         "terminal_event_count": 1,
         "terminal_event_type": "turn.completed",
     }
+    candidate_provenance = {
+        "candidate_execution_mode": "CLEAN_GIT_WORKTREE",
+        "candidate_sha": candidate,
+        "candidate_tree_sha": candidate,
+    }
     value = {
         "artifact": runner.rc.CANARY_ARTIFACT,
-        "candidate_sha": candidate,
+        **candidate_provenance,
+        "candidate_provenance_digest": runner.rc._domain_digest(
+            runner.rc.CANARY_CANDIDATE_PROVENANCE_DOMAIN,
+            candidate_provenance,
+        ),
         "candidate_goal_digest": "e" * 64,
         "canary_output_sha256": runner.rc.CANARY_OUTPUT_SHA256,
         "confirmation_count": 1,
         "confirmation_digest_bound": True,
         "allowed_host_managed_delta_count": 0,
-        "canary_workspace_identity_digest": "3" * 64,
+        "canary_workspace_identity_digest": route_digit * 64,
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
         "fresh_until": fresh_text,
@@ -60,14 +77,14 @@ def canary(candidate: str) -> dict:
         "host_config_delta_kind": runner.rc.HOST_CONFIG_DELTA_NONE,
         "host_receipt_issuer": runner.rc.CANARY_ISSUER,
         "host_receipt_trust": runner.rc.CANARY_TRUST,
-        "host_create_readback_count": 1,
+        "host_create_readback_count": goal_count,
         "host_lifecycle_readback_count": 1,
         "host_result_digest": "b" * 64,
-        "host_task_create_count": 1,
-        "host_task_identity_digest": "c" * 64,
-        "host_task_readback_count": 1,
-        "host_terminal_wait_readback_count": 1,
-        "host_total_read_count": 4,
+        "host_task_create_count": goal_count,
+        "host_task_identity_digest": route_digit * 64,
+        "host_task_readback_count": goal_count,
+        "host_terminal_wait_readback_count": goal_count,
+        "host_total_read_count": 3 * goal_count + 1,
         "intake_external_effects": 0,
         "intake_heartbeat_count": 0,
         "intake_host_task_count": 0,
@@ -88,7 +105,8 @@ def canary(candidate: str) -> dict:
         "private_data_used": False,
         "provider_resend_count": 0,
         "provider_terminal_diagnostic_digest": runner.rc._domain_digest(
-            runner.rc.CANARY_PROVIDER_DIAGNOSTIC_DOMAIN, diagnostic
+            runner.rc.CANARY_PROVIDER_DIAGNOSTIC_DOMAIN,
+            [diagnostic for _ in range(goal_count)],
         ),
         "research_scored": False,
         "result": "ACKNOWLEDGED",
@@ -147,15 +165,39 @@ class V4ConformanceRunnerTests(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "canary.json"
-            path.write_bytes(runner.rc._canonical(canary(candidate)))
-            canary_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            issued = datetime.now(timezone.utc).replace(microsecond=0)
+            path_2 = Path(directory) / "canary-2.json"
+            path_8 = Path(directory) / "canary-8.json"
+            path_2.write_bytes(
+                runner.rc._canonical(
+                    canary(
+                        candidate,
+                        goal_count=2,
+                        route_digit="2",
+                        issued=issued,
+                    )
+                )
+            )
+            path_8.write_bytes(
+                runner.rc._canonical(
+                    canary(
+                        candidate,
+                        goal_count=8,
+                        route_digit="8",
+                        issued=issued + timedelta(minutes=1),
+                    )
+                )
+            )
+            canary_digests = {
+                2: hashlib.sha256(path_2.read_bytes()).hexdigest(),
+                8: hashlib.sha256(path_8.read_bytes()).hexdigest(),
+            }
             with mock.patch.object(
                 runner,
                 "_run_case",
                 side_effect=mock_execution,
             ):
-                receipt = runner.run(ROOT, candidate, path)
+                receipt = runner.run(ROOT, candidate, path_2, path_8)
         self.assertEqual(receipt["case_count"], 349)
         self.assertEqual(receipt["mapped"], 349)
         self.assertEqual(receipt["semantic_coverage_mapping_count"], 349)
@@ -184,7 +226,7 @@ class V4ConformanceRunnerTests(unittest.TestCase):
             receipt,
             candidate,
             ROOT,
-            expected_canary_sha256=canary_digest,
+            expected_canary_sha256=canary_digests,
         )
         with self.assertRaisesRegex(
             runner.rc.RcValidationError, "RC_CONFORMANCE_RECEIPT_INVALID"
@@ -193,7 +235,7 @@ class V4ConformanceRunnerTests(unittest.TestCase):
                 receipt,
                 candidate,
                 ROOT,
-                expected_canary_sha256="f" * 64,
+                expected_canary_sha256={2: "f" * 64, 8: "f" * 64},
             )
 
     def test_single_method_execution_requires_exactly_one_real_test(self) -> None:

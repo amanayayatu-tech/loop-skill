@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 from dataclasses import replace
 from typing import Any
@@ -10,11 +11,16 @@ from .kernel import AuthorityContext, reduce_command
 from .protocol import (
     ApplyResult,
     CommandEnvelope,
+    EAGER_STORAGE_MODE,
+    LEGACY_ABSENT_STORAGE_MODE,
+    MALFORMED_STORAGE_MODE,
     InjectedCrash,
     ProtocolRejection,
-    command_digest,
-    snapshot_digest,
     canonical_bytes,
+    classify_persisted_storage_mode,
+    command_digest,
+    raw_domain_digest,
+    snapshot_digest,
     validate_command,
 )
 
@@ -65,6 +71,7 @@ class InMemoryStore:
         self._rejected: dict[
             tuple[str, str], tuple[str, dict[str, str]]
         ] = {}
+        self._blobs: dict[str, bytes] = {}
         self.commit_count = 0
 
     def snapshot(self, loop_ref: str) -> dict[str, Any] | None:
@@ -73,6 +80,22 @@ class InMemoryStore:
 
     def events(self, loop_ref: str) -> list[dict[str, Any]]:
         return copy.deepcopy(self._events.get(loop_ref, []))
+
+    def put_blob(self, content: bytes) -> str:
+        if not isinstance(content, bytes):
+            raise TypeError("blob content must be bytes")
+        digest = raw_domain_digest("loopskill-blob-v1\n", content)
+        existing = self._blobs.get(digest)
+        if existing is not None and existing != content:
+            raise ProtocolRejection(
+                "INTERNAL_INVARIANT_VIOLATION", "immutable blob digest collision"
+            )
+        self._blobs[digest] = content
+        return digest
+
+    def get_blob(self, digest: str) -> bytes | None:
+        value = self._blobs.get(digest)
+        return None if value is None else bytes(value)
 
     @property
     def rejection_count(self) -> int:
@@ -99,6 +122,14 @@ class InMemoryStore:
                         request_digest,
                         result,
                     ) in sorted(self._accepted.items())
+                ],
+                "blobs": [
+                    {
+                        "blob_digest": digest,
+                        "content_base64": base64.b64encode(content).decode("ascii"),
+                        "content_bytes": len(content),
+                    }
+                    for digest, content in sorted(self._blobs.items())
                 ],
                 "events": {
                     loop_ref: copy.deepcopy(events)
@@ -130,6 +161,11 @@ class InMemoryStore:
         )
 
     def verify_integrity(self) -> None:
+        for digest, content in self._blobs.items():
+            if raw_domain_digest("loopskill-blob-v1\n", content) != digest:
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION", "blob digest mismatch"
+                )
         for loop_ref, snapshot in self._snapshots.items():
             expected_sequence = list(range(1, len(self._events.get(loop_ref, [])) + 1))
             actual_sequence = [
@@ -181,8 +217,23 @@ class InMemoryStore:
             raise ProtocolRejection(error["code"], error["detail"])
 
         try:
-            validate_command(command)
             current = self._snapshots.get(loop_ref)
+            storage_mode = classify_persisted_storage_mode(current)
+            if storage_mode == MALFORMED_STORAGE_MODE:
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION",
+                    "persisted storage mode is malformed",
+                )
+            if storage_mode in {
+                LEGACY_ABSENT_STORAGE_MODE,
+                EAGER_STORAGE_MODE,
+            }:
+                from loop_architect.v4_eager_v40 import reduce_eager_command
+
+                reducer = reduce_eager_command
+            else:
+                validate_command(command)
+                reducer = reduce_command
             actual_revision = 0 if current is None else current["loop_revision"]
             if actual_revision != command.expected_loop_revision:
                 raise ProtocolRejection(
@@ -191,8 +242,10 @@ class InMemoryStore:
                 )
             if fault_at == "before_reduce":
                 raise InjectedCrash(fault_at)
-            candidate, pending_events, response = reduce_command(
-                current, command, self.authority
+            candidate, pending_events, response = reducer(
+                current,
+                command,
+                self.authority,
             )
             if fault_at == "after_reduce_before_commit":
                 raise InjectedCrash(fault_at)

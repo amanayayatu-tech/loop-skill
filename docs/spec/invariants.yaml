@@ -16,7 +16,7 @@
       "schema_surfaces": ["protocol/v4/loopskill-v4.protocol.json"],
       "test_surfaces": ["tests/test_v4_protocol_authority.py", "tests/test_v4_persistence_spike.py"],
       "evidence_surfaces": ["evidence/v4-development"],
-      "adr": ["docs/adr/0011-loopskill-4-compatible-kernel-refactor.md", "docs/adr/0012-loopskill-4-sqlite-persistence-selection.md"],
+      "adr": ["docs/adr/0011-loopskill-4-compatible-kernel-refactor.md", "docs/adr/0012-loopskill-4-sqlite-persistence-selection.md", "docs/adr/0013-content-addressed-plan-capacity.md"],
       "introduced_version": "4.0.0"
     },
     {

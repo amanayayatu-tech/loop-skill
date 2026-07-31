@@ -18,6 +18,12 @@ from loop_architect.v4_alpha.protocol import (
 )
 
 from .contract import AttemptClaimPort, CodexProviderPort
+from .prompt import (
+    CONTENT_PAYLOAD_FIELDS,
+    PromptMaterializationError,
+    TARGET_PROMPT_BYTES,
+    prompt_bytes,
+)
 
 
 HOST_SCHEMA_VERSION = "codex-host-v1"
@@ -450,6 +456,19 @@ class CodexHostAdapter:
             raise ProtocolRejection(
                 "RECEIPT_IDENTITY_MISMATCH", "provider request digest mismatch"
             )
+        if set(attempt.payload) == CONTENT_PAYLOAD_FIELDS:
+            try:
+                materialized_bytes = prompt_bytes(
+                    attempt.payload, attempt.provider_idempotency_key
+                )
+            except PromptMaterializationError as exc:
+                raise ProtocolRejection(
+                    "RESOURCE_LIMIT_EXCEEDED", "Host prompt hard limit"
+                ) from exc
+            if materialized_bytes > TARGET_PROMPT_BYTES:
+                raise ProtocolRejection(
+                    "RESOURCE_LIMIT_EXCEEDED", "Host prompt release target"
+                )
         if not all(
             (
                 attempt.attempt_ref,

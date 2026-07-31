@@ -55,6 +55,7 @@ RD = "test_v4_rc_distribution"
 UX = "test_v4_single_entry_ux"
 DOC = "test_v4_docs"
 APP = "test_v4_exec_provider"
+V41 = "test_v4_1_plan_capacity"
 
 CASE_CONTRACT_VERSION = "loopskill-v4-executable-case-contract-v1"
 EVIDENCE_PROFILE = "SEMANTIC_MAPPINGS_TO_UNIQUE_EXECUTED_ASSERTIONS"
@@ -308,7 +309,7 @@ FAMILY_TEST_BINDINGS = {
     "H-001": _test(H, "V4CodexAdapterTests", "test_all_host_mutations_and_resources_are_closed_and_single_invoke"),
     "H-002": _test(H, "V4CodexAdapterTests", "test_missing_readback_is_unknown_and_never_resends"),
     "H-003": _test(H, "V4CodexAdapterTests", "test_response_lost_then_authoritative_readback_and_eventual_indexing"),
-    "H-004": _test(H, "V4CodexAdapterTests", "test_receipt_issuer_trust_and_freshness_are_kernel_authority"),
+    "H-004": _test(A, "V4AlphaPureKernelTests", "test_receipt_trust_freshness_and_identity_failures"),
     "H-005": _test(H, "V4CodexAdapterTests", "test_cooperative_response_is_unverifiable_not_strict"),
     "H-006": _test(H, "V4CodexAdapterTests", "test_capability_profiles_assurance_memory_and_guarantee_vocabulary"),
     "H-007": _test(H, "V4CodexAdapterTests", "test_schema_enum_identity_and_capability_drift_fail_closed"),
@@ -326,7 +327,7 @@ FAMILY_TEST_BINDINGS = {
     "K-008": _test(PA, "V4ProtocolAuthorityTests", "test_event_error_reference_and_capability_unknowns_fail_closed"),
     "K-009": _test(PP, "V4OperabilityProjectionTests", "test_audit_archive_and_status_are_deterministic_read_only_views"),
     "L-001": _test(PP, "V4ProductPolicyTests", "test_every_vertical_nonterminal_snapshot_has_one_next_action_class"),
-    "L-002": _test(B, "V4BetaMeasurementTests", "test_real_local_v4_fixture_passes_frozen_comparator"),
+    "L-002": _test(B, "V4BetaMeasurementTests", "test_frozen_v4_fixture_receipt_passes_frozen_comparator"),
     "M-001": _test(M, "V4LegacyBoundaryTests", "test_v3_root_detection_is_read_only"),
     "M-002": _test(M, "V4LegacyBoundaryTests", "test_rejection_replay_and_changed_pack_remain_zero_write"),
     "M-003": _test(M, "V4LegacyBoundaryTests", "test_stable_external_v3_release_reference"),
@@ -335,14 +336,14 @@ FAMILY_TEST_BINDINGS = {
     "P-001": _test(PP, "V4ProductPolicyTests", "test_repair_is_bounded_and_same_failure_routes_to_human"),
     "P-002": _test(PP, "V4ProductPolicyTests", "test_repair_is_bounded_and_same_failure_routes_to_human"),
     "P-003": _test(PP, "V4ProductPolicyTests", "test_standard_is_fixed_dependency_order_and_adaptive_is_bounded"),
-    "P-004": _test(A, "V4AlphaPureKernelTests", "test_stop_loop_cas_authority_and_unresolved_effect_are_honest"),
+    "P-004": _test(A, "V4AlphaPureKernelTests", "test_stop_loop_cas_and_authority_from_exact_checkpoint"),
     "R-001": _test(A, "V4AlphaPureKernelTests", "test_corrected_vertical_exact_snapshot_events_and_replay"),
     "R-002": _test(PP, "V4ProductPolicyTests", "test_repair_is_bounded_and_same_failure_routes_to_human"),
     "R-003": _test(A, "V4AlphaPureKernelTests", "test_cooperative_fixture_terminates_with_limitation_not_strict_claim"),
     "R-004": _test(A, "V4AlphaPureKernelTests", "test_finalization_receipt_binds_exact_subject_chain_digest"),
     "REJ-001": _test(A, "V4AlphaPureKernelTests", "test_changed_accepted_and_rejected_operations_conflict"),
     "RES-001": _test(PA, "V4ProtocolAuthorityTests", "test_semantic_payload_shape_enum_and_protocol_drift_reject"),
-    "S-001": _test(A, "V4AlphaPureKernelTests", "test_all_33_declared_transaction_fault_boundaries"),
+    "S-001": _test(UX, "V4SingleEntryUXTests", "test_startup_effect_all_durable_boundaries_are_atomic"),
     "S-002": _test(PS, "V4PersistenceSpikeTests", "test_rejection_replay_and_changed_request_survive_reopen"),
     "S-003": _test(PS, "V4PersistenceSpikeTests", "test_rejection_replay_and_changed_request_survive_reopen"),
     "S-004": _test(PS, "V4PersistenceSpikeTests", "test_backup_restore_is_exact_and_source_remains_live"),
@@ -352,10 +353,10 @@ FAMILY_TEST_BINDINGS = {
     "UX-002": _test(UX, "V4SingleEntryUXTests", "test_default_path_has_zero_control_fields_and_no_policy_pack"),
     "UX-003": _test(UX, "V4SingleEntryUXTests", "test_default_path_has_zero_control_fields_and_no_policy_pack"),
     "UX-004": _test(UX, "V4SingleEntryUXTests", "test_invalid_inputs_are_stable_non_leaking_and_leave_no_store"),
-    "UX-005": _test(UX, "V4SingleEntryUXTests", "test_unknown_and_unverifiable_are_visible_without_resend_controls"),
+    "UX-005": _test(H, "V4CodexAdapterTests", "test_single_entry_startup_unknown_and_cooperative_do_not_bind_host"),
     "UX-006": _test(M, "V4LegacyBoundaryTests", "test_cli_rejects_legacy_root_without_creating_v4_store"),
     "UX-007": _test(UX, "V4SingleEntryUXTests", "test_default_status_hides_internal_identity_diagnostics_is_opt_in"),
-    "UX-008": _test(B, "V4BetaMeasurementTests", "test_real_local_v4_fixture_passes_frozen_comparator"),
+    "UX-008": _test(B, "V4BetaMeasurementTests", "test_frozen_v4_fixture_receipt_passes_frozen_comparator"),
     "UX-009": _test(RC, "V4RcAcceptanceTests", "test_canary_receipt_is_minimized_and_fail_closed"),
     "UX-010": _test(UX, "V4SingleEntryUXTests", "test_intake_four_outcomes_seven_sections_and_zero_side_effects"),
     "UX-011": _test(UX, "V4SingleEntryUXTests", "test_intake_four_outcomes_seven_sections_and_zero_side_effects"),
@@ -364,14 +365,14 @@ FAMILY_TEST_BINDINGS = {
     "UX-014": _test(UX, "V4SingleEntryUXTests", "test_confirmed_preparation_creates_and_starts_without_control_identity"),
     "UX-015": _test(UX, "V4SingleEntryUXTests", "test_direct_task_recommendation_never_creates_loop_or_preparation"),
     "UX-016": _test(UX, "V4SingleEntryUXTests", "test_noninteractive_main_entry_stops_after_prepare_without_confirmation"),
-    "XFX-001": _test(A, "V4AlphaPureKernelTests", "test_attempt_commit_consumes_budget_and_forbids_resend"),
-    "XFX-002": _test(A, "V4AlphaPureKernelTests", "test_attempt_commit_consumes_budget_and_forbids_resend"),
+    "XFX-001": _test(V41, "V41PlanCapacityTests", "test_pure_kernel_two_goal_activation_is_atomic_bounded_and_replay_safe"),
+    "XFX-002": _test(V41, "V41PlanCapacityTests", "test_start_replay_after_committed_response_loss_is_one_attempt"),
     "XFX-003": _test(H, "V4CodexAdapterTests", "test_response_lost_then_authoritative_readback_and_eventual_indexing"),
     "XFX-004": _test(H, "V4CodexAdapterTests", "test_response_lost_then_authoritative_readback_and_eventual_indexing"),
-    "XFX-005": _test(A, "V4AlphaPureKernelTests", "test_unknown_and_unverifiable_allow_exact_late_observation_only"),
+    "XFX-005": _test(H, "V4CodexAdapterTests", "test_single_entry_startup_unknown_and_cooperative_do_not_bind_host"),
     "XFX-006": _test(H, "V4CodexAdapterTests", "test_cooperative_response_is_unverifiable_not_strict"),
-    "XFX-007": _test(A, "V4AlphaPureKernelTests", "test_attempt_commit_consumes_budget_and_forbids_resend"),
-    "XFX-008": _test(A, "V4AlphaPureKernelTests", "test_unknown_and_unverifiable_allow_exact_late_observation_only"),
+    "XFX-007": _test(V41, "V41PlanCapacityTests", "test_blob_write_crash_missing_tamper_and_orphan_are_fail_closed"),
+    "XFX-008": _test(H, "V4CodexAdapterTests", "test_single_entry_startup_unknown_and_cooperative_do_not_bind_host"),
 }
 
 # Case-level overrides are reserved for a branch whose exact regression is
@@ -406,7 +407,7 @@ CASE_TEST_OVERRIDES = {
     "F-003-e": _test(
         A,
         "V4AlphaPureKernelTests",
-        "test_stop_loop_cas_authority_and_unresolved_effect_are_honest",
+        "test_stop_loop_cas_and_authority_from_exact_checkpoint",
     ),
     "H-011-e": _test(
         UX,
@@ -544,15 +545,27 @@ def _catalog_and_bindings(root: Path, candidate: str):
     return corpus, catalog, bindings
 
 
-def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
+def run(
+    root: Path,
+    candidate: str,
+    canary_2_path: Path,
+    canary_8_path: Path,
+) -> dict[str, Any]:
     corpus, catalog, bindings = _catalog_and_bindings(root, candidate)
-    canary_raw = canary_path.read_bytes()
-    canary = json.loads(canary_raw.decode("utf-8", "strict"))
-    if canary_raw != rc._canonical(canary):
-        raise RuntimeError("CONFORMANCE_CANARY_RECEIPT_NOT_CANONICAL")
-    rc.validate_canary_receipt(canary, candidate)
-    canary_sha256 = hashlib.sha256(canary_raw).hexdigest()
-    real_canary_cases = {"UX-009-a", "CAP-RELEASE-CANARY"}
+    canaries = {}
+    canary_sha256 = {}
+    for goal_count, path in ((2, canary_2_path), (8, canary_8_path)):
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8", "strict"))
+        if raw != rc._canonical(value):
+            raise RuntimeError("CONFORMANCE_CANARY_RECEIPT_NOT_CANONICAL")
+        rc.validate_canary_receipt(
+            value, candidate, expected_goal_count=goal_count
+        )
+        canaries[goal_count] = value
+        canary_sha256[goal_count] = hashlib.sha256(raw).hexdigest()
+    rc.validate_canary_pair(canaries[2], canaries[8], candidate)
+    real_canary_cases = {"UX-009-a": 2, "CAP-RELEASE-CANARY": 8}
     corpus_digest = hashlib.sha256(corpus.encode("utf-8")).hexdigest()
     results = []
     target_executions: dict[str, dict[str, Any]] = {}
@@ -591,13 +604,17 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
             "replay_expectation": receipt_contract["replay_expectation"],
         }
         if case_id in real_canary_cases:
-            result["canary_receipt_sha256"] = canary_sha256
+            goal_count = real_canary_cases[case_id]
+            result["canary_goal_count"] = goal_count
+            result["canary_receipt_sha256"] = canary_sha256[goal_count]
         results.append(result)
     test_method_results = [target_executions[key] for key in sorted(target_executions)]
     if len(test_method_results) != EXPECTED_EXECUTED_ASSERTION_METHOD_COUNT:
         raise RuntimeError("CONFORMANCE_EXECUTED_ASSERTION_COUNT_DRIFT")
     body = {
         "artifact": "loopskill-v4-conformance-execution-v2",
+        "bound_real_canary_count": 2,
+        "bound_real_host_invocations": 10,
         "candidate_sha": candidate,
         "case_catalog_digest": preservation.EXACT_CASE_CATALOG_SHA256,
         "canonical_case_ids": True,
@@ -609,7 +626,7 @@ def run(root: Path, candidate: str, canary_path: Path) -> dict[str, Any]:
         "independent_case_observation_claimed": False,
         "mapped": len(results),
         "passed_test_methods": len(test_method_results),
-        "real_external_effects": 1,
+        "real_external_effects": 0,
         "semantic_coverage_mapping_count": len(results),
         "status": "PASS",
         "test_method_count": len(test_method_results),
@@ -677,19 +694,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--candidate", required=True)
-    parser.add_argument("--canary-receipt", type=Path)
+    parser.add_argument("--canary-2-receipt", type=Path)
+    parser.add_argument("--canary-8-receipt", type=Path)
     parser.add_argument("--hosted-unit-only", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     try:
         if args.hosted_unit_only:
-            if args.canary_receipt:
+            if args.canary_2_receipt or args.canary_8_receipt:
                 raise RuntimeError("CONFORMANCE_HOSTED_CANARY_FORBIDDEN")
             value = hosted_run(args.root.resolve(), args.candidate)
         else:
-            if not args.canary_receipt or not args.output:
+            if (
+                not args.canary_2_receipt
+                or not args.canary_8_receipt
+                or not args.output
+            ):
                 raise RuntimeError("CONFORMANCE_FINAL_RECEIPTS_REQUIRED")
-            value = run(args.root.resolve(), args.candidate, args.canary_receipt)
+            value = run(
+                args.root.resolve(),
+                args.candidate,
+                args.canary_2_receipt,
+                args.canary_8_receipt,
+            )
         if args.output:
             args.output.write_bytes(rc._canonical(value) + b"\n")
         summary = {"status": value["status"], "case_count": value["case_count"]}

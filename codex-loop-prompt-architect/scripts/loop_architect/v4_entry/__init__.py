@@ -1,5 +1,12 @@
 """Single public-entry application service for LoopSkill 4."""
 
+from .conversation import (
+    ConversationIntakeError,
+    ConversationIntakeSession,
+    SlotAnswer,
+    accepts_conversation_confirmation,
+)
+
 from .service import (
     EntryError,
     confirm_loop,
@@ -19,7 +26,11 @@ from .service import (
 )
 
 __all__ = [
+    "ConversationIntakeError",
+    "ConversationIntakeSession",
     "EntryError",
+    "SlotAnswer",
+    "accepts_conversation_confirmation",
     "confirm_loop",
     "control_loop",
     "diagnostics",

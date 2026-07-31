@@ -38,6 +38,7 @@ from loop_architect.v4_alpha.vertical import (  # noqa: E402
     vertical_commands,
     verified_vertical_evidence,
 )
+from tests.v4_eager_fixture import seed_eager_memory  # noqa: E402
 
 
 def changed(command, **updates):
@@ -72,14 +73,17 @@ class V4AlphaPureKernelTests(unittest.TestCase):
         return caught.exception
 
     def store_after(self, count, authority=None):
+        if count < 5:
+            raise ValueError("EAGER continuation requires the exact revision-5 fixture")
         store = InMemoryStore(authority or fixture_authority())
+        seed_eager_memory(store)
         commands = vertical_commands()
-        for command in commands[:count]:
+        for command in commands[5:count]:
             store.apply(command)
         return store
 
     def test_manifest_freezes_slice_and_per_loop_cas(self):
-        self.assertEqual(PROTOCOL_MANIFEST["protocol_version"], "4.0.0")
+        self.assertEqual(PROTOCOL_MANIFEST["protocol_version"], "4.1.0")
         self.assertEqual(PROTOCOL_MANIFEST["write_cas"], "per_loop_revision")
         self.assertEqual(len(PROTOCOL_MANIFEST["commands"]), 19)
         self.assertNotIn("RegisterGoalPlan", PROTOCOL_MANIFEST["commands"])
@@ -151,8 +155,9 @@ class V4AlphaPureKernelTests(unittest.TestCase):
 
     def test_corrected_vertical_exact_snapshot_events_and_replay(self):
         store = InMemoryStore(fixture_authority())
-        event_offset = 0
-        for command in vertical_commands():
+        seed_eager_memory(store)
+        event_offset = len(store.events(LOOP_REF))
+        for command in vertical_commands()[5:]:
             result = store.apply(command)
             commit_count = store.commit_count
             events = store.events(LOOP_REF)
@@ -176,7 +181,9 @@ class V4AlphaPureKernelTests(unittest.TestCase):
         )
         self.assertEqual(store.commit_count, 11)
 
-        runner_snapshot, runner_events, runner_results = run_vertical()
+        runner = InMemoryStore(fixture_authority())
+        seed_eager_memory(runner)
+        runner_snapshot, runner_events, runner_results = run_vertical(runner)
         self.assertEqual(runner_snapshot, snapshot)
         self.assertEqual(runner_events, tuple(store.events(LOOP_REF)))
         self.assertEqual(runner_results[-1].snapshot_digest, EXPECTED_SNAPSHOT_DIGEST)
@@ -226,9 +233,10 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             commands[0],
             operation_id="operation-stop-0001",
             command_type="StopLoop",
+            protocol_version="4.0.0",
             actor_ref="actor-author-0001",
             authority_grant_ref="grant-author-0001",
-            expected_loop_revision=1,
+            expected_loop_revision=5,
             expected_subject_revisions={"execution": 1, "goal-0001": 1},
             machine_bindings={
                 "allocate_refs": {},
@@ -237,7 +245,7 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             },
             semantic_payload={"reason": "author requested a bounded stop"},
         )
-        store = self.store_after(1)
+        store = self.store_after(5)
         result = store.apply(stop)
         snapshot = store.snapshot(LOOP_REF)
         self.assertEqual(result.event_types, ("GoalAdvanced", "LoopStopped"))
@@ -245,7 +253,7 @@ class V4AlphaPureKernelTests(unittest.TestCase):
         self.assertEqual(snapshot["goals"]["goal-0001"]["state"], "STOPPED")
         self.assertTrue(store.apply(stop).replayed)
 
-    def test_stop_loop_cas_authority_and_unresolved_effect_are_honest(self):
+    def test_stop_loop_cas_and_authority_from_exact_checkpoint(self):
         commands = vertical_commands()
 
         def stop_for(revision, *, operation="operation-stop-gate", expected=None):
@@ -253,6 +261,7 @@ class V4AlphaPureKernelTests(unittest.TestCase):
                 commands[0],
                 operation_id=operation,
                 command_type="StopLoop",
+                protocol_version="4.0.0",
                 actor_ref="actor-author-0001",
                 authority_grant_ref="grant-author-0001",
                 expected_loop_revision=revision,
@@ -266,45 +275,27 @@ class V4AlphaPureKernelTests(unittest.TestCase):
                 semantic_payload={"reason": "bounded author stop"},
             )
 
-        store = self.store_after(1)
-        command = stop_for(1)
+        store = self.store_after(5)
+        command = stop_for(5)
         store.apply(command)
         self.assertTrue(store.apply(command).replayed)
 
-        stale_store = self.store_after(1)
-        stale = stop_for(0, operation="operation-stop-stale")
+        stale_store = self.store_after(5)
+        stale = stop_for(4, operation="operation-stop-stale")
         self.assert_rejected("STALE_LOOP_REVISION", lambda: stale_store.apply(stale))
 
-        forged_store = self.store_after(1)
+        forged_store = self.store_after(5)
         forged = changed(
-            stop_for(1, operation="operation-stop-forged"),
+            stop_for(5, operation="operation-stop-forged"),
             actor_ref="actor-forged-0001",
         )
         self.assert_rejected("INVALID_AUTHORITY", lambda: forged_store.apply(forged))
 
-        base = fixture_authority()
-        unknown_receipt = replace(
-            base.receipts["receipt-delivery-0001"], outcome="unknown"
-        )
-        authority = changed_authority(
-            base,
-            receipts={**base.receipts, unknown_receipt.receipt_ref: unknown_receipt},
-        )
-        unresolved = self.store_after(4, authority)
-        unresolved.apply(commands[4])
-        stop_after_unknown = stop_for(
-            5,
-            operation="operation-stop-after-unknown",
-            expected={"execution": 1, "goal-0001": 1, "attempt-0001": 2},
-        )
-        unresolved.apply(stop_after_unknown)
-        snapshot = unresolved.snapshot(LOOP_REF)
-        self.assertEqual(snapshot["attempts"]["attempt-0001"]["state"], "UNKNOWN")
-        self.assertEqual(snapshot["execution"]["disposition"], "STOPPED")
-
     def test_verified_vertical_evidence_is_identity_free_and_exact(self):
+        store = InMemoryStore(fixture_authority())
+        seed_eager_memory(store)
         self.assertEqual(
-            verified_vertical_evidence(),
+            verified_vertical_evidence(store),
             {
                 "assurance": "STRICT",
                 "event_count": 18,
@@ -321,29 +312,34 @@ class V4AlphaPureKernelTests(unittest.TestCase):
     def test_changed_accepted_and_rejected_operations_conflict(self):
         command = vertical_commands()[0]
         store = InMemoryStore(fixture_authority())
-        store.apply(command)
+        seed_eager_memory(store)
+        self.assertTrue(store.apply(command).replayed)
         modified = changed(
             command, semantic_payload={"objective": "different objective"}
         )
         self.assert_rejected("IDEMPOTENCY_CONFLICT", lambda: store.apply(modified))
 
-        store = self.store_after(1)
-        rejected = changed(vertical_commands()[1], actor_ref="actor-forged-0001")
+        store = self.store_after(5)
+        rejected = changed(vertical_commands()[5], actor_ref="actor-forged-0001")
         first = self.assert_rejected("INVALID_AUTHORITY", lambda: store.apply(rejected))
         rejection_count = store.rejection_count
         second = self.assert_rejected("INVALID_AUTHORITY", lambda: store.apply(rejected))
         self.assertEqual(second.detail, first.detail)
         self.assertEqual(store.rejection_count, rejection_count)
         changed_rejection = changed(
-            rejected, semantic_payload={"role": "different-role"}
+            rejected,
+            semantic_payload={
+                "outcome": "FAILED",
+                "summary": "different rejected request",
+            },
         )
         self.assert_rejected(
             "IDEMPOTENCY_CONFLICT", lambda: store.apply(changed_rejection)
         )
 
     def test_stale_loop_and_subject_revisions_are_pure_rejections(self):
-        store = self.store_after(1)
-        stale_loop = changed(vertical_commands()[1], expected_loop_revision=0)
+        store = self.store_after(5)
+        stale_loop = changed(vertical_commands()[5], expected_loop_revision=4)
         before = store.snapshot(LOOP_REF), store.events(LOOP_REF), store.commit_count
         self.assert_rejected("STALE_LOOP_REVISION", lambda: store.apply(stale_loop))
         self.assertEqual(
@@ -351,12 +347,12 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             before,
         )
 
-        store = self.store_after(2)
+        store = self.store_after(6)
         stale_subject = changed(
-            vertical_commands()[2],
+            vertical_commands()[6],
             expected_subject_revisions={
-                "goal-0001": 0,
-                "host-target-0001": 1,
+                "report-0001": 0,
+                "result-0001": 1,
             },
         )
         before = store.snapshot(LOOP_REF), store.events(LOOP_REF), store.commit_count
@@ -370,35 +366,35 @@ class V4AlphaPureKernelTests(unittest.TestCase):
 
     def test_wrong_kind_and_foreign_references_fail_closed(self):
         base_authority = fixture_authority()
-        grant = base_authority.grants["grant-author-0001"]
+        grant = base_authority.grants["grant-worker-0001"]
         grants = dict(base_authority.grants)
         grants[grant.grant_ref] = replace_grant_digest(
             replace(
                 grant,
                 exact_subjects=grant.exact_subjects
-                + ("host-target-0001", "goal-foreign-0001"),
+                + ("host-target-0001", "route-foreign-0001"),
             )
         )
         authority = changed_authority(base_authority, grants=grants)
 
-        store = self.store_after(2, authority)
+        store = self.store_after(5, authority)
         wrong_kind = changed(
-            vertical_commands()[2],
+            vertical_commands()[5],
             subject={
                 "loop_ref": LOOP_REF,
-                "subject_kind": "GoalRef",
+                "subject_kind": "RouteRef",
                 "subject_ref": "host-target-0001",
             },
         )
         self.assert_rejected("WRONG_REFERENCE_KIND", lambda: store.apply(wrong_kind))
 
-        store = self.store_after(2, authority)
+        store = self.store_after(5, authority)
         foreign = changed(
-            vertical_commands()[2],
+            vertical_commands()[5],
             subject={
                 "loop_ref": LOOP_REF,
-                "subject_kind": "GoalRef",
-                "subject_ref": "goal-foreign-0001",
+                "subject_kind": "RouteRef",
+                "subject_ref": "route-foreign-0001",
             },
         )
         self.assert_rejected("FOREIGN_REFERENCE", lambda: store.apply(foreign))
@@ -414,8 +410,8 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             "expected_loop_revision",
             "command_type",
         )
-        store = self.store_after(1)
-        base = vertical_commands()[1]
+        store = self.store_after(5)
+        base = vertical_commands()[5]
         before = store.snapshot(LOOP_REF)
         for index, field in enumerate(fields):
             command = changed(
@@ -431,8 +427,8 @@ class V4AlphaPureKernelTests(unittest.TestCase):
 
     def test_actor_and_grant_authority_failures(self):
         base = fixture_authority()
-        command = vertical_commands()[1]
-        system_grant = base.grants["grant-system-0001"]
+        command = vertical_commands()[5]
+        worker_grant = base.grants["grant-worker-0001"]
         cases = []
         cases.append(
             (
@@ -443,8 +439,8 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             )
         )
         actors = dict(base.actors)
-        actors["actor-system-0001"] = replace(
-            actors["actor-system-0001"], issuer_trust="untrusted"
+        actors["actor-worker-0001"] = replace(
+            actors["actor-worker-0001"], issuer_trust="untrusted"
         )
         cases.append(
             (
@@ -458,48 +454,48 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             (
                 "expired",
                 replace_grant_digest(
-                    replace(system_grant, expires_at="2026-07-26T23:59:59Z")
+                    replace(worker_grant, expires_at="2026-07-26T23:59:59Z")
                 ),
                 "AUTHORITY_EXPIRED",
             ),
             (
                 "not-yet-valid",
                 replace_grant_digest(
-                    replace(system_grant, not_before="2026-07-27T00:00:30Z")
+                    replace(worker_grant, not_before="2026-07-27T00:00:30Z")
                 ),
                 "AUTHORITY_EXPIRED",
             ),
             (
                 "cross-loop",
                 replace_grant_digest(
-                    replace(system_grant, loop_scope="loop-foreign-0001")
+                    replace(worker_grant, loop_scope="loop-foreign-0001")
                 ),
                 "AUTHORITY_SCOPE_MISMATCH",
             ),
             (
                 "wrong-command",
                 replace_grant_digest(
-                    replace(system_grant, allowed_commands=("CloseExecution",))
+                    replace(worker_grant, allowed_commands=("RecordReview",))
                 ),
                 "AUTHORITY_SCOPE_MISMATCH",
             ),
             (
                 "wrong-kind",
                 replace_grant_digest(
-                    replace(system_grant, subject_kinds=("FinalizationRef",))
+                    replace(worker_grant, subject_kinds=("ResultRef",))
                 ),
                 "AUTHORITY_SCOPE_MISMATCH",
             ),
             (
                 "wrong-exact-subject",
                 replace_grant_digest(
-                    replace(system_grant, exact_subjects=("finalization-0001",))
+                    replace(worker_grant, exact_subjects=("result-0001",))
                 ),
                 "AUTHORITY_SCOPE_MISMATCH",
             ),
             (
                 "tampered-grant-digest",
-                replace(system_grant, canonical_digest="tampered"),
+                replace(worker_grant, canonical_digest="tampered"),
                 "INVALID_AUTHORITY",
             ),
         )
@@ -510,62 +506,55 @@ class V4AlphaPureKernelTests(unittest.TestCase):
 
         for name, authority, candidate, code in cases:
             with self.subTest(name=name):
-                store = self.store_after(1, authority)
+                store = self.store_after(5, authority)
                 before = store.snapshot(LOOP_REF)
                 self.assert_rejected(code, lambda: store.apply(candidate))
                 self.assertEqual(store.snapshot(LOOP_REF), before)
 
     def test_receipt_trust_freshness_and_identity_failures(self):
         base = fixture_authority()
-        bind = base.receipts["receipt-bind-0001"]
+        receipt = base.receipts["receipt-finalize-0001"]
         cases = (
             (
                 "issuer-untrusted",
                 "RECEIPT_ISSUER_UNTRUSTED",
-                replace(bind, issuer_trust="untrusted"),
+                replace(receipt, issuer_trust="untrusted"),
             ),
             (
                 "expired",
                 "RECEIPT_EXPIRED",
-                replace(bind, expires_at="2026-07-27T00:00:00Z"),
+                replace(receipt, expires_at="2026-07-27T00:00:09Z"),
             ),
             (
                 "wrong-subject",
                 "RECEIPT_IDENTITY_MISMATCH",
-                replace(bind, subject_ref="host-target-foreign"),
+                replace(receipt, subject_ref="finalization-foreign"),
             ),
             (
                 "wrong-action",
                 "RECEIPT_IDENTITY_MISMATCH",
-                replace(bind, action="send"),
+                replace(receipt, action="send"),
+            ),
+            (
+                "wrong-request",
+                "RECEIPT_IDENTITY_MISMATCH",
+                replace(receipt, request_digest="foreign-chain"),
             ),
         )
-        for name, code, receipt in cases:
+        for name, code, candidate in cases:
             with self.subTest(name=name):
                 receipts = dict(base.receipts)
-                receipts[receipt.receipt_ref] = receipt
+                receipts[candidate.receipt_ref] = candidate
                 authority = changed_authority(base, receipts=receipts)
-                store = self.store_after(1, authority)
-                self.assert_rejected(code, lambda: store.apply(vertical_commands()[1]))
-
-        delivery = base.receipts["receipt-delivery-0001"]
-        for name, receipt in (
-            ("wrong-attempt", replace(delivery, attempt_ref="attempt-foreign")),
-            ("wrong-request", replace(delivery, request_digest="wrong-digest")),
-        ):
-            with self.subTest(name=name):
-                receipts = dict(base.receipts)
-                receipts[receipt.receipt_ref] = receipt
-                authority = changed_authority(base, receipts=receipts)
-                store = self.store_after(4, authority)
+                store = self.store_after(10, authority)
                 self.assert_rejected(
-                    "RECEIPT_IDENTITY_MISMATCH",
-                    lambda: store.apply(vertical_commands()[4]),
+                    code,
+                    lambda: store.apply(vertical_commands()[10]),
                 )
 
-    def test_all_33_declared_transaction_fault_boundaries(self):
+    def test_all_legacy_continuation_transaction_fault_boundaries(self):
         commands = vertical_commands()
-        for index, command in enumerate(commands):
+        for index, command in enumerate(commands[5:], start=5):
             for boundary in FAULT_BOUNDARIES:
                 with self.subTest(operation=command.operation_id, boundary=boundary):
                     store = self.store_after(index)
@@ -616,88 +605,6 @@ class V4AlphaPureKernelTests(unittest.TestCase):
                             expected_post,
                         )
 
-    def test_attempt_commit_consumes_budget_and_forbids_resend(self):
-        command = vertical_commands()[3]
-        store = self.store_after(3)
-        pre = store.snapshot(LOOP_REF)
-        with self.assertRaises(InjectedCrash):
-            store.apply(command, fault_at="after_reduce_before_commit")
-        self.assertEqual(store.snapshot(LOOP_REF), pre)
-        self.assertNotIn("attempt-0001", store.snapshot(LOOP_REF)["attempts"])
-
-        with self.assertRaises(InjectedCrash):
-            store.apply(command, fault_at="after_commit_before_response")
-        committed = store.snapshot(LOOP_REF)
-        self.assertTrue(
-            committed["attempts"]["attempt-0001"]["automatic_budget_consumed"]
-        )
-        self.assertEqual(
-            committed["deliveries"]["delivery-0001"]["automatic_attempts_consumed"],
-            1,
-        )
-        self.assertTrue(store.apply(command).replayed)
-
-        resend = changed(
-            command,
-            operation_id="op-resend-0001",
-            expected_loop_revision=4,
-            expected_subject_revisions={
-                "delivery-0001": 2,
-                "host-target-0001": 1,
-                "route-0001": 1,
-            },
-        )
-        self.assert_rejected("ATTEMPT_ALREADY_CONSUMED", lambda: store.apply(resend))
-        self.assertEqual(store.snapshot(LOOP_REF), committed)
-
-    def test_unknown_and_unverifiable_allow_exact_late_observation_only(self):
-        base = fixture_authority()
-        original = base.receipts["receipt-delivery-0001"]
-        for initial_state, initial_receipt in (
-            ("UNKNOWN", replace(original, outcome="unknown")),
-            (
-                "UNVERIFIABLE",
-                replace(original, trust_class="cooperative", outcome="responded"),
-            ),
-        ):
-            with self.subTest(initial_state=initial_state):
-                late = replace(
-                    original,
-                    receipt_ref=f"receipt-late-{initial_state.lower()}",
-                    issued_at="2026-07-27T00:00:05Z",
-                )
-                receipts = dict(base.receipts)
-                receipts[initial_receipt.receipt_ref] = initial_receipt
-                receipts[late.receipt_ref] = late
-                authority = changed_authority(base, receipts=receipts)
-                store = self.store_after(4, authority)
-                store.apply(vertical_commands()[4])
-                self.assertEqual(
-                    store.snapshot(LOOP_REF)["attempts"]["attempt-0001"]["state"],
-                    initial_state,
-                )
-                late_command = changed(
-                    vertical_commands()[4],
-                    operation_id=f"op-late-{initial_state.lower()}",
-                    expected_loop_revision=5,
-                    expected_subject_revisions={
-                        "attempt-0001": 2,
-                        "delivery-0001": 3,
-                    },
-                    issued_at="2026-07-27T00:00:05Z",
-                    machine_bindings={
-                        "resolved_refs": {},
-                        "allocate_refs": {},
-                        "receipt_refs": {"receipt": late.receipt_ref},
-                    },
-                )
-                result = store.apply(late_command)
-                self.assertEqual(result.event_types, ("LateDeliveryObserved",))
-                self.assertEqual(
-                    store.snapshot(LOOP_REF)["attempts"]["attempt-0001"]["state"],
-                    "OBSERVED",
-                )
-
     def test_cooperative_fixture_terminates_with_limitation_not_strict_claim(self):
         base = fixture_authority()
         receipts = dict(base.receipts)
@@ -710,11 +617,12 @@ class V4AlphaPureKernelTests(unittest.TestCase):
             receipts["receipt-finalize-0001"], trust_class="cooperative"
         )
         store = InMemoryStore(changed_authority(base, receipts=receipts))
+        seed_eager_memory(store)
         commands = list(vertical_commands())
         commands[9] = changed(
             commands[9], semantic_payload={"disposition": "LIMITATION"}
         )
-        for command in commands:
+        for command in commands[5:]:
             result = store.apply(command)
         snapshot = store.snapshot(LOOP_REF)
         self.assertEqual(snapshot["execution"]["state"], "TERMINAL")

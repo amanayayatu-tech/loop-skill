@@ -2,9 +2,8 @@
 
 ## Supported versions
 
-Security support follows the versions listed on GitHub Releases. This document
-describes the 4.0.0 security boundary without claiming that an unpublished
-source commit is already a public release. LoopSkill v3.3.8 remains an
+Security support follows the versions listed on GitHub Releases.
+LoopSkill 4.1.0 is the currently supported public line. LoopSkill v3.3.8 remains an
 independent historical release; v4 does not repair or migrate its data. No
 paper-treatment or prerelease branch is promoted to a supported public line by
 implication.
@@ -25,8 +24,10 @@ provider action merely to reproduce the report.
 
 LoopSkill 4 owns only its distinct v4 installation, data root, and receipts. It
 must not modify unrelated Codex config, register MCP, overwrite a v3 install,
-or import v3 state. The Kernel trusts only machine-constructed authority and
-verified receipts; model-authored control identities have no authority.
+start a daemon, require an App restart, or import v3 state. The Kernel trusts
+only machine-constructed authority and verified receipts; model-authored
+control identities have no authority. Plan content is private, content-addressed,
+and admitted only through the confirmed 1–32 Goal capacity contract.
 
 Security reports and fixes do not authorize publishing private evidence,
 force-pushing, rewriting historical releases, or claiming cross-system

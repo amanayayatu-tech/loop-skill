@@ -6,6 +6,15 @@ Reducer transition invariants remain in the kernel; Host provenance and
 readback rules remain in Adapter contracts. JSON Schema is therefore a shape
 artifact, not the full protocol semantics.
 
+For v4.1 the same manifest also owns the capacity contract and optional
+content-plan command fields. Generated consumers expose the 1–32 Goal,
+128 KiB canonical PlanDocument, 256 KiB text/Markdown source, 8 KiB / 64-member
+CreateLoop release target, and 24 KiB Host prompt admission target. Runtime code
+must not restate those numbers as a parallel authority. `AuthorityGrantV2`,
+`PlanDocument`, `PlanIndex`, and `PlanCapacityReport` are generated wire types;
+plan semantic canonicalization and reference derivation remain reviewed runtime
+invariants rather than a second schema.
+
 Regenerate deterministic consumers with:
 
 ```sh

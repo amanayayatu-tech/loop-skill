@@ -11,6 +11,7 @@ import hashlib
 import os
 import re
 import stat
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -19,9 +20,12 @@ from loop_architect.v4_adapters.codex.exec_provider import CodexExecProvider
 from loop_architect.v4_adapters.codex.adapter import HostUnavailable
 from loop_architect.v4_alpha.protocol import (
     LoopIntakeInput,
+    ProtocolRejection,
     canonical_bytes,
     snapshot_digest,
+    validate_result_payload,
 )
+from loop_architect.v4_alpha.plan_codec import canonicalize_plan
 from loop_architect.v4_persistence.sqlite_store import SQLiteStore
 
 from .service import (
@@ -49,6 +53,9 @@ CANARY_CONFIG_DELTA_DOMAIN = b"loopskill.v4.exec-canary.config-delta.v1\0"
 CANARY_WORKSPACE_DOMAIN = b"loopskill.v4.exec-canary.workspace.v1\0"
 CANARY_PROVIDER_DIAGNOSTIC_DOMAIN = (
     b"loopskill.v4.exec-canary.provider-diagnostic.v1\0"
+)
+CANARY_CANDIDATE_PROVENANCE_DOMAIN = (
+    b"loopskill.v4.exec-canary.candidate-provenance.v1\0"
 )
 
 HOST_CONFIG_DELTA_NONE = "NONE"
@@ -322,6 +329,89 @@ def _validate_candidate(candidate_sha: str) -> str:
     return candidate_sha
 
 
+def _candidate_provenance(
+    candidate_sha: str,
+    candidate_root: Path | str | None,
+    *,
+    runtime_source: Path | str | None = None,
+) -> dict[str, str]:
+    if candidate_root is None:
+        raise CanaryError("CANARY_CANDIDATE_ROOT_INVALID")
+    supplied_root = Path(candidate_root)
+    try:
+        root = supplied_root.resolve(strict=True)
+        metadata = root.stat()
+        if (
+            not supplied_root.is_absolute()
+            or supplied_root != root
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+        ):
+            raise OSError("unsafe candidate root")
+        top = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).stdout.strip()
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).stdout.strip()
+        tree = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CanaryError("CANARY_CANDIDATE_ROOT_INVALID") from exc
+    if Path(top).resolve() != root:
+        raise CanaryError("CANARY_CANDIDATE_ROOT_INVALID")
+    if head != candidate_sha:
+        raise CanaryError("CANARY_CANDIDATE_HEAD_MISMATCH")
+    if status:
+        raise CanaryError("CANARY_CANDIDATE_WORKTREE_DIRTY")
+    source = Path(__file__ if runtime_source is None else runtime_source).resolve()
+    expected_source = (
+        root
+        / "codex-loop-prompt-architect"
+        / "scripts"
+        / "loop_architect"
+        / "v4_entry"
+        / "canary.py"
+    ).resolve()
+    if source != expected_source or not source.is_file():
+        raise CanaryError("CANARY_RUNTIME_PAYLOAD_MISMATCH")
+    body = {
+        "candidate_execution_mode": "CLEAN_GIT_WORKTREE",
+        "candidate_sha": candidate_sha,
+        "candidate_tree_sha": tree,
+    }
+    body["candidate_provenance_digest"] = _domain_digest(
+        CANARY_CANDIDATE_PROVENANCE_DOMAIN, body
+    )
+    return body
+
+
 def _ensure_empty_private_root(path: Path | str) -> Path:
     root = Path(path)
     if root.exists():
@@ -348,27 +438,116 @@ def _ensure_empty_private_root(path: Path | str) -> Path:
     return root
 
 
-def _request() -> LoopIntakeInput:
+def _canary_filenames(goal_count: int) -> tuple[str, ...]:
+    if goal_count not in {1, 2, 8}:
+        raise CanaryError("CANARY_GOAL_COUNT_INVALID")
+    if goal_count == 1:
+        return (CANARY_OUTPUT_FILENAME,)
+    return tuple(f"canary-output-{index:02d}.txt" for index in range(1, goal_count + 1))
+
+
+def _canary_goal(filename: str) -> str:
+    return (
+        f"In this workspace, create exactly one new regular file named {filename} "
+        "with UTF-8 content 'LOOPSKILL4_CANARY_OK' followed by exactly one LF byte. "
+        "Preserve any already-created canary output files and create no other entries. "
+        f"Then check locally that {filename} exists and that its SHA-256 is "
+        f"{CANARY_OUTPUT_SHA256}. Return PASS only when all of those local checks "
+        "succeed; return FAILED when a completed check does not match; use LIMITATION "
+        "or UNVERIFIABLE only when one of those local checks cannot actually be performed."
+    )
+
+
+def _request(goal_count: int = 1) -> LoopIntakeInput:
+    if goal_count == 1:
+        return LoopIntakeInput(
+            goal=CANARY_GOAL,
+            goal_plan=(CANARY_GOAL,),
+            task_horizon="long",
+            write_scope=(CANARY_OUTPUT_FILENAME,),
+            budget="Complete only the stated local file operation and local checks.",
+            external_actions=(),
+            acceptance_criteria=(
+                "artifact-changed",
+                f"file-exists:{CANARY_OUTPUT_FILENAME}",
+                f"file-sha256:{CANARY_OUTPUT_FILENAME}={CANARY_OUTPUT_SHA256}",
+            ),
+            stop_conditions=(
+                "Stop after the stated local file and workspace checks are complete.",
+            ),
+            authorization_boundaries=(
+                f"Write only {CANARY_OUTPUT_FILENAME} inside this workspace.",
+                "Do not read or write outside this workspace.",
+                "Do not use the network or perform commit, push, publish, or deploy actions.",
+            ),
+        )
+    filenames = _canary_filenames(goal_count)
+    goals = tuple(_canary_goal(filename) for filename in filenames)
+    source_digest = hashlib.sha256(
+        f"loopskill-v4.1-capacity-canary:{goal_count}".encode("ascii")
+    ).hexdigest()
+    plan = canonicalize_plan(
+        {
+            "boundaries": {
+                "destructive_actions_allowed": False,
+                "external_actions": [],
+                "forbidden_actions": [
+                    "Do not read or write outside this workspace.",
+                    "Do not use the network or perform commit, push, publish, or deploy actions.",
+                ],
+                "forbidden_paths": [],
+                "write_scope": list(filenames),
+            },
+            "budget": {
+                "currency": None,
+                "max_cost_minor_units": 0,
+                "max_host_invocations": goal_count,
+                "wall_clock_seconds": 7_200,
+            },
+            "completion_evidence": [
+                f"file-sha256:{filename}={CANARY_OUTPUT_SHA256}"
+                for filename in filenames
+            ],
+            "goals": [
+                {
+                    "acceptance_criteria": [
+                        "artifact-changed",
+                        f"file-exists:{filename}",
+                        f"file-sha256:{filename}={CANARY_OUTPUT_SHA256}",
+                    ],
+                    "goal_id": f"g{index:03d}",
+                    "objective": objective,
+                }
+                for index, (filename, objective) in enumerate(zip(filenames, goals))
+            ],
+            "objective": goals[0],
+            "roadmap_policy": {"max_reorders": 0, "mode": "STANDARD"},
+            "schema": "loopskill-plan-v1",
+            "source": {
+                "kind": "expert_semantic_json",
+                "source_content_retained": False,
+                "source_digest": source_digest,
+            },
+            "stop_conditions": [
+                "Stop after the current local file and workspace checks are complete.",
+                "Stop on any uncertain Host outcome; never resend an invocation.",
+            ],
+        }
+    )
     return LoopIntakeInput(
-        goal=CANARY_GOAL,
-        goal_plan=(CANARY_GOAL,),
+        goal=goals[0],
+        goal_plan=goals,
         task_horizon="long",
-        write_scope=(CANARY_OUTPUT_FILENAME,),
-        budget="Complete only the stated local file operation and local checks.",
+        write_scope=filenames,
+        budget=f"At most {goal_count} Host invocations and two hours; no paid service.",
         external_actions=(),
-        acceptance_criteria=(
-            "artifact-changed",
-            f"file-exists:{CANARY_OUTPUT_FILENAME}",
-            f"file-sha256:{CANARY_OUTPUT_FILENAME}={CANARY_OUTPUT_SHA256}",
-        ),
-        stop_conditions=(
-            "Stop after the stated local file and workspace checks are complete.",
-        ),
-        authorization_boundaries=(
-            f"Write only {CANARY_OUTPUT_FILENAME} inside this workspace.",
-            "Do not read or write outside this workspace.",
-            "Do not use the network or perform commit, push, publish, or deploy actions.",
-        ),
+        acceptance_criteria=tuple(plan["completion_evidence"]),
+        stop_conditions=tuple(plan["stop_conditions"]),
+        authorization_boundaries=tuple(plan["boundaries"]["forbidden_actions"]),
+        canonical_plan=plan,
+        source_kind="expert_semantic_json",
+        source_digest=source_digest,
+        source_bytes=0,
     )
 
 
@@ -390,30 +569,31 @@ def _default_wait(provider: Any, workspace: Path, *, timeout_seconds: float = 30
         raise CanaryError("CANARY_TERMINAL_WAIT_CONTRACT_INVALID") from exc
 
 
-def _verify_workspace(workspace: Path) -> None:
+def _verify_workspace(workspace: Path, goal_count: int = 1) -> None:
+    expected_names = set(_canary_filenames(goal_count))
     try:
         entries = list(workspace.iterdir())
-        if len(entries) != 1 or entries[0].name != CANARY_OUTPUT_FILENAME:
+        if len(entries) != goal_count or {entry.name for entry in entries} != expected_names:
             raise OSError("unexpected workspace surface")
-        output = entries[0]
-        metadata = output.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-            raise OSError("unsafe output")
-        descriptor = os.open(output, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            opened = os.fstat(descriptor)
-            raw = os.read(descriptor, len(CANARY_OUTPUT_BYTES) + 1)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
-            ):
-                raise OSError("output changed during read")
-        finally:
-            os.close(descriptor)
+        for output in entries:
+            metadata = output.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise OSError("unsafe output")
+            descriptor = os.open(output, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                opened = os.fstat(descriptor)
+                raw = os.read(descriptor, len(CANARY_OUTPUT_BYTES) + 1)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
+                    or raw != CANARY_OUTPUT_BYTES
+                    or hashlib.sha256(raw).hexdigest() != CANARY_OUTPUT_SHA256
+                ):
+                    raise OSError("output changed or invalid")
+            finally:
+                os.close(descriptor)
     except OSError as exc:
         raise CanaryError("CANARY_OUTPUT_INVALID") from exc
-    if raw != CANARY_OUTPUT_BYTES or hashlib.sha256(raw).hexdigest() != CANARY_OUTPUT_SHA256:
-        raise CanaryError("CANARY_OUTPUT_INVALID")
 
 
 def _provider_metrics(provider: Any) -> dict[str, int]:
@@ -442,6 +622,36 @@ def _provider_metrics(provider: Any) -> dict[str, int]:
     return metrics
 
 
+def _aggregate_provider_metrics(
+    providers: tuple[Any, ...], goal_count: int
+) -> dict[str, int]:
+    if len(providers) != goal_count:
+        raise CanaryError("CANARY_PROVIDER_METRICS_INVALID")
+    values = {name: 0 for name in _SAFE_PROVIDER_METRICS}
+    for provider in providers:
+        raw = getattr(provider, "metrics", None)
+        raw = raw() if callable(raw) else raw
+        if not isinstance(raw, Mapping) or not _SAFE_PROVIDER_METRICS <= set(raw):
+            raise CanaryError("CANARY_PROVIDER_METRICS_UNAVAILABLE")
+        for name in _SAFE_PROVIDER_METRICS:
+            current = raw[name]
+            if isinstance(current, bool) or not isinstance(current, int) or current < 0:
+                raise CanaryError("CANARY_PROVIDER_METRICS_INVALID")
+            values[name] += current
+    if (
+        values["delivery_readback_count"] < goal_count
+        or values["delivery_readback_count"] > 3 * goal_count
+        or values["duplicate_invoke_rejection_count"] != 0
+        or values["lifecycle_read_count"] != 1
+        or values["provider_resend_count"] != 0
+        or values["task_create_count"] != goal_count
+        or values["task_result_read_count"] != goal_count
+        or values["terminal_wait_read_count"] != goal_count
+    ):
+        raise CanaryError("CANARY_PROVIDER_METRICS_INVALID")
+    return values
+
+
 def _provider_terminal_diagnostic(provider: Any) -> dict[str, Any]:
     reader = getattr(provider, "terminal_diagnostic", None)
     raw = reader() if callable(reader) else None
@@ -454,6 +664,8 @@ def _provider_terminal_diagnostic(provider: Any) -> dict[str, Any]:
         "result_sha256",
         "returncode_class",
         "schema_control_digest",
+        "semantic_outcome",
+        "semantic_summary",
         "stderr_bytes",
         "stderr_sha256",
         "stdout_bytes",
@@ -496,6 +708,18 @@ def _provider_terminal_diagnostic(provider: Any) -> dict[str, Any]:
     ):
         if not isinstance(value[name], str) or not re.fullmatch(r"[0-9a-f]{64}", value[name]):
             raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID")
+    semantic = {
+        "outcome": value["semantic_outcome"],
+        "summary": value["semantic_summary"],
+    }
+    if semantic == {"outcome": None, "summary": None}:
+        if value["code"] == "PASS":
+            raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID")
+    else:
+        try:
+            validate_result_payload(semantic)
+        except ProtocolRejection as exc:
+            raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID") from exc
     return value
 
 
@@ -512,50 +736,73 @@ def _live_summary(
     candidate_sha: str,
     store_root: Path,
     workspace: Path,
+    goal_count: int = 1,
 ) -> tuple[dict[str, Any], str]:
-    _verify_workspace(workspace)
+    _verify_workspace(workspace, goal_count)
     path = store_root / STORE_FILENAME
     with SQLiteStore(path) as store:
         store.verify_integrity()
         descriptors = store.loop_descriptors()
-        if len(descriptors) != 1 or descriptors[0]["goal"] != CANARY_GOAL:
+        if len(descriptors) != 1 or descriptors[0]["goal"] != _request(goal_count).goal:
             raise CanaryError("CANARY_CANDIDATE_BINDING_INVALID")
         snapshot = store.snapshot(descriptors[0]["loop_ref"])
         if snapshot is None:
             raise CanaryError("CANARY_CLOSURE_INVALID")
-        effect = _single(snapshot.get("external_effects", {}), "CANARY_CLOSURE_INVALID")
-        result = _single(snapshot.get("results", {}), "CANARY_CLOSURE_INVALID")
-        report = _single(snapshot.get("reports", {}), "CANARY_CLOSURE_INVALID")
-        artifact = _single(snapshot.get("artifacts", {}), "CANARY_CLOSURE_INVALID")
-        review = _single(snapshot.get("reviews", {}), "CANARY_CLOSURE_INVALID")
+        effects = tuple(snapshot.get("external_effects", {}).values())
+        results = tuple(snapshot.get("results", {}).values())
+        reports = tuple(snapshot.get("reports", {}).values())
+        artifacts = tuple(snapshot.get("artifacts", {}).values())
+        reviews = tuple(snapshot.get("reviews", {}).values())
         finalization = _single(
             snapshot.get("finalizations", {}), "CANARY_CLOSURE_INVALID"
         )
-        host_resource = snapshot.get("host_resources", {}).get(
-            effect.get("host_resource_ref")
-        )
-        provider_id = (
-            None
-            if not isinstance(host_resource, Mapping)
-            else host_resource.get("provider_resource_ref")
-        )
-        if not isinstance(provider_id, str) or not provider_id:
-            raise CanaryError("CANARY_HOST_IDENTITY_INVALID")
         if (
-            result.get("state") != "ACKNOWLEDGED"
-            or result.get("outcome") != "PASS"
-            or not isinstance(result.get("source_observation_digest"), str)
-            or report.get("state") != "ACCEPTED"
-            or artifact.get("state") != "VERIFIED"
-            or review.get("state") != "PASS"
+            len(effects) != goal_count
+            or len(results) != goal_count
+            or len(reports) != goal_count
+            or len(artifacts) != goal_count
+            or len(reviews) != goal_count
+            or any(
+                result.get("state") != "ACKNOWLEDGED"
+                or result.get("outcome") != "PASS"
+                or not isinstance(result.get("source_observation_digest"), str)
+                for result in results
+            )
+            or any(report.get("state") != "ACCEPTED" for report in reports)
+            or any(artifact.get("state") != "VERIFIED" for artifact in artifacts)
+            or any(review.get("state") != "PASS" for review in reviews)
             or finalization.get("state") != "EXECUTION_CLOSED"
             or snapshot.get("execution", {}).get("state") != "TERMINAL"
             or snapshot.get("execution", {}).get("disposition") != "SUCCEEDED"
             or snapshot.get("closure_assurance", {}).get("strength") != "STRICT"
         ):
             raise CanaryError("CANARY_CLOSURE_INVALID")
+        provider_ids: list[str] = []
+        for effect in effects:
+            host_resource = snapshot.get("host_resources", {}).get(
+                effect.get("host_resource_ref")
+            )
+            provider_id = (
+                None
+                if not isinstance(host_resource, Mapping)
+                else host_resource.get("provider_resource_ref")
+            )
+            if not isinstance(provider_id, str) or not provider_id:
+                raise CanaryError("CANARY_HOST_IDENTITY_INVALID")
+            provider_ids.append(provider_id)
+        result_digests = [str(result["source_observation_digest"]) for result in results]
+        host_identity_digest = (
+            _domain_digest(CANARY_HOST_ID_DOMAIN, provider_ids[0])
+            if goal_count == 1
+            else _domain_digest(CANARY_HOST_ID_DOMAIN, provider_ids)
+        )
+        result_digest = (
+            result_digests[0]
+            if goal_count == 1
+            else _domain_digest(CANARY_LIVE_DOMAIN, result_digests)
+        )
         live = {
-            "artifact_state": artifact["state"],
+            "artifact_state": "VERIFIED",
             "assurance": snapshot["closure_assurance"]["strength"],
             "canary_output_sha256": CANARY_OUTPUT_SHA256,
             "candidate_goal_digest": descriptors[0]["goal_digest"],
@@ -563,15 +810,13 @@ def _live_summary(
             "execution_disposition": snapshot["execution"]["disposition"],
             "execution_state": snapshot["execution"]["state"],
             "finalization_state": finalization["state"],
-            "host_task_identity_digest": _domain_digest(
-                CANARY_HOST_ID_DOMAIN, provider_id
-            ),
+            "host_task_identity_digest": host_identity_digest,
             "lifecycle_state": "TERMINAL",
-            "result_digest": result["source_observation_digest"],
-            "result_outcome": result["outcome"],
-            "result_state": result["state"],
-            "report_state": report["state"],
-            "review_state": review["state"],
+            "result_digest": result_digest,
+            "result_outcome": "PASS",
+            "result_state": "ACKNOWLEDGED",
+            "report_state": "ACCEPTED",
+            "review_state": "PASS",
             "snapshot_digest": snapshot_digest(snapshot),
         }
         return live, descriptors[0]["goal_digest"]
@@ -584,11 +829,20 @@ def _receipt(
     integrity: Mapping[str, Any],
     issued_at: datetime,
     observed_at: datetime,
-    provider_diagnostic: Mapping[str, Any],
+    provider_diagnostic: Any,
+    candidate_provenance: Mapping[str, str],
+    goal_count: int = 1,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "artifact": CANARY_ARTIFACT,
+        "candidate_execution_mode": candidate_provenance[
+            "candidate_execution_mode"
+        ],
+        "candidate_provenance_digest": candidate_provenance[
+            "candidate_provenance_digest"
+        ],
         "candidate_sha": candidate_sha,
+        "candidate_tree_sha": candidate_provenance["candidate_tree_sha"],
         "candidate_goal_digest": live["candidate_goal_digest"],
         "canary_output_sha256": live["canary_output_sha256"],
         "confirmation_count": 1,
@@ -601,7 +855,9 @@ def _receipt(
         ],
         "entry": "loopskill4",
         "finalization": "ACKNOWLEDGED",
-        "fresh_until": _iso(issued_at + timedelta(minutes=10)),
+        "fresh_until": _iso(
+            issued_at + timedelta(minutes=10 if goal_count == 1 else 120)
+        ),
         "host_auth_after_digest": integrity["after"]["host_auth"]["digest"],
         "host_auth_before_digest": integrity["before"]["host_auth"]["digest"],
         "host_config_after_digest": integrity["after"]["host_config"]["digest"],
@@ -701,7 +957,9 @@ def run_canary(
     candidate_sha: str,
     evidence_root: Path | str,
     *,
+    candidate_root: Path | str | None = None,
     confirmation_callback: Callable[[Mapping[str, Any]], bool],
+    goal_count: int = 1,
     integrity_inputs: Mapping[str, Path | str] | None = None,
     provider_factory: Callable[[Path], Any] | None = None,
     wait_callback: Callable[[Any, Path], None] | None = None,
@@ -715,6 +973,7 @@ def run_canary(
     producing ``canary-receipt.json``.
     """
     candidate = _validate_candidate(candidate_sha)
+    candidate_provenance = _candidate_provenance(candidate, candidate_root)
     root = _ensure_empty_private_root(evidence_root).resolve(strict=True)
     workspace = root / "workspace"
     workspace.mkdir(mode=0o700)
@@ -722,7 +981,8 @@ def run_canary(
     prepared_root = root / "prepared"
     store_root = root / "store"
 
-    request = _request()
+    _canary_filenames(goal_count)
+    request = _request(goal_count)
     intake_report = intake_report_loop(request)
     if intake_report["1 最终判定"]["disposition"] != "READY_FOR_LOOP":
         raise CanaryError("CANARY_INTAKE_NOT_READY")
@@ -746,6 +1006,7 @@ def run_canary(
         CANARY_INTEGRITY_BEFORE_FILENAME,
         {
             "artifact": "loopskill-v4-canary-integrity-before-v1",
+            **candidate_provenance,
             "candidate_sha": candidate,
             "inputs": _integrity_public(before_integrity),
             "issued_at": _iso(issued_at),
@@ -753,64 +1014,81 @@ def run_canary(
         },
     )
 
-    provider = None
-    provider_diagnostic = None
+    providers: list[Any] = []
+    provider_diagnostics: list[Mapping[str, Any]] = []
     after_integrity = None
     integrity_observed_at = None
+    final_view = None
     try:
-        if provider_factory is None:
-            provider = CodexExecProvider(
-                workspace,
-                issuer_ref=CANARY_ISSUER,
-                issuer_trust=CANARY_TRUST,
-                clock=clock,
-            )
-        else:
-            provider = provider_factory(workspace)
-
-        preflight = getattr(provider, "preflight", None)
-        if not callable(preflight):
-            raise CanaryError("CANARY_HOST_PROTOCOL_PREFLIGHT_UNAVAILABLE")
-        try:
-            preflight()
-        except HostUnavailable as exc:
-            raise CanaryError("CANARY_HOST_PROTOCOL_INCOMPATIBLE") from exc
-
-        # Exactly one public START.  No exception path re-enters this call.
-        start_loop(
-            confirmed,
-            root=store_root,
-            clock=clock,
-            host_provider=provider,
-            host_issuer_ref=CANARY_ISSUER,
-            host_issuer_trust=CANARY_TRUST,
-            workspace_root=workspace,
-        )
-        (wait_callback or _default_wait)(provider, workspace)
-        # Exactly one synchronization.  UNKNOWN/UNVERIFIABLE remains canonical.
-        final_view = sync_loop(
-            root=store_root,
-            host_provider=provider,
-            host_issuer_ref=CANARY_ISSUER,
-            host_issuer_trust=CANARY_TRUST,
-            clock=clock,
-            workspace_root=workspace,
-        )
-    finally:
-        close = None if provider is None else getattr(provider, "close", None)
-        if callable(close):
-            close()
-        if provider is not None:
-            try:
-                provider_diagnostic = _provider_terminal_diagnostic(provider)
-            except CanaryError:
-                provider_diagnostic = None
-            if provider_diagnostic is not None:
-                _write_canonical_once(
-                    root,
-                    CANARY_PROVIDER_DIAGNOSTIC_FILENAME,
-                    provider_diagnostic,
+        for index in range(goal_count):
+            if provider_factory is None:
+                provider = CodexExecProvider(
+                    workspace,
+                    issuer_ref=CANARY_ISSUER,
+                    issuer_trust=CANARY_TRUST,
+                    clock=clock,
                 )
+            else:
+                provider = provider_factory(workspace)
+            providers.append(provider)
+            try:
+                preflight = getattr(provider, "preflight", None)
+                if not callable(preflight):
+                    raise CanaryError("CANARY_HOST_PROTOCOL_PREFLIGHT_UNAVAILABLE")
+                try:
+                    preflight()
+                except HostUnavailable as exc:
+                    raise CanaryError("CANARY_HOST_PROTOCOL_INCOMPATIBLE") from exc
+
+                if index == 0:
+                    # Exactly one public START. No exception path re-enters it.
+                    start_loop(
+                        confirmed,
+                        root=store_root,
+                        clock=clock,
+                        host_provider=provider,
+                        host_issuer_ref=CANARY_ISSUER,
+                        host_issuer_trust=CANARY_TRUST,
+                        workspace_root=workspace,
+                    )
+                    (wait_callback or _default_wait)(provider, workspace)
+                    final_view = sync_loop(
+                        root=store_root,
+                        host_provider=provider,
+                        host_issuer_ref=CANARY_ISSUER,
+                        host_issuer_trust=CANARY_TRUST,
+                        clock=clock,
+                        workspace_root=workspace,
+                    )
+                else:
+                    # A fresh one-invocation Provider owns each already-committed
+                    # next-Goal Attempt; no Provider instance is reused.
+                    final_view = sync_loop(
+                        root=store_root,
+                        host_provider=provider,
+                        host_issuer_ref=CANARY_ISSUER,
+                        host_issuer_trust=CANARY_TRUST,
+                        clock=clock,
+                        workspace_root=workspace,
+                    )
+                    (wait_callback or _default_wait)(provider, workspace)
+            finally:
+                close = getattr(provider, "close", None)
+                if callable(close):
+                    close()
+                try:
+                    diagnostic = _provider_terminal_diagnostic(provider)
+                except CanaryError:
+                    diagnostic = None
+                if diagnostic is not None:
+                    provider_diagnostics.append(diagnostic)
+                    filename = (
+                        CANARY_PROVIDER_DIAGNOSTIC_FILENAME
+                        if goal_count == 1
+                        else f"canary-provider-diagnostic-{index + 1:02d}.json"
+                    )
+                    _write_canonical_once(root, filename, diagnostic)
+    finally:
         after_integrity = _integrity_snapshot(integrity_inputs)
         integrity_observed_at = clock()
         comparison = _integrity_comparison(
@@ -823,16 +1101,26 @@ def run_canary(
         _write_canonical_once(root, CANARY_INTEGRITY_FILENAME, comparison)
     if comparison["host_config_delta"]["unexpected_changed_input_count"] != 0:
         raise CanaryError("CANARY_HOST_INTEGRITY_CHANGED")
-    if final_view.progress != "Finished" or final_view.result != "SUCCEEDED":
+    if final_view is None or final_view.progress != "Finished" or final_view.result != "SUCCEEDED":
         raise CanaryError("CANARY_OUTCOME_NOT_PASS")
 
-    _verify_workspace(workspace)
-    assert provider is not None
+    _verify_workspace(workspace, goal_count)
     assert integrity_observed_at is not None
-    metrics = _provider_metrics(provider)
-    if provider_diagnostic is None or provider_diagnostic.get("code") != "PASS":
+    provider_tuple = tuple(providers)
+    metrics = (
+        _provider_metrics(provider_tuple[0])
+        if goal_count == 1
+        else _aggregate_provider_metrics(provider_tuple, goal_count)
+    )
+    if (
+        len(provider_diagnostics) != goal_count
+        or any(item.get("code") != "PASS" for item in provider_diagnostics)
+    ):
         raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID")
-    live, _ = _live_summary(candidate, store_root, workspace)
+    live, _ = _live_summary(candidate, store_root, workspace, goal_count)
+    diagnostic_evidence: Any = (
+        provider_diagnostics[0] if goal_count == 1 else provider_diagnostics
+    )
     receipt = _receipt(
         candidate,
         live,
@@ -840,7 +1128,9 @@ def run_canary(
         comparison,
         issued_at,
         integrity_observed_at,
-        provider_diagnostic,
+        diagnostic_evidence,
+        candidate_provenance,
+        goal_count,
     )
     _write_receipt(root, receipt)
     return receipt

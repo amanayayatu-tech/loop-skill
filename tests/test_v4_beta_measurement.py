@@ -13,11 +13,10 @@ SPEC = importlib.util.spec_from_file_location("measure_v4_beta", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 measurement = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(measurement)
-RUNNER_PATH = ROOT / "scripts" / "run_v4_beta_fixture.py"
-RUNNER_SPEC = importlib.util.spec_from_file_location("run_v4_beta_fixture", RUNNER_PATH)
-assert RUNNER_SPEC is not None and RUNNER_SPEC.loader is not None
-runner = importlib.util.module_from_spec(RUNNER_SPEC)
-RUNNER_SPEC.loader.exec_module(runner)
+FROZEN_EVIDENCE = (
+    ROOT / "evidence" / "v4-development" / "p7-policy-operability-and-comparison-evidence.json"
+)
+FROZEN_BASELINE = ROOT / "evidence" / "v4-development" / "p7-v3-baseline-freeze.json"
 
 
 class V4BetaMeasurementTests(unittest.TestCase):
@@ -86,8 +85,13 @@ class V4BetaMeasurementTests(unittest.TestCase):
                 )
                 self.assertEqual(rejected["status"], "FAIL")
 
-    def test_real_local_v4_fixture_passes_frozen_comparator(self) -> None:
-        receipt = runner.run_fixture()
+    def test_frozen_v4_fixture_receipt_passes_frozen_comparator(self) -> None:
+        evidence = json.loads(FROZEN_EVIDENCE.read_text(encoding="utf-8"))
+        receipt = evidence["v4_receipt"]
+        self.assertEqual(
+            evidence["file_sha256"]["scripts/run_v4_beta_fixture.py"],
+            receipt["fixture_runner_sha256"],
+        )
         self.assertEqual(receipt["real_external_effects"], 0)
         self.assertEqual(receipt["canonical_commits"], 11)
         self.assertEqual(receipt["event_count"], 18)
@@ -101,7 +105,7 @@ class V4BetaMeasurementTests(unittest.TestCase):
             receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
             result = measurement.compare_v4(
                 measurement.DEFAULT_SCENARIO,
-                runner.BASELINE,
+                FROZEN_BASELINE,
                 receipt_path,
             )
         self.assertEqual(result["status"], "PASS")

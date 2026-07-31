@@ -135,6 +135,101 @@
       ],
       "type": "object"
     },
+    "AuthorityGrantV2": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_ref": {
+          "type": "string"
+        },
+        "allowed_commands": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "canonical_digest": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "grant_ref": {
+          "type": "string"
+        },
+        "issuer_actor_ref": {
+          "type": "string"
+        },
+        "issuer_trust": {
+          "type": "string"
+        },
+        "loop_scope": {
+          "type": "string"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "not_before": {
+          "type": "string"
+        },
+        "schema": {
+          "const": "loopskill-authority-grant-v2",
+          "type": "string"
+        },
+        "subject_kinds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subject_selector": {
+          "additionalProperties": false,
+          "properties": {
+            "goal_index_max": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "goal_index_min": {
+              "const": 0,
+              "type": "integer"
+            },
+            "include_loop_scope": {
+              "type": "boolean"
+            },
+            "mode": {
+              "const": "PLAN_DERIVED_V1",
+              "type": "string"
+            },
+            "plan_digest": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "goal_index_max",
+            "goal_index_min",
+            "include_loop_scope",
+            "mode",
+            "plan_digest"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "grant_ref",
+        "actor_ref",
+        "issuer_actor_ref",
+        "issuer_trust",
+        "allowed_commands",
+        "loop_scope",
+        "subject_kinds",
+        "subject_selector",
+        "not_before",
+        "expires_at",
+        "nonce",
+        "canonical_digest"
+      ],
+      "type": "object"
+    },
     "CapabilityRecord": {
       "additionalProperties": false,
       "properties": {
@@ -342,6 +437,12 @@
         "budget": {
           "type": "string"
         },
+        "canonical_plan": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "external_actions": {
           "items": {
             "type": "string"
@@ -356,6 +457,23 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "source_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_digest": {
+          "type": "string"
+        },
+        "source_kind": {
+          "enum": [
+            "literal_text",
+            "pasted_text",
+            "authorized_file",
+            "expert_semantic_json",
+            "canonical_plan_json"
+          ],
+          "type": "string"
         },
         "stop_conditions": {
           "items": {
@@ -398,6 +516,337 @@
       ],
       "type": "object"
     },
+    "PlanCapacityReport": {
+      "additionalProperties": false,
+      "properties": {
+        "blocking_reason": {
+          "type": "string"
+        },
+        "capacity_contract_version": {
+          "const": "loopskill-capacity-v1",
+          "type": "string"
+        },
+        "capacity_status": {
+          "enum": [
+            "PASS",
+            "BLOCKED"
+          ],
+          "type": "string"
+        },
+        "create_loop_byte_headroom": {
+          "type": "integer"
+        },
+        "create_loop_collection_headroom": {
+          "type": "integer"
+        },
+        "create_loop_command_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "create_loop_max_collection_members": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "goal_count": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "materialized_goal_prompt_bytes": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "max_materialized_goal_id": {
+          "type": "string"
+        },
+        "max_materialized_goal_prompt_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_digest": {
+          "type": "string"
+        },
+        "plan_index_digest": {
+          "type": "string"
+        },
+        "provider_prompt_headroom": {
+          "type": "integer"
+        },
+        "source_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_digest": {
+          "type": "string"
+        },
+        "source_kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_kind",
+        "source_bytes",
+        "source_digest",
+        "goal_count",
+        "plan_bytes",
+        "plan_digest",
+        "plan_index_digest",
+        "create_loop_command_bytes",
+        "create_loop_max_collection_members",
+        "max_materialized_goal_prompt_bytes",
+        "max_materialized_goal_id",
+        "create_loop_byte_headroom",
+        "create_loop_collection_headroom",
+        "provider_prompt_headroom",
+        "capacity_contract_version",
+        "capacity_status",
+        "blocking_reason",
+        "materialized_goal_prompt_bytes"
+      ],
+      "type": "object"
+    },
+    "PlanDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "boundaries": {
+          "additionalProperties": false,
+          "properties": {
+            "destructive_actions_allowed": {
+              "type": "boolean"
+            },
+            "external_actions": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "forbidden_actions": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "forbidden_paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "write_scope": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "destructive_actions_allowed",
+            "external_actions",
+            "forbidden_actions",
+            "forbidden_paths",
+            "write_scope"
+          ],
+          "type": "object"
+        },
+        "budget": {
+          "additionalProperties": false,
+          "properties": {
+            "currency": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "max_cost_minor_units": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_host_invocations": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "wall_clock_seconds": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "currency",
+            "max_cost_minor_units",
+            "max_host_invocations",
+            "wall_clock_seconds"
+          ],
+          "type": "object"
+        },
+        "completion_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "goals": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "acceptance_criteria": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "goal_id": {
+                "pattern": "^g[0-9]{3}$",
+                "type": "string"
+              },
+              "objective": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "acceptance_criteria",
+              "goal_id",
+              "objective"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "roadmap_policy": {
+          "additionalProperties": false,
+          "properties": {
+            "max_reorders": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "enum": [
+                "STANDARD",
+                "ADAPTIVE"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "max_reorders",
+            "mode"
+          ],
+          "type": "object"
+        },
+        "schema": {
+          "const": "loopskill-plan-v1",
+          "type": "string"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "literal_text",
+                "pasted_text",
+                "authorized_file",
+                "expert_semantic_json",
+                "canonical_plan_json"
+              ],
+              "type": "string"
+            },
+            "source_content_retained": {
+              "const": false,
+              "type": "boolean"
+            },
+            "source_digest": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "source_content_retained",
+            "source_digest"
+          ],
+          "type": "object"
+        },
+        "stop_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "source",
+        "objective",
+        "boundaries",
+        "budget",
+        "roadmap_policy",
+        "completion_evidence",
+        "stop_conditions",
+        "goals"
+      ],
+      "type": "object"
+    },
+    "PlanIndex": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_digest": {
+          "type": "string"
+        },
+        "capacity_contract_version": {
+          "const": "loopskill-capacity-v1",
+          "type": "string"
+        },
+        "goal_count": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ordered_goal_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ordered_goal_slice_digests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plan_digest": {
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema": {
+          "const": "loopskill-plan-index-v1",
+          "type": "string"
+        },
+        "workspace_binding": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "plan_digest",
+        "goal_count",
+        "ordered_goal_ids",
+        "ordered_goal_slice_digests",
+        "revision",
+        "workspace_binding",
+        "authority_digest",
+        "capacity_contract_version"
+      ],
+      "type": "object"
+    },
     "PreparedLoopBundle": {
       "additionalProperties": false,
       "properties": {
@@ -405,6 +854,9 @@
           "type": "string"
         },
         "bundle_digest": {
+          "type": "string"
+        },
+        "capacity_report_digest": {
           "type": "string"
         },
         "controller_plan_digest": {
@@ -415,6 +867,12 @@
         },
         "manifest_digest": {
           "type": "string"
+        },
+        "plan_digest": {
+          "type": "string"
+        },
+        "plan_index_digest": {
+          "type": "string"
         }
       },
       "required": [
@@ -422,7 +880,10 @@
         "boundary_digest",
         "controller_plan_digest",
         "instructions_digest",
-        "bundle_digest"
+        "bundle_digest",
+        "plan_digest",
+        "plan_index_digest",
+        "capacity_report_digest"
       ],
       "type": "object"
     },
@@ -451,6 +912,13 @@
           "type": "array"
         },
         "budget": {
+          "type": "string"
+        },
+        "capacity_contract_version": {
+          "const": "loopskill-capacity-v1",
+          "type": "string"
+        },
+        "capacity_report_digest": {
           "type": "string"
         },
         "control_namespace": {
@@ -487,10 +955,30 @@
         "max_roadmap_revisions": {
           "type": "integer"
         },
+        "plan_digest": {
+          "type": "string"
+        },
+        "plan_index_digest": {
+          "type": "string"
+        },
+        "plan_storage_mode": {
+          "const": "CONTENT_ADDRESSED_V1",
+          "type": "string"
+        },
         "prepared_at": {
           "type": "string"
         },
+        "product_version": {
+          "const": "4.1.0",
+          "type": "string"
+        },
+        "protocol_manifest_digest": {
+          "type": "string"
+        },
         "selection_reason": {
+          "type": "string"
+        },
+        "source_digest": {
           "type": "string"
         },
         "stop_conditions": {
@@ -530,7 +1018,15 @@
         "authorization_boundaries",
         "artifact_profile",
         "workspace_identity_digest",
-        "prepared_at"
+        "prepared_at",
+        "plan_storage_mode",
+        "plan_digest",
+        "plan_index_digest",
+        "capacity_report_digest",
+        "capacity_contract_version",
+        "source_digest",
+        "product_version",
+        "protocol_manifest_digest"
       ],
       "type": "object"
     },
@@ -698,6 +1194,6 @@
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "ffbc01b8d8ba881a73a27b6b3d3e789d24acccb6b340ac0840589650bcbb514f",
+  "manifest_sha256": "5a46d9c4d31d2964821165a66a07ca67ac4eee53cd58976438ae3eb19ba9f2c2",
   "title": "LoopSkill 4 protocol wire shapes"
 }

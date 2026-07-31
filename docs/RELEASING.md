@@ -7,8 +7,8 @@ exposure, unresolved deterministic gates, or identity drift.
 
 ## Release identity
 
-- version file: `VERSION` = `4.0.0`;
-- release tag: annotated `v4.0.0`;
+- version file: `VERSION` = `4.1.0`;
+- release tag: annotated `v4.1.0`;
 - public repository: `amanayayatu-tech/loop-skill`;
 - default branch: `main`;
 - historical fallback: [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8);
@@ -20,11 +20,12 @@ No evidence from a different commit may be used as exact-SHA evidence. A merge
 or squash creates a new candidate identity and requires the corresponding
 release-identity checks and real foreground Codex exec canary on the merged SHA.
 
-## Before Gate 1: freeze release truth once
+## Before Gate 1: freeze candidate truth
 
-Development and review commits must keep candidate wording. Immediately before
-Gate 1, make one deliberate release-truth commit that changes exactly these six
-candidate/support surfaces together:
+Development, RC validation, both real canaries, and review must keep candidate
+wording. Gate 1 starts from that exact clean candidate. Only after separate
+author release authorization may an operator make one deliberate release-truth
+commit that changes exactly these seven candidate/support surfaces together:
 
 1. `README.md`: candidate notice to the approved Chinese stable notice;
 2. `README.en.md`: candidate notice to the approved English stable notice;
@@ -32,25 +33,28 @@ candidate/support surfaces together:
    stable notice;
 4. `docs/v4/quickstart.en.md`: candidate notice to the matching English stable
    notice;
-5. `SECURITY.md`: future support wording to “LoopSkill 4.0.0 is the currently
+5. `SECURITY.md`: future support wording to “LoopSkill 4.1.0 is the currently
    supported public line.”;
-6. `CHANGELOG.md`: the final `4.0.0` release date and release-link identity.
+6. `CHANGELOG.md`: the final `4.1.0` release date and release-link identity.
+7. `docs/v4/release-notes-v4.1.md`: candidate-only status to the reviewed
+   public release notes, including the direct v3.3.8 fallback and claim limits.
 
-`VERSION` is already `4.0.0` and remains a separately validated version truth;
-it is not a seventh candidate-to-stable text switch. Before that one commit,
-English candidate copy must say “undergoing release validation” and must not
-claim a gate result before evidence exists. After the commit, set its new `HEAD`
-as `CANDIDATE`. All receipts from the predecessor SHA are superseded: Gate 1 and
-every later exact-SHA gate start again from this new clean commit. If any of the
-six surfaces changes afterward, create a new candidate SHA and repeat the full
-exact-SHA chain; do not transplant predecessor evidence.
+`VERSION` is already `4.1.0` and remains a separately validated version truth;
+it is not an eighth candidate-to-stable text switch. Before that authorized
+commit, English copy must say “awaiting author release authorization” and must
+not claim public support. The truth switch creates a new candidate SHA, so all
+RC-ready receipts from its predecessor are superseded: Gate 1 and every later
+exact-SHA gate must run again before publication. If any of the seven surfaces
+changes afterward, create another candidate SHA and repeat the full exact-SHA
+chain; do not transplant predecessor evidence.
 
 ## Gate 1: candidate structure and deterministic checks
 
-Run focused checks while changing code. Gate 1 begins only after the six-surface
-release-truth transition above. On that final clean candidate, create one
+Run focused checks while changing code. On the final clean candidate, create one
 disposable validation environment, run exactly one complete v4 suite under
-branch coverage, and keep every raw log outside the repository:
+branch coverage, and keep every raw log outside the repository. Candidate mode
+is used for RC readiness; release mode is reserved for the separately authorized
+truth-switch SHA:
 
 ```bash
 set -euo pipefail
@@ -187,41 +191,49 @@ are predecessor evidence, not release artifacts.
 
 ## Gate 2: exact-SHA local foreground Codex exec canary
 
-After freezing the candidate SHA, run one new non-scored, non-research,
-disposable canary through the receipt-bound public entry installed from that
-exact commit. Install, uninstall, config-integrity, and independent-v3 sentinel
-checks use a new isolated `CODEX_HOME`. The one authenticated model turn uses
+After freezing the candidate SHA, run exactly two new non-scored, non-research,
+disposable routes through the public source-tree entry from that exact clean
+commit: a fresh 2-Goal route, then only after it passes, a fresh 8-Goal
+route. Together they authorize at most 10 Host invocations and two hours.
+Install, uninstall, config-integrity, and independent-v3 sentinel checks use a
+new isolated `CODEX_HOME`. The authenticated model turns use
 the operator's already-authenticated official Codex Host context without
 copying, linking, or rewriting credentials. Its config and auth files are only
 hashed before and after the turn; the canary never inspects the operator's real
 v3 installation or data. The evidence root must not already exist. The command
 stops for the exact interactive phrase
-`RUN THIS CANARY` before constructing the provider. In other words, the release
-invocation is the installed, receipt-checked `loopskill4 canary`, not the source-
-tree entry:
+`START THIS LOOP` once for each route before constructing its first provider.
+Each Goal uses one fresh one-invocation Provider. The release invocations use
+the candidate's own `loopskill4 canary` entry and bind its live module path,
+commit tree, and clean-worktree state before any Host effect. The separately
+required distribution gate still proves the isolated installed entry.
 
 The exact candidate must first prove that preflight requires the official
 `--output-schema` and `--output-last-message` flags. The private schema and
 result paths are identity/digest-bound, outside the artifact workspace, and
 cleaned. JSONL is lifecycle-only; the result file is the sole semantic source.
 Bounded stderr is diagnostic and cannot alone veto success, while overflow
-fails closed. Private evidence retains only byte counts/digests and the safe
-terminal classification needed to distinguish transport/result failures;
-public evidence binds the diagnostic digest and exposes no raw Host transcript,
-result text, path, or identity.
+fails closed. The private provider diagnostic retains byte counts/digests,
+the safe terminal classification, and the schema-valid bounded semantic
+outcome/summary needed to explain a non-PASS result. Public evidence binds only
+the diagnostic digest and exposes no raw Host transcript, result text, path, or
+identity.
 
 ```bash
 set -euo pipefail
 umask 077
 CANARY_CODEX_HOME="$RELEASE_TMP/canary-codex-home"
-CANARY_ROOT="$RELEASE_TMP/exec-canary"
+CANARY_ROOT_2="$RELEASE_TMP/exec-canary-2-goal"
+CANARY_ROOT_8="$RELEASE_TMP/exec-canary-8-goal"
+CANDIDATE_ROOT="$(pwd -P)"
 HOST_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 HOST_CONFIG="$HOST_CODEX_HOME/config.toml"
 HOST_AUTH="$HOST_CODEX_HOME/auth.json"
 mkdir -p "$CANARY_CODEX_HOME/skills/codex-loop-prompt-architect"
 printf '%s\n' '# isolated LoopSkill 4 canary config' >"$CANARY_CODEX_HOME/config.toml"
 printf '%s\n' 'synthetic-v3-sentinel' >"$CANARY_CODEX_HOME/skills/codex-loop-prompt-architect/PRESERVE"
-test ! -e "$CANARY_ROOT"
+test ! -e "$CANARY_ROOT_2"
+test ! -e "$CANARY_ROOT_8"
 
 snapshot_path() {
   "$PY" - "$1" <<'PY'
@@ -263,7 +275,7 @@ CODEX_HOME="$HOST_CODEX_HOME" codex login status 2>&1 | grep -F 'Logged in' >/de
 export CODEX_HOME="$CANARY_CODEX_HOME"
 LOOP_RELEASE_COMMIT="$CANDIDATE" PYTHON="$PY" bash scripts/install.sh \
   >"$RELEASE_TMP/canary-install.log"
-CANARY_ENTRY="$CANARY_CODEX_HOME/skills/loopskill4/scripts/loopskill4"
+CANARY_ENTRY="$CANDIDATE_ROOT/codex-loop-prompt-architect/scripts/loopskill4"
 CANARY_UNINSTALL="$CANARY_CODEX_HOME/install-receipts/loopskill4/uninstall_v4.py"
 INSTALL_READBACK="$("$PY" "$CANARY_UNINSTALL" --codex-home "$CANARY_CODEX_HOME" --check)"
 printf '%s\n' "$INSTALL_READBACK" >"$RELEASE_TMP/canary-install-readback.json"
@@ -279,7 +291,15 @@ trap cleanup_canary_install EXIT
 
 CODEX_HOME="$HOST_CODEX_HOME" "$CANARY_ENTRY" canary \
   --candidate "$CANDIDATE" \
-  --evidence-root "$CANARY_ROOT"
+  --candidate-root "$CANDIDATE_ROOT" \
+  --goals 2 \
+  --evidence-root "$CANARY_ROOT_2"
+
+CODEX_HOME="$HOST_CODEX_HOME" "$CANARY_ENTRY" canary \
+  --candidate "$CANDIDATE" \
+  --candidate-root "$CANDIDATE_ROOT" \
+  --goals 8 \
+  --evidence-root "$CANARY_ROOT_8"
 
 UNINSTALL_FIRST="$("$PY" "$CANARY_UNINSTALL" --codex-home "$CANARY_CODEX_HOME")"
 grep -F '"status":"UNINSTALLED"' <<<"$UNINSTALL_FIRST" >/dev/null
@@ -299,7 +319,8 @@ test "$HOST_AUTH_BEFORE" = "$HOST_AUTH_AFTER"
 "$PY" - "$CANDIDATE" "$CONFIG_BEFORE" "$CONFIG_AFTER" \
   "$V3_BEFORE" "$V3_AFTER" "$HOST_CONFIG_BEFORE" "$HOST_CONFIG_AFTER" \
   "$HOST_AUTH_BEFORE" "$HOST_AUTH_AFTER" \
-  "$CANARY_ROOT/canary-receipt.json" \
+  "$CANARY_ROOT_2/canary-receipt.json" \
+  "$CANARY_ROOT_8/canary-receipt.json" \
   "$EVIDENCE/canary-environment-integrity.json" <<'PY'
 from pathlib import Path
 import hashlib
@@ -308,43 +329,50 @@ import sys
 
 candidate = sys.argv[1]
 values = sys.argv[2:10]
-receipt_path = Path(sys.argv[10])
-output = sys.argv[11]
+receipt_paths = (Path(sys.argv[10]), Path(sys.argv[11]))
+output = sys.argv[12]
 labels = ("isolated_config", "v3_sentinel", "host_config", "host_auth")
 pairs = {
     label: {"before": values[index * 2], "after": values[index * 2 + 1]}
     for index, label in enumerate(labels)
 }
-receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+receipts = [json.loads(path.read_text(encoding="utf-8")) for path in receipt_paths]
+for receipt, expected in zip(receipts, (2, 8)):
+    if (
+        receipt.get("candidate_sha") != candidate
+        or receipt.get("status") != "PASS"
+        or receipt.get("host_task_create_count") != expected
+        or receipt.get("host_task_readback_count") != expected
+        or receipt.get("host_terminal_wait_readback_count") != expected
+        or receipt.get("provider_resend_count") != 0
+        or receipt.get("unexpected_changed_input_count") != 0
+        or receipt.get("observed_host_auth_changed_bytes") != 0
+    ):
+        raise SystemExit("canary route receipt invalid")
 host_config_changed = pairs["host_config"]["before"] != pairs["host_config"]["after"]
 unexpected_changed_input_count = sum(
     pairs[label]["before"] != pairs[label]["after"]
     for label in ("isolated_config", "v3_sentinel", "host_auth")
 )
-if receipt["host_config_delta_kind"] == "NONE":
-    host_delta_matches = (
-        not host_config_changed
-        and receipt["allowed_host_managed_delta_count"] == 0
-        and receipt["observed_host_config_changed_bytes"] == 0
-    )
-elif receipt["host_config_delta_kind"] == "CODEX_WORKSPACE_TRUST_APPEND_V1":
-    host_delta_matches = (
-        host_config_changed
-        and receipt["allowed_host_managed_delta_count"] == 1
-        and receipt["observed_host_config_changed_bytes"] > 0
-    )
-else:
-    host_delta_matches = False
+allowed_total = sum(item["allowed_host_managed_delta_count"] for item in receipts)
+observed_total = sum(item["observed_host_config_changed_bytes"] for item in receipts)
+host_delta_matches = (
+    all(item["host_config_delta_kind"] in {"NONE", "CODEX_WORKSPACE_TRUST_APPEND_V1"} for item in receipts)
+    and host_config_changed == (observed_total > 0)
+    and allowed_total == sum(item["host_config_delta_kind"] == "CODEX_WORKSPACE_TRUST_APPEND_V1" for item in receipts)
+)
 unexpected_changed_input_count += int(not host_delta_matches)
-if unexpected_changed_input_count or receipt["unexpected_changed_input_count"] != 0:
+if unexpected_changed_input_count:
     raise SystemExit("canary environment integrity changed")
 body = {
     "artifact": "loopskill-v4-canary-environment-integrity-v1",
-    "allowed_host_managed_delta_count": receipt["allowed_host_managed_delta_count"],
+    "allowed_host_managed_delta_count": allowed_total,
     "candidate_sha": candidate,
-    "host_config_delta_kind": receipt["host_config_delta_kind"],
+    "host_config_delta_kind": "PER_ROUTE_VALIDATED",
     "measurements": pairs,
-    "observed_host_config_changed_bytes": receipt["observed_host_config_changed_bytes"],
+    "observed_host_config_changed_bytes": observed_total,
+    "route_goal_counts": [2, 8],
+    "route_receipt_sha256": [hashlib.sha256(path.read_bytes()).hexdigest() for path in receipt_paths],
     "status": "PASS",
     "unexpected_changed_input_count": unexpected_changed_input_count,
 }
@@ -364,8 +392,10 @@ It must show:
 1. intake with 0 loop/task/heartbeat/external effects;
 2. prepare with 0 Host effects and digest-bound human views;
 3. explicit confirmation of the unchanged boundary;
-4. one machine-owned, cwd-bound foreground `codex exec --json` invocation;
-5. directly captured terminal JSONL without hand-copied control identity;
+4. exactly 2 then 8 machine-owned, cwd-bound foreground `codex exec --json`
+   invocations, one fresh Provider per Goal;
+5. directly captured terminal JSONL for every Goal without hand-copied control
+   identity;
 6. minimal artifact, review, report, and finalization evidence;
 7. no LoopSkill MCP, no LoopSkill-required App restart, no provider resend,
    and no access to real v3 installs, user repositories, private experiments,
@@ -395,8 +425,8 @@ terminal stream window is not a task budget. On timeout it must preserve
 `UNKNOWN`, make no lifecycle claim, and must not resend or resume.
 
 The Codex Desktop folder-open → `list_projects` → `projectId` → `create_thread`
-route has separate 23/23 verified provisioning receipts, but it is not wired
-into the 4.0.0 Provider. The gate validates only the cwd-bound foreground exec
+route has separate historical provisioning receipts, but it is not wired into
+the 4.1.0 Provider. The gate validates only the cwd-bound foreground exec
 route and makes no Desktop-visible saved project/task claim.
 
 If the outcome is `UNKNOWN`/`UNVERIFIABLE`, retain it honestly. Do not retry the
@@ -410,15 +440,17 @@ post-process readback. A locally constructed receipt JSON alone cannot
 substitute for the bound store/artifact evidence. The disposable store and raw
 Host identity remain outside the repository and release packet.
 
-After the PASS receipt exists, bind the two real-exec corpus mappings to that
-receipt. This remains profile A: 349 semantic mappings to 74 unique executed
-assertion methods, not 349 independent observations.
+After both PASS receipts exist, bind `UX-009-a` to the 2-Goal receipt and
+`CAP-RELEASE-CANARY` to the 8-Goal receipt. The RC evidence index separately
+binds both routes. This remains profile A: 349 semantic mappings to 74 unique
+executed assertion methods, not 349 independent observations.
 
 ```bash
 set -euo pipefail
 "$PY" scripts/run_v4_conformance.py \
   --candidate "$CANDIDATE" \
-  --canary-receipt "$CANARY_ROOT/canary-receipt.json" \
+  --canary-2-receipt "$CANARY_ROOT_2/canary-receipt.json" \
+  --canary-8-receipt "$CANARY_ROOT_8/canary-receipt.json" \
   --output "$EVIDENCE/final-conformance.json"
 ```
 
@@ -476,15 +508,15 @@ test -z "$(git status --porcelain=v1 --untracked-files=all)"
 test "$(git rev-parse HEAD)" = "$CANDIDATE"
 git rev-parse origin/main >/dev/null
 git merge-base --is-ancestor origin/main HEAD
-test -z "$(git tag --list v4.0.0)"
-REMOTE_TAG_READBACK="$(git ls-remote --tags origin refs/tags/v4.0.0 'refs/tags/v4.0.0^{}')"
+test -z "$(git tag --list v4.1.0)"
+REMOTE_TAG_READBACK="$(git ls-remote --tags origin refs/tags/v4.1.0 'refs/tags/v4.1.0^{}')"
 test -z "$REMOTE_TAG_READBACK"
 set +e
-GH_RELEASE_READBACK="$(gh api --include repos/amanayayatu-tech/loop-skill/releases/tags/v4.0.0 2>&1)"
+GH_RELEASE_READBACK="$(gh api --include repos/amanayayatu-tech/loop-skill/releases/tags/v4.1.0 2>&1)"
 GH_RELEASE_STATUS=$?
 set -e
 if [[ "$GH_RELEASE_STATUS" -eq 0 ]]; then
-  echo "v4.0.0 GitHub Release already exists" >&2
+  echo "v4.1.0 GitHub Release already exists" >&2
   exit 1
 fi
 if ! grep -Eq '^HTTP/[^ ]+ 404 ' <<<"$GH_RELEASE_READBACK"; then
@@ -493,7 +525,7 @@ if ! grep -Eq '^HTTP/[^ ]+ 404 ' <<<"$GH_RELEASE_READBACK"; then
 fi
 ```
 
-Also read GitHub state and confirm no existing v4.0.0 Release. If `origin/main`
+Also read GitHub state and confirm no existing v4.1.0 Release. If `origin/main`
 drifted, integrate it non-destructively and rerun all affected release gates.
 Verify the intended diff, branch ancestry, secrets/private paths, large files,
 and predecessor evidence exclusion. Never force-push.
@@ -538,7 +570,8 @@ PY
 
 "$PY" scripts/build_v4_author_packet.py \
   --root . --candidate "$CANDIDATE" \
-  --evidence "exec_canary=$CANARY_ROOT/canary-receipt.json" \
+  --evidence "exec_canary_2_goal=$CANARY_ROOT_2/canary-receipt.json" \
+  --evidence "exec_canary_8_goal=$CANARY_ROOT_8/canary-receipt.json" \
   --evidence "coverage=$EVIDENCE/coverage.json" \
   --evidence "distribution=$EVIDENCE/distribution.json" \
   --evidence "final_conformance=$EVIDENCE/final-conformance.json" \
@@ -551,11 +584,14 @@ PY
 
 "$PY" scripts/validate_v4_rc.py \
   --candidate "$CANDIDATE" \
-  --canary-receipt "$CANARY_ROOT/canary-receipt.json" \
-  --canary-store "$CANARY_ROOT/store" \
+  --canary-2-receipt "$CANARY_ROOT_2/canary-receipt.json" \
+  --canary-2-store "$CANARY_ROOT_2/store" \
+  --canary-8-receipt "$CANARY_ROOT_8/canary-receipt.json" \
+  --canary-8-store "$CANARY_ROOT_8/store" \
   --conformance-receipt "$EVIDENCE/final-conformance.json" \
   --author-packet "$EVIDENCE/author-packet.json" \
-  --evidence "exec_canary=$CANARY_ROOT/canary-receipt.json" \
+  --evidence "exec_canary_2_goal=$CANARY_ROOT_2/canary-receipt.json" \
+  --evidence "exec_canary_8_goal=$CANARY_ROOT_8/canary-receipt.json" \
   --evidence "coverage=$EVIDENCE/coverage.json" \
   --evidence "distribution=$EVIDENCE/distribution.json" \
   --evidence "final_conformance=$EVIDENCE/final-conformance.json" \
@@ -583,14 +619,14 @@ PY
    include every affected code gate in that rerun rather than inheriting feature-
    branch evidence.
 6. Confirm every v4 main CI job is green and all version/docs/release-note
-   surfaces say 4.0.0 consistently.
+   surfaces say 4.1.0 consistently.
 
 ## Gate 6: tag and GitHub Release
 
-Create annotated `v4.0.0` on the verified merged-main SHA and push only that
+Create annotated `v4.1.0` on the verified merged-main SHA and push only that
 tag. Wait for all v4 tag CI jobs to pass. Then create public GitHub Release
-4.0.0 from the exact tag, mark it latest and non-prerelease, and use
-`docs/v4/release-notes.md` after final truth review.
+4.1.0 from the exact tag, mark it latest and non-prerelease, and use
+`docs/v4/release-notes-v4.1.md` after final truth review.
 
 Release notes must prominently state:
 

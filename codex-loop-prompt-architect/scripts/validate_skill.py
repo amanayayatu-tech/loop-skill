@@ -155,8 +155,8 @@ def validate(skill_dir: Path) -> list[str]:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         errors.append(f"protocol validation failed: {exc}")
     try:
-        if version_path(skill_dir).read_text(encoding="utf-8").strip() != "4.0.0":
-            errors.append("VERSION must be 4.0.0")
+        if version_path(skill_dir).read_text(encoding="utf-8").strip() != "4.1.0":
+            errors.append("VERSION must be 4.1.0")
     except (OSError, ValueError) as exc:
         errors.append(str(exc))
 

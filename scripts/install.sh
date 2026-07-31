@@ -555,8 +555,8 @@ maybe_fault() {
   fi
 }
 
-if [[ "$VERSION" != "4.0.0" ]]; then
-  echo "V4_VERSION_INVALID: expected 4.0.0, got $VERSION" >&2
+if [[ "$VERSION" != "4.1.0" ]]; then
+  echo "V4_VERSION_INVALID: expected 4.1.0, got $VERSION" >&2
   exit 1
 fi
 for required in \
@@ -701,16 +701,107 @@ PY
 fi
 recover_install_transaction
 
+repo_commit="SOURCE_ARCHIVE"
+git_source_mode="archive"
+git_archive_commit=""
+if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git_top="$(git -C "$ROOT_DIR" rev-parse --show-toplevel)"
+  if [[ "$git_top" == "$ROOT_DIR" ]]; then
+    git_source_mode="tracked-worktree"
+    if [[ -z "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)" ]]; then
+      git_archive_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+      repo_commit="$git_archive_commit"
+      git_source_mode="exact-commit"
+    fi
+  fi
+fi
+if [[ -n "${LOOP_RELEASE_COMMIT:-}" && "$repo_commit" != "$LOOP_RELEASE_COMMIT" ]]; then
+  echo "V4_RELEASE_COMMIT_MISMATCH" >&2
+  exit 1
+fi
+
 transaction="$(mktemp -d "$STAGING_ROOT/loopskill4.XXXXXX")"
 SOURCE_IMAGE="$transaction/source"
 INSTALL_IMAGE="$transaction/install"
 mkdir -p "$SOURCE_IMAGE" "$INSTALL_IMAGE"
-cp -R "$SOURCE_DIR/." "$SOURCE_IMAGE/"
-mkdir -p "$SOURCE_IMAGE/protocol/v4/generated"
-cp "$ROOT_DIR/protocol/v4/loopskill-v4.protocol.json" "$SOURCE_IMAGE/protocol/v4/"
-cp "$ROOT_DIR/protocol/v4/generated/api-summary.json" "$SOURCE_IMAGE/protocol/v4/generated/"
-cp "$ROOT_DIR/protocol/v4/generated/loopskill-v4.schema.json" "$SOURCE_IMAGE/protocol/v4/generated/"
-cp "$ROOT_DIR/VERSION" "$SOURCE_IMAGE/VERSION"
+if [[ "$git_source_mode" == "exact-commit" ]]; then
+  TRACKED_ARCHIVE="$transaction/tracked"
+  TRACKED_ARCHIVE_TAR="$transaction/tracked.tar"
+  mkdir -p "$TRACKED_ARCHIVE"
+  # Keep archive production and extraction sequential. Some BSD tar builds may
+  # close stdin after the end marker, which turns git archive into SIGPIPE 141
+  # under pipefail even though extraction completed successfully.
+  git -C "$ROOT_DIR" archive --format=tar --output="$TRACKED_ARCHIVE_TAR" \
+    "$git_archive_commit" -- \
+    codex-loop-prompt-architect \
+    protocol/v4/loopskill-v4.protocol.json \
+    protocol/v4/generated/api-summary.json \
+    protocol/v4/generated/loopskill-v4.schema.json \
+    VERSION
+  tar -xf "$TRACKED_ARCHIVE_TAR" -C "$TRACKED_ARCHIVE"
+  cp -R "$TRACKED_ARCHIVE/codex-loop-prompt-architect/." "$SOURCE_IMAGE/"
+  mkdir -p "$SOURCE_IMAGE/protocol/v4/generated"
+  cp "$TRACKED_ARCHIVE/protocol/v4/loopskill-v4.protocol.json" "$SOURCE_IMAGE/protocol/v4/"
+  cp "$TRACKED_ARCHIVE/protocol/v4/generated/api-summary.json" "$SOURCE_IMAGE/protocol/v4/generated/"
+  cp "$TRACKED_ARCHIVE/protocol/v4/generated/loopskill-v4.schema.json" "$SOURCE_IMAGE/protocol/v4/generated/"
+  cp "$TRACKED_ARCHIVE/VERSION" "$SOURCE_IMAGE/VERSION"
+elif [[ "$git_source_mode" == "tracked-worktree" ]]; then
+  "$PYTHON_BIN" - "$ROOT_DIR" "$SOURCE_IMAGE" <<'PY'
+from pathlib import Path
+import os
+import shutil
+import stat
+import subprocess
+import sys
+
+root = Path(sys.argv[1]).resolve(strict=True)
+output = Path(sys.argv[2]).resolve(strict=True)
+package = Path("codex-loop-prompt-architect")
+selected = subprocess.run(
+    [
+        "git",
+        "-C",
+        str(root),
+        "ls-files",
+        "-z",
+        "--",
+        str(package),
+        "protocol/v4/loopskill-v4.protocol.json",
+        "protocol/v4/generated/api-summary.json",
+        "protocol/v4/generated/loopskill-v4.schema.json",
+        "VERSION",
+    ],
+    check=True,
+    stdout=subprocess.PIPE,
+).stdout.split(b"\0")
+for encoded in selected:
+    if not encoded:
+        continue
+    relative = Path(os.fsdecode(encoded))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise SystemExit("V4_INSTALL_TRACKED_SOURCE_INVALID")
+    source = root / relative
+    destination_relative = (
+        relative.relative_to(package)
+        if relative.parts[:1] == package.parts
+        else relative
+    )
+    destination = output / destination_relative
+    metadata = source.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit("V4_INSTALL_TRACKED_SOURCE_INVALID")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination, follow_symlinks=False)
+    os.chmod(destination, stat.S_IMODE(metadata.st_mode), follow_symlinks=False)
+PY
+else
+  cp -R "$SOURCE_DIR/." "$SOURCE_IMAGE/"
+  mkdir -p "$SOURCE_IMAGE/protocol/v4/generated"
+  cp "$ROOT_DIR/protocol/v4/loopskill-v4.protocol.json" "$SOURCE_IMAGE/protocol/v4/"
+  cp "$ROOT_DIR/protocol/v4/generated/api-summary.json" "$SOURCE_IMAGE/protocol/v4/generated/"
+  cp "$ROOT_DIR/protocol/v4/generated/loopskill-v4.schema.json" "$SOURCE_IMAGE/protocol/v4/generated/"
+  cp "$ROOT_DIR/VERSION" "$SOURCE_IMAGE/VERSION"
+fi
 find "$SOURCE_IMAGE" -type f -name '*.pyc' -delete
 find "$SOURCE_IMAGE" -type d -name '__pycache__' -empty -delete
 find "$SOURCE_IMAGE" -type f -name '.DS_Store' -delete
@@ -830,7 +921,7 @@ if [[ -e "$TARGET_DIR" || -L "$TARGET_DIR" ]]; then
       echo "V4_INSTALL_ACTIVE_RECEIPT_INVALID" >&2
       exit 1
     fi
-    echo "LoopSkill 4.0.0 is already installed at $TARGET_DIR"
+    echo "LoopSkill 4.1.0 is already installed at $TARGET_DIR"
     echo "No files or Codex configuration changed."
     safe_remove_tree "$transaction" "$STAGING_ROOT"
     transaction=""
@@ -959,19 +1050,6 @@ if [[ "$config_before_state" != "$config_after_state" ]]; then
 fi
 config_after="${config_after_state#*:}"
 
-repo_commit="SOURCE_ARCHIVE"
-if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  git_top="$(git -C "$ROOT_DIR" rev-parse --show-toplevel)"
-  if [[ "$git_top" == "$ROOT_DIR" ]] && \
-    [[ -z "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)" ]]; then
-    repo_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
-  fi
-fi
-if [[ -n "${LOOP_RELEASE_COMMIT:-}" && "$repo_commit" != "$LOOP_RELEASE_COMMIT" ]]; then
-  echo "V4_RELEASE_COMMIT_MISMATCH" >&2
-  exit 1
-fi
-
 staged_receipt="$transaction/receipt.json"
 "$PYTHON_BIN" "$TARGET_DIR/scripts/verify_installation.py" \
   --source "$SOURCE_IMAGE" \
@@ -1033,7 +1111,7 @@ else
   legacy_message="No v3 installation was changed or created."
 fi
 trap - EXIT
-echo "Installed LoopSkill 4.0.0 to $TARGET_DIR"
+echo "Installed LoopSkill 4.1.0 to $TARGET_DIR"
 echo "$legacy_message"
 echo "Codex config.toml is byte-identical; no MCP entry was registered."
 echo "LoopSkill 4 itself does not require a Codex App restart."

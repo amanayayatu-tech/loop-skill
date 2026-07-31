@@ -35,19 +35,42 @@ def receipt_for(key: str, candidate: str) -> dict:
         "artifact": packet_builder._EVIDENCE_ARTIFACTS[key],
         "candidate_sha": candidate,
     }
-    if key == "exec_canary":
+    if key in {"exec_canary_2_goal", "exec_canary_8_goal"}:
+        goal_count = 2 if key == "exec_canary_2_goal" else 8
+        route_digit = "2" if goal_count == 2 else "8"
+        issued_at = (
+            "2026-07-30T01:00:00Z"
+            if goal_count == 2
+            else "2026-07-30T01:10:00Z"
+        )
+        observed_at = (
+            "2026-07-30T01:05:00Z"
+            if goal_count == 2
+            else "2026-07-30T01:20:00Z"
+        )
+        candidate_provenance = {
+            "candidate_execution_mode": "CLEAN_GIT_WORKTREE",
+            "candidate_sha": candidate,
+            "candidate_tree_sha": candidate,
+        }
         return {
             **common,
             "app_restart_count": 0,
+            **candidate_provenance,
             "candidate_goal_digest": digest,
+            "candidate_provenance_digest": hashlib.sha256(
+                packet_builder.CANARY_CANDIDATE_PROVENANCE_DOMAIN
+                + packet_builder._canonical(candidate_provenance)
+            ).hexdigest(),
             "canary_output_sha256": digest,
             "confirmation_count": 1,
             "confirmation_digest_bound": True,
             "allowed_host_managed_delta_count": 0,
-            "canary_workspace_identity_digest": digest,
+            "canary_workspace_identity_digest": route_digit * 64,
             "entry": "loopskill4",
             "finalization": "ACKNOWLEDGED",
-            "host_create_readback_count": 1,
+            "fresh_until": "2026-07-30T03:00:00Z",
+            "host_create_readback_count": goal_count,
             "host_auth_after_digest": digest,
             "host_auth_before_digest": digest,
             "host_config_after_digest": digest,
@@ -58,21 +81,23 @@ def receipt_for(key: str, candidate: str) -> dict:
             "host_receipt_issuer": "codex-exec-jsonl-v1",
             "host_receipt_trust": "same-process-terminal-observed",
             "host_result_digest": digest,
-            "host_task_create_count": 1,
-            "host_task_identity_digest": digest,
-            "host_task_readback_count": 1,
-            "host_terminal_wait_readback_count": 1,
-            "host_total_read_count": 4,
+            "host_task_create_count": goal_count,
+            "host_task_identity_digest": route_digit * 64,
+            "host_task_readback_count": goal_count,
+            "host_terminal_wait_readback_count": goal_count,
+            "host_total_read_count": 3 * goal_count + 1,
             "intake_external_effects": 0,
             "intake_heartbeat_count": 0,
             "intake_host_task_count": 0,
             "intake_loop_count": 0,
             "integrity_measurement_digest": digest,
+            "issued_at": issued_at,
             "loopskill_mcp_registration_count": 0,
             "machine_owned_identity": True,
             "manual_control_identity_count": 0,
             "observed_host_auth_changed_bytes": 0,
             "observed_host_config_changed_bytes": 0,
+            "observed_at": observed_at,
             "prepare_delivery_count": 0,
             "prepare_heartbeat_count": 0,
             "prepare_host_effects": 0,
@@ -111,6 +136,8 @@ def receipt_for(key: str, candidate: str) -> dict:
         return {
             **common,
             "binding_manifest_digest": digest,
+            "bound_real_canary_count": 2,
+            "bound_real_host_invocations": 10,
             "canonical_case_ids": True,
             "case_catalog_digest": digest,
             "case_count": 349,
@@ -122,7 +149,7 @@ def receipt_for(key: str, candidate: str) -> dict:
             "independent_case_observation_claimed": False,
             "mapped": 349,
             "passed_test_methods": 74,
-            "real_external_effects": 1,
+            "real_external_effects": 0,
             "semantic_coverage_mapping_count": 349,
             "status": "PASS",
             "test_method_count": 74,
@@ -347,7 +374,8 @@ class V4AuthorPacketTests(unittest.TestCase):
     def test_each_receipt_requires_its_typed_artifact_and_pass_state(self) -> None:
         fixture = self.fixture()
         status_fields = {
-            "exec_canary": ("status", "FAIL"),
+            "exec_canary_2_goal": ("status", "FAIL"),
+            "exec_canary_8_goal": ("status", "FAIL"),
             "coverage": ("status", "FAIL"),
             "distribution": ("status", "FAIL"),
             "final_conformance": ("status", "FAIL"),
@@ -388,15 +416,15 @@ class V4AuthorPacketTests(unittest.TestCase):
     def test_fixed_counts_zero_effects_and_digest_shapes_fail_closed(self) -> None:
         fixture = self.fixture()
         mutations = (
-            ("exec_canary", "provider_resend_count", 1),
-            ("exec_canary", "host_task_create_count", 2),
-            ("exec_canary", "host_terminal_wait_readback_count", 0),
-            ("exec_canary", "host_total_read_count", 5),
-            ("exec_canary", "observed_host_auth_changed_bytes", 1),
-            ("exec_canary", "unexpected_changed_input_count", 1),
-            ("exec_canary", "allowed_host_managed_delta_count", 1),
+            ("exec_canary_2_goal", "provider_resend_count", 1),
+            ("exec_canary_2_goal", "host_task_create_count", 1),
+            ("exec_canary_2_goal", "host_terminal_wait_readback_count", 0),
+            ("exec_canary_2_goal", "host_total_read_count", 5),
+            ("exec_canary_2_goal", "observed_host_auth_changed_bytes", 1),
+            ("exec_canary_2_goal", "unexpected_changed_input_count", 1),
+            ("exec_canary_2_goal", "allowed_host_managed_delta_count", 1),
             (
-                "exec_canary",
+                "exec_canary_2_goal",
                 "host_config_delta_kind",
                 "CODEX_WORKSPACE_TRUST_APPEND_V1",
             ),
@@ -407,7 +435,7 @@ class V4AuthorPacketTests(unittest.TestCase):
             ("hosted_conformance", "case_count", 348),
             ("hosted_conformance", "real_external_effects", 1),
             ("final_conformance", "passed_test_methods", 73),
-            ("final_conformance", "real_external_effects", 0),
+            ("final_conformance", "real_external_effects", 1),
             ("independent_review", "open_finding_count", 1),
             ("release_identity_preflight", "feature_contains_origin_main", False),
             ("release_identity_preflight", "v4_tag_exists", True),
@@ -462,7 +490,7 @@ class V4AuthorPacketTests(unittest.TestCase):
             )
 
     def test_exact_host_owned_trust_delta_is_accepted_without_zeroing_bytes(self) -> None:
-        value = receipt_for("exec_canary", "a" * 40)
+        value = receipt_for("exec_canary_2_goal", "a" * 40)
         value.update(
             {
                 "allowed_host_managed_delta_count": 1,
@@ -471,7 +499,7 @@ class V4AuthorPacketTests(unittest.TestCase):
                 "observed_host_config_changed_bytes": 109,
             }
         )
-        packet_builder._validate_exec_canary(value)
+        packet_builder._validate_exec_canary(value, expected_goal_count=2)
 
     def test_private_evidence_keys_paths_and_secrets_fail_closed(self) -> None:
         fixture = self.fixture()

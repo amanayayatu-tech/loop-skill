@@ -1,12 +1,12 @@
 # LoopSkill 4 known limitations
 
-- Only the Codex Host Adapter is supported in 4.0. The Kernel is host-neutral,
+- Only the Codex Host Adapter is supported in 4.1. The Kernel is host-neutral,
   but there is no multi-host support claim before a second real Adapter passes
   conformance.
 - SQLite and Codex do not share one transaction. LoopSkill does not promise
   cross-system exactly-once across SQLite, Codex, Git, or network boundaries.
   External outcomes can remain `UNKNOWN`.
-- The 4.0 Provider owns one foreground `codex exec --json --output-schema
+- Each activated Goal uses one fresh 4.1 foreground `codex exec --json --output-schema
   --output-last-message`
   process and accepts only its directly captured terminal stream plus one
   schema-valid final outcome/summary object. Schema or result drift fails
@@ -14,6 +14,16 @@
   Desktop-visible saved project/task, provider idempotency, cross-process Host
   readback, or automatic `exec resume`. Lost process/stream evidence remains
   `UNKNOWN` with no resend.
+- A confirmed plan contains 1–32 Goals, not an unbounded queue. Canonical plans
+  are limited to 128 KiB, explicitly authorized text/Markdown sources to
+  256 KiB, and materialized prompts to a 24 KiB release target / 32 KiB hard
+  limit. Overflow is rejected before Host execution and is never truncated.
+- Conversational answers exist only in the current pre-PREPARE session. There
+  is no draft database or background intake service; after session loss the
+  user must provide the input again.
+- `EAGER_V4_0` compatibility is deliberately closed to status, export, and
+  original-reducer continuation. There is no migration, rewrite, dual write,
+  or conversion to `CONTENT_ADDRESSED_V1`.
 - Cooperative Host evidence can close work with a visible limitation, but it
   cannot become strict Host-attested assurance. Missing capability is reported
   as unavailable or `UNVERIFIABLE`.
@@ -25,7 +35,7 @@
 - Standard and Adaptive policy constrain sequencing and repair; they do not
   prove the target task is achievable or that a model will produce a correct
   patch.
-- Repository tests and a disposable foreground Codex exec canary do not prove empirical
+- Repository tests and disposable 2/8-Goal foreground Codex exec canaries do not prove empirical
   patch-success superiority, arbitrary long-horizon efficacy, or production
   reliability for every project.
 - v4 cannot open, import, repair, run, or automatically migrate v3 roots,

@@ -125,8 +125,29 @@ class V4RcDistributionTests(unittest.TestCase):
 
     def test_isolated_install_is_v4_only_and_config_byte_identical(self) -> None:
         original_config, original_v3 = self._seed_config_and_v3()
-        result = self._install()
+        source_status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=ROOT,
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout
+        expected_repo_commit = (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+            ).strip()
+            if not source_status
+            else "SOURCE_ARCHIVE"
+        )
+        ignored_private = ROOT / "codex-loop-prompt-architect" / "private.tmp"
+        self.assertFalse(ignored_private.exists())
+        ignored_private.write_bytes(b"must never enter the install image\n")
+        try:
+            result = self._install()
+        finally:
+            ignored_private.unlink(missing_ok=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.target / ignored_private.name).exists())
         self.assertTrue((self.target / "scripts/loopskill4").is_file())
         self.assertFalse((self.target / "scripts/uninstall_v4.py").exists())
         self.assertTrue(self.management_uninstaller.is_file())
@@ -138,7 +159,8 @@ class V4RcDistributionTests(unittest.TestCase):
 
         receipt = json.loads(self._latest_receipt().read_text(encoding="utf-8"))
         self.assertEqual(receipt["artifact"], "loopskill4-install-receipt-v1")
-        self.assertEqual(receipt["version"], "4.0.0")
+        self.assertEqual(receipt["version"], "4.1.0")
+        self.assertEqual(receipt["repo_commit"], expected_repo_commit)
         self.assertEqual(receipt["source_install_drift"], [])
         self.assertEqual(
             receipt["source_manifest_digest"], receipt["installed_manifest_digest"]
@@ -195,6 +217,40 @@ class V4RcDistributionTests(unittest.TestCase):
             tree_bytes(self.codex_home / "install-receipts/loopskill4"),
             before_receipts,
         )
+        self.assertEqual((self.codex_home / "config.toml").read_bytes(), config)
+        self.assertEqual(tree_bytes(self.legacy_target), legacy)
+
+    def test_v4_0_receipt_bound_clean_replacement_preserves_loop_data(self) -> None:
+        config, legacy = self._seed_config_and_v3()
+        data_root = self.temp_root / "loop-data"
+        data_root.mkdir()
+        (data_root / "preserve.sqlite3").write_bytes(b"historical-loop-data")
+        data_before = tree_state(data_root)
+        installed = self._install()
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+
+        pointer_path = self.codex_home / "install-receipts/loopskill4/active-receipt"
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        receipt_path = pointer_path.parent / pointer["receipt"]
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["version"] = "4.0.0"
+        receipt_path.write_text(
+            json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        pointer["sha256"] = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+        pointer_path.write_text(
+            json.dumps(pointer, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+        removed = uninstall_v4.uninstall(self.codex_home)
+        self.assertEqual(removed["status"], "UNINSTALLED")
+        replacement = self._install()
+        self.assertEqual(replacement.returncode, 0, replacement.stderr)
+        current = json.loads(self._latest_receipt().read_text(encoding="utf-8"))
+        self.assertEqual(current["version"], "4.1.0")
+        self.assertEqual(tree_state(data_root), data_before)
         self.assertEqual((self.codex_home / "config.toml").read_bytes(), config)
         self.assertEqual(tree_bytes(self.legacy_target), legacy)
 

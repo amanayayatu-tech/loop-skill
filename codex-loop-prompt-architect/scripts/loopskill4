@@ -7,11 +7,19 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from loop_architect.v4_alpha.protocol import LoopIntakeInput
+from loop_architect.v4_alpha.generated_protocol import CAPACITY_CONTRACT
+from loop_architect.v4_alpha.plan_codec import PlanCodecError, canonicalize_plan
+from loop_architect.v4_alpha.protocol import (
+    LoopIntakeInput,
+    canonical_bytes,
+    parse_json_bytes,
+    raw_domain_digest,
+)
 from loop_architect.v4_adapters.codex import CodexExecProvider, HostUnavailable
 from loop_architect.v4_entry import (
     EntryError,
@@ -81,7 +89,9 @@ def parser() -> PublicParser:
     doctor.add_argument("--diagnostics", action="store_true")
     canary = subcommands.add_parser("canary")
     canary.add_argument("--candidate", required=True)
+    canary.add_argument("--candidate-root", type=Path, required=True)
     canary.add_argument("--evidence-root", type=Path, required=True)
+    canary.add_argument("--goals", type=int, choices=(1, 2, 8), default=1)
     canary.add_argument("--diagnostics", action="store_true")
     compile_prepared = subcommands.add_parser("compile")
     compile_prepared.add_argument("prepared_directory", type=Path)
@@ -119,7 +129,12 @@ _SEQUENCE_FIELDS = {
 }
 
 
-def _intake_value(document) -> LoopIntakeInput:
+def _intake_value(
+    document,
+    *,
+    source_kind="expert_semantic_json",
+    source_raw: bytes | None = None,
+) -> LoopIntakeInput:
     if not isinstance(document, dict) or not set(document) <= _INTAKE_FIELDS:
         raise EntryError(
             "USER_INPUT_INVALID",
@@ -157,75 +172,361 @@ def _intake_value(document) -> LoopIntakeInput:
                 "Use arrays containing only UTF-8 strings.",
             )
         values[field] = tuple(value)
-    return LoopIntakeInput(**values)
+    raw = canonical_bytes(document) if source_raw is None else source_raw
+    return LoopIntakeInput(
+        **values,
+        source_kind=source_kind,
+        source_digest=raw_domain_digest("loopskill-prd-source-v1\n", raw),
+        source_bytes=len(raw),
+    )
 
 
-def read_intake_input(value: str) -> LoopIntakeInput:
-    path = Path(value)
-    if value == "-":
-        raw = sys.stdin.buffer.read(32769)
-        return _decode_intake_bytes(raw, json_document=True)
-    if path.is_dir() and is_legacy_input(path):
-        raise EntryError(*unsupported_legacy_error())
-    if path.is_file():
-        try:
-            raw = path.read_bytes()
-        except OSError as exc:
-            raise EntryError(
-                "USER_INPUT_INVALID",
-                "The goal file could not be read.",
-                "Provide one readable UTF-8 goal file.",
-            ) from exc
-        if len(raw) > 32768:
-            raise EntryError(
-                "USER_INPUT_INVALID",
-                "The goal file is too large.",
-                "Reduce the semantic input to at most 32768 UTF-8 bytes.",
+def _canonical_plan_input(document, raw: bytes) -> LoopIntakeInput:
+    try:
+        plan = canonicalize_plan(document)
+    except PlanCodecError as exc:
+        raise EntryError(
+            exc.code,
+            "The canonical plan does not satisfy the closed v4.1 contract.",
+            f"Repair the plan and try again ({exc.reason}).",
+        ) from exc
+    admitted_digest = raw_domain_digest("loopskill-prd-source-v1\n", raw)
+    plan = canonicalize_plan(
+        {
+            **plan,
+            "source": {
+                **plan["source"],
+                "kind": "canonical_plan_json",
+                "source_digest": admitted_digest,
+            },
+        }
+    )
+    boundaries = plan["boundaries"]
+    return LoopIntakeInput(
+        goal=plan["objective"],
+        goal_plan=tuple(goal["objective"] for goal in plan["goals"]),
+        task_horizon=plan["roadmap_policy"]["mode"].lower(),
+        write_scope=tuple(boundaries["write_scope"]),
+        budget=canonical_bytes(plan["budget"]).decode("utf-8"),
+        external_actions=tuple(boundaries["external_actions"]),
+        acceptance_criteria=tuple(plan["completion_evidence"]),
+        stop_conditions=tuple(plan["stop_conditions"]),
+        authorization_boundaries=tuple(boundaries["forbidden_actions"]),
+        canonical_plan=plan,
+        source_kind="canonical_plan_json",
+        source_digest=admitted_digest,
+        source_bytes=len(raw),
+    )
+
+
+def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        stat.S_IFMT(metadata.st_mode),
+    )
+
+
+def _admission_components(path: Path) -> tuple[str, tuple[str, ...]]:
+    if path.is_absolute():
+        components = tuple(path.parts[1:])
+        # Darwin exposes this one fixed compatibility anchor as
+        # /var -> private/var.  Verify that exact system alias, then traverse
+        # /private/var directly; never resolve or follow a user-controlled
+        # component.
+        if sys.platform == "darwin" and components[:1] == ("var",):
+            try:
+                alias = os.lstat("/var")
+                alias_target = os.readlink("/var")
+            except OSError:
+                pass
+            else:
+                if (
+                    stat.S_ISLNK(alias.st_mode)
+                    and alias.st_uid == 0
+                    and alias_target == "private/var"
+                ):
+                    components = ("private", "var", *components[1:])
+        anchor = "/"
+    else:
+        components = tuple(path.parts)
+        anchor = "."
+    if (
+        not components
+        or any(component in {"", ".", ".."} for component in components)
+        or not hasattr(os, "O_DIRECTORY")
+        or not hasattr(os, "O_NOFOLLOW")
+    ):
+        raise OSError("invalid source path")
+    return anchor, components
+
+
+def _admit_source(
+    path: Path,
+    *,
+    maximum: int | None,
+) -> tuple[str, bytes | tuple[str, ...] | None] | None:
+    descriptors: list[int] = []
+    mappings: list[tuple[int, str, tuple[int, int, int]]] = []
+    leaf_observed = False
+    flags_directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    flags_file = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+    try:
+        anchor, components = _admission_components(path)
+        directory_fd = os.open(anchor, flags_directory)
+        descriptors.append(directory_fd)
+        for component in components[:-1]:
+            child_fd = os.open(component, flags_directory, dir_fd=directory_fd)
+            mappings.append(
+                (directory_fd, component, _directory_identity(os.fstat(child_fd)))
             )
-        if is_legacy_input(path, raw):
+            descriptors.append(child_fd)
+            directory_fd = child_fd
+
+        leaf = components[-1]
+        descriptor = os.open(leaf, flags_file, dir_fd=directory_fd)
+        descriptors.append(descriptor)
+        leaf_observed = True
+        opened = os.fstat(descriptor)
+
+        limit_exceeded = False
+        if stat.S_ISDIR(opened.st_mode):
+            directory_identity = _directory_identity(opened)
+            entries = tuple(sorted(os.listdir(descriptor)))
+            after = os.fstat(descriptor)
+            if _directory_identity(after) != directory_identity:
+                raise OSError("source directory changed while inspecting")
+            mappings.append((directory_fd, leaf, directory_identity))
+            result: tuple[str, bytes | tuple[str, ...] | None] = (
+                "directory",
+                entries,
+            )
+        elif not stat.S_ISREG(opened.st_mode):
+            current = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+            if _file_identity(current) != _file_identity(opened):
+                raise OSError("source identity changed")
+            result = ("other", None)
+        elif maximum is None:
+            current = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+            if _file_identity(current) != _file_identity(opened):
+                raise OSError("source identity changed")
+            result = ("file", None)
+        else:
+            opened_identity = _file_identity(opened)
+            limit_exceeded = opened.st_size > maximum
+            reads: list[bytes] = []
+            observations: list[os.stat_result] = []
+            if not limit_exceeded:
+                for pass_index in range(2):
+                    if pass_index:
+                        os.lseek(descriptor, 0, os.SEEK_SET)
+                    chunks = []
+                    remaining = maximum + 1
+                    while remaining:
+                        chunk = os.read(descriptor, min(65_536, remaining))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    reads.append(b"".join(chunks))
+                    observations.append(os.fstat(descriptor))
+                if (
+                    any(
+                        _file_identity(observation) != opened_identity
+                        for observation in observations
+                    )
+                    or reads[0] != reads[1]
+                ):
+                    raise OSError("source changed while reading")
+                raw = reads[0]
+            else:
+                raw = b""
+            current = os.stat(leaf, dir_fd=directory_fd, follow_symlinks=False)
+            if _file_identity(current) != opened_identity:
+                raise OSError("source mapping changed while reading")
+            limit_exceeded = limit_exceeded or len(raw) > maximum
+            result = ("file", raw)
+
+        for parent_fd, component, expected in mappings:
+            current = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                stat.S_ISLNK(current.st_mode)
+                or _directory_identity(current) != expected
+            ):
+                raise OSError("source path component changed")
+        if limit_exceeded:
+            raise EntryError(
+                "RESOURCE_LIMIT_EXCEEDED",
+                "The input file exceeds the supported byte boundary.",
+                f"Reduce the input to at most {maximum} UTF-8 bytes.",
+            )
+        return result
+    except FileNotFoundError as exc:
+        if not leaf_observed:
+            return None
+        raise EntryError(
+            "PATH_CONFINEMENT_VIOLATION",
+            "The requested source is unavailable, unsafe, or changed while reading.",
+            "Provide one stable regular UTF-8 file without symlinks.",
+        ) from exc
+    except EntryError:
+        raise
+    except OSError as exc:
+        raise EntryError(
+            "PATH_CONFINEMENT_VIOLATION",
+            "The requested source is unavailable, unsafe, or changed while reading.",
+            "Provide one stable regular UTF-8 file without symlinks.",
+        ) from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _source_maximum(path: Path) -> int | None:
+    suffix = path.suffix.lower()
+    return (
+        int(
+            CAPACITY_CONTRACT[
+                "expert_json_max_bytes"
+                if suffix == ".json"
+                else "source_text_max_bytes"
+            ]
+        )
+        if suffix in {".json", ".md", ".txt"}
+        else None
+    )
+
+
+def _decode_admitted_input(
+    value: str,
+    path: Path,
+    maximum: int | None,
+    admitted: tuple[str, bytes | tuple[str, ...] | None] | None,
+) -> LoopIntakeInput:
+    if admitted is not None:
+        path_kind, payload = admitted
+        if path_kind == "directory" and is_legacy_input(
+            path,
+            path_kind="directory",
+            directory_entries=payload,
+        ):
+            raise EntryError(*unsupported_legacy_error())
+        if path_kind != "file":
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The source is not a regular file.",
+                "Provide one regular UTF-8 JSON, text, or Markdown file.",
+            )
+        if maximum is None:
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The source type is unsupported.",
+                "Use one UTF-8 JSON, text, or Markdown file.",
+            )
+        if not isinstance(payload, bytes):
+            raise EntryError(
+                "PATH_CONFINEMENT_VIOLATION",
+                "The requested source could not be read safely.",
+                "Provide one stable regular UTF-8 file without symlinks.",
+            )
+        raw = payload
+        if is_legacy_input(path, raw, path_kind="file"):
             raise EntryError(*unsupported_legacy_error())
         if path.suffix.lower() == ".json":
             return _decode_intake_bytes(raw, json_document=True)
-        return _intake_value({"goal": _decode_text(raw)})
-    if path.suffix.lower() in {".json", ".txt"} or "/" in value:
+        return _intake_value(
+            {"goal": _decode_text(raw)},
+            source_kind="authorized_file",
+            source_raw=raw,
+        )
+    if value.startswith(("./", "../", "/")):
         raise EntryError(
             "USER_INPUT_INVALID",
             "The goal file was not found.",
             "Provide one readable goal file or literal goal text.",
         )
-    return _intake_value({"goal": value})
+    raw = value.encode("utf-8", "strict")
+    if b"\x00" in raw or len(raw) > int(CAPACITY_CONTRACT["source_text_max_bytes"]):
+        raise EntryError(
+            "RESOURCE_LIMIT_EXCEEDED",
+            "The literal request exceeds the supported text boundary.",
+            "Reduce the request or provide one smaller authorized file.",
+        )
+    return _intake_value(
+        {"goal": value}, source_kind="literal_text", source_raw=raw
+    )
+
+
+def read_intake_input(value: str) -> LoopIntakeInput:
+    if value == "-":
+        raw = sys.stdin.buffer.read(int(CAPACITY_CONTRACT["expert_json_max_bytes"]) + 1)
+        return _decode_intake_bytes(raw, json_document=True)
+    path = Path(value)
+    maximum = _source_maximum(path)
+    admitted = _admit_source(path, maximum=maximum)
+    return _decode_admitted_input(value, path, maximum, admitted)
 
 
 def _decode_intake_bytes(raw: bytes, *, json_document: bool) -> LoopIntakeInput:
-    if len(raw) > 32768:
+    maximum = int(
+        CAPACITY_CONTRACT[
+            "expert_json_max_bytes" if json_document else "source_text_max_bytes"
+        ]
+    )
+    if len(raw) > maximum:
         raise EntryError(
-            "USER_INPUT_INVALID",
+            "RESOURCE_LIMIT_EXCEEDED",
             "The input is too large.",
-            "Reduce the semantic input to at most 32768 UTF-8 bytes.",
+            f"Reduce the input to at most {maximum} UTF-8 bytes.",
         )
     text = _decode_text(raw)
     if not json_document:
-        return _intake_value({"goal": text})
+        return _intake_value(
+            {"goal": text}, source_kind="pasted_text", source_raw=raw
+        )
     try:
-        document = json.loads(text)
-    except json.JSONDecodeError as exc:
+        document = parse_json_bytes(raw)
+    except Exception as exc:
         raise EntryError(
             "USER_INPUT_INVALID",
             "The input file is not valid UTF-8 JSON.",
             "Use one JSON object containing documented semantic intake fields.",
         ) from exc
-    return _intake_value(document)
+    if isinstance(document, dict) and document.get("schema") == "loopskill-plan-v1":
+        return _canonical_plan_input(document, raw)
+    return _intake_value(document, source_raw=raw)
 
 
 def _decode_text(raw: bytes) -> str:
     try:
-        return raw.decode("utf-8", "strict")
+        text = raw.decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
         raise EntryError(
             "USER_INPUT_INVALID",
             "The goal file is not valid UTF-8.",
             "Save the file as UTF-8 and try again.",
         ) from exc
+    if "\x00" in text:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The source contains a NUL byte.",
+            "Provide plain UTF-8 text without embedded NUL bytes.",
+        )
+    return text
 
 
 def print_status(value) -> None:
@@ -335,12 +636,22 @@ def _doctor_view(*, include_diagnostics: bool):
 
 
 def _interactive_start(args):
-    subject = Path(args.goal_file_or_prepared_directory)
-    if subject.is_dir():
-        if is_legacy_input(subject):
-            raise EntryError(*unsupported_legacy_error())
-        return _start_with_owned_provider(subject, root=args.root)
-    request = read_intake_input(args.goal_file_or_prepared_directory)
+    value = args.goal_file_or_prepared_directory
+    subject = Path(value)
+    if value == "-":
+        request = read_intake_input(value)
+    else:
+        maximum = _source_maximum(subject)
+        admitted = _admit_source(subject, maximum=maximum)
+        if admitted is not None and admitted[0] == "directory":
+            if is_legacy_input(
+                subject,
+                path_kind="directory",
+                directory_entries=admitted[1],
+            ):
+                raise EntryError(*unsupported_legacy_error())
+            return _start_with_owned_provider(subject, root=args.root)
+        request = _decode_admitted_input(value, subject, maximum, admitted)
     report = intake_report_loop(request)
     print_intake_report(report)
     disposition = report["1 最终判定"]["disposition"]
@@ -382,7 +693,9 @@ def _close_provider(provider) -> None:
         close()
 
 
-def _finish_owned_provider_task(value, provider, *, root: Path):
+def _finish_owned_provider_task(
+    value, provider, *, root: Path, synchronize_after_wait: bool = True
+):
     """Finish this process's one created task without a daemon or resend."""
 
     metrics = getattr(provider, "metrics", None)
@@ -408,11 +721,13 @@ def _finish_owned_provider_task(value, provider, *, root: Path):
         )
     try:
         waiter(timeout_seconds=300.0)
-        return sync_loop(
-            root=root,
-            host_provider=provider,
-            workspace_root=Path.cwd(),
-        )
+        if synchronize_after_wait:
+            return sync_loop(
+                root=root,
+                host_provider=provider,
+                workspace_root=Path.cwd(),
+            )
+        return value
     except (HostUnavailable, ValueError) as exc:
         raise EntryError(
             "USER_INTERNAL_ERROR",
@@ -443,7 +758,9 @@ def _refresh_with_owned_provider(*, root: Path):
             host_provider=provider,
             workspace_root=Path.cwd(),
         )
-        return _finish_owned_provider_task(value, provider, root=root)
+        return _finish_owned_provider_task(
+            value, provider, root=root, synchronize_after_wait=False
+        )
     finally:
         _close_provider(provider)
 
@@ -463,8 +780,11 @@ def _interactive_canary(args):
         )
         if not sys.stdin.isatty():
             return False
-        answer = input('Type "RUN THIS CANARY" to authorize one disposable Codex invocation: ')
-        return answer == "RUN THIS CANARY"
+        answer = input(
+            f'Type "START THIS LOOP" to confirm this {args.goals}-Goal '
+            "disposable canary boundary: "
+        )
+        return answer == "START THIS LOOP"
 
     try:
         host_codex_home = Path(
@@ -473,7 +793,9 @@ def _interactive_canary(args):
         return run_canary(
             args.candidate,
             args.evidence_root,
+            candidate_root=args.candidate_root,
             confirmation_callback=confirm,
+            goal_count=args.goals,
             integrity_inputs={
                 "host_auth": host_codex_home / "auth.json",
                 "host_config": host_codex_home / "config.toml",

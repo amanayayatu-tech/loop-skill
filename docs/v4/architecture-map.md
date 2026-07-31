@@ -5,15 +5,15 @@ State Gateway, State-Writer, Supervisor, or canonical dual write.
 
 ```text
 Entry / composition root
-  ├─ Intake → Prepare → Confirm → Start
+  ├─ conversational Intake → owner-only Prepare → Confirm → Start
   ├─ deterministic Kernel
   │    └─ typed protocol + Store/Artifact/Host ports only
-  ├─ SQLite Store
+  ├─ SQLite Store + immutable content-addressed plan blobs
   │    └─ one canonical transactional writer and outbox truth
   ├─ Artifact / review / finalization libraries
   │    └─ existing-Git, non-Git, new-Git capability implementations
   ├─ Codex Host Adapter
-  │    └─ one foreground official `codex exec --json` invocation and honest capability rows
+  │    └─ one foreground official `codex exec --json` invocation per activated Goal and honest capability rows
   ├─ optional Policy
   │    └─ Standard, Adaptive, roles, decisions, bounded repair
   └─ rebuildable projections
@@ -34,6 +34,11 @@ Entry / composition root
   four-phase path and honest `UNKNOWN`/`UNVERIFIABLE` handling without it.
 - Projections are rebuildable and read-only. They cannot authorize recovery or
   become another ledger.
+- PlanCodec canonicalizes the confirmed 1–32 Goal PlanDocument outside the
+  Kernel. The Kernel independently validates plan/index/digest/selector
+  identities but never reads arbitrary files or networks. CreateLoop registers
+  only the current Goal; the existing `AdvanceGoal` transaction completes it,
+  creates the next Goal/Attempt, and writes one compact outbox descriptor.
 
 ## External effects
 
@@ -66,11 +71,11 @@ first call only when the durable Attempt is still unclaimed; after a started
 process loses evidence it preserves `UNKNOWN` and does not resume or resend.
 
 Codex Desktop's folder-open → `list_projects` → `projectId` → `create_thread`
-route has 23/23 verified provisioning receipts. That evidence establishes the
-Desktop provisioning route, not a capability in the v4.0 Provider. The 4.0
+route has historical verified provisioning receipts. That evidence establishes
+the Desktop provisioning route, not a capability in the v4.1 Provider. The 4.1
 default is a foreground cwd-bound `codex exec` invocation and does not promise
 a Desktop-visible saved project/task. Optional saved-project convenience is
-deferred beyond 4.0.0.
+outside the current release boundary.
 
 After exact task readback, Entry submits the generated
 `StageExternalResult` command and the existing Result/Artifact/Review/
@@ -91,6 +96,8 @@ operation receipt, outbox, and current Result/Report/finalization bindings
 commit atomically. Artifact correctness, workflow terminality, Host assurance,
 and public release are distinct claims with distinct evidence.
 
-The 4.0.0 release support claim is gated by the eight-lane Linux/macOS × Python
-3.11, 3.12, 3.13, and 3.14 runtime/distribution matrix. A local result from one
-Python runtime is useful focused evidence, not a substitute for that matrix.
+The 4.1.0 release support claim is gated by the eight-lane Linux/macOS × Python
+3.11, 3.12, 3.13, and 3.14 runtime/distribution matrix, 1/4/8/16/32 fake-Provider
+capacity routes, and fresh 2-Goal then 8-Goal real Host canaries on one exact
+candidate. A local result from one Python runtime is focused evidence, not a
+substitute for that matrix.

@@ -162,12 +162,42 @@ def privacy_export(export_bytes: bytes) -> dict[str, Any]:
     accepted = sum(operation.get("accepted", True) is True for operation in operations)
     rejected = sum(operation.get("accepted") is False for operation in operations)
     rejected += len(exported.get("rejected", []))
+    plans = []
+    for snapshot in snapshot_values:
+        plan = snapshot.get("goal_plan")
+        if not isinstance(plan, Mapping):
+            continue
+        if plan.get("storage_mode") == "CONTENT_ADDRESSED_V1":
+            plans.append(
+                {
+                    "active_index": plan.get("active_index"),
+                    "capacity_contract_version": plan.get(
+                        "capacity_contract_version"
+                    ),
+                    "goal_count": plan.get("goal_count"),
+                    "order_digest": domain_digest(
+                        "loopskill-public-plan-order-v1\n",
+                        {
+                            "goal_ids": list(plan.get("ordered_goal_ids", ())),
+                            "slice_digests": list(
+                                plan.get("ordered_goal_slice_digests", ())
+                            ),
+                        },
+                    ),
+                    "plan_digest": plan.get("plan_digest"),
+                    "plan_index_digest": plan.get("plan_index_digest"),
+                    "revision": plan.get("revision"),
+                    "schema": "loopskill-plan-v1",
+                    "storage_mode": "CONTENT_ADDRESSED_V1",
+                }
+            )
     body = {
         "accepted_operation_count": accepted,
         "assurance_counts": dict(sorted(assurance_states.items())),
         "canonical_export_digest": hashlib.sha256(export_bytes).hexdigest(),
         "execution_state_counts": dict(sorted(execution_states.items())),
         "loop_count": len(snapshot_values),
+        "plans": sorted(plans, key=lambda item: str(item["plan_digest"])),
         "rejected_operation_count": rejected,
     }
     return {

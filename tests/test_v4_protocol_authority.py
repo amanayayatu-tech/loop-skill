@@ -98,7 +98,12 @@ class V4ProtocolAuthorityTests(unittest.TestCase):
             GENERATOR.parse_manifest('{"protocol_version":"a","protocol_version":"b"}')
 
     def test_semantic_payload_shape_enum_and_protocol_drift_reject(self):
-        base = vertical_commands()[0]
+        base = with_command_change(
+            vertical_commands()[0],
+            lambda values: values.update(
+                protocol_version=PROTOCOL_MANIFEST["protocol_version"]
+            ),
+        )
         cases = (
             ({}, "INVALID_COMMAND"),
             ({"objective": "x", "manual_schema": "forbidden"}, "INVALID_COMMAND"),

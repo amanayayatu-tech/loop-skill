@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sqlite3
@@ -10,17 +11,30 @@ from pathlib import Path
 from typing import Any
 
 from loop_architect.v4_alpha.kernel import AuthorityContext, reduce_command
+from loop_architect.v4_alpha.plan_codec import (
+    CONTENT_STORAGE_MODE,
+    PlanCodecError,
+    materialize_provider_request,
+    parse_plan_bytes,
+    plan_digest,
+    validate_plan_index,
+)
 from loop_architect.v4_alpha.protocol import (
     ApplyResult,
     ActorRef,
     AuthorityGrant,
+    AuthorityGrantV2,
     CommandEnvelope,
     EffectAttempt,
+    EAGER_STORAGE_MODE,
+    LEGACY_ABSENT_STORAGE_MODE,
+    MALFORMED_STORAGE_MODE,
     Receipt,
     InjectedCrash,
     ProtocolRejection,
     canonical_bytes,
     authority_grant_digest,
+    classify_persisted_storage_mode,
     command_digest,
     domain_digest,
     raw_domain_digest,
@@ -360,7 +374,7 @@ class SQLiteStore:
 
     def _load_authority(self) -> AuthorityContext:
         actors: dict[str, ActorRef] = {}
-        grants: dict[str, AuthorityGrant] = {}
+        grants: dict[str, AuthorityGrant | AuthorityGrantV2] = {}
         receipts: dict[str, Receipt] = {}
         for row in self._connection.execute(
             "SELECT actor_ref, loop_ref, actor_json FROM authority_actors ORDER BY actor_ref"
@@ -380,8 +394,11 @@ class SQLiteStore:
             )
             value["allowed_commands"] = tuple(value["allowed_commands"])
             value["subject_kinds"] = tuple(value["subject_kinds"])
-            value["exact_subjects"] = tuple(value["exact_subjects"])
-            grant = AuthorityGrant(**value)
+            if value.get("schema") == "loopskill-authority-grant-v2":
+                grant = AuthorityGrantV2(**value)
+            else:
+                value["exact_subjects"] = tuple(value["exact_subjects"])
+                grant = AuthorityGrant(**value)
             if (
                 grant.grant_ref != row["grant_ref"]
                 or grant.loop_scope != row["loop_ref"]
@@ -576,16 +593,33 @@ class SQLiteStore:
                     return _apply_result(outcome, replayed=True)
                 raise ProtocolRejection(outcome["code"], outcome["detail"])
 
-            validate_command(command)
             current = self._snapshot_in_transaction(loop_ref)
+            storage_mode = classify_persisted_storage_mode(current)
+            if storage_mode == MALFORMED_STORAGE_MODE:
+                raise ProtocolRejection(
+                    "INTERNAL_INVARIANT_VIOLATION",
+                    "persisted storage mode is malformed",
+                )
+            if storage_mode in {
+                LEGACY_ABSENT_STORAGE_MODE,
+                EAGER_STORAGE_MODE,
+            }:
+                from loop_architect.v4_eager_v40 import reduce_eager_command
+
+                reducer = reduce_eager_command
+            else:
+                validate_command(command)
+                reducer = reduce_command
             actual_revision = 0 if current is None else current["loop_revision"]
             if actual_revision != command.expected_loop_revision:
                 raise ProtocolRejection(
                     "STALE_LOOP_REVISION",
                     f"expected {command.expected_loop_revision}, actual {actual_revision}",
                 )
-            candidate, pending_events, response = reduce_command(
-                current, command, self.authority
+            candidate, pending_events, response = reducer(
+                current,
+                command,
+                self.authority,
             )
             if fault_at == "after_reduce_before_write":
                 raise InjectedCrash(fault_at)
@@ -812,16 +846,61 @@ class SQLiteStore:
             descriptors.append(descriptor)
         return descriptors
 
-    @staticmethod
     def _attempt_wire(
-        snapshot: dict[str, Any], attempt_ref: str, attempt: dict[str, Any]
+        self, snapshot: dict[str, Any], attempt_ref: str, attempt: dict[str, Any]
     ) -> EffectAttempt:
         delivery_ref = attempt.get("delivery_ref")
         if "external_effect_ref" in attempt:
             subject_kind = "ExternalEffectRef"
             subject_ref = attempt["external_effect_ref"]
             action = attempt["action"]
-            payload = attempt["provider_request"]
+            descriptor = attempt["provider_request"]
+            if descriptor.get("storage_mode") == CONTENT_STORAGE_MODE:
+                try:
+                    plan_raw = self.get_blob(str(descriptor["plan_digest"]))
+                    index_raw = self.get_blob(str(descriptor["plan_index_digest"]))
+                    if plan_raw is None or index_raw is None:
+                        raise PersistenceCorruption("bound plan blob is absent")
+                    plan = parse_plan_bytes(plan_raw)
+                    index_value = _decode_canonical(
+                        index_raw, f"plan-index:{descriptor['plan_index_digest']}"
+                    )
+                    if (
+                        plan_digest(plan_raw) != descriptor["plan_digest"]
+                        or plan_digest(index_raw) != descriptor["plan_index_digest"]
+                    ):
+                        raise PersistenceCorruption("bound plan digest mismatch")
+                    index = validate_plan_index(index_value, plan)
+                    active_index = int(descriptor["active_index"])
+                    if (
+                        index["ordered_goal_ids"][active_index]
+                        != descriptor["goal_id"]
+                        or index["ordered_goal_slice_digests"][active_index]
+                        != descriptor["goal_slice_digest"]
+                        or index["workspace_binding"]
+                        != descriptor["workspace_binding"]
+                    ):
+                        raise PersistenceCorruption("current Goal descriptor drift")
+                    payload = materialize_provider_request(
+                        plan,
+                        index,
+                        active_index,
+                        target_ref=str(descriptor["target_ref"]),
+                        artifact_digest=str(descriptor["artifact_digest"]),
+                        prior_disposition=str(descriptor["prior_disposition"]),
+                    )
+                    if domain_digest(
+                        "loopskill-provider-request-v1\n", payload
+                    ) != attempt["provider_request_digest"]:
+                        raise PersistenceCorruption(
+                            "materialized provider request identity drift"
+                        )
+                except (KeyError, IndexError, TypeError, ValueError, PlanCodecError) as exc:
+                    raise PersistenceCorruption(
+                        "content-addressed provider request is invalid"
+                    ) from exc
+            else:
+                payload = descriptor
         else:
             subject_kind = "DeliveryRef"
             subject_ref = delivery_ref
@@ -922,6 +1001,14 @@ class SQLiteStore:
         )
         if not isinstance(payload, dict):
             raise PersistenceCorruption("Attempt provider payload is not an object")
+        snapshot = self.snapshot(str(row["loop_ref"]))
+        if snapshot is None or attempt_ref not in snapshot.get("attempts", {}):
+            raise PersistenceCorruption("Attempt snapshot record is absent")
+        materialized = self._attempt_wire(
+            snapshot, attempt_ref, snapshot["attempts"][attempt_ref]
+        )
+        if dict(materialized.payload) != payload:
+            raise PersistenceCorruption("Attempt outbox materialization drift")
         return EffectAttempt(
             attempt_ref=row["attempt_ref"],
             loop_ref=row["loop_ref"],
@@ -1072,9 +1159,13 @@ class SQLiteStore:
             )
             outbox.append(value)
         blobs = [
-            {"blob_digest": row["blob_digest"], "content_bytes": row["content_bytes"]}
+            {
+                "blob_digest": row["blob_digest"],
+                "content_base64": base64.b64encode(bytes(row["content"])).decode("ascii"),
+                "content_bytes": row["content_bytes"],
+            }
             for row in self._connection.execute(
-                "SELECT blob_digest, content_bytes FROM immutable_blobs ORDER BY blob_digest"
+                "SELECT blob_digest, content, content_bytes FROM immutable_blobs ORDER BY blob_digest"
             )
         ]
         descriptors = self.loop_descriptors()
