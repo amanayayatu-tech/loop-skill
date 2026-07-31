@@ -70,7 +70,7 @@ export PYTHONDONTWRITEBYTECODE=1
 "$PY" scripts/generate_v4_protocol.py --check
 "$PY" scripts/validate_spec.py --root .
 "$PY" scripts/validate_v4_preservation.py --root . --json
-"$PY" scripts/check_v4_docs.py --candidate --smoke
+"$PY" scripts/check_v4_docs.py --release --smoke
 "$PY" scripts/check_v4_ci.py
 "$PY" codex-loop-prompt-architect/scripts/validate_skill.py codex-loop-prompt-architect
 "$PY" -m coverage erase
