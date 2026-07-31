@@ -501,7 +501,7 @@ def _spdx_sbom(
             "licenseDeclared": "MIT",
             "name": "LoopSkill",
             "primaryPackagePurpose": "APPLICATION",
-            "versionInfo": "4.1.0",
+            "versionInfo": "4.1.1",
         }
     ]
     relationships = [
@@ -542,10 +542,10 @@ def _spdx_sbom(
         },
         "dataLicense": "CC0-1.0",
         "documentNamespace": (
-            "https://github.com/amanayayatu-tech/loop-skill/sbom/v4.1.0/"
+            "https://github.com/amanayayatu-tech/loop-skill/sbom/v4.1.1/"
             + candidate
         ),
-        "name": f"LoopSkill-4.1.0-{candidate[:12]}",
+        "name": f"LoopSkill-4.1.1-{candidate[:12]}",
         "packages": packages,
         "relationships": relationships,
         "spdxVersion": "SPDX-2.3",
@@ -599,7 +599,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
     version = _run(root, "git", "show", f"{candidate}:VERSION").decode(
         "utf-8", "strict"
     ).strip()
-    if version != "4.1.0":
+    if version != "4.1.1":
         raise RcValidationError("RC_VERSION_INVALID")
     dependencies = _dependency_inventory()
     runtime_identity = _runtime_identity(dependencies)
@@ -1511,7 +1511,7 @@ def validate_author_packet(
             root, "git", "rev-parse", "paper-treatment-v3.3.12^{commit}"
         ).decode("ascii", "strict").strip()
         _run(root, "git", "merge-base", "--is-ancestor", origin_main, candidate)
-        local_v4_tag = _run(root, "git", "tag", "--list", "v4.1.0").strip()
+        local_v4_tag = _run(root, "git", "tag", "--list", "v4.1.1").strip()
     except UnicodeDecodeError as exc:
         raise RcValidationError("RC_AUTHOR_PACKET_PREFLIGHT_IDENTITY_INVALID") from exc
     if (

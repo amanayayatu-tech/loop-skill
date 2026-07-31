@@ -3,6 +3,24 @@
 All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [4.1.1] - 2026-08-01
+
+### Fixed
+
+- v4 now rejects a v3-marked working directory before `PREPARE`, `START`, or
+  `status --refresh`, preserving the existing zero-write
+  `USER_UNSUPPORTED_LEGACY_VERSION` boundary for new v4 inputs as well as
+  legacy inputs.
+
+### Validation boundary
+
+- This scoped hotfix is accepted by its direct zero-write subprocess regression,
+  the complete deterministic suite, isolated distribution tests, and exact-SHA
+  pull-request/main/tag CI. It does not claim a fresh real Host canary.
+- A superseded candidate's two semantic Goals passed before its shared Host
+  config integrity check failed; that failure remains preserved and is not a
+  v4.1.1 release receipt.
+
 ## [4.1.0] - 2026-07-31
 
 ### Added
@@ -630,6 +648,7 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
+[4.1.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.1.1
 [4.1.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.1.0
 [4.0.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.0.0
 [3.3.8]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8

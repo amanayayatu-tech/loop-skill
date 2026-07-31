@@ -96,7 +96,7 @@ def validate(root: Path) -> dict[str, object]:
     if (
         not isinstance(push, dict)
         or push.get("branches") != ["main"]
-        or push.get("tags") != ["v4.1.0"]
+        or push.get("tags") != ["v4.1.1"]
     ):
         raise CiError("CI_PUSH_SCOPE_INVALID")
     if permissions != {"contents": "read"}:
@@ -145,7 +145,7 @@ def validate(root: Path) -> dict[str, object]:
         for command in commands:
             if command not in run_text:
                 raise CiError(f"CI_COMMAND_WRONG_JOB:{job}:{command}")
-    tag_condition = "github.ref == 'refs/tags/v4.1.0'"
+    tag_condition = "github.ref == 'refs/tags/v4.1.1'"
     release_steps = structured_steps["release-hygiene"]
     for needle in ("scripts/check_v4_docs.py --release", "scripts/check_release_identity.py"):
         matches = [step for step in release_steps if needle in str(step.get("run", ""))]
@@ -176,7 +176,7 @@ def validate(root: Path) -> dict[str, object]:
         "name: LoopSkill 4 Release CI",
         "pull_request:",
         "branches: [main]",
-        "tags: [v4.1.0]",
+        "tags: [v4.1.1]",
         "workflow_dispatch:",
         "permissions:\n  contents: read",
         CHECKOUT,

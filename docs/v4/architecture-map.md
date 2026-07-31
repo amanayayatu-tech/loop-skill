@@ -96,7 +96,7 @@ operation receipt, outbox, and current Result/Report/finalization bindings
 commit atomically. Artifact correctness, workflow terminality, Host assurance,
 and public release are distinct claims with distinct evidence.
 
-The 4.1.0 release support claim is gated by the eight-lane Linux/macOS × Python
+The 4.1.1 release support claim is gated by the eight-lane Linux/macOS × Python
 3.11, 3.12, 3.13, and 3.14 runtime/distribution matrix, 1/4/8/16/32 fake-Provider
 capacity routes, and fresh 2-Goal then 8-Goal real Host canaries on one exact
 candidate. A local result from one Python runtime is focused evidence, not a

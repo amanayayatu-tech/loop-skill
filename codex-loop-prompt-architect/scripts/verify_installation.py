@@ -98,7 +98,7 @@ def verify(
         raise VerificationError("V4_SOURCE_INSTALL_DRIFT")
     if config_before_sha256 != config_after_sha256:
         raise VerificationError("V4_CODEX_CONFIG_MUTATED")
-    if version != "4.1.0":
+    if version != "4.1.1":
         raise VerificationError("V4_VERSION_INVALID")
     if repo_commit != "SOURCE_ARCHIVE" and (
         len(repo_commit) != 40
