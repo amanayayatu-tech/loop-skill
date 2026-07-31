@@ -7,11 +7,11 @@
 [English](README.en.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> 本文档对应 LoopSkill 4.1.0 发布候选，正在等待作者发布授权；当前可用的公开版本仍以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
+> 本文档对应 LoopSkill 4.1.0；当前可用的公开版本以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
 
-**LoopSkill 帮你把一次聊天容易丢失的耐久任务，变成先看清边界、再启动一次、最后留下结果和证据的工作流程。**
+**一句话说明要做什么，LoopSkill 帮你先锁定边界，确认后只启动一次，并用机器证据告诉你做成了什么、哪里还不确定。**
 
-聊天会结束，长任务却未必已经完成。中途可能换上下文、重复执行同一步，或者只得到一句“完成了”，却不知道文件是否真的正确。LoopSkill 不承诺让模型永久自主运行；它为一个前台 Codex Host 任务提供清楚、可检查、不会盲目重试的边界。
+聊天会结束，长任务却未必已经完成。中途可能换上下文、越做越宽、重复执行同一步，或者只得到一句“完成了”，却不知道文件是否真的正确。LoopSkill 不承诺让模型永久自主运行；它把一个前台 Codex Host 任务组织成有目标、有边界、有验收、有停止条件的过程。
 
 ![耐久任务从目标和边界交接到证据与结果的故事图](docs/readme-assets/durable-handoff.png)
 
@@ -49,7 +49,7 @@ LoopSkill 4 是 **v4-only hard break**。它保留 v3 的安全原则，但不�
 
 先决条件：macOS 或 Linux、Git、Python 3.11–3.14，以及已经登录的官方 Codex。LoopSkill 4 runtime 只依赖 Python 标准库。
 
-以下安装命令只适用于作者另行授权并发布 `v4.1.0` 之后；发布候选本身不是公开发行。
+以下命令安装公开发布的 `v4.1.0` tag：
 
 ```bash
 git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
@@ -247,7 +247,7 @@ CI 还运行 Linux/macOS × Python 3.11–3.14 安装卸载矩阵、协议漂移
 ## 发布、安全与历史版本
 
 - [v4 发布流程](docs/RELEASING.md)
-- [4.1.0 candidate release notes](docs/v4/release-notes-v4.1.md)
+- [4.1.0 发布说明](docs/v4/release-notes-v4.1.md)
 - [4.0.0 historical release notes](docs/v4/release-notes.md)
 - [v4.1 compatibility matrix](docs/v4/compatibility-matrix-v4.1.md)
 - [Security policy](SECURITY.md)

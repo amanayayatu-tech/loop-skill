@@ -7,11 +7,11 @@
 [中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> This document describes the LoopSkill 4.1.0 release candidate, which is awaiting author release authorization. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
+> This document describes LoopSkill 4.1.0. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
 
-**LoopSkill turns durable work that can get lost in one chat into a flow that checks the boundary first, starts once, and leaves a result with evidence.**
+**Describe the job in one sentence. LoopSkill fixes the boundary first, starts once after confirmation, and uses machine evidence to show what worked and what remains uncertain.**
 
-A chat can end before a long task is truly complete. Context can drift, a step can run twice, or “done” can arrive without proof that the file is correct. LoopSkill does not promise permanent autonomous execution. It gives one foreground Codex Host task a clear, inspectable boundary with no blind retry.
+A chat can end before a long task is truly complete. Context can drift, scope can grow, a step can run twice, or “done” can arrive without proof that the file is correct. LoopSkill does not promise permanent autonomous execution. It organizes one foreground Codex Host task around a goal, boundary, acceptance criteria, and stop conditions.
 
 ![Durable handoff from a goal and boundary to evidence and result](docs/readme-assets/durable-handoff.png)
 
@@ -49,7 +49,7 @@ Intake returns `READY_FOR_LOOP`, `NEEDS_CLARIFICATION`, `BLOCKED`, or `DIRECT_TA
 
 Prerequisites: macOS or Linux, Git, Python 3.11–3.14, and an authenticated official Codex installation. The LoopSkill 4 runtime uses only the Python standard library.
 
-The install command below applies only after the author separately authorizes and publishes `v4.1.0`; a release candidate is not a public release.
+The command below installs the published `v4.1.0` tag:
 
 ```bash
 git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
@@ -247,7 +247,7 @@ CI also runs the Linux/macOS × Python 3.11–3.14 install/uninstall matrix, pro
 ## Release, security, and historical versions
 
 - [v4 release process](docs/RELEASING.md)
-- [4.1.0 candidate release notes](docs/v4/release-notes-v4.1.md)
+- [4.1.0 release notes](docs/v4/release-notes-v4.1.md)
 - [4.0.0 historical release notes](docs/v4/release-notes.md)
 - [v4.1 compatibility matrix](docs/v4/compatibility-matrix-v4.1.md)
 - [Security policy](SECURITY.md)

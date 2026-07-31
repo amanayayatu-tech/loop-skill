@@ -1,16 +1,14 @@
 # LoopSkill 4 quickstart
 
-This document describes the LoopSkill 4.1.0 release candidate, which is awaiting
-author release authorization. See GitHub Releases for the public versions currently available.
+This document describes LoopSkill 4.1.0. See GitHub Releases for the public versions currently available.
 
 ## Install
 
 Requirements: macOS or Linux, Git, and Python 3.11–3.14. Runtime dependencies
-are standard-library only. Version 4.1.0 may be published only after all eight
+are standard-library only. Version 4.1.0 release validation covers all eight
 Linux/macOS × Python 3.11, 3.12, 3.13, and 3.14 release-CI
-runtime/distribution lanes, both real Host canaries, and independent review pass,
-followed by separate author release authorization. The install command below
-applies only to that future published tag.
+runtime/distribution lanes, real Host canaries, and independent review. The
+command below installs the published tag.
 
 ```bash
 git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git

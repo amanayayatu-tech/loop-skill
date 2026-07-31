@@ -1,12 +1,12 @@
 # LoopSkill 4 快速开始
 
-本文档对应 LoopSkill 4.1.0 发布候选，正在等待作者发布授权；当前可用的公开版本仍以 GitHub Releases 页面为准。
+本文档对应 LoopSkill 4.1.0；当前可用的公开版本以 GitHub Releases 页面为准。
 
 ## 安装
 
-要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。4.1.0 只有在
-Linux/macOS × Python 3.11、3.12、3.13、3.14 的八个 release-CI
-runtime/distribution lane、两条真实 Host canary 和独立审查全部通过，并获得作者另行发布授权后才能发布。以下安装命令只适用于届时已发布的 tag。
+要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。4.1.0 的
+发布验证覆盖 Linux/macOS × Python 3.11、3.12、3.13、3.14 的八个 release-CI
+runtime/distribution lane、真实 Host canary 和独立审查。以下命令安装公开发布的 tag。
 
 ```bash
 git clone --branch v4.1.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git

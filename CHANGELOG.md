@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [4.1.0] - Unreleased
+## [4.1.0] - 2026-07-31
 
 ### Added
 
@@ -34,9 +34,10 @@ All notable changes to this project are documented here. The project follows
 
 ### Release status
 
-- This source tree is a release candidate awaiting author release
-  authorization. Local RC evidence and canaries do not authorize push, PR,
-  merge, tag, GitHub Release, global installation, or deployment.
+- Released as the current public v4 line after exact-candidate and merged-main
+  validation, fresh Host canaries, independent review, and release CI. Private
+  canary evidence and permanent-HOLD research assets are not publication
+  artifacts.
 
 ## [4.0.0] - 2026-07-28
 
@@ -629,7 +630,7 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
-[4.1.0]: https://github.com/amanayayatu-tech/loop-skill/compare/v4.0.0...HEAD
+[4.1.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.1.0
 [4.0.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.0.0
 [3.3.8]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8
 [3.3.7]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.7
