@@ -98,6 +98,10 @@ class V4DocsTests(unittest.TestCase):
                 (docs.README_RELEASE_STATUS_ZH, docs.README_CANDIDATE_STATUS_ZH),
                 (docs.README_RELEASE_STATUS_EN, docs.README_CANDIDATE_STATUS_EN),
                 (docs.SECURITY_RELEASE_STATUS, docs.SECURITY_CANDIDATE_STATUS),
+                (
+                    docs.RELEASE_NOTES_RELEASE_STATUS,
+                    docs.RELEASE_NOTES_CANDIDATE_STATUS,
+                ),
             )
             for relative in (
                 "README.md",
@@ -106,6 +110,7 @@ class V4DocsTests(unittest.TestCase):
                 "docs/v4/quickstart.en.md",
                 "SECURITY.md",
                 "CHANGELOG.md",
+                "docs/v4/release-notes-v4.1.md",
             ):
                 path = root / relative
                 text = path.read_text(encoding="utf-8")
@@ -131,6 +136,7 @@ class V4DocsTests(unittest.TestCase):
                 docs.QUICKSTART_CANDIDATE_STATUS_ZH: docs.QUICKSTART_RELEASE_STATUS_ZH,
                 docs.QUICKSTART_CANDIDATE_STATUS_EN: docs.QUICKSTART_RELEASE_STATUS_EN,
                 docs.SECURITY_CANDIDATE_STATUS: docs.SECURITY_RELEASE_STATUS,
+                docs.RELEASE_NOTES_CANDIDATE_STATUS: docs.RELEASE_NOTES_RELEASE_STATUS,
                 "## [4.1.0] - Unreleased": "## [4.1.0] - 2026-07-30",
             }
             for relative in (
@@ -140,6 +146,7 @@ class V4DocsTests(unittest.TestCase):
                 "docs/v4/quickstart.en.md",
                 "SECURITY.md",
                 "CHANGELOG.md",
+                "docs/v4/release-notes-v4.1.md",
             ):
                 path = root / relative
                 text = path.read_text(encoding="utf-8")
@@ -147,6 +154,20 @@ class V4DocsTests(unittest.TestCase):
                     text = text.replace(old, new)
                 path.write_text(text, encoding="utf-8")
             self.assertEqual(docs.validate(root, mode="release")["status"], "PASS")
+            release_notes = root / "docs/v4/release-notes-v4.1.md"
+            release_notes_text = release_notes.read_text(encoding="utf-8")
+            release_notes.write_text(
+                release_notes_text.replace(
+                    "https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8",
+                    "https://example.invalid/missing-v3-fallback",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                docs.DocsError, "DOC_RELEASE_NOTES_INCOMPLETE"
+            ):
+                docs.validate(root, mode="release")
+            release_notes.write_text(release_notes_text, encoding="utf-8")
             stale_zh = root / "README.md"
             stale_zh.write_text(
                 stale_zh.read_text(encoding="utf-8") + "\n此源码树是稳定发行\n",

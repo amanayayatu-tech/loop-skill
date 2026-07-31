@@ -64,11 +64,13 @@ README_CANDIDATE_STATUS_EN = "This document describes the LoopSkill 4.1.0 releas
 QUICKSTART_CANDIDATE_STATUS_ZH = "本文档对应 LoopSkill 4.1.0 发布候选，正在等待作者发布授权；当前可用的公开版本仍以 GitHub Releases 页面为准"
 QUICKSTART_CANDIDATE_STATUS_EN = "This document describes the LoopSkill 4.1.0 release candidate, which is awaiting\nauthor release authorization. See GitHub Releases for the public versions currently available."
 SECURITY_CANDIDATE_STATUS = "describes the LoopSkill 4.1.0 release-candidate security boundary"
+RELEASE_NOTES_CANDIDATE_STATUS = "Status: `V4_1_RC_READY_AWAITING_AUTHOR_RELEASE_AUTHORIZATION` is the only\npre-publication completion state."
 README_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.1.0；当前可用的公开版本以"
 README_RELEASE_STATUS_EN = "This document describes LoopSkill 4.1.0. See"
 QUICKSTART_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.1.0；当前可用的公开版本以 GitHub Releases 页面为准"
 QUICKSTART_RELEASE_STATUS_EN = "This document describes LoopSkill 4.1.0. See GitHub Releases for the public versions currently available."
 SECURITY_RELEASE_STATUS = "LoopSkill 4.1.0 is the currently supported public line."
+RELEASE_NOTES_RELEASE_STATUS = "Status: LoopSkill 4.1.0 is the current public v4 release."
 SECURITY_STATUS = "Security support follows the versions listed on GitHub Releases."
 README_ASSETS = (
     (
@@ -264,6 +266,9 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     quickstart_zh = (root / "docs/v4/quickstart.zh-CN.md").read_text(encoding="utf-8")
     quickstart_en = (root / "docs/v4/quickstart.en.md").read_text(encoding="utf-8")
     releasing = (root / "docs/RELEASING.md").read_text(encoding="utf-8")
+    release_notes_v41 = (root / "docs/v4/release-notes-v4.1.md").read_text(
+        encoding="utf-8"
+    )
     security = (root / "SECURITY.md").read_text(encoding="utf-8")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     version = (root / "VERSION").read_text(encoding="utf-8").strip()
@@ -311,6 +316,20 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     ):
         if literal not in releasing:
             raise DocsError(f"DOC_RELEASE_RUNBOOK_INCOMPLETE:{literal}")
+    for literal in (
+        "`INTAKE → PREPARE → CONFIRM → START`",
+        "v4-only hard break",
+        "https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8",
+        "does not register MCP",
+        "require an App restart",
+        "cross-system",
+        "exactly-once",
+        "support multiple Hosts",
+        "patch-success",
+        "long-horizon superiority",
+    ):
+        if literal not in release_notes_v41:
+            raise DocsError(f"DOC_RELEASE_NOTES_INCOMPLETE:{literal}")
     for claim in COMMON_CLAIMS:
         if claim not in zh or claim not in en:
             raise DocsError(f"DOC_CLAIM_PARITY_DRIFT:{claim}")
@@ -382,6 +401,7 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         and QUICKSTART_CANDIDATE_STATUS_ZH in quickstart_zh
         and QUICKSTART_CANDIDATE_STATUS_EN in quickstart_en
         and SECURITY_CANDIDATE_STATUS in security
+        and RELEASE_NOTES_CANDIDATE_STATUS in release_notes_v41
     )
     release_status = (
         README_RELEASE_STATUS_ZH in zh
@@ -389,6 +409,7 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         and QUICKSTART_RELEASE_STATUS_ZH in quickstart_zh
         and QUICKSTART_RELEASE_STATUS_EN in quickstart_en
         and SECURITY_RELEASE_STATUS in security
+        and RELEASE_NOTES_RELEASE_STATUS in release_notes_v41
     )
     if (
         SECURITY_STATUS not in security
@@ -403,7 +424,11 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         "stable release",
         "not yet published",
     )
-    if any(literal in text for literal in premature for text in (zh, en, quickstart_zh, quickstart_en, security)):
+    if any(
+        literal in text
+        for literal in premature
+        for text in (zh, en, quickstart_zh, quickstart_en, security, release_notes_v41)
+    ):
         raise DocsError("DOC_RELEASE_STATUS_PREMATURE_OR_AMBIGUOUS")
     if candidate_status and "## [4.1.0] - Unreleased" not in changelog:
         raise DocsError("DOC_RELEASE_STATUS_NOT_CANDIDATE")

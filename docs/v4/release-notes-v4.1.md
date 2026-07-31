@@ -1,8 +1,11 @@
-# LoopSkill 4.1.0 release-candidate notes
+# LoopSkill 4.1.0 release notes
 
-Status: `V4_1_RC_READY_AWAITING_AUTHOR_RELEASE_AUTHORIZATION` is the only
-pre-publication completion state. These notes do not claim a tag, GitHub
-Release, installation, deployment, or supported public line.
+Status: LoopSkill 4.1.0 is the current public v4 release.
+
+LoopSkill 4.1 helps turn work that can outlive one chat into a bounded process:
+state the goal, inspect the scope, confirm once, and check the result against
+machine evidence. The visible flow remains
+`INTAKE → PREPARE → CONFIRM → START`; it does not silently start a Host task.
 
 ## User-visible changes
 
@@ -26,6 +29,9 @@ Release, installation, deployment, or supported public line.
 - New Loops use `CONTENT_ADDRESSED_V1`. Existing `EAGER_V4_0` stores support
   status, export, and original-reducer continuation only. There is no migration,
   rewrite, or dual write.
+- LoopSkill 4 is a v4-only hard break. It does not open, import, repair, or
+  automatically migrate v3 data. Users who need the historical v3 line can use
+  [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8).
 
 ## Safety boundary
 
@@ -33,8 +39,9 @@ LoopSkill still uses one canonical Store writer, at-most-one automatic Attempt
 per activation, bounded foreground Codex execution, and honest `UNKNOWN` /
 `UNVERIFIABLE` outcomes. It does not register MCP, edit Codex configuration,
 require an App restart, start a daemon, restore v3 runtime, promise cross-system
-exactly-once, or claim proven long-horizon superiority.
+exactly-once, support multiple Hosts, or claim patch-success or proven
+long-horizon superiority.
 
-The local release gate requires deterministic matrices plus a fresh 2-Goal and,
-only after it passes, a fresh 8-Goal real Host canary on the same exact clean
+Release validation used deterministic matrices plus a fresh 2-Goal and, only
+after it passed, a fresh 8-Goal real Host canary on the same exact clean
 candidate. Those 10 invocations are product validation, not research evidence.

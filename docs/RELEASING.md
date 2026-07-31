@@ -25,7 +25,7 @@ release-identity checks and real foreground Codex exec canary on the merged SHA.
 Development, RC validation, both real canaries, and review must keep candidate
 wording. Gate 1 starts from that exact clean candidate. Only after separate
 author release authorization may an operator make one deliberate release-truth
-commit that changes exactly these six candidate/support surfaces together:
+commit that changes exactly these seven candidate/support surfaces together:
 
 1. `README.md`: candidate notice to the approved Chinese stable notice;
 2. `README.en.md`: candidate notice to the approved English stable notice;
@@ -36,13 +36,15 @@ commit that changes exactly these six candidate/support surfaces together:
 5. `SECURITY.md`: future support wording to “LoopSkill 4.1.0 is the currently
    supported public line.”;
 6. `CHANGELOG.md`: the final `4.1.0` release date and release-link identity.
+7. `docs/v4/release-notes-v4.1.md`: candidate-only status to the reviewed
+   public release notes, including the direct v3.3.8 fallback and claim limits.
 
 `VERSION` is already `4.1.0` and remains a separately validated version truth;
-it is not a seventh candidate-to-stable text switch. Before that authorized
+it is not an eighth candidate-to-stable text switch. Before that authorized
 commit, English copy must say “awaiting author release authorization” and must
 not claim public support. The truth switch creates a new candidate SHA, so all
 RC-ready receipts from its predecessor are superseded: Gate 1 and every later
-exact-SHA gate must run again before publication. If any of the six surfaces
+exact-SHA gate must run again before publication. If any of the seven surfaces
 changes afterward, create another candidate SHA and repeat the full exact-SHA
 chain; do not transplant predecessor evidence.
 
