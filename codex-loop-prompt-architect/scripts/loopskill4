@@ -453,9 +453,7 @@ def _decode_admitted_input(
             source_kind="authorized_file",
             source_raw=raw,
         )
-    if path.suffix.lower() in {".json", ".md", ".txt"} or value.startswith(
-        ("./", "../", "/")
-    ):
+    if value.startswith(("./", "../", "/")):
         raise EntryError(
             "USER_INPUT_INVALID",
             "The goal file was not found.",

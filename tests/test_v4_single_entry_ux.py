@@ -212,6 +212,41 @@ def load_cli_module():
 
 
 class V4SingleEntryUXTests(unittest.TestCase):
+    def test_public_cli_preserves_literal_suffix_and_explicit_path_intent(self):
+        cli = load_cli_module()
+        literal_requests = (
+            "Create and verify release-checklist.md",
+            "Create and verify release-checklist.txt",
+            "Create and verify release-checklist.json",
+            "请创建并验证release-checklist.md",
+            "请创建并验证release-checklist.txt",
+            "请创建并验证release-checklist.json",
+        )
+        for request in literal_requests:
+            with self.subTest(request=request):
+                admitted = cli.read_intake_input(request)
+                self.assertEqual(admitted.goal, request)
+                self.assertEqual(admitted.source_kind, "literal_text")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources = {
+                "bare.md": "bare file",
+                "with space.txt": "spaced file",
+                "需求说明.md": "Unicode file",
+            }
+            for name, content in sources.items():
+                (root / name).write_text(content, encoding="utf-8")
+            with contextlib.chdir(root):
+                for name, content in sources.items():
+                    with self.subTest(source=name):
+                        admitted = cli.read_intake_input(name)
+                        self.assertEqual(admitted.goal, content)
+                        self.assertEqual(admitted.source_kind, "authorized_file")
+                with self.assertRaises(EntryError) as missing:
+                    cli.read_intake_input("./requirements.md")
+                self.assertEqual(missing.exception.code, "USER_INPUT_INVALID")
+
     def test_public_cli_input_decoding_doctor_and_confirmation_edges(self):
         cli = load_cli_module()
         with tempfile.TemporaryDirectory() as temporary:
