@@ -947,6 +947,8 @@ def _validate_canary_integrity_evidence(
         "result_sha256",
         "returncode_class",
         "schema_control_digest",
+        "semantic_outcome",
+        "semantic_summary",
         "stderr_bytes",
         "stderr_sha256",
         "stdout_bytes",
@@ -954,7 +956,23 @@ def _validate_canary_integrity_evidence(
         "terminal_event_count",
         "terminal_event_type",
     }
-    invalid_diagnostic = any(
+    semantic_invalid = False
+    for provider_diagnostic in provider_diagnostics:
+        summary = provider_diagnostic.get("semantic_summary")
+        try:
+            summary_bytes = summary.encode("utf-8", "strict")
+        except (AttributeError, UnicodeEncodeError):
+            semantic_invalid = True
+            break
+        if (
+            provider_diagnostic.get("semantic_outcome") != "PASS"
+            or not summary.strip()
+            or len(summary) > 4_096
+            or len(summary_bytes) > 4_096
+        ):
+            semantic_invalid = True
+            break
+    invalid_diagnostic = semantic_invalid or any(
         set(provider_diagnostic) != expected_provider_keys
         or provider_diagnostic["artifact"]
         != "loopskill-codex-exec-terminal-diagnostic-v1"

@@ -20,8 +20,10 @@ from loop_architect.v4_adapters.codex.exec_provider import CodexExecProvider
 from loop_architect.v4_adapters.codex.adapter import HostUnavailable
 from loop_architect.v4_alpha.protocol import (
     LoopIntakeInput,
+    ProtocolRejection,
     canonical_bytes,
     snapshot_digest,
+    validate_result_payload,
 )
 from loop_architect.v4_alpha.plan_codec import canonicalize_plan
 from loop_architect.v4_persistence.sqlite_store import SQLiteStore
@@ -662,6 +664,8 @@ def _provider_terminal_diagnostic(provider: Any) -> dict[str, Any]:
         "result_sha256",
         "returncode_class",
         "schema_control_digest",
+        "semantic_outcome",
+        "semantic_summary",
         "stderr_bytes",
         "stderr_sha256",
         "stdout_bytes",
@@ -704,6 +708,18 @@ def _provider_terminal_diagnostic(provider: Any) -> dict[str, Any]:
     ):
         if not isinstance(value[name], str) or not re.fullmatch(r"[0-9a-f]{64}", value[name]):
             raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID")
+    semantic = {
+        "outcome": value["semantic_outcome"],
+        "summary": value["semantic_summary"],
+    }
+    if semantic == {"outcome": None, "summary": None}:
+        if value["code"] == "PASS":
+            raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID")
+    else:
+        try:
+            validate_result_payload(semantic)
+        except ProtocolRejection as exc:
+            raise CanaryError("CANARY_PROVIDER_DIAGNOSTIC_INVALID") from exc
     return value
 
 

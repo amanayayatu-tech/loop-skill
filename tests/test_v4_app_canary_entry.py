@@ -203,6 +203,15 @@ class FakeCanaryProvider:
     def terminal_diagnostic(self):
         empty = hashlib.sha256(b"").hexdigest()
         result = b'{"outcome":"PASS","summary":"disposable canary completed"}'
+        semantic_outcome = (
+            None
+            if self.mode == "unknown"
+            else "FAILED"
+            if self.mode == "failed"
+            else "UNVERIFIABLE"
+            if self.mode == "unverifiable"
+            else "PASS"
+        )
         return {
             "artifact": "loopskill-codex-exec-terminal-diagnostic-v1",
             "code": "PASS" if self.mode != "unknown" else "STDOUT_JSONL_INVALID",
@@ -213,6 +222,10 @@ class FakeCanaryProvider:
             "returncode_class": "ZERO",
             "schema_control_digest": domain_digest(
                 "loopskill-codex-result-schema-v1\n", result_payload_schema()
+            ),
+            "semantic_outcome": semantic_outcome,
+            "semantic_summary": (
+                None if semantic_outcome is None else "disposable canary completed"
             ),
             "stderr_bytes": 0,
             "stderr_sha256": empty,
@@ -954,6 +967,16 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
             self.assertEqual(providers[0].terminal_wait_read_count, 1)
             self.assertEqual(providers[0].protocol_preflight_count, 1)
             self.assertEqual(receipt["status"], "PASS")
+            diagnostic = json.loads(
+                (evidence / canary.CANARY_PROVIDER_DIAGNOSTIC_FILENAME).read_text()
+            )
+            self.assertEqual(diagnostic["semantic_outcome"], "PASS")
+            self.assertEqual(
+                diagnostic["semantic_summary"], "disposable canary completed"
+            )
+            self.assertNotIn(
+                "disposable canary completed", json.dumps(receipt, sort_keys=True)
+            )
 
 
 if __name__ == "__main__":

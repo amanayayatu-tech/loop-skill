@@ -40,6 +40,8 @@ def canary(
         "result_sha256": hashlib.sha256(result).hexdigest(),
         "returncode_class": "ZERO",
         "schema_control_digest": "6" * 64,
+        "semantic_outcome": "PASS",
+        "semantic_summary": "complete",
         "stderr_bytes": 0,
         "stderr_sha256": empty,
         "stdout_bytes": 100,

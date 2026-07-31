@@ -372,6 +372,8 @@ class ExecProviderTests(unittest.TestCase):
                 provider.invoke("create_task", payload(), KEY)
             self.assertEqual(caught.exception.provider_code, "PROCESS_EXIT_NONZERO")
             self.assertEqual(provider.terminal_diagnostic()["stderr_bytes"], 6)
+            self.assertIsNone(provider.terminal_diagnostic()["semantic_outcome"])
+            self.assertIsNone(provider.terminal_diagnostic()["semantic_summary"])
             self.assertIsNone(provider.readback("create_task", KEY))
         with tempfile.TemporaryDirectory() as temporary:
             provider = self.provider(
@@ -383,6 +385,8 @@ class ExecProviderTests(unittest.TestCase):
             provider.invoke("create_task", payload(), KEY)
             diagnostic = provider.terminal_diagnostic()
             self.assertEqual(diagnostic["code"], "PASS")
+            self.assertEqual(diagnostic["semantic_outcome"], "PASS")
+            self.assertEqual(diagnostic["semantic_summary"], "complete")
             self.assertEqual(diagnostic["stderr_bytes"], len(b"progress\n"))
             self.assertEqual(diagnostic["stderr_sha256"], hashlib.sha256(b"progress\n").hexdigest())
 
@@ -498,6 +502,9 @@ class ExecProviderTests(unittest.TestCase):
                 )
                 provider.invoke("create_task", payload(), KEY)
                 self.assertEqual(provider.read_task_result("thread-machine")["result"], value)
+                diagnostic = provider.terminal_diagnostic()
+                self.assertEqual(diagnostic["semantic_outcome"], outcome)
+                self.assertEqual(diagnostic["semantic_summary"], "bounded evidence")
 
     def test_structured_result_rejects_shape_type_encoding_and_size_drift(self):
         invalid = {
@@ -875,6 +882,8 @@ class ExecProviderTests(unittest.TestCase):
             self.assertEqual(diagnostic["code"], "RESULT_SCHEMA_INVALID")
             self.assertEqual(diagnostic["returncode_class"], "ZERO")
             self.assertGreater(diagnostic["result_bytes"], 0)
+            self.assertIsNone(diagnostic["semantic_outcome"])
+            self.assertIsNone(diagnostic["semantic_summary"])
             serialized = json.dumps(diagnostic, sort_keys=True)
             self.assertNotIn(str(root), serialized)
             self.assertNotIn("thread-machine", serialized)

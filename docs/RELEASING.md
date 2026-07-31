@@ -211,10 +211,11 @@ The exact candidate must first prove that preflight requires the official
 result paths are identity/digest-bound, outside the artifact workspace, and
 cleaned. JSONL is lifecycle-only; the result file is the sole semantic source.
 Bounded stderr is diagnostic and cannot alone veto success, while overflow
-fails closed. Private evidence retains only byte counts/digests and the safe
-terminal classification needed to distinguish transport/result failures;
-public evidence binds the diagnostic digest and exposes no raw Host transcript,
-result text, path, or identity.
+fails closed. The private provider diagnostic retains byte counts/digests,
+the safe terminal classification, and the schema-valid bounded semantic
+outcome/summary needed to explain a non-PASS result. Public evidence binds only
+the diagnostic digest and exposes no raw Host transcript, result text, path, or
+identity.
 
 ```bash
 set -euo pipefail

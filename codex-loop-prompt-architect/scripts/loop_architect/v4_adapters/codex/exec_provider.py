@@ -119,6 +119,8 @@ class _TerminalDiagnostic:
     result_control_digest: str
     returncode_class: str
     schema_control_digest: str
+    semantic_outcome: str | None
+    semantic_summary: str | None
     stderr_bytes: int
     stderr_sha256: str
     stdout_bytes: int
@@ -126,7 +128,7 @@ class _TerminalDiagnostic:
     terminal_event_count: int
     terminal_event_type: str | None
 
-    def public_safe(self) -> Mapping[str, Any]:
+    def private_evidence(self) -> Mapping[str, Any]:
         return {
             "artifact": "loopskill-codex-exec-terminal-diagnostic-v1",
             "code": self.code,
@@ -136,6 +138,8 @@ class _TerminalDiagnostic:
             "result_control_digest": self.result_control_digest,
             "returncode_class": self.returncode_class,
             "schema_control_digest": self.schema_control_digest,
+            "semantic_outcome": self.semantic_outcome,
+            "semantic_summary": self.semantic_summary,
             "stderr_bytes": self.stderr_bytes,
             "stderr_sha256": self.stderr_sha256,
             "stdout_bytes": self.stdout_bytes,
@@ -918,6 +922,7 @@ class CodexExecProvider:
         process_result: _ProcessResult | None = None
         transcript: _TerminalTranscript | None = None
         result_raw = b""
+        result_payload: dict[str, str] | None = None
         schema_digest = _sha256(b"")
         try:
             with _result_controls(self.workspace) as controls:
@@ -956,6 +961,7 @@ class CodexExecProvider:
                 primary_code=getattr(exc, "primary_provider_code", None),
                 process_result=process_result,
                 result_raw=result_raw,
+                result_payload=result_payload,
                 schema_digest=schema_digest,
                 transcript=transcript,
             )
@@ -971,6 +977,7 @@ class CodexExecProvider:
             primary_code=None,
             process_result=process_result,
             result_raw=result_raw,
+            result_payload=result_payload,
             schema_digest=schema_digest,
             transcript=transcript,
         )
@@ -1051,11 +1058,11 @@ class CodexExecProvider:
             )
 
     def terminal_diagnostic(self) -> Mapping[str, Any] | None:
-        """Return the privacy-safe immutable same-process transport diagnosis."""
+        """Return bounded private same-process transport and semantic evidence."""
 
         if self._terminal_diagnostic is None:
             return None
-        return dict(self._terminal_diagnostic.public_safe())
+        return dict(self._terminal_diagnostic.private_evidence())
 
     def close(self) -> None:
         """No Host process survives ``invoke``; retained state is local evidence only."""
@@ -1079,6 +1086,7 @@ class CodexExecProvider:
         primary_code: str | None,
         process_result: _ProcessResult | None,
         result_raw: bytes,
+        result_payload: Mapping[str, str] | None,
         schema_digest: str,
         transcript: _TerminalTranscript | None,
     ) -> _TerminalDiagnostic:
@@ -1102,6 +1110,12 @@ class CodexExecProvider:
             result_control_digest=_sha256(result_raw),
             returncode_class=returncode_class,
             schema_control_digest=schema_digest,
+            semantic_outcome=(
+                None if result_payload is None else result_payload["outcome"]
+            ),
+            semantic_summary=(
+                None if result_payload is None else result_payload["summary"]
+            ),
             stderr_bytes=len(stderr),
             stderr_sha256=_sha256(stderr),
             stdout_bytes=len(stdout),
