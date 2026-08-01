@@ -1,6 +1,7 @@
 # LoopSkill 4.2.0 release notes
 
-Status: LoopSkill 4.2.0 is the current public v4 release.
+Status: publication is established only by the public v4.2.0 tag and GitHub
+Release readback.
 
 LoopSkill 4.2.0 turns the v4.1 bounded single-Attempt path into a recoverable
 long-horizon Build Loop while retaining the explicit
@@ -39,7 +40,8 @@ long-horizon Build Loop while retaining the explicit
   waits require an exact Goal-bound gate digest; generic resume cannot bypass
   those gates.
 - Command verifier output is bounded while being read. Loopback HTTP verification
-  disables ambient proxies and cannot block on an undrained server-output pipe.
+  rejects a preoccupied port, disables ambient proxies, and cannot block on an
+  undrained server-output pipe.
 
 ## Safety boundary
 
@@ -49,6 +51,11 @@ state, expose credential values, or authorize automatic publication. Remote
 cross-system actions are not claimed exactly-once. Unknown external outcomes
 remain visible and are never converted into success. This release does not
 support multiple Hosts.
+
+The Codex Host subprocess receives only the minimal runtime environment needed
+to locate its executable, configured Codex home, user home, locale, timezone,
+and temporary directory. Ambient project variables and credential values are
+not inherited.
 
 The independent v3 fallback remains
 [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8).

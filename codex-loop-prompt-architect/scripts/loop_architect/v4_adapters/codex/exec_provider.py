@@ -56,6 +56,20 @@ MAX_JSONL_LINE_BYTES = 1024 * 1024
 MAX_INSPECTION_BYTES = 256 * 1024
 PROCESS_REAP_GRACE_SECONDS = 2.0
 MAX_ATTEMPT_TIMEOUT_SECONDS = 30_000.0
+_HOST_ENV_ALLOWLIST = frozenset(
+    {
+        "CODEX_HOME",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PATH",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+    }
+)
 _VERSION = re.compile(r"^codex-cli ([0-9A-Za-z][0-9A-Za-z.+-]*)$")
 _REQUIRED_EXEC_HELP = (
     "--cd",
@@ -719,6 +733,16 @@ def _remaining_attempt_seconds(
     return max(0.0, (bound - used) / 1000)
 
 
+def _host_environment() -> dict[str, str]:
+    """Pass only runtime identity needed by Codex, never ambient project secrets."""
+
+    return {
+        name: os.environ[name]
+        for name in sorted(_HOST_ENV_ALLOWLIST)
+        if name in os.environ
+    }
+
+
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
@@ -794,6 +818,7 @@ def _run_bounded_process(
         process = subprocess.Popen(
             list(argv),
             cwd=str(cwd),
+            env=_host_environment(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1364,6 +1389,24 @@ class CodexExecProvider:
                 provider_idempotency_key,
                 budget_reason,
             )
+        attempt_timeout_seconds = self.timeout_seconds
+        if resumed:
+            assert attempt_directory is not None
+            remaining_attempt_seconds = min(
+                attempt_timeout_seconds,
+                _remaining_attempt_seconds(
+                    attempt_directory,
+                    self.clock(),
+                    resumed=False,
+                ),
+            )
+            if remaining_attempt_seconds <= 0:
+                return self._local_wait_observation(
+                    payload,
+                    provider_idempotency_key,
+                    "The original Attempt active-compute timeout is exhausted; the Host session was not resumed.",
+                )
+            attempt_timeout_seconds = remaining_attempt_seconds
         self._task_create_count += 1
         if self.attempt_root is not None:
             assert attempt_directory is not None
@@ -1375,7 +1418,7 @@ class CodexExecProvider:
                     canonical_bytes(
                         {
                             "attempt_timeout_milliseconds": int(
-                                self.timeout_seconds * 1000
+                                attempt_timeout_seconds * 1000
                             ),
                             "prior_active_compute_ms": _prior_active_compute_ms(
                                 attempt_directory, resume_started
@@ -1394,7 +1437,7 @@ class CodexExecProvider:
                     canonical_bytes(
                         {
                             "attempt_timeout_milliseconds": int(
-                                self.timeout_seconds * 1000
+                                attempt_timeout_seconds * 1000
                             ),
                             "input_sha256": _sha256(prompt.encode("utf-8") + b"\n"),
                             "provider_idempotency_key_digest": hashlib.sha256(
@@ -1481,7 +1524,7 @@ class CodexExecProvider:
                     ),
                     cwd=self.workspace,
                     stdin_bytes=prompt.encode("utf-8") + b"\n",
-                    timeout_seconds=self.timeout_seconds,
+                    timeout_seconds=attempt_timeout_seconds,
                     stdout_limit=MAX_STDOUT_BYTES,
                     stderr_limit=MAX_STDERR_BYTES,
                     process_observer=observe_process,
@@ -1733,12 +1776,26 @@ class CodexExecProvider:
             )
         if authorize_resume:
             resume_started = self.clock()
+            remaining_attempt_seconds = min(
+                self.timeout_seconds,
+                _remaining_attempt_seconds(
+                    directory,
+                    resume_started,
+                    resumed=False,
+                ),
+            )
+            if remaining_attempt_seconds <= 0:
+                return self._local_wait_observation(
+                    payload,
+                    provider_key,
+                    "The original Attempt active-compute timeout is exhausted; the Host session was not resumed.",
+                )
             _write_private_once(
                 directory / "resume.json",
                 canonical_bytes(
                     {
                         "attempt_timeout_milliseconds": int(
-                            self.timeout_seconds * 1000
+                            remaining_attempt_seconds * 1000
                         ),
                         "prior_active_compute_ms": _prior_active_compute_ms(
                             directory, resume_started

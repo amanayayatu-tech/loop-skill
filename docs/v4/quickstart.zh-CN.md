@@ -7,7 +7,8 @@
 要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。4.2.0 的
 发布验证覆盖直接 v3-cwd 零写入回归、完整确定性测试，以及 Linux/macOS ×
 Python 3.11、3.12、3.13、3.14 的八个 release-CI runtime/distribution lane，
-并要求三层一次性 canary。以下命令安装公开发布的 tag。
+并要求三层有序的一次性 canary。GitHub Releases 列出 v4.2.0 后，以下命令
+安装该精确 tag。
 
 ```bash
 git clone --branch v4.2.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git

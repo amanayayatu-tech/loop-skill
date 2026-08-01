@@ -8,6 +8,7 @@ import os
 import re
 import selectors
 import signal
+import socket
 import subprocess
 import time
 import urllib.error
@@ -514,6 +515,11 @@ def _verify_http(root: Path, raw: str) -> Mapping[str, Any]:
         ):
             raise ValueError("invalid HTTP route verifier")
         normalized_routes.append(route)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", port))
+    except OSError as exc:
+        raise ValueError("HTTP verifier port is already in use") from exc
     process = subprocess.Popen(
         list(argv),
         cwd=str(cwd),
@@ -556,6 +562,7 @@ def _verify_http(root: Path, raw: str) -> Mapping[str, Any]:
                 response_status == route["status"]
                 and response_body is not None
                 and route["contains"].encode("utf-8") in response_body
+                and process.poll() is None
             )
             responses.append(
                 {

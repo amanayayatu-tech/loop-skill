@@ -661,6 +661,67 @@ class ExecProviderTests(unittest.TestCase):
                     process_observer=reject_process,
                 )
 
+    def test_bounded_runner_does_not_inherit_ambient_project_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
+            os.environ,
+            {"LOOPSKILL_TEST_AMBIENT_VALUE": "present"},
+        ):
+            result = _run_bounded_process(
+                (
+                    sys.executable,
+                    "-c",
+                    "import os; print(os.environ.get('LOOPSKILL_TEST_AMBIENT_VALUE', 'absent'))",
+                ),
+                cwd=Path(temporary).resolve(),
+                stdin_bytes=b"",
+                timeout_seconds=2,
+                stdout_limit=100,
+                stderr_limit=100,
+            )
+            self.assertEqual(result.stdout, b"absent\n")
+
+    def test_session_resume_uses_only_the_original_attempt_time_remaining(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            attempts.mkdir(mode=0o700)
+            key = "resume-original-time-bound"
+            attempt = attempts / exec_provider._private_attempt_name(key)
+            attempt.mkdir(mode=0o700)
+            for name, value in (
+                (
+                    "intent.json",
+                    {
+                        "attempt_timeout_milliseconds": 5_000,
+                        "started_at": (NOW - timedelta(seconds=4))
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    },
+                ),
+                ("session.json", {"thread_id": "thread-machine"}),
+            ):
+                path = attempt / name
+                path.write_bytes(canonical_bytes(value))
+                path.chmod(0o600)
+            runner = FakeRunner()
+            provider = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                timeout_seconds=5,
+                attempt_root=attempts,
+                runner=runner,
+            )
+            provider.invoke("create_task", self.v2_payload(), key)
+            resume = json.loads((attempt / "resume.json").read_text())
+            self.assertEqual(resume["prior_active_compute_ms"], 4_000)
+            self.assertEqual(resume["attempt_timeout_milliseconds"], 1_000)
+            self.assertEqual(provider.timeout_seconds, 5)
+            execution = [call for call in runner.calls if call[0][-1:] == ("-",)][0]
+            self.assertEqual(execution[1]["timeout_seconds"], 1)
+
     def test_recovery_budget_blocks_only_a_new_session_resume(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

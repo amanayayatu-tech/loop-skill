@@ -8,8 +8,8 @@ Requirements: macOS or Linux, Git, and Python 3.11–3.14. Runtime dependencies
 are standard-library only. Version 4.2.0 release validation covers the direct
 v3-cwd zero-write regression, the complete deterministic suite, and all eight
 Linux/macOS × Python 3.11, 3.12, 3.13, and 3.14 release-CI
-runtime/distribution lanes. This scoped patch does not claim a new real Host
-canary. The command below installs the published tag.
+runtime/distribution lanes and requires three ordered one-shot canary layers.
+When GitHub Releases lists v4.2.0, the command below installs that exact tag.
 
 ```bash
 git clone --branch v4.2.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git

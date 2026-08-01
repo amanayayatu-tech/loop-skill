@@ -33,11 +33,11 @@ commit that changes exactly these seven candidate/support surfaces together:
    stable notice;
 4. `docs/v4/quickstart.en.md`: candidate notice to the matching English stable
    notice;
-5. `SECURITY.md`: future support wording to “LoopSkill 4.2.0 is the currently
-   supported public line.”;
+5. `SECURITY.md`: support wording conditional on the GitHub Releases listing;
 6. `CHANGELOG.md`: the final `4.2.0` release date and release-link identity.
 7. `docs/v4/release-notes-v4.2.md`: candidate-only status to the reviewed
-   public release notes, including the direct v3.3.8 fallback and claim limits.
+   publication-readback boundary, including the direct v3.3.8 fallback and
+   claim limits.
 
 `VERSION` is already `4.2.0` and remains a separately validated version truth;
 it is not an eighth candidate-to-stable text switch. Before that authorized
