@@ -8,7 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -422,6 +422,90 @@ class ExecProviderTests(unittest.TestCase):
             self.assertEqual(observation["provider_id"], "thread-machine")
             self.assertEqual(runner.calls[-1][0][:3], (provider.executable, "exec", "resume"))
 
+    def test_process_identity_requires_the_same_live_process_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            identity = root / "process.json"
+            token = exec_provider._process_start_token(os.getpid())
+            self.assertIsNotNone(token)
+            identity.write_bytes(
+                canonical_bytes({"pid": os.getpid(), "start_token": token})
+            )
+            identity.chmod(0o600)
+            self.assertTrue(exec_provider._process_identity_alive(identity))
+            self.assertFalse(
+                exec_provider._process_identity_alive(root / "missing.json")
+            )
+
+            with mock.patch.object(
+                exec_provider.os, "kill", side_effect=ProcessLookupError
+            ):
+                self.assertFalse(exec_provider._process_identity_alive(identity))
+            with mock.patch.object(
+                exec_provider.os, "kill", side_effect=PermissionError
+            ), mock.patch.object(exec_provider, "_process_start_token", return_value=None):
+                with self.assertRaises(HostUnavailable) as unavailable:
+                    exec_provider._process_identity_alive(identity)
+            self.assertEqual(
+                unavailable.exception.provider_code,
+                "PROCESS_IDENTITY_UNVERIFIABLE",
+            )
+
+    def test_interrupted_compute_evidence_is_bounded_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            attempt = Path(temporary).resolve()
+            intent = attempt / "intent.json"
+            intent.write_bytes(
+                canonical_bytes(
+                    {
+                        "attempt_timeout_milliseconds": 5000,
+                        "started_at": (NOW - timedelta(seconds=10))
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    }
+                )
+            )
+            intent.chmod(0o600)
+            self.assertEqual(exec_provider._prior_active_compute_ms(attempt, NOW), 5000)
+
+            resume = attempt / "resume.json"
+            resume.write_bytes(canonical_bytes({"prior_active_compute_ms": 1234}))
+            resume.chmod(0o600)
+            self.assertEqual(exec_provider._prior_active_compute_ms(attempt, NOW), 1234)
+
+            resume.write_bytes(canonical_bytes({"prior_active_compute_ms": True}))
+            with self.assertRaises(HostResponseLost) as invalid_resume:
+                exec_provider._prior_active_compute_ms(attempt, NOW)
+            self.assertEqual(
+                invalid_resume.exception.provider_code, "BUDGET_EVIDENCE_INVALID"
+            )
+
+            resume.unlink()
+            intent.write_bytes(canonical_bytes({"started_at": "not-a-time"}))
+            with self.assertRaises(HostResponseLost) as invalid_intent:
+                exec_provider._prior_active_compute_ms(attempt, NOW)
+            self.assertEqual(
+                invalid_intent.exception.provider_code, "BUDGET_EVIDENCE_INVALID"
+            )
+
+    def test_process_observer_failure_reaps_the_spawned_process(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+
+            def reject_process(_pid):
+                raise RuntimeError("observer failed")
+
+            with self.assertRaisesRegex(RuntimeError, "observer failed"):
+                _run_bounded_process(
+                    (sys.executable, "-c", "import time; time.sleep(30)"),
+                    cwd=root,
+                    stdin_bytes=b"",
+                    timeout_seconds=5,
+                    stdout_limit=1024,
+                    stderr_limit=1024,
+                    process_observer=reject_process,
+                )
+
     def test_recovery_budget_blocks_only_a_new_session_resume(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -652,6 +736,18 @@ class ExecProviderTests(unittest.TestCase):
                 "Human confirmation",
                 "LIMITATION",
             ),
+            (
+                "human-policy",
+                {"session.json": {"thread_id": "thread-machine"}},
+                "Goal recovery policy",
+                "LIMITATION",
+            ),
+            (
+                "unknown-policy",
+                {"session.json": {"thread_id": "thread-machine"}},
+                "policy is unavailable",
+                "LIMITATION",
+            ),
         )
         for label, files, expected, expected_outcome in cases:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
@@ -690,6 +786,22 @@ class ExecProviderTests(unittest.TestCase):
                         "goal_policy": {
                             **selected_payload["goal_policy"],
                             "recovery_policy": "reconcile",
+                        },
+                    }
+                elif label == "human-policy":
+                    selected_payload = {
+                        **selected_payload,
+                        "goal_policy": {
+                            **selected_payload["goal_policy"],
+                            "recovery_policy": "human",
+                        },
+                    }
+                elif label == "unknown-policy":
+                    selected_payload = {
+                        **selected_payload,
+                        "goal_policy": {
+                            **selected_payload["goal_policy"],
+                            "recovery_policy": "unsupported",
                         },
                     }
                 observation = provider.invoke("create_task", selected_payload, key)
