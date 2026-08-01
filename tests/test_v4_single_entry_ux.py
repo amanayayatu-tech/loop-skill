@@ -1202,6 +1202,23 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 revised.assert_called_once()
             with mock.patch.object(cli, "_interactive_start", return_value=visible):
                 self.assertEqual(invoke(["start", "goal", "--root", str(root)])[0], 0)
+            started_root = root / "loops" / "loop-started-diagnostics"
+
+            def start_with_root(_args, *, started_roots):
+                started_roots.append(started_root)
+                return visible
+
+            with mock.patch.object(
+                cli, "_interactive_start", side_effect=start_with_root
+            ), mock.patch.object(
+                cli, "diagnostics", return_value={"internal": "started-loop"}
+            ) as start_diagnostics:
+                code, output, _ = invoke(
+                    ["start", "goal", "--diagnostics", "--root", str(root)]
+                )
+                self.assertEqual(code, 0)
+                self.assertIn("Diagnostics:", output)
+                start_diagnostics.assert_called_once_with(root=started_root)
             for action in ("pause", "resume", "stop"):
                 with self.subTest(action=action), mock.patch.object(
                     cli, "control_loop", return_value=visible

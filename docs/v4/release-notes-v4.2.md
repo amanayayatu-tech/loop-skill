@@ -22,7 +22,8 @@ long-horizon Build Loop while retaining the explicit
 - A restart reads back a completed Attempt. An interrupted replay-safe session
   may consume one recorded `codex exec resume`; a live process is never resent.
   PID plus process-start identity prevents PID reuse from impersonating it, and
-  interrupted active compute is conservatively charged to the persisted budget.
+  the macOS token is locale/timezone independent. Initial and resumed deadlines
+  survive controller restart, and interrupted resume compute remains charged.
 - Independent verification now supports exact argv commands, loopback HTTP
   routes, file existence/change/SHA-256, human approval, real-time gates, and
   optional capability skip-with-evidence.
@@ -37,6 +38,8 @@ long-horizon Build Loop while retaining the explicit
 - Public discovery and status projections open Stores read-only. Human and time
   waits require an exact Goal-bound gate digest; generic resume cannot bypass
   those gates.
+- Command verifier output is bounded while being read. Loopback HTTP verification
+  disables ambient proxies and cannot block on an undrained server-output pipe.
 
 ## Safety boundary
 

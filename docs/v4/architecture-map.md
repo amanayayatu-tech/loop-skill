@@ -48,7 +48,8 @@ Host call. Provider idempotency is not assumed: one provider key maps to one
 owner-only Attempt directory, and recovery may only read its terminal evidence,
 wait on its recorded live PID plus process-start identity, or use its one bound
 session resume. Interrupted active compute is conservatively charged from the
-persisted start time up to the Attempt bound. A late
+persisted initial or resume start time up to that invocation's bound; controller
+restart never refreshes either deadline. A late
 authoritative observation can strengthen the same subject identity but cannot
 invent a new Goal Attempt or rewrite workflow history.
 Budget exhaustion pauses before the Adapter invokes the Host. A digest-bound
@@ -96,6 +97,11 @@ Public `list`, `status`, policy, and diagnostics views open SQLite in read-only
 mode. Repair ordinals, attempt limits, and repeated-failure fingerprints are
 scoped to the active Goal, so one Goal cannot consume another Goal's repair
 budget.
+
+Command verifiers drain stdout and stderr incrementally and terminate on the
+first output-bound violation. Loopback HTTP verification disables ambient
+proxies; server stdout/stderr are discarded rather than buffered, and route
+responses remain bounded and digest-only.
 
 ## State and evidence
 

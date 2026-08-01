@@ -100,7 +100,10 @@ canonical `UNKNOWN` and never resends.
 For Plan v2, the Provider copies terminal schema/result/transcript bytes and a
 digest manifest into one owner-only Attempt directory. The process record binds
 both PID and process-start identity so PID reuse cannot impersonate the original
-Attempt. `readback`,
+Attempt; the macOS fallback normalizes process-start observation to a fixed UTC/C
+environment. The persisted initial and resume start times preserve the original
+per-invocation deadline across controller restarts and conservatively charge an
+interrupted resume to the active-compute budget. `readback`,
 `read_task_result`, and lifecycle reads validate those files after restart.
 Partial stdout binds `thread.started` as soon as observed; recovery never parses
 unrelated rollout files.

@@ -7,8 +7,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -290,6 +292,12 @@ class V4ArtifactCapabilityTests(unittest.TestCase):
             with socket.socket() as probe:
                 probe.bind(("127.0.0.1", 0))
                 port = probe.getsockname()[1]
+            server = (
+                "import os\n"
+                "os.write(1,b'x'*(2*1024*1024))\n"
+                "from http.server import HTTPServer,SimpleHTTPRequestHandler\n"
+                f"HTTPServer(('127.0.0.1',{port}),SimpleHTTPRequestHandler).serve_forever()\n"
+            )
             criterion = "http-json:" + json.dumps(
                 {
                     "cwd": ".",
@@ -298,14 +306,7 @@ class V4ArtifactCapabilityTests(unittest.TestCase):
                     "routes": [
                         {"contains": "loopskill-http-ready", "path": "/", "status": 200}
                     ],
-                    "start_argv": [
-                        sys.executable,
-                        "-m",
-                        "http.server",
-                        str(port),
-                        "--bind",
-                        "127.0.0.1",
-                    ],
+                    "start_argv": [sys.executable, "-c", server],
                     "startup_timeout_seconds": 10,
                 },
                 sort_keys=True,
@@ -313,12 +314,36 @@ class V4ArtifactCapabilityTests(unittest.TestCase):
             )
             with SQLiteStore(root / "store.sqlite3", fixture_authority()) as store:
                 persist_capture_blobs(store, capture)
-                result = verify_artifact(
-                    store, capture, (criterion,), workspace_root=root
-                )
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "HTTP_PROXY": "http://127.0.0.1:1",
+                        "NO_PROXY": "",
+                    },
+                ):
+                    result = verify_artifact(
+                        store, capture, (criterion,), workspace_root=root
+                    )
             self.assertEqual(result.state, "VERIFIED")
             with socket.socket() as closed:
                 self.assertNotEqual(closed.connect_ex(("127.0.0.1", port)), 0)
+
+    def test_command_verifier_stops_at_the_output_bound_while_reading(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            started = time.monotonic()
+            with self.assertRaisesRegex(ValueError, "output exceeded"):
+                artifact_verifier._run_verifier_process(
+                    (
+                        sys.executable,
+                        "-c",
+                        "import os,time;os.write(1,b'x'*(2*1024*1024));time.sleep(30)",
+                    ),
+                    cwd=root,
+                    environment={},
+                    timeout_seconds=5,
+                )
+            self.assertLess(time.monotonic() - started, 2)
 
     def test_loopback_http_verifier_never_follows_redirects(self):
         with tempfile.TemporaryDirectory() as temporary:

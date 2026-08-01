@@ -765,7 +765,16 @@ def _effect_workspace_root() -> Path:
     return root
 
 
-def _interactive_start(args):
+def _interactive_start(args, *, started_roots=None):
+    def start_prepared(prepared):
+        context = (
+            prepared if hasattr(prepared, "manifest") else review_prepared(prepared)
+        )
+        started_root = _new_loop_root(args.root, context.manifest.loop_ref)
+        if started_roots is not None:
+            started_roots.append(started_root)
+        return _start_with_owned_provider(context, root=args.root)
+
     value = args.goal_file_or_prepared_directory
     subject = Path(value)
     if value == "-":
@@ -781,7 +790,7 @@ def _interactive_start(args):
             ):
                 raise EntryError(*unsupported_legacy_error())
             _effect_workspace_root()
-            return _start_with_owned_provider(subject, root=args.root)
+            return start_prepared(subject)
         request = _decode_admitted_input(value, subject, maximum, admitted)
     report = intake_report_loop(request)
     print_intake_report(report)
@@ -815,7 +824,7 @@ def _interactive_start(args):
             "Review the prepared artifacts and confirm them explicitly.",
         )
     confirmed = confirm_loop(output, confirmed=True)
-    return _start_with_owned_provider(confirmed, root=args.root)
+    return start_prepared(confirmed)
 
 
 def _close_provider(provider) -> None:
@@ -1155,7 +1164,9 @@ def main(argv=None) -> int:
             )
             return 0
         if args.action == "start":
-            value = _interactive_start(args)
+            started_roots = []
+            value = _interactive_start(args, started_roots=started_roots)
+            selected_root = started_roots[0] if len(started_roots) == 1 else args.root
         elif args.action == "approve":
             value = satisfy_gate(
                 root=selected_root,

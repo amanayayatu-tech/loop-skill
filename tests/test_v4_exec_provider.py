@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -451,6 +452,27 @@ class ExecProviderTests(unittest.TestCase):
                 "PROCESS_IDENTITY_UNVERIFIABLE",
             )
 
+    def test_ps_process_start_token_uses_fixed_timezone_and_locale(self):
+        completed = subprocess.CompletedProcess(
+            args=("/bin/ps",), returncode=0, stdout=b"Sat Aug  1 12:00:00 2026\n"
+        )
+        with mock.patch.object(
+            exec_provider.Path, "read_bytes", side_effect=OSError
+        ), mock.patch.object(
+            exec_provider.subprocess, "run", return_value=completed
+        ) as run:
+            token = exec_provider._process_start_token(os.getpid())
+        self.assertEqual(
+            token,
+            hashlib.sha256(
+                b"ps-start-v1\0Sat Aug  1 12:00:00 2026"
+            ).hexdigest(),
+        )
+        self.assertEqual(
+            run.call_args.kwargs["env"],
+            {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"},
+        )
+
     def test_interrupted_compute_evidence_is_bounded_and_fail_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             attempt = Path(temporary).resolve()
@@ -469,11 +491,48 @@ class ExecProviderTests(unittest.TestCase):
             self.assertEqual(exec_provider._prior_active_compute_ms(attempt, NOW), 5000)
 
             resume = attempt / "resume.json"
-            resume.write_bytes(canonical_bytes({"prior_active_compute_ms": 1234}))
+            resume.write_bytes(
+                canonical_bytes(
+                    {
+                        "attempt_timeout_milliseconds": 5000,
+                        "prior_active_compute_ms": 1234,
+                        "started_at": (NOW - timedelta(seconds=3))
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "thread_id": "thread-machine",
+                    }
+                )
+            )
             resume.chmod(0o600)
-            self.assertEqual(exec_provider._prior_active_compute_ms(attempt, NOW), 1234)
+            self.assertEqual(exec_provider._prior_active_compute_ms(attempt, NOW), 4234)
+            self.assertEqual(
+                exec_provider._prior_active_compute_ms(
+                    attempt, NOW, include_current_resume=False
+                ),
+                1234,
+            )
+            self.assertEqual(
+                exec_provider._remaining_attempt_seconds(
+                    attempt, NOW, resumed=True
+                ),
+                2.0,
+            )
+            self.assertEqual(
+                exec_provider._prior_active_compute_ms(
+                    attempt, NOW - timedelta(days=1)
+                ),
+                6234,
+            )
 
-            resume.write_bytes(canonical_bytes({"prior_active_compute_ms": True}))
+            resume.write_bytes(
+                canonical_bytes(
+                    {
+                        "attempt_timeout_milliseconds": 5000,
+                        "prior_active_compute_ms": True,
+                        "started_at": NOW.isoformat().replace("+00:00", "Z"),
+                    }
+                )
+            )
             with self.assertRaises(HostResponseLost) as invalid_resume:
                 exec_provider._prior_active_compute_ms(attempt, NOW)
             self.assertEqual(
@@ -486,6 +545,102 @@ class ExecProviderTests(unittest.TestCase):
                 exec_provider._prior_active_compute_ms(attempt, NOW)
             self.assertEqual(
                 invalid_intent.exception.provider_code, "BUDGET_EVIDENCE_INVALID"
+            )
+
+    def test_live_attempt_recovery_preserves_the_original_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            attempts.mkdir(mode=0o700)
+            key = "expired-live-process"
+            attempt = attempts / exec_provider._private_attempt_name(key)
+            attempt.mkdir(mode=0o700)
+            for name, value in (
+                (
+                    "intent.json",
+                    {
+                        "attempt_timeout_milliseconds": 1000,
+                        "started_at": (NOW - timedelta(seconds=2))
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    },
+                ),
+                (
+                    "process.json",
+                    {
+                        "pid": os.getpid(),
+                        "start_token": exec_provider._process_start_token(os.getpid()),
+                    },
+                ),
+                ("session.json", {"thread_id": "thread-machine"}),
+            ):
+                path = attempt / name
+                path.write_bytes(canonical_bytes(value))
+                path.chmod(0o600)
+            provider = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                timeout_seconds=5,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            started = time.monotonic()
+            with self.assertRaises(HostUnavailable) as still_running:
+                provider.invoke("create_task", self.v2_payload(maximum_calls=3), key)
+            self.assertLess(time.monotonic() - started, 1)
+            self.assertEqual(
+                still_running.exception.provider_code, "PROCESS_STILL_RUNNING"
+            )
+
+    def test_interrupted_resume_time_is_charged_before_later_host_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            attempts.mkdir(mode=0o700)
+            attempt = attempts / "attempt-spent-resume"
+            attempt.mkdir(mode=0o700)
+            for name, value in (
+                (
+                    "intent.json",
+                    {
+                        "attempt_timeout_milliseconds": 5000,
+                        "started_at": (NOW - timedelta(seconds=20))
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    },
+                ),
+                (
+                    "resume.json",
+                    {
+                        "attempt_timeout_milliseconds": 5000,
+                        "prior_active_compute_ms": 4000,
+                        "started_at": (NOW - timedelta(seconds=10))
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "thread_id": "thread-machine",
+                    },
+                ),
+            ):
+                path = attempt / name
+                path.write_bytes(canonical_bytes(value))
+                path.chmod(0o600)
+            provider = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            self.assertIn(
+                "active-compute budget is exhausted",
+                provider.budget_block_reason(
+                    self.v2_payload(maximum_calls=3, wall_seconds=8)
+                ),
             )
 
     def test_process_observer_failure_reaps_the_spawned_process(self):
@@ -690,7 +845,15 @@ class ExecProviderTests(unittest.TestCase):
             argv = runner.calls[-1][0]
             self.assertEqual(argv[:3], (provider.executable, "exec", "resume"))
             self.assertIn("thread-machine", argv)
-            self.assertTrue((attempt / "resume.json").is_file())
+            self.assertEqual(
+                json.loads((attempt / "resume.json").read_text()),
+                {
+                    "attempt_timeout_milliseconds": 3_600_000,
+                    "prior_active_compute_ms": 0,
+                    "started_at": NOW.isoformat().replace("+00:00", "Z"),
+                    "thread_id": "thread-machine",
+                },
+            )
             self.assertTrue((attempt / "attempt.json").is_file())
 
             no_second_exec = FakeRunner()

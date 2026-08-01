@@ -582,6 +582,7 @@ def _process_start_token(pid: int) -> str | None:
         completed = subprocess.run(
             (ps, "-o", "lstart=", "-p", str(pid)),
             check=False,
+            env={"LANG": "C", "LC_ALL": "C", "TZ": "UTC"},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -637,31 +638,21 @@ def _process_identity_alive(path: Path) -> bool:
     return observed == start_token
 
 
-def _prior_active_compute_ms(directory: Path, now: datetime) -> int:
-    resume_path = directory / "resume.json"
-    if os.path.lexists(resume_path):
-        try:
-            value = json.loads(
-                _read_private_regular(resume_path, limit=2048).decode("utf-8", "strict")
-            )
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise _coded_error(
-                "BUDGET_EVIDENCE_INVALID", "resume budget evidence is invalid"
-            ) from exc
-        prior = value.get("prior_active_compute_ms") if isinstance(value, Mapping) else None
-        if isinstance(prior, bool) or not isinstance(prior, int) or prior < 0:
-            raise _coded_error(
-                "BUDGET_EVIDENCE_INVALID", "resume budget evidence is invalid"
-            )
-        return prior
+def _active_compute_window(
+    directory: Path, *, resumed: bool
+) -> tuple[int, datetime, int]:
+    path = directory / ("resume.json" if resumed else "intent.json")
     try:
-        intent = json.loads(
-            _read_private_regular(directory / "intent.json", limit=4096).decode(
-                "utf-8", "strict"
-            )
+        value = json.loads(
+            _read_private_regular(path, limit=4096).decode("utf-8", "strict")
         )
-        started = datetime.fromisoformat(str(intent["started_at"]).replace("Z", "+00:00"))
-        bound = intent["attempt_timeout_milliseconds"]
+        if not isinstance(value, Mapping):
+            raise TypeError("active-compute evidence must be an object")
+        started = datetime.fromisoformat(
+            str(value["started_at"]).replace("Z", "+00:00")
+        )
+        bound = value["attempt_timeout_milliseconds"]
+        prior = value["prior_active_compute_ms"] if resumed else 0
     except (
         KeyError,
         TypeError,
@@ -671,23 +662,61 @@ def _prior_active_compute_ms(directory: Path, now: datetime) -> int:
         ValueError,
     ) as exc:
         raise _coded_error(
-            "BUDGET_EVIDENCE_INVALID", "Attempt active-compute evidence is invalid"
+            "BUDGET_EVIDENCE_INVALID",
+            "resume budget evidence is invalid"
+            if resumed
+            else "Attempt active-compute evidence is invalid",
         ) from exc
     if (
-        not isinstance(intent, Mapping)
-        or started.tzinfo is None
+        started.tzinfo is None
         or isinstance(bound, bool)
         or not isinstance(bound, int)
         or bound < 1
+        or isinstance(prior, bool)
+        or not isinstance(prior, int)
+        or prior < 0
     ):
         raise _coded_error(
-            "BUDGET_EVIDENCE_INVALID", "Attempt active-compute evidence is invalid"
+            "BUDGET_EVIDENCE_INVALID",
+            "resume budget evidence is invalid"
+            if resumed
+            else "Attempt active-compute evidence is invalid",
         )
-    elapsed = int(
-        max(0.0, (now.astimezone(timezone.utc) - started.astimezone(timezone.utc)).total_seconds())
-        * 1000
-    )
+    return prior, started, bound
+
+
+def _elapsed_active_compute_ms(started: datetime, bound: int, now: datetime) -> int:
+    delta = (
+        now.astimezone(timezone.utc) - started.astimezone(timezone.utc)
+    ).total_seconds()
+    if delta < 0:
+        return bound
+    elapsed = int(delta * 1000)
     return min(bound, elapsed)
+
+
+def _prior_active_compute_ms(
+    directory: Path,
+    now: datetime,
+    *,
+    include_current_resume: bool = True,
+) -> int:
+    resumed = os.path.lexists(directory / "resume.json")
+    prior, started, bound = _active_compute_window(directory, resumed=resumed)
+    current = (
+        _elapsed_active_compute_ms(started, bound, now)
+        if not resumed or include_current_resume
+        else 0
+    )
+    return prior + current
+
+
+def _remaining_attempt_seconds(
+    directory: Path, now: datetime, *, resumed: bool
+) -> float:
+    _prior, started, bound = _active_compute_window(directory, resumed=resumed)
+    used = _elapsed_active_compute_ms(started, bound, now)
+    return max(0.0, (bound - used) / 1000)
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -1340,13 +1369,18 @@ class CodexExecProvider:
             assert attempt_directory is not None
             if resumed:
                 assert self.resume_thread_id is not None
+                resume_started = self.clock()
                 _write_private_once(
                     attempt_directory / "resume.json",
                     canonical_bytes(
                         {
-                            "prior_active_compute_ms": _prior_active_compute_ms(
-                                attempt_directory, self.clock()
+                            "attempt_timeout_milliseconds": int(
+                                self.timeout_seconds * 1000
                             ),
+                            "prior_active_compute_ms": _prior_active_compute_ms(
+                                attempt_directory, resume_started
+                            ),
+                            "started_at": _iso(resume_started),
                             "thread_id": self.resume_thread_id,
                         }
                     ),
@@ -1603,8 +1637,24 @@ class CodexExecProvider:
         process_paths = tuple(
             directory / name for name in ("resume-process.json", "process.json")
         )
-        deadline = time.monotonic() + self.timeout_seconds
-        while any(_process_identity_alive(path) for path in process_paths):
+        active_processes = tuple(
+            path for path in process_paths if _process_identity_alive(path)
+        )
+        if len(active_processes) > 1:
+            raise _coded_error(
+                "CONTROL_IDENTITY_DRIFT",
+                "multiple persistent Host process identities are live",
+            )
+        deadline = time.monotonic() + (
+            0.0
+            if not active_processes
+            else _remaining_attempt_seconds(
+                directory,
+                self.clock(),
+                resumed=active_processes[0].name == "resume-process.json",
+            )
+        )
+        while active_processes:
             if os.path.lexists(directory / "attempt.json"):
                 if self._restore_persistent_directory(
                     directory,
@@ -1627,6 +1677,14 @@ class CodexExecProvider:
                     unavailable=True,
                 )
             time.sleep(0.25)
+            active_processes = tuple(
+                path for path in process_paths if _process_identity_alive(path)
+            )
+            if len(active_processes) > 1:
+                raise _coded_error(
+                    "CONTROL_IDENTITY_DRIFT",
+                    "multiple persistent Host process identities are live",
+                )
         session_path = directory / "session.json"
         if not os.path.lexists(session_path):
             return reconcile_or_wait(
@@ -1674,13 +1732,18 @@ class CodexExecProvider:
                 "The Goal recovery policy is unavailable; the Host action was not resent.",
             )
         if authorize_resume:
+            resume_started = self.clock()
             _write_private_once(
                 directory / "resume.json",
                 canonical_bytes(
                     {
-                        "prior_active_compute_ms": _prior_active_compute_ms(
-                            directory, self.clock()
+                        "attempt_timeout_milliseconds": int(
+                            self.timeout_seconds * 1000
                         ),
+                        "prior_active_compute_ms": _prior_active_compute_ms(
+                            directory, resume_started
+                        ),
+                        "started_at": _iso(resume_started),
                         "thread_id": thread_id,
                     }
                 ),
@@ -1756,7 +1819,9 @@ class CodexExecProvider:
             if value.get("resumed") is True:
                 try:
                     used_milliseconds += _prior_active_compute_ms(
-                        directory, self.clock()
+                        directory,
+                        self.clock(),
+                        include_current_resume=False,
                     )
                 except (HostResponseLost, HostUnavailable, OSError, ValueError):
                     return "The persisted active-compute budget evidence is unverifiable."

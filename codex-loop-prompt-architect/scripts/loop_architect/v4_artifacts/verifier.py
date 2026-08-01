@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import selectors
 import signal
 import subprocess
 import time
@@ -332,22 +333,83 @@ def _run_verifier_process(
         shell=False,
         start_new_session=True,
     )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    streams = {"stdout": process.stdout, "stderr": process.stderr}
+    selector = selectors.DefaultSelector()
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    for channel, stream in streams.items():
+        os.set_blocking(stream.fileno(), False)
+        selector.register(stream.fileno(), selectors.EVENT_READ, channel)
+    deadline = time.monotonic() + timeout_seconds
+    timed_out = False
     try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGTERM)
-        try:
-            stdout, stderr = process.communicate(timeout=2)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            stdout, stderr = process.communicate(timeout=2)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            events = selector.select(min(remaining, 0.25))
+            if not events and process.poll() is not None:
+                events = [
+                    (key, selectors.EVENT_READ)
+                    for key in tuple(selector.get_map().values())
+                ]
+            for key, _mask in events:
+                try:
+                    chunk = os.read(key.fd, 65_536)
+                except BlockingIOError:
+                    continue
+                except OSError as exc:
+                    raise ValueError("verifier output stream failed") from exc
+                if not chunk:
+                    selector.unregister(key.fd)
+                    continue
+                channel = str(key.data)
+                output[channel].extend(chunk)
+                if len(output[channel]) > _MAX_VERIFIER_OUTPUT:
+                    raise ValueError("verifier output exceeded bound")
+        if not timed_out:
+            try:
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+    except BaseException:
+        _stop_verifier_process(process)
+        raise
+    finally:
+        selector.close()
+        for stream in streams.values():
+            if not stream.closed:
+                stream.close()
+    if timed_out:
+        _stop_verifier_process(process)
         returncode = -signal.SIGTERM
     else:
-        returncode = process.returncode
+        returncode = int(process.returncode)
     elapsed_ms = (time.monotonic_ns() - started) // 1_000_000
-    if len(stdout) > _MAX_VERIFIER_OUTPUT or len(stderr) > _MAX_VERIFIER_OUTPUT:
-        raise ValueError("verifier output exceeded bound")
+    stdout = bytes(output["stdout"])
+    stderr = bytes(output["stderr"])
     return returncode, stdout, stderr, elapsed_ms
+
+
+def _stop_verifier_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        process.wait()
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait()
+        return
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=2)
 
 
 def _verify_command(root: Path, raw: str) -> Mapping[str, Any]:
@@ -435,13 +497,15 @@ def _verify_http(root: Path, raw: str) -> Mapping[str, Any]:
         cwd=str(cwd),
         env=environment,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         shell=False,
         start_new_session=True,
     )
     responses: list[Mapping[str, Any]] = []
-    opener = urllib.request.build_opener(_NoRedirect())
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NoRedirect()
+    )
     deadline = time.monotonic() + startup_timeout
     try:
         for route in normalized_routes:
@@ -484,16 +548,9 @@ def _verify_http(root: Path, raw: str) -> Mapping[str, Any]:
                 }
             )
     finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=2)
-        stdout, stderr = process.communicate()
-    if len(stdout) > _MAX_VERIFIER_OUTPUT or len(stderr) > _MAX_VERIFIER_OUTPUT:
-        raise ValueError("HTTP verifier output exceeded bound")
+        _stop_verifier_process(process)
+    stdout = b""
+    stderr = b""
     return {
         "argv_digest": domain_digest("loopskill-verifier-argv-v1\n", list(argv)),
         "process_returncode": process.returncode,
