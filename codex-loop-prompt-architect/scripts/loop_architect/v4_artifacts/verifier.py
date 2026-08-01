@@ -387,6 +387,7 @@ def _run_verifier_process(
         returncode = -signal.SIGTERM
     else:
         returncode = int(process.returncode)
+        _stop_verifier_process(process)
     elapsed_ms = (time.monotonic_ns() - started) // 1_000_000
     stdout = bytes(output["stdout"])
     stderr = bytes(output["stderr"])
@@ -394,22 +395,43 @@ def _run_verifier_process(
 
 
 def _stop_verifier_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        process.wait()
-        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         process.wait()
         return
-    try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
+    if process.poll() is None:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
             pass
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            process.wait()
+            return
+        except PermissionError:
+            pass
+        time.sleep(0.01)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        process.wait()
+        return
+    if process.poll() is None:
         process.wait(timeout=2)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            pass
+        time.sleep(0.01)
+    raise ValueError("verifier process group did not close")
 
 
 def _verify_command(root: Path, raw: str) -> Mapping[str, Any]:

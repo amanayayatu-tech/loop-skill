@@ -345,6 +345,28 @@ class V4ArtifactCapabilityTests(unittest.TestCase):
                 )
             self.assertLess(time.monotonic() - started, 2)
 
+    def test_command_verifier_reaps_descendants_after_the_leader_exits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            script = (
+                "import subprocess,sys\n"
+                "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'],"
+                "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+                "print(child.pid,flush=True)\n"
+            )
+            returncode, stdout, _stderr, _elapsed = (
+                artifact_verifier._run_verifier_process(
+                    (sys.executable, "-c", script),
+                    cwd=root,
+                    environment={},
+                    timeout_seconds=5,
+                )
+            )
+            self.assertEqual(returncode, 0)
+            child_pid = int(stdout.strip())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+
     def test_loopback_http_verifier_never_follows_redirects(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
