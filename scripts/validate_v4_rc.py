@@ -501,7 +501,7 @@ def _spdx_sbom(
             "licenseDeclared": "MIT",
             "name": "LoopSkill",
             "primaryPackagePurpose": "APPLICATION",
-            "versionInfo": "4.1.1",
+            "versionInfo": "4.2.0",
         }
     ]
     relationships = [
@@ -542,10 +542,10 @@ def _spdx_sbom(
         },
         "dataLicense": "CC0-1.0",
         "documentNamespace": (
-            "https://github.com/amanayayatu-tech/loop-skill/sbom/v4.1.1/"
+            "https://github.com/amanayayatu-tech/loop-skill/sbom/v4.2.0/"
             + candidate
         ),
-        "name": f"LoopSkill-4.1.1-{candidate[:12]}",
+        "name": f"LoopSkill-4.2.0-{candidate[:12]}",
         "packages": packages,
         "relationships": relationships,
         "spdxVersion": "SPDX-2.3",
@@ -599,7 +599,7 @@ def static_receipt(root: Path, candidate: str, *, require_clean_head: bool = Tru
     version = _run(root, "git", "show", f"{candidate}:VERSION").decode(
         "utf-8", "strict"
     ).strip()
-    if version != "4.1.1":
+    if version != "4.2.0":
         raise RcValidationError("RC_VERSION_INVALID")
     dependencies = _dependency_inventory()
     runtime_identity = _runtime_identity(dependencies)
@@ -1511,7 +1511,7 @@ def validate_author_packet(
             root, "git", "rev-parse", "paper-treatment-v3.3.12^{commit}"
         ).decode("ascii", "strict").strip()
         _run(root, "git", "merge-base", "--is-ancestor", origin_main, candidate)
-        local_v4_tag = _run(root, "git", "tag", "--list", "v4.1.1").strip()
+        local_v4_tag = _run(root, "git", "tag", "--list", "v4.2.0").strip()
     except UnicodeDecodeError as exc:
         raise RcValidationError("RC_AUTHOR_PACKET_PREFLIGHT_IDENTITY_INVALID") from exc
     if (
@@ -1547,6 +1547,8 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--canary-2-store", type=Path)
     parser.add_argument("--canary-8-receipt", type=Path)
     parser.add_argument("--canary-8-store", type=Path)
+    parser.add_argument("--long-horizon-receipt", type=Path)
+    parser.add_argument("--nepha-copy-receipt", type=Path)
     parser.add_argument("--conformance-receipt", type=Path)
     parser.add_argument("--author-packet", type=Path)
     parser.add_argument("--evidence", action="append", default=[])
@@ -1570,6 +1572,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 or args.canary_2_store
                 or args.canary_8_receipt
                 or args.canary_8_store
+                or args.long_horizon_receipt
+                or args.nepha_copy_receipt
                 or args.conformance_receipt
                 or args.author_packet
                 or args.evidence
@@ -1582,6 +1586,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 or not args.canary_2_store
                 or not args.canary_8_receipt
                 or not args.canary_8_store
+                or not args.long_horizon_receipt
+                or not args.nepha_copy_receipt
                 or not args.conformance_receipt
                 or not args.author_packet
                 or not args.evidence
@@ -1612,6 +1618,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt["canary_8_goal_receipt_digest"] = canary_digests[8]
             receipt["live_canary_2_goal_attestation_digest"] = live_digests[2]
             receipt["live_canary_8_goal_attestation_digest"] = live_digests[8]
+            additional_canaries: dict[str, dict[str, Any]] = {}
+            for key, canary_path in (
+                ("long_horizon_canary", args.long_horizon_receipt),
+                ("nepha_copy_canary", args.nepha_copy_receipt),
+            ):
+                additional_raw = canary_path.read_bytes()
+                additional = json.loads(additional_raw.decode("utf-8", "strict"))
+                if additional_raw != _canonical(additional):
+                    raise RcValidationError("RC_CANARY_RECEIPT_NOT_CANONICAL")
+                additional_canaries[key] = additional
+                receipt[key + "_receipt_digest"] = hashlib.sha256(
+                    additional_raw
+                ).hexdigest()
             conformance_raw = args.conformance_receipt.read_bytes()
             conformance = json.loads(conformance_raw.decode("utf-8", "strict"))
             validate_conformance_receipt(
@@ -1640,12 +1659,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             if (
                 evidence_values["exec_canary_2_goal"] != canaries[2]
                 or evidence_values["exec_canary_8_goal"] != canaries[8]
+                or evidence_values["long_horizon_canary"]
+                != additional_canaries["long_horizon_canary"]
+                or evidence_values["nepha_copy_canary"]
+                != additional_canaries["nepha_copy_canary"]
                 or evidence_values["final_conformance"] != conformance
                 or evidence_values["static_validation"] != exact_static_receipt
             ):
                 raise RcValidationError("RC_AUTHOR_PACKET_PRIMARY_EVIDENCE_MISMATCH")
             receipt["author_packet_digest"] = hashlib.sha256(packet_raw).hexdigest()
-            receipt["gate_status"] = "LOOPSKILL_4_1_PUBLICATION_CANDIDATE_VALIDATED"
+            receipt["gate_status"] = "LOOPSKILL_4_2_PUBLICATION_CANDIDATE_VALIDATED"
             receipt["publication_ready"] = True
         receipt.pop("receipt_digest", None)
         receipt["receipt_digest"] = hashlib.sha256(_canonical(receipt)).hexdigest()

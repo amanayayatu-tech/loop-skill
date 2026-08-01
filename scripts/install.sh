@@ -365,12 +365,15 @@ except (UnicodeDecodeError, json.JSONDecodeError) as exc:
 required = {
     "artifact",
     "kind",
+    "manager_backup_sha256",
     "manager_preexisted",
     "manager_sha256",
     "pointer_backup_sha256",
     "pointer_preexisted",
     "receipt",
+    "target_backup_manifest_digest",
     "target_manifest_digest",
+    "target_preexisted",
     "transaction",
 }
 if (
@@ -379,11 +382,30 @@ if (
     or journal["artifact"] != "loopskill4-distribution-transaction-v1"
     or journal["kind"] != "INSTALL"
     or not isinstance(journal["manager_preexisted"], bool)
+    or not isinstance(journal["target_preexisted"], bool)
     or not isinstance(journal["pointer_preexisted"], bool)
     or not isinstance(journal["manager_sha256"], str)
     or len(journal["manager_sha256"]) != 64
     or not isinstance(journal["target_manifest_digest"], str)
     or len(journal["target_manifest_digest"]) != 64
+    or (
+        journal["manager_backup_sha256"] is not None
+        and (
+            not isinstance(journal["manager_backup_sha256"], str)
+            or len(journal["manager_backup_sha256"]) != 64
+        )
+    )
+    or (
+        journal["target_backup_manifest_digest"] is not None
+        and (
+            not isinstance(journal["target_backup_manifest_digest"], str)
+            or len(journal["target_backup_manifest_digest"]) != 64
+        )
+    )
+    or journal["manager_preexisted"]
+    != (journal["manager_backup_sha256"] is not None)
+    or journal["target_preexisted"]
+    != (journal["target_backup_manifest_digest"] is not None)
     or not isinstance(journal["receipt"], str)
     or Path(journal["receipt"]).name != journal["receipt"]
     or not journal["receipt"].endswith(".json")
@@ -486,7 +508,22 @@ if receipt_raw is not None:
         raise SystemExit("V4_INSTALL_RECOVERY_RECEIPT_INVALID")
     receipt.unlink()
     fsync_directory(receipt_root)
-if not journal["manager_preexisted"] and manager_raw is not None:
+manager_backup = transaction / "uninstall_v4.py.backup"
+if journal["manager_preexisted"]:
+    backup_raw = secure_regular(
+        manager_backup, transaction, "V4_INSTALL_RECOVERY_MANAGER_BACKUP_INVALID"
+    )
+    if hashlib.sha256(backup_raw).hexdigest() != journal["manager_backup_sha256"]:
+        raise SystemExit("V4_INSTALL_RECOVERY_MANAGER_BACKUP_INVALID")
+    if manager_raw != backup_raw:
+        if manager_raw is None or hashlib.sha256(manager_raw).hexdigest() != journal["manager_sha256"]:
+            raise SystemExit("V4_INSTALL_RECOVERY_MANAGER_INVALID")
+        temporary = manager.with_name(f".{manager.name}.{os.getpid()}.recovery")
+        temporary.write_bytes(backup_raw)
+        os.chmod(temporary, 0o755)
+        os.replace(temporary, manager)
+        fsync_directory(receipt_root)
+elif manager_raw is not None:
     if hashlib.sha256(manager_raw).hexdigest() != journal["manager_sha256"]:
         raise SystemExit("V4_INSTALL_RECOVERY_MANAGER_INVALID")
     manager.unlink()
@@ -495,9 +532,28 @@ if target_digest is not None:
     if target_digest != journal["target_manifest_digest"] or not lexists(transaction):
         raise SystemExit("V4_INSTALL_RECOVERY_TARGET_AMBIGUOUS")
     rollback_target = transaction / "rollback-target"
-    if lexists(rollback_target):
-        raise SystemExit("V4_INSTALL_RECOVERY_TARGET_AMBIGUOUS")
-    os.replace(target, rollback_target)
+    if journal["target_preexisted"]:
+        if not lexists(rollback_target) or inventory_digest(rollback_target) != journal["target_backup_manifest_digest"]:
+            raise SystemExit("V4_INSTALL_RECOVERY_TARGET_BACKUP_INVALID")
+        failed_target = transaction / "failed-target"
+        if lexists(failed_target):
+            raise SystemExit("V4_INSTALL_RECOVERY_TARGET_AMBIGUOUS")
+        os.replace(target, failed_target)
+        os.replace(rollback_target, target)
+        fsync_directory(target.parent)
+        shutil.rmtree(failed_target)
+        fsync_directory(transaction)
+    else:
+        if lexists(rollback_target):
+            raise SystemExit("V4_INSTALL_RECOVERY_TARGET_AMBIGUOUS")
+        os.replace(target, rollback_target)
+        fsync_directory(target.parent)
+        fsync_directory(transaction)
+elif journal["target_preexisted"]:
+    rollback_target = transaction / "rollback-target"
+    if not lexists(rollback_target) or inventory_digest(rollback_target) != journal["target_backup_manifest_digest"]:
+        raise SystemExit("V4_INSTALL_RECOVERY_TARGET_BACKUP_INVALID")
+    os.replace(rollback_target, target)
     fsync_directory(target.parent)
     fsync_directory(transaction)
 if lexists(transaction):
@@ -555,8 +611,8 @@ maybe_fault() {
   fi
 }
 
-if [[ "$VERSION" != "4.1.1" ]]; then
-  echo "V4_VERSION_INVALID: expected 4.1.1, got $VERSION" >&2
+if [[ "$VERSION" != "4.2.0" ]]; then
+  echo "V4_VERSION_INVALID: expected 4.2.0, got $VERSION" >&2
   exit 1
 fi
 for required in \
@@ -844,6 +900,20 @@ print(hashlib.sha256(path.read_bytes()).hexdigest())
 PY
 }
 
+inventory_digest() {
+  "$PYTHON_BIN" - "$SOURCE_IMAGE/scripts/verify_installation.py" "$1" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location("loopskill4_verify", sys.argv[1])
+assert spec and spec.loader
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.digest(module.file_inventory(Path(sys.argv[2]))))
+PY
+}
+
 fsync_directory() {
   "$PYTHON_BIN" - "$1" <<'PY'
 from pathlib import Path
@@ -861,6 +931,9 @@ PY
 manager_digest="$(sha256_file "$ROOT_DIR/scripts/uninstall_v4.py")"
 manager_present=0
 pointer_present=0
+manager_backup_sha256="null"
+target_preexisted=0
+target_backup_manifest_digest="null"
 if [[ -f "$MANAGEMENT_UNINSTALLER" && ! -L "$MANAGEMENT_UNINSTALLER" ]]; then
   manager_present=1
 fi
@@ -872,15 +945,18 @@ if [[ "$manager_present" != "$pointer_present" ]]; then
   exit 1
 fi
 if [[ "$manager_present" == "1" ]]; then
-  if [[ "$(sha256_file "$MANAGEMENT_UNINSTALLER")" != "$manager_digest" ]]; then
-    echo "V4_INSTALL_MANAGEMENT_UNINSTALLER_DRIFT" >&2
+  manager_check="$("$PYTHON_BIN" "$MANAGEMENT_UNINSTALLER" \
+    --codex-home "$CODEX_HOME_DIR" --check 2>&1)" || {
+    if [[ "$manager_check" == *"V4_UNINSTALL_MANAGEMENT_ENTRY_INVALID"* ]]; then
+      echo "V4_INSTALL_MANAGEMENT_UNINSTALLER_DRIFT" >&2
+    else
+      echo "V4_INSTALL_ACTIVE_RECEIPT_INVALID" >&2
+    fi
     exit 1
-  fi
-  if ! "$PYTHON_BIN" "$MANAGEMENT_UNINSTALLER" \
-    --codex-home "$CODEX_HOME_DIR" --check >/dev/null; then
-    echo "V4_INSTALL_ACTIVE_RECEIPT_INVALID" >&2
-    exit 1
-  fi
+  }
+  cp "$MANAGEMENT_UNINSTALLER" "$transaction/uninstall_v4.py.backup"
+  chmod 0600 "$transaction/uninstall_v4.py.backup"
+  manager_backup_sha256="\"$(sha256_file "$transaction/uninstall_v4.py.backup")\""
   pointer_preexisted=1
   "$PYTHON_BIN" - "$ACTIVE_POINTER" "$transaction/active-receipt.backup" <<'PY'
 from pathlib import Path
@@ -921,15 +997,19 @@ if [[ -e "$TARGET_DIR" || -L "$TARGET_DIR" ]]; then
       echo "V4_INSTALL_ACTIVE_RECEIPT_INVALID" >&2
       exit 1
     fi
-    echo "LoopSkill 4.1.1 is already installed at $TARGET_DIR"
+    echo "LoopSkill $VERSION is already installed at $TARGET_DIR"
     echo "No files or Codex configuration changed."
     safe_remove_tree "$transaction" "$STAGING_ROOT"
     transaction=""
     trap - EXIT
     exit 0
   fi
-  echo "V4_INSTALL_CONFLICT: $TARGET_DIR already exists with different bytes" >&2
-  exit 1
+  if [[ "$manager_present" != "1" ]]; then
+    echo "V4_INSTALL_CONFLICT: $TARGET_DIR already exists with different bytes" >&2
+    exit 1
+  fi
+  target_preexisted=1
+  target_backup_manifest_digest="\"$(inventory_digest "$TARGET_DIR")\""
 fi
 
 receipt_name="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM.json"
@@ -979,7 +1059,9 @@ staged_journal="$transaction/active-transaction.json"
 "$PYTHON_BIN" - \
   "$staged_journal" "$(basename "$transaction")" "$receipt_name" \
   "$manager_present" "$pointer_preexisted" "$manager_digest" \
-  "$pointer_backup_sha256" "$target_manifest_digest" <<'PY'
+  "$pointer_backup_sha256" "$target_manifest_digest" \
+  "$manager_backup_sha256" "$target_preexisted" \
+  "$target_backup_manifest_digest" <<'PY'
 from pathlib import Path
 import json
 import os
@@ -990,12 +1072,15 @@ payload = json.dumps(
     {
         "artifact": "loopskill4-distribution-transaction-v1",
         "kind": "INSTALL",
+        "manager_backup_sha256": json.loads(sys.argv[9]),
         "manager_preexisted": sys.argv[4] == "1",
         "manager_sha256": sys.argv[6],
         "pointer_backup_sha256": json.loads(sys.argv[7]),
         "pointer_preexisted": sys.argv[5] == "1",
         "receipt": sys.argv[3],
+        "target_backup_manifest_digest": json.loads(sys.argv[11]),
         "target_manifest_digest": sys.argv[8],
+        "target_preexisted": sys.argv[10] == "1",
         "transaction": sys.argv[2],
     },
     ensure_ascii=False,
@@ -1039,6 +1124,11 @@ config_before_state="$(config_state)"
 config_existed="${config_before_state%%:*}"
 config_before="${config_before_state#*:}"
 
+if [[ "$target_preexisted" == "1" ]]; then
+  mv "$TARGET_DIR" "$transaction/rollback-target"
+  fsync_directory "$SKILLS_ROOT"
+  fsync_directory "$transaction"
+fi
 mv "$INSTALL_IMAGE" "$TARGET_DIR"
 fsync_directory "$SKILLS_ROOT"
 maybe_fault after_target
@@ -1065,6 +1155,9 @@ staged_receipt="$transaction/receipt.json"
 if [[ "$manager_present" == "0" ]]; then
   atomic_install_file \
     "$ROOT_DIR/scripts/uninstall_v4.py" "$MANAGEMENT_UNINSTALLER" 0755 create
+elif [[ "$(sha256_file "$MANAGEMENT_UNINSTALLER")" != "$manager_digest" ]]; then
+  atomic_install_file \
+    "$ROOT_DIR/scripts/uninstall_v4.py" "$MANAGEMENT_UNINSTALLER" 0755 replace
 fi
 maybe_fault after_manager
 
@@ -1111,7 +1204,7 @@ else
   legacy_message="No v3 installation was changed or created."
 fi
 trap - EXIT
-echo "Installed LoopSkill 4.1.1 to $TARGET_DIR"
+echo "Installed LoopSkill $VERSION to $TARGET_DIR"
 echo "$legacy_message"
 echo "Codex config.toml is byte-identical; no MCP entry was registered."
 echo "LoopSkill 4 itself does not require a Codex App restart."

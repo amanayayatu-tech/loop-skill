@@ -12,6 +12,21 @@ MAX_CAPTURE_FILES = 4_096
 MAX_CAPTURE_BYTES = 64 * 1024 * 1024
 MAX_FILE_BYTES = 16 * 1024 * 1024
 CONTROL_PREFIXES = (".codex-loop", ".git")
+DEFAULT_EXCLUDED_DIRECTORIES = frozenset(
+    {
+        ".cache",
+        ".coverage",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "coverage",
+        "dist",
+        "node_modules",
+    }
+)
+DEFAULT_EXCLUDED_FILES = frozenset({".DS_Store"})
 
 
 class ArtifactCaptureError(RuntimeError):
@@ -154,11 +169,16 @@ def enumerate_regular_files(root: Path | str) -> tuple[str, ...]:
                 raise ArtifactCaptureError(
                     "PATH_CONFINEMENT_VIOLATION", f"symlink directory: {relative}"
                 )
-            if name in CONTROL_PREFIXES and directory_path == root_path:
+            if (
+                name in DEFAULT_EXCLUDED_DIRECTORIES
+                or (name in CONTROL_PREFIXES and directory_path == root_path)
+            ):
                 continue
             kept.append(name)
         names[:] = kept
         for name in sorted(files):
+            if name in DEFAULT_EXCLUDED_FILES:
+                continue
             candidate = directory_path / name
             relative = candidate.relative_to(root_path).as_posix()
             if candidate.is_symlink():

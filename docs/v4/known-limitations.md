@@ -1,21 +1,22 @@
 # LoopSkill 4 known limitations
 
-- Only the Codex Host Adapter is supported in 4.1. The Kernel is host-neutral,
+- Only the Codex Host Adapter is supported in 4.2. The Kernel is host-neutral,
   but there is no multi-host support claim before a second real Adapter passes
   conformance.
 - SQLite and Codex do not share one transaction. LoopSkill does not promise
   cross-system exactly-once across SQLite, Codex, Git, or network boundaries.
   External outcomes can remain `UNKNOWN`.
-- Each activated Goal uses one fresh 4.1 foreground `codex exec --json --output-schema
-  --output-last-message`
-  process and accepts only its directly captured terminal stream plus one
-  schema-valid final outcome/summary object. Schema or result drift fails
-  closed; there is no prose-marker fallback. It does not promise a
-  Desktop-visible saved project/task, provider idempotency, cross-process Host
-  readback, or automatic `exec resume`. Lost process/stream evidence remains
-  `UNKNOWN` with no resend.
-- A confirmed plan contains 1–32 Goals, not an unbounded queue. Canonical plans
-  are limited to 128 KiB, explicitly authorized text/Markdown sources to
+- Each Attempt uses one foreground `codex exec --json --output-schema
+  --output-last-message` process and accepts only its captured terminal stream
+  plus one schema-valid final outcome/summary object. Schema or result drift
+  fails closed; there is no prose-marker fallback. Owner-only persistent
+  controls allow terminal readback after controller restart and at most one
+  recorded `codex exec resume` for a captured replay-safe session. A live
+  process is waited on, and an unsafe external action requires a human gate;
+  none of these paths promises a Desktop-visible saved project/task or remote
+  exactly-once behavior.
+- A confirmed plan contains 1–128 Goals, not an unbounded queue. Canonical plans
+  are limited to 512 KiB, explicitly authorized text/Markdown sources to
   256 KiB, and materialized prompts to a 24 KiB release target / 32 KiB hard
   limit. Overflow is rejected before Host execution and is never truncated.
 - Conversational answers exist only in the current pre-PREPARE session. There
@@ -35,7 +36,8 @@
 - Standard and Adaptive policy constrain sequencing and repair; they do not
   prove the target task is achievable or that a model will produce a correct
   patch.
-- Repository tests and disposable 2/8-Goal foreground Codex exec canaries do not prove empirical
+- Repository tests, disposable 2/8-Goal foreground Host routes, the deterministic
+  long-horizon canary, and the Nepha copy canary do not prove empirical
   patch-success superiority, arbitrary long-horizon efficacy, or production
   reliability for every project.
 - v4 cannot open, import, repair, run, or automatically migrate v3 roots,

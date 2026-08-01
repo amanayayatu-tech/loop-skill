@@ -22,6 +22,7 @@ from .prompt import (
     CONTENT_PAYLOAD_FIELDS,
     PromptMaterializationError,
     TARGET_PROMPT_BYTES,
+    V2_CONTENT_PAYLOAD_FIELDS,
     prompt_bytes,
 )
 
@@ -263,6 +264,31 @@ class CodexHostAdapter:
                 response_lost = True
             except HostUnavailable:
                 response_lost = True
+        elif row.get("invocation_state") in {"STARTED", "UNKNOWN", "UNVERIFIABLE"}:
+            observed = self._bounded_readback(attempt)
+            if observed is not None:
+                authoritative = (
+                    observed["trust"] == "authoritative"
+                    and self._strict_observation_allowed(attempt.action, capabilities)
+                )
+                return self._receipt(
+                    attempt,
+                    observed,
+                    capabilities=capabilities,
+                    trust_class="strict" if authoritative else "cooperative",
+                    outcome="observed" if authoritative else "responded",
+                )
+            recover = getattr(self.provider, "recover", None)
+            if callable(recover):
+                try:
+                    response = recover(
+                        attempt.action,
+                        attempt.payload,
+                        attempt.provider_idempotency_key,
+                    )
+                    self._validate_observation(response, attempt)
+                except (HostResponseLost, HostUnavailable):
+                    response_lost = True
 
         observed = self._bounded_readback(attempt)
         if observed is not None:
@@ -456,7 +482,10 @@ class CodexHostAdapter:
             raise ProtocolRejection(
                 "RECEIPT_IDENTITY_MISMATCH", "provider request digest mismatch"
             )
-        if set(attempt.payload) == CONTENT_PAYLOAD_FIELDS:
+        if set(attempt.payload) in {
+            CONTENT_PAYLOAD_FIELDS,
+            V2_CONTENT_PAYLOAD_FIELDS,
+        }:
             try:
                 materialized_bytes = prompt_bytes(
                     attempt.payload, attempt.provider_idempotency_key

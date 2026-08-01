@@ -484,7 +484,7 @@ def _request(goal_count: int = 1) -> LoopIntakeInput:
     filenames = _canary_filenames(goal_count)
     goals = tuple(_canary_goal(filename) for filename in filenames)
     source_digest = hashlib.sha256(
-        f"loopskill-v4.1-capacity-canary:{goal_count}".encode("ascii")
+        f"loopskill-v4.2-capacity-canary:{goal_count}".encode("ascii")
     ).hexdigest()
     plan = canonicalize_plan(
         {
@@ -551,7 +551,7 @@ def _request(goal_count: int = 1) -> LoopIntakeInput:
     )
 
 
-def _default_wait(provider: Any, workspace: Path, *, timeout_seconds: float = 300.0) -> None:
+def _default_wait(provider: Any, workspace: Path, *, timeout_seconds: float = 30_000.0) -> None:
     """Wait read-only for the unique invocation; never use file timing as closure."""
 
     del workspace

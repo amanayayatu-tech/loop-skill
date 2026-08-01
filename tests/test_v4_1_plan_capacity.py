@@ -470,14 +470,14 @@ def load_cli():
 
 class V41PlanCapacityTests(unittest.TestCase):
     def test_manifest_generated_identity_and_capacity_contract(self):
-        self.assertEqual(PROTOCOL_VERSION, "4.1.0")
-        self.assertEqual(CAPACITY_CONTRACT["goal_count_max"], 32)
+        self.assertEqual(PROTOCOL_VERSION, "4.2.0")
+        self.assertEqual(CAPACITY_CONTRACT["goal_count_max"], 128)
         fixture = json.loads(
             (ROOT / "protocol/v4/generated/identity-fixtures.json").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertEqual(fixture["protocol_version"], "4.1.0")
+        self.assertEqual(fixture["protocol_version"], "4.2.0")
         self.assertEqual(
             fixture["plan_digest"],
             domain_digest("loopskill-blob-v1\n", fixture["plan_document"]),
@@ -1201,22 +1201,12 @@ except ProtocolRejection as exc:
         self.assertEqual(
             corpus["admission_limits"],
             {
-                "canonical_plan_max_bytes": int(
-                    CAPACITY_CONTRACT["canonical_plan_max_bytes"]
-                ),
-                "create_loop_target_bytes": int(
-                    CAPACITY_CONTRACT["create_loop_target_bytes"]
-                ),
-                "create_loop_target_collection_members": int(
-                    CAPACITY_CONTRACT["create_loop_target_collection_members"]
-                ),
-                "goal_count_max": int(CAPACITY_CONTRACT["goal_count_max"]),
-                "host_prompt_target_bytes": int(
-                    CAPACITY_CONTRACT["host_prompt_target_bytes"]
-                ),
-                "source_text_max_bytes": int(
-                    CAPACITY_CONTRACT["source_text_max_bytes"]
-                ),
+                "canonical_plan_max_bytes": 128 * 1024,
+                "create_loop_target_bytes": 8 * 1024,
+                "create_loop_target_collection_members": 64,
+                "goal_count_max": 32,
+                "host_prompt_target_bytes": 24 * 1024,
+                "source_text_max_bytes": 256 * 1024,
             },
         )
         self.assertEqual(

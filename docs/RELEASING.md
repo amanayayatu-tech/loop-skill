@@ -7,8 +7,8 @@ exposure, unresolved deterministic gates, or identity drift.
 
 ## Release identity
 
-- version file: `VERSION` = `4.1.1`;
-- release tag: annotated `v4.1.1`;
+- version file: `VERSION` = `4.2.0`;
+- release tag: annotated `v4.2.0`;
 - public repository: `amanayayatu-tech/loop-skill`;
 - default branch: `main`;
 - historical fallback: [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8);
@@ -33,13 +33,13 @@ commit that changes exactly these seven candidate/support surfaces together:
    stable notice;
 4. `docs/v4/quickstart.en.md`: candidate notice to the matching English stable
    notice;
-5. `SECURITY.md`: future support wording to “LoopSkill 4.1.1 is the currently
+5. `SECURITY.md`: future support wording to “LoopSkill 4.2.0 is the currently
    supported public line.”;
-6. `CHANGELOG.md`: the final `4.1.1` release date and release-link identity.
-7. `docs/v4/release-notes-v4.1.md`: candidate-only status to the reviewed
+6. `CHANGELOG.md`: the final `4.2.0` release date and release-link identity.
+7. `docs/v4/release-notes-v4.2.md`: candidate-only status to the reviewed
    public release notes, including the direct v3.3.8 fallback and claim limits.
 
-`VERSION` is already `4.1.1` and remains a separately validated version truth;
+`VERSION` is already `4.2.0` and remains a separately validated version truth;
 it is not an eighth candidate-to-stable text switch. Before that authorized
 commit, English copy must say “awaiting author release authorization” and must
 not claim public support. The truth switch creates a new candidate SHA, so all
@@ -191,26 +191,21 @@ are predecessor evidence, not release artifacts.
 
 ## Gate 2: exact-SHA local foreground Codex exec canary
 
-### v4.1.1 scoped boundary-hotfix exception
+v4.2.0 has no canary exception. Gate 2 has three ordered layers bound to the
+same clean candidate SHA:
 
-Do not run this Gate for v4.1.1. The author explicitly accepts the direct
-v3-cwd zero-write subprocess regression, the complete deterministic Gate 1,
-isolated distribution validation, and exact-SHA pull-request/main/tag CI in its
-place. The changed branch fails before Provider construction, while the normal
-non-v3 Provider route is unchanged; the disposable non-v3 routes below cannot
-exercise the repaired branch. No real Host invocation or canary PASS is claimed
-for v4.1.1.
+1. fresh 2-Goal then 8-Goal official Host routes for the base receipt chain;
+2. the deterministic long-horizon scenario covering continuous advancement,
+   same-Loop repair, restart/session resume, human/time/budget waiting,
+   optional skip, multi-Loop selection, and loopback HTTP verification;
+3. a disposable copy of Nepha covering a Chinese workspace path, test command,
+   listener plus four routes, and separation between the primary Host and a
+   Codex child capability.
 
-Preserve the superseded development incident as terminal predecessor evidence.
-Its two semantic Goals passed, its
-shared Host config integrity check failed, no receipt was emitted, and its
-8-Goal route never started. Do not rerun it, diagnose the ambient config writer
-as part of this release, relax the validator, or relabel the failure.
+Layer 2 or 3 failure returns to the same release branch. Do not relax a
+verifier, reuse a failed canary identity, or publish with an exception.
 
-The remaining Gate 2 procedure applies to releases that do not carry this
-explicit version-scoped exception.
-
-After freezing the candidate SHA, run exactly two new non-scored, non-research,
+For layer 1, run exactly two new non-scored, non-research,
 disposable routes through the public source-tree entry from that exact clean
 commit: a fresh 2-Goal route, then only after it passes, a fresh 8-Goal
 route. Together they authorize at most 10 Host invocations and two hours.
@@ -439,13 +434,13 @@ foreground Codex process group must be reaped on success, failure, timeout, or
 interruption. A canary or cleanup failure is a HOLD with preserved evidence,
 never permission to rerun the provider action. The exact canary process scope
 must prove zero descendants after the installed entry exits; a global
-process-name search is not sufficient evidence. Its 300-second foreground
+process-name search is not sufficient evidence. Its 30000-second foreground
 terminal stream window is not a task budget. On timeout it must preserve
 `UNKNOWN`, make no lifecycle claim, and must not resend or resume.
 
 The Codex Desktop folder-open → `list_projects` → `projectId` → `create_thread`
 route has separate historical provisioning receipts, but it is not wired into
-the 4.1.1 Provider. The gate validates only the cwd-bound foreground exec
+the 4.2.0 Provider. The gate validates only the cwd-bound foreground exec
 route and makes no Desktop-visible saved project/task claim.
 
 If the outcome is `UNKNOWN`/`UNVERIFIABLE`, retain it honestly. Do not retry the
@@ -527,15 +522,15 @@ test -z "$(git status --porcelain=v1 --untracked-files=all)"
 test "$(git rev-parse HEAD)" = "$CANDIDATE"
 git rev-parse origin/main >/dev/null
 git merge-base --is-ancestor origin/main HEAD
-test -z "$(git tag --list v4.1.1)"
-REMOTE_TAG_READBACK="$(git ls-remote --tags origin refs/tags/v4.1.1 'refs/tags/v4.1.1^{}')"
+test -z "$(git tag --list v4.2.0)"
+REMOTE_TAG_READBACK="$(git ls-remote --tags origin refs/tags/v4.2.0 'refs/tags/v4.2.0^{}')"
 test -z "$REMOTE_TAG_READBACK"
 set +e
-GH_RELEASE_READBACK="$(gh api --include repos/amanayayatu-tech/loop-skill/releases/tags/v4.1.1 2>&1)"
+GH_RELEASE_READBACK="$(gh api --include repos/amanayayatu-tech/loop-skill/releases/tags/v4.2.0 2>&1)"
 GH_RELEASE_STATUS=$?
 set -e
 if [[ "$GH_RELEASE_STATUS" -eq 0 ]]; then
-  echo "v4.1.1 GitHub Release already exists" >&2
+  echo "v4.2.0 GitHub Release already exists" >&2
   exit 1
 fi
 if ! grep -Eq '^HTTP/[^ ]+ 404 ' <<<"$GH_RELEASE_READBACK"; then
@@ -544,7 +539,7 @@ if ! grep -Eq '^HTTP/[^ ]+ 404 ' <<<"$GH_RELEASE_READBACK"; then
 fi
 ```
 
-Also read GitHub state and confirm no existing v4.1.1 Release. If `origin/main`
+Also read GitHub state and confirm no existing v4.2.0 Release. If `origin/main`
 drifted, integrate it non-destructively and rerun all affected release gates.
 Verify the intended diff, branch ancestry, secrets/private paths, large files,
 and predecessor evidence exclusion. Never force-push.
@@ -638,14 +633,14 @@ PY
    include every affected code gate in that rerun rather than inheriting feature-
    branch evidence.
 6. Confirm every v4 main CI job is green and all version/docs/release-note
-   surfaces say 4.1.1 consistently.
+   surfaces say 4.2.0 consistently.
 
 ## Gate 6: tag and GitHub Release
 
-Create annotated `v4.1.1` on the verified merged-main SHA and push only that
+Create annotated `v4.2.0` on the verified merged-main SHA and push only that
 tag. Wait for all v4 tag CI jobs to pass. Then create public GitHub Release
-4.1.1 from the exact tag, mark it latest and non-prerelease, and use
-`docs/v4/release-notes-v4.1.md` after final truth review.
+4.2.0 from the exact tag, mark it latest and non-prerelease, and use
+`docs/v4/release-notes-v4.2.md` after final truth review.
 
 Release notes must prominently state:
 

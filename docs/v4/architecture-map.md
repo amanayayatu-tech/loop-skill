@@ -34,7 +34,7 @@ Entry / composition root
   four-phase path and honest `UNKNOWN`/`UNVERIFIABLE` handling without it.
 - Projections are rebuildable and read-only. They cannot authorize recovery or
   become another ledger.
-- PlanCodec canonicalizes the confirmed 1–32 Goal PlanDocument outside the
+- PlanCodec canonicalizes the confirmed 1–128 Goal PlanDocument outside the
   Kernel. The Kernel independently validates plan/index/digest/selector
   identities but never reads arbitrary files or networks. CreateLoop registers
   only the current Goal; the existing `AdvanceGoal` transaction completes it,
@@ -43,12 +43,19 @@ Entry / composition root
 ## External effects
 
 The Store durably records one `AttemptRef` before execution ownership is
-claimed. The automatic attempt budget is consumed immediately before the Host
-call. Provider idempotency plus authoritative readback supports only an
-effectively-once statement. Without both, the contract is at-most-one automatic
-attempt and the outcome may be `UNKNOWN`; the system does not resend. A late
+claimed. Invocation and observed active-compute budgets are checked before the
+Host call. Provider idempotency is not assumed: one provider key maps to one
+owner-only Attempt directory, and recovery may only read its terminal evidence,
+wait on its recorded live PID plus process-start identity, or use its one bound
+session resume. Interrupted active compute is conservatively charged from the
+persisted initial or resume start time up to that invocation's bound; controller
+restart never refreshes either deadline. A late
 authoritative observation can strengthen the same subject identity but cannot
-invent a new attempt or rewrite workflow history.
+invent a new Goal Attempt or rewrite workflow history.
+Budget exhaustion pauses before the Adapter invokes the Host. A digest-bound
+`budget-extend` may only increase the current invocation and active-compute
+limits; `ResumeLoop` records `BudgetExtended` without changing immutable Plan
+scope or requirements.
 
 The public composition root constructs `CodexExecProvider` only after explicit
 confirmation. It sends the digest-bound semantic boundary on stdin, not
@@ -56,23 +63,22 @@ user/model control identity. It derives one closed outcome/summary JSON Schema
 from the typed manifest, passes it through the official `--output-schema`
 option, and supplies one private `--output-last-message` path as the sole
 semantic-result byte source. Both controls remain outside the artifact workspace
-and are removed after the process. The Provider owns one foreground process group
-and accepts one bounded complete JSONL lifecycle plus one schema-valid result file.
-It has no `agent_message`/text-marker fallback, provider
-idempotency key, automatic resume, or cross-process readback. Missing,
-ambiguous, failed, truncated, timed-out, or lost evidence becomes `UNKNOWN`,
-never another invocation.
+and are removed from their transient machine-controlled locations after the
+process. Plan v2 also persists digest-bound copies outside the artifact
+workspace. The Provider owns one foreground process group and accepts one
+bounded complete JSONL lifecycle plus one schema-valid result file. It has no
+`agent_message`/text-marker fallback or provider-side idempotency assumption.
 
-The default foreground observation window is at most 300 seconds and is not the
-task budget. The official executable owns its internal thread/turn lifecycle;
-LoopSkill reaps the process group on every exit path. A new Provider cannot
-read a completed or failed prior process. `status --refresh` may execute the one
-first call only when the durable Attempt is still unclaimed; after a started
-process loses evidence it preserves `UNKNOWN` and does not resume or resend.
+The per-Attempt bound is at most 30000 seconds and is not the whole-Loop budget.
+The official executable owns its internal thread/turn lifecycle; LoopSkill
+reaps the process group on every owned exit path. A new Provider can read a
+completed persistent Attempt. If an interrupted Plan v2 Attempt captured a
+session, replay-safe recovery may issue exactly one recorded
+`codex exec resume`; non-replayable work waits for human confirmation.
 
 Codex Desktop's folder-open → `list_projects` → `projectId` → `create_thread`
 route has historical verified provisioning receipts. That evidence establishes
-the Desktop provisioning route, not a capability in the v4.1 Provider. The 4.1
+the Desktop provisioning route, not a capability in the v4.2 Provider. The 4.2
 default is a foreground cwd-bound `codex exec` invocation and does not promise
 a Desktop-visible saved project/task. Optional saved-project convenience is
 outside the current release boundary.
@@ -82,11 +88,20 @@ After exact task readback, Entry submits the generated
 Finalization commands. Each local operation is independently transactional and
 replay-safe; every committed intermediate state has one deterministic successor.
 If a crash follows the local Attempt commit but precedes its provider call,
-`status --refresh` may claim that Attempt and execute its one first call. Once
-execution ownership was claimed, refresh cannot recover a foreign-process
-transcript and returns honest `UNKNOWN`; it can never perform a second spawn or
-resume. The directly captured Host-result digest remains in the canonical
-Result binding so changed local evidence fails closed.
+`run`/`continue` may claim that Attempt and execute its first call. After Host
+start, recovery is restricted to the persistent PID/session/result evidence
+above. The directly captured Host-result digest remains in the canonical Result
+binding so changed local evidence fails closed.
+
+Public `list`, `status`, policy, and diagnostics views open SQLite in read-only
+mode. Repair ordinals, attempt limits, and repeated-failure fingerprints are
+scoped to the active Goal, so one Goal cannot consume another Goal's repair
+budget.
+
+Command verifiers drain stdout and stderr incrementally and terminate on the
+first output-bound violation. Loopback HTTP verification disables ambient
+proxies; server stdout/stderr are discarded rather than buffered, and route
+responses remain bounded and digest-only.
 
 ## State and evidence
 
@@ -96,8 +111,8 @@ operation receipt, outbox, and current Result/Report/finalization bindings
 commit atomically. Artifact correctness, workflow terminality, Host assurance,
 and public release are distinct claims with distinct evidence.
 
-The 4.1.1 release support claim is gated by the eight-lane Linux/macOS × Python
-3.11, 3.12, 3.13, and 3.14 runtime/distribution matrix, 1/4/8/16/32 fake-Provider
-capacity routes, and fresh 2-Goal then 8-Goal real Host canaries on one exact
-candidate. A local result from one Python runtime is focused evidence, not a
-substitute for that matrix.
+The 4.2.0 release support claim is gated by the eight-lane Linux/macOS × Python
+3.11, 3.12, 3.13, and 3.14 runtime/distribution matrix, v1 compatibility plus
+v2 128-Goal capacity boundaries, upgrade rollback injection, long-horizon
+state-machine tests, and three canary layers on one exact candidate. A local
+result from one Python runtime is focused evidence, not a substitute for that matrix.

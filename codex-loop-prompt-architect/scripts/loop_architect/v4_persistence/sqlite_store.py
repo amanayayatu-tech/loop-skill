@@ -111,21 +111,30 @@ class SQLiteStore:
         authority: AuthorityContext | None = None,
         *,
         busy_timeout_ms: int = 1_000,
+        readonly: bool = False,
     ) -> None:
         self.path = Path(path)
         self.authority = authority
         self.busy_timeout_ms = busy_timeout_ms
+        self.readonly = readonly
         self._closed = False
         self._prepare_path()
         try:
+            target: str | Path = self.path
+            uri = False
+            if self.readonly:
+                target = self.path.resolve(strict=True).as_uri() + "?mode=ro"
+                uri = True
             self._connection = sqlite3.connect(
-                self.path,
+                target,
                 isolation_level=None,
                 timeout=busy_timeout_ms / 1_000,
+                uri=uri,
             )
             self._connection.row_factory = sqlite3.Row
             self._configure()
-            self._initialize_schema()
+            if not self.readonly:
+                self._initialize_schema()
             if self.authority is None:
                 self.authority = self._load_authority()
         except sqlite3.DatabaseError as exc:
@@ -138,7 +147,11 @@ class SQLiteStore:
             raise
 
     def _prepare_path(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.readonly:
+            if not self.path.parent.is_dir() or not self.path.exists():
+                raise PersistenceError("read-only SQLite store is unavailable")
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.is_symlink():
             raise PersistenceError("SQLite store path must not be a symlink")
         if self.path.exists():
@@ -158,6 +171,10 @@ class SQLiteStore:
     def _configure(self) -> None:
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+        if self.readonly:
+            self._connection.execute("PRAGMA query_only = ON")
+            self._connection.execute("PRAGMA trusted_schema = OFF")
+            return
         journal_mode = self._connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         if str(journal_mode).lower() != "wal":
             raise PersistenceError("SQLite WAL mode unavailable")

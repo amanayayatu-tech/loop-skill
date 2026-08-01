@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-LoopSkill 4.1 ships one Host Adapter, Codex. The Kernel remains Host-neutral,
+LoopSkill 4.2 ships one Host Adapter, Codex. The Kernel remains Host-neutral,
 but no multi-host claim is allowed before a second real Adapter passes the same
 conformance corpus. Core sees only manifest-generated `EffectAttempt`,
 `CapabilityRecord`, and `Receipt` values; it contains no Codex ID, enum, argv,
@@ -19,18 +19,20 @@ snapshot, operation result, and outbox row before any Host invocation.
 `SQLiteStore.claim_attempt` is the only execution-ownership transition. The
 Adapter and Provider never write canonical state.
 
-One claimed Attempt permits one foreground process spawn:
+One claimed Goal Attempt permits a bounded initial foreground process and, only
+after interruption with a captured session, one recorded same-session resume:
 
 | Local condition | Provider action | Recovery |
 | --- | --- | --- |
 | Attempt committed but unclaimed | one claimant may invoke `codex exec` | the same durable Attempt may make its first call |
-| process started | no second spawn | accept only the directly captured terminal stream |
-| complete valid JSONL lifecycle + one schema-valid result file + zero exit | bind same-process terminal observation and schema/result digests | local result/artifact/review/finalization may advance |
-| lost, malformed, failed, ambiguous, timed-out, or interrupted evidence | no retry or resume | preserve `UNKNOWN` |
+| process started and the recorded PID plus process-start identity are still live | wait; do not spawn | read its persistent terminal evidence when available |
+| complete valid JSONL lifecycle + one schema-valid result file + zero exit | bind persistent terminal observation and schema/result digests | local result/artifact/review/finalization may advance |
+| interrupted with session and replay-safe policy | record and run one `codex exec resume` | no second automatic resume |
+| no session or non-replayable action | no blind call | reconcile local workspace or wait for human confirmation |
 
-There is no daemon, proxy, Supervisor, automatic `exec resume`, project
-provisioner, second writer, or post-process Host lookup. A crash after the
-Attempt is claimed sacrifices liveness rather than risking a duplicate effect.
+There is no daemon, proxy, Supervisor, project provisioner, second writer, or
+unbounded retry. Recovery is restricted to owner-only evidence for the same
+provider key and session.
 
 The only guarantee text for this Provider is:
 
@@ -61,8 +63,8 @@ Preflight has zero model/Host effects. It:
 
 The pure argv builder selects `exec --json`, both machine-controlled output
 paths, exact `--cd`, workspace-write
-sandbox, `sandbox_workspace_write.network_access=false`, non-Git support,
-ephemeral execution, ignored user config/rules, and prompt input from stdin. It
+sandbox, Plan-bound network access, non-Git support, persistent Plan v2
+sessions, ignored user config/rules, and prompt input from stdin. It
 never invokes a shell or asks the model/user for a control identity.
 
 The subprocess runs in one owned process group. stdout, stderr, individual
@@ -95,17 +97,24 @@ raw stderr, result, transcript, path, or Host identity. The classification is
 diagnostic only; the Adapter still maps ambiguous external completion to
 canonical `UNKNOWN` and never resends.
 
-The Provider caches the valid transcript only inside the live Provider object.
-`readback`, `read_task_result`, and lifecycle reads expose that same-process
-evidence to the existing Adapter. A new process cannot recover it, and 4.1.1
-does not parse rollout files to manufacture recovery.
+For Plan v2, the Provider copies terminal schema/result/transcript bytes and a
+digest manifest into one owner-only Attempt directory. The process record binds
+both PID and process-start identity so PID reuse cannot impersonate the original
+Attempt; the macOS fallback normalizes process-start observation to a fixed UTC/C
+environment. The persisted initial and resume start times preserve the original
+per-invocation deadline across controller restarts and conservatively charge an
+interrupted resume to the active-compute budget. `readback`,
+`read_task_result`, and lifecycle reads validate those files after restart.
+Partial stdout binds `thread.started` as soon as observed; recovery never parses
+unrelated rollout files.
 
 ## Capability truth
 
 `task_create`, `resource_read`, and `lifecycle_readback` are available strictly
-only for the directly captured same-process transcript. The capability source
-explicitly identifies this scope. These are unavailable as cross-process Host
-lookups.
+for the directly captured transcript and its digest-bound persistent copy. A
+later controller process may validate that copy, but cannot perform a general
+cross-process Host lookup. The capability source explicitly identifies this
+scope.
 
 `project_registration`, independent `thread_create`, `message_send`,
 `heartbeat`, and `provider_idempotency` are unavailable. Sandbox, trust, model,
@@ -116,8 +125,8 @@ strict directly captured terminal evidence.
 
 Codex Desktop folder-open plus exact-path project listing and project-bound
 thread creation has separately passed 23/23 historical provisioning receipts.
-That proves the Desktop route exists; it is not wired into the 4.1.1 Provider.
-Saved-project convenience and Desktop-visible task creation are not 4.1.1
+That proves the Desktop route exists; it is not wired into the 4.2 Provider.
+Saved-project convenience and Desktop-visible task creation are not 4.2
 claims.
 
 ## Predecessor transport evidence

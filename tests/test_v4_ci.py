@@ -71,14 +71,14 @@ class V4CiTests(unittest.TestCase):
                 encoding="utf-8"
             )
             workflow.write_text(
-                source.replace("tags: [v4.1.1]", "tags: [v4.1.0]"),
+                source.replace("tags: [v4.2.0]", "tags: [v4.1.0]"),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ci.CiError, "CI_PUSH_SCOPE_INVALID"):
                 ci.validate(root)
             workflow.write_text(
                 source.replace(
-                    "if: github.ref == 'refs/tags/v4.1.1'",
+                    "if: github.ref == 'refs/tags/v4.2.0'",
                     "if: always()",
                     1,
                 ),
@@ -87,12 +87,19 @@ class V4CiTests(unittest.TestCase):
             with self.assertRaisesRegex(ci.CiError, "CI_TAG_CONDITION_INVALID"):
                 ci.validate(root)
 
-            workflow.write_text(
-                source.replace("fetch-depth: 0", "fetch-depth: 1", 1),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(ci.CiError, "CI_PROVENANCE_HISTORY_UNAVAILABLE"):
-                ci.validate(root)
+            needle = "fetch-depth: 0"
+            for occurrence in range(source.count(needle)):
+                start = -1
+                for _ in range(occurrence + 1):
+                    start = source.index(needle, start + 1)
+                workflow.write_text(
+                    source[:start] + "fetch-depth: 1" + source[start + len(needle) :],
+                    encoding="utf-8",
+                )
+                with self.subTest(checkout=occurrence), self.assertRaisesRegex(
+                    ci.CiError, "CI_PROVENANCE_HISTORY_UNAVAILABLE"
+                ):
+                    ci.validate(root)
 
 
 if __name__ == "__main__":

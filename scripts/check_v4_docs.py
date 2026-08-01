@@ -43,8 +43,8 @@ STALE_CURRENT_PRODUCT = (
 )
 COMMON_CLAIMS = (
     "4.0.0",
-    "4.1.1",
-    "1–32",
+    "4.2.0",
+    "1–128",
     "CONTENT_ADDRESSED_V1",
     "EAGER_V4_0",
     "INTAKE",
@@ -59,18 +59,18 @@ COMMON_CLAIMS = (
     "scripts/check_v4_docs.py",
 )
 LOCAL_LINK_EXCLUSIONS = {"README.md", "README.en.md"}
-README_CANDIDATE_STATUS_ZH = "本文档对应 LoopSkill 4.1.1 发布候选，正在等待作者发布授权；当前可用的公开版本仍以"
-README_CANDIDATE_STATUS_EN = "This document describes the LoopSkill 4.1.1 release candidate, which is awaiting author release authorization. See"
-QUICKSTART_CANDIDATE_STATUS_ZH = "本文档对应 LoopSkill 4.1.1 发布候选，正在等待作者发布授权；当前可用的公开版本仍以 GitHub Releases 页面为准"
-QUICKSTART_CANDIDATE_STATUS_EN = "This document describes the LoopSkill 4.1.1 release candidate, which is awaiting\nauthor release authorization. See GitHub Releases for the public versions currently available."
-SECURITY_CANDIDATE_STATUS = "describes the LoopSkill 4.1.1 release-candidate security boundary"
-RELEASE_NOTES_CANDIDATE_STATUS = "Status: `V4_1_RC_READY_AWAITING_AUTHOR_RELEASE_AUTHORIZATION` is the only\npre-publication completion state."
-README_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.1.1；当前可用的公开版本以"
-README_RELEASE_STATUS_EN = "This document describes LoopSkill 4.1.1. See"
-QUICKSTART_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.1.1；当前可用的公开版本以 GitHub Releases 页面为准"
-QUICKSTART_RELEASE_STATUS_EN = "This document describes LoopSkill 4.1.1. See GitHub Releases for the public versions currently available."
-SECURITY_RELEASE_STATUS = "LoopSkill 4.1.1 is the currently supported public line."
-RELEASE_NOTES_RELEASE_STATUS = "Status: LoopSkill 4.1.1 is the current public v4 release."
+README_CANDIDATE_STATUS_ZH = "本文档对应 LoopSkill 4.2.0 发布候选，正在等待作者发布授权；当前可用的公开版本仍以"
+README_CANDIDATE_STATUS_EN = "This document describes the LoopSkill 4.2.0 release candidate, which is awaiting author release authorization. See"
+QUICKSTART_CANDIDATE_STATUS_ZH = "本文档对应 LoopSkill 4.2.0 发布候选，正在等待作者发布授权；当前可用的公开版本仍以 GitHub Releases 页面为准"
+QUICKSTART_CANDIDATE_STATUS_EN = "This document describes the LoopSkill 4.2.0 release candidate, which is awaiting\nauthor release authorization. See GitHub Releases for the public versions currently available."
+SECURITY_CANDIDATE_STATUS = "describes the LoopSkill 4.2.0 release-candidate security boundary"
+RELEASE_NOTES_CANDIDATE_STATUS = "Status: `V4_2_RC_READY_AWAITING_AUTHOR_RELEASE_AUTHORIZATION` is the only\npre-publication completion state."
+README_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.2.0；当前可用的公开版本以"
+README_RELEASE_STATUS_EN = "This document describes LoopSkill 4.2.0. See"
+QUICKSTART_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.2.0；当前可用的公开版本以 GitHub Releases 页面为准"
+QUICKSTART_RELEASE_STATUS_EN = "This document describes LoopSkill 4.2.0. See GitHub Releases for the public versions currently available."
+SECURITY_RELEASE_STATUS = "LoopSkill 4.2.0 is the currently supported public line."
+RELEASE_NOTES_RELEASE_STATUS = "Status: LoopSkill 4.2.0 is the current public v4 release."
 SECURITY_STATUS = "Security support follows the versions listed on GitHub Releases."
 README_ASSETS = (
     (
@@ -266,13 +266,13 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     quickstart_zh = (root / "docs/v4/quickstart.zh-CN.md").read_text(encoding="utf-8")
     quickstart_en = (root / "docs/v4/quickstart.en.md").read_text(encoding="utf-8")
     releasing = (root / "docs/RELEASING.md").read_text(encoding="utf-8")
-    release_notes_v41 = (root / "docs/v4/release-notes-v4.1.md").read_text(
+    release_notes_v42 = (root / "docs/v4/release-notes-v4.2.md").read_text(
         encoding="utf-8"
     )
     security = (root / "SECURITY.md").read_text(encoding="utf-8")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     version = (root / "VERSION").read_text(encoding="utf-8").strip()
-    if version != "4.1.1":
+    if version != "4.2.0":
         raise DocsError("DOC_VERSION_DRIFT")
     if _markers(zh) != EXPECTED_SECTIONS or _markers(en) != EXPECTED_SECTIONS:
         raise DocsError("DOC_SECTION_PARITY_DRIFT")
@@ -328,7 +328,7 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         "patch-success",
         "long-horizon superiority",
     ):
-        if literal not in release_notes_v41:
+        if literal not in release_notes_v42:
             raise DocsError(f"DOC_RELEASE_NOTES_INCOMPLETE:{literal}")
     for claim in COMMON_CLAIMS:
         if claim not in zh or claim not in en:
@@ -362,23 +362,23 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     ):
         raise DocsError("DOC_CANARY_LOGIN_STREAM_DRIFT")
     if (
-        "唯一首次 invocation" not in zh
-        or "第二次 spawn" not in zh
-        or "one first invocation" not in en
-        or "second spawn" not in en
+        "持久证据" not in zh
+        or "`codex exec resume`" not in zh
+        or "persistent evidence" not in en
+        or "`codex exec resume`" not in en
     ):
-        raise DocsError("DOC_REFRESH_ATTEMPT_SEMANTICS_DRIFT")
+        raise DocsError("DOC_RECOVERY_ATTEMPT_SEMANTICS_DRIFT")
     ux_contract = (root / "docs/architecture/loopskill-v4-single-entry-ux.md").read_text(
         encoding="utf-8"
     )
     for literal in (
-        "durable Attempt has not been claimed",
-        "unique first foreground",
-        "no cross-process Host",
-        "never performs\na second spawn",
+        "owner-only child root",
+        "persists input/session/process/terminal",
+        "same-session resume",
+        "Non-replayable actions wait",
     ):
         if literal not in ux_contract:
-            raise DocsError(f"DOC_REFRESH_ATTEMPT_SEMANTICS_DRIFT:{literal}")
+            raise DocsError(f"DOC_RECOVERY_ATTEMPT_SEMANTICS_DRIFT:{literal}")
     retired_canary_literals = (
         "loopskill-v4-disposable-app-canary-v1",
         "codex-app-task-readback-v1",
@@ -401,7 +401,7 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         and QUICKSTART_CANDIDATE_STATUS_ZH in quickstart_zh
         and QUICKSTART_CANDIDATE_STATUS_EN in quickstart_en
         and SECURITY_CANDIDATE_STATUS in security
-        and RELEASE_NOTES_CANDIDATE_STATUS in release_notes_v41
+        and RELEASE_NOTES_CANDIDATE_STATUS in release_notes_v42
     )
     release_status = (
         README_RELEASE_STATUS_ZH in zh
@@ -409,7 +409,7 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         and QUICKSTART_RELEASE_STATUS_ZH in quickstart_zh
         and QUICKSTART_RELEASE_STATUS_EN in quickstart_en
         and SECURITY_RELEASE_STATUS in security
-        and RELEASE_NOTES_RELEASE_STATUS in release_notes_v41
+        and RELEASE_NOTES_RELEASE_STATUS in release_notes_v42
     )
     if (
         SECURITY_STATUS not in security
@@ -427,15 +427,15 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
     if any(
         literal in text
         for literal in premature
-        for text in (zh, en, quickstart_zh, quickstart_en, security, release_notes_v41)
+        for text in (zh, en, quickstart_zh, quickstart_en, security, release_notes_v42)
     ):
         raise DocsError("DOC_RELEASE_STATUS_PREMATURE_OR_AMBIGUOUS")
-    if candidate_status and "## [4.1.1] - Unreleased" not in changelog:
+    if candidate_status and "## [4.2.0] - Unreleased" not in changelog:
         raise DocsError("DOC_RELEASE_STATUS_NOT_CANDIDATE")
     if mode == "release" and (
-        re.search(r"^## \[4\.1\.1\] - 20[0-9]{2}-[0-9]{2}-[0-9]{2}$", changelog, re.MULTILINE)
+        re.search(r"^## \[4\.2\.0\] - 20[0-9]{2}-[0-9]{2}-[0-9]{2}$", changelog, re.MULTILINE)
         is None
-        or "## [4.1.1] - Unreleased" in changelog
+        or "## [4.2.0] - Unreleased" in changelog
     ):
         raise DocsError("DOC_RELEASE_STATUS_NOT_STABLE")
     return {

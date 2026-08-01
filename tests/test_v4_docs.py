@@ -38,12 +38,12 @@ class V4DocsTests(unittest.TestCase):
         self.assertEqual(smoke["command_count"], 5)
         self.assertEqual(smoke["external_effect_count"], 0)
         releasing = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
-        release_notes = (ROOT / "docs/v4/release-notes-v4.1.md").read_text(
+        release_notes = (ROOT / "docs/v4/release-notes-v4.2.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("v4.1.1 scoped boundary-hotfix exception", releasing)
-        self.assertIn("Do not run this Gate for v4.1.1", releasing)
-        self.assertIn("no fresh Host canary is claimed", release_notes)
+        self.assertIn("v4.2.0 has no canary exception", releasing)
+        self.assertIn("three ordered layers", releasing)
+        self.assertIn("one recorded `codex exec resume`", release_notes)
 
     def test_section_command_link_and_stale_wording_drift_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -66,13 +66,14 @@ class V4DocsTests(unittest.TestCase):
                 "docs/v4/known-limitations.md",
                 "docs/v4/architecture-map.md",
                 "docs/v4/release-notes.md",
-                "docs/v4/release-notes-v4.1.md",
+                "docs/v4/release-notes-v4.2.md",
                 "docs/readme-assets/durable-handoff.png",
                 "docs/readme-assets/evidence-before-closure.png",
                 "docs/RELEASING.md",
                 "docs/adr/0011-loopskill-4-compatible-kernel-refactor.md",
                 "docs/adr/0013-content-addressed-plan-capacity.md",
                 "docs/v4/compatibility-matrix-v4.1.md",
+                "docs/v4/compatibility-matrix-v4.2.md",
                 "protocol/v4/README.md",
                 "examples/v4-standard-input.json",
                 "codex-loop-prompt-architect/scripts/loop_architect/v4_entry/canary.py",
@@ -117,15 +118,15 @@ class V4DocsTests(unittest.TestCase):
                 "docs/v4/quickstart.en.md",
                 "SECURITY.md",
                 "CHANGELOG.md",
-                "docs/v4/release-notes-v4.1.md",
+                "docs/v4/release-notes-v4.2.md",
             ):
                 path = root / relative
                 text = path.read_text(encoding="utf-8")
                 for old, new in candidate_replacements:
                     text = text.replace(old, new)
                 text = re.sub(
-                    r"^## \[4\.1\.1\] - 20[0-9]{2}-[0-9]{2}-[0-9]{2}$",
-                    "## [4.1.1] - Unreleased",
+                    r"^## \[4\.2\.0\] - 20[0-9]{2}-[0-9]{2}-[0-9]{2}$",
+                    "## [4.2.0] - Unreleased",
                     text,
                     count=1,
                     flags=re.MULTILINE,
@@ -144,7 +145,7 @@ class V4DocsTests(unittest.TestCase):
                 docs.QUICKSTART_CANDIDATE_STATUS_EN: docs.QUICKSTART_RELEASE_STATUS_EN,
                 docs.SECURITY_CANDIDATE_STATUS: docs.SECURITY_RELEASE_STATUS,
                 docs.RELEASE_NOTES_CANDIDATE_STATUS: docs.RELEASE_NOTES_RELEASE_STATUS,
-                "## [4.1.1] - Unreleased": "## [4.1.1] - 2026-07-31",
+                "## [4.2.0] - Unreleased": "## [4.2.0] - 2026-08-02",
             }
             for relative in (
                 "README.md",
@@ -153,7 +154,7 @@ class V4DocsTests(unittest.TestCase):
                 "docs/v4/quickstart.en.md",
                 "SECURITY.md",
                 "CHANGELOG.md",
-                "docs/v4/release-notes-v4.1.md",
+                "docs/v4/release-notes-v4.2.md",
             ):
                 path = root / relative
                 text = path.read_text(encoding="utf-8")
@@ -161,7 +162,7 @@ class V4DocsTests(unittest.TestCase):
                     text = text.replace(old, new)
                 path.write_text(text, encoding="utf-8")
             self.assertEqual(docs.validate(root, mode="release")["status"], "PASS")
-            release_notes = root / "docs/v4/release-notes-v4.1.md"
+            release_notes = root / "docs/v4/release-notes-v4.2.md"
             release_notes_text = release_notes.read_text(encoding="utf-8")
             release_notes.write_text(
                 release_notes_text.replace(

@@ -179,6 +179,37 @@ def _validate_plan_selector(
         if subject_ref == expected:
             matched = True
             break
+    if not matched and plan.get("capacity_contract_version") == "loopskill-capacity-v2":
+        repair_prefix = {
+            "ArtifactRef": "artifact-",
+            "AttemptRef": "attempt-",
+            "ExternalEffectRef": "external-effect-",
+            "HostResourceRef": "host-target-",
+            "ReportRef": "report-",
+            "ResultRef": "result-",
+            "ReviewRef": "review-",
+        }.get(subject_kind)
+        if repair_prefix is not None:
+            for goal_ref, goal in snapshot.get("goals", {}).items():
+                goal_id = goal.get("goal_id")
+                if not isinstance(goal_id, str):
+                    continue
+                for repair_ordinal in range(1, int(goal.get("max_attempts", 1))):
+                    repair_identity = domain_digest(
+                        "loopskill-repair-chain-v1\n",
+                        {
+                            "goal_id": goal_id,
+                            "goal_ref": goal_ref,
+                            "loop_ref": loop_ref,
+                            "plan_digest": plan["plan_digest"],
+                            "repair_ordinal": repair_ordinal,
+                        },
+                    )
+                    if subject_ref == repair_prefix + repair_identity[:24]:
+                        matched = True
+                        break
+                if matched:
+                    break
     if not matched:
         raise ProtocolRejection("AUTHORITY_SCOPE_MISMATCH", "plan-derived subject")
 
@@ -248,6 +279,7 @@ def validate_references(
         if collection is None or subject_ref not in snapshot.get(collection, {}):
             raise ProtocolRejection("FOREIGN_REFERENCE", subject_ref)
     if snapshot is not None:
+        allocated = command.machine_bindings.get("allocate_refs", {})
         for reference, expected in command.expected_subject_revisions.items():
             actual = _subject_record(snapshot, reference).get("revision")
             if actual != expected:
@@ -263,6 +295,11 @@ def validate_references(
                 }:
                     continue
                 if reference.startswith("receipt-"):
+                    continue
+                if (
+                    name == "target_ref"
+                    and reference == allocated.get("new_host_resource_ref")
+                ):
                     continue
                 if _kind_for_ref(reference) and reference != loop_ref:
                     _subject_record(snapshot, reference)
@@ -386,33 +423,53 @@ def policy_context(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     goals = sorted(snapshot.get("goals", {}).items())
     artifacts = sorted(snapshot.get("artifacts", {}).items())
     reviews = sorted(snapshot.get("reviews", {}).items())
+    active = [item for item in goals if item[1].get("state") == "ACTIVE"]
+    if len(active) == 1 and isinstance(active[0][1].get("chain_refs"), Mapping):
+        chain = active[0][1]["chain_refs"]
+        goal_entry = active[0]
+        artifact = snapshot.get("artifacts", {}).get(chain.get("artifact_ref"))
+        review = snapshot.get("reviews", {}).get(chain.get("review_ref"))
+        artifact_entry = (
+            (str(chain["artifact_ref"]), artifact)
+            if isinstance(artifact, Mapping)
+            else None
+        )
+        review_entry = (
+            (str(chain["review_ref"]), review)
+            if isinstance(review, Mapping)
+            else None
+        )
+    else:
+        goal_entry = None if not goals else goals[-1]
+        artifact_entry = None if not artifacts else artifacts[-1]
+        review_entry = None if not reviews else reviews[-1]
     return {
         "artifact": None
-        if not artifacts
+        if artifact_entry is None
         else {
-            "ref": artifacts[-1][0],
-            "revision": artifacts[-1][1]["revision"],
-            "state": artifacts[-1][1]["state"],
+            "ref": artifact_entry[0],
+            "revision": artifact_entry[1]["revision"],
+            "state": artifact_entry[1]["state"],
         },
         "execution": {
             "revision": snapshot["execution"]["revision"],
             "state": snapshot["execution"]["state"],
         },
         "goal": None
-        if not goals
+        if goal_entry is None
         else {
-            "ref": goals[-1][0],
-            "revision": goals[-1][1]["revision"],
-            "state": goals[-1][1]["state"],
+            "ref": goal_entry[0],
+            "revision": goal_entry[1]["revision"],
+            "state": goal_entry[1]["state"],
         },
         "loop_ref": snapshot["loop_ref"],
         "loop_revision": snapshot["loop_revision"],
         "review": None
-        if not reviews
+        if review_entry is None
         else {
-            "ref": reviews[-1][0],
-            "revision": reviews[-1][1]["revision"],
-            "state": reviews[-1][1]["state"],
+            "ref": review_entry[0],
+            "revision": review_entry[1]["revision"],
+            "state": review_entry[1]["state"],
         },
     }
 
@@ -503,7 +560,7 @@ def _create_loop(
     if storage_mode != CONTENT_STORAGE_MODE:
         raise ProtocolRejection(
             "INVALID_COMMAND",
-            "v4.1 CreateLoop requires CONTENT_ADDRESSED_V1 storage",
+            "v4 CreateLoop requires CONTENT_ADDRESSED_V1 storage",
         )
     common_invalid = (
         not isinstance(objectives, (list, tuple))
@@ -540,10 +597,14 @@ def _create_loop(
         "max_cost_minor_units"
     )
     stop_policy_digest = command.semantic_payload.get("stop_policy_digest")
+    goal_requirement = command.semantic_payload.get("goal_requirement", "required")
+    max_attempts = command.semantic_payload.get("max_attempts", 1)
+    capacity_version = command.semantic_payload.get("capacity_contract_version")
+    goal_limit = 128 if capacity_version == "loopskill-capacity-v2" else 32
     if (
         isinstance(goal_count, bool)
         or not isinstance(goal_count, int)
-        or not 1 <= goal_count <= 32
+        or not 1 <= goal_count <= goal_limit
         or active_index != 0
         or plan_revision != 0
         or not isinstance(goal_id, str)
@@ -575,8 +636,15 @@ def _create_loop(
         or isinstance(max_cost_minor_units, bool)
         or not isinstance(max_cost_minor_units, int)
         or max_cost_minor_units < 0
-        or command.semantic_payload.get("capacity_contract_version")
-        != "loopskill-capacity-v1"
+        or capacity_version not in {"loopskill-capacity-v1", "loopskill-capacity-v2"}
+        or goal_requirement not in {"required", "optional"}
+        or isinstance(max_attempts, bool)
+        or not isinstance(max_attempts, int)
+        or not 1 <= max_attempts <= 3
+        or (
+            capacity_version == "loopskill-capacity-v1"
+            and (goal_requirement != "required" or max_attempts != 1)
+        )
     ):
         raise ProtocolRejection("INVALID_COMMAND", "content plan identity drift")
     objective_digest = domain_digest("loopskill-goal-objective-v1\n", objective)
@@ -634,8 +702,10 @@ def _create_loop(
             "depends_on": None,
             "goal_id": goal_id,
             "goal_slice_digest": slice_digest,
+            "max_attempts": max_attempts,
             "objective": objective.strip(),
             "order": 0,
+            "requirement": goal_requirement,
         }
     )
     state["goal_plan"] = {
@@ -647,9 +717,7 @@ def _create_loop(
             "max_host_invocations": max_host_invocations,
             "wall_clock_seconds": wall_clock_seconds,
         },
-        "capacity_contract_version": command.semantic_payload[
-            "capacity_contract_version"
-        ],
+        "capacity_contract_version": capacity_version,
         "goal_count": goal_count,
         "max_roadmap_revisions": max_revisions,
         "mode": mode,
@@ -1497,6 +1565,9 @@ def _advance_goal(
         "FAILED": result.get("outcome") == "FAILED"
         and review.get("state") in {"PASS", "LIMITATION"},
         "LIMITATION": review.get("state") == "LIMITATION",
+        "SKIPPED": goal.get("requirement") == "optional"
+        and review.get("state") == "LIMITATION"
+        and result.get("outcome") in {"BLOCKED", "LIMITATION", "UNVERIFIABLE"},
     }
     if disposition not in allowed or not allowed[disposition]:
         raise ProtocolRejection("INVALID_TRANSITION", "Goal cannot advance")
@@ -1505,7 +1576,7 @@ def _advance_goal(
     plan = snapshot.get("goal_plan")
     next_goal_ref = None
     if (
-        disposition == "DONE"
+        disposition in {"DONE", "SKIPPED"}
         and isinstance(plan, dict)
         and plan.get("storage_mode") == CONTENT_STORAGE_MODE
     ):
@@ -1541,6 +1612,12 @@ def _advance_goal(
                 "provider_idempotency_key": chain["provider_key"],
             }
             resolved = command.machine_bindings["resolved_refs"]
+            try:
+                next_max_attempts = int(resolved.get("next_max_attempts", "1"))
+            except ValueError as exc:
+                raise ProtocolRejection(
+                    "INVALID_COMMAND", "next Goal max attempts is invalid"
+                ) from exc
             if (
                 any(allocate.get(name) != value for name, value in expected_allocate.items())
                 or resolved.get("next_goal_id") != next_goal_id
@@ -1550,6 +1627,9 @@ def _advance_goal(
                 or resolved.get("plan_index_digest") != plan["plan_index_digest"]
                 or resolved.get("workspace_identity_digest")
                 != plan["workspace_binding"]
+                or resolved.get("next_goal_requirement", "required")
+                not in {"required", "optional"}
+                or not 1 <= next_max_attempts <= 3
             ):
                 raise ProtocolRejection(
                     "INVALID_TRANSITION", "next Goal descriptor drift"
@@ -1581,8 +1661,10 @@ def _advance_goal(
                 "depends_on": goal_ref,
                 "goal_id": next_goal_id,
                 "goal_slice_digest": next_slice_digest,
+                "max_attempts": next_max_attempts,
                 "objective_digest": objective_digest,
                 "order": next_index,
+                "requirement": resolved.get("next_goal_requirement", "required"),
                 "revision": 1,
                 "state": "ACTIVE",
             }
@@ -1593,7 +1675,7 @@ def _advance_goal(
                 "goal_slice_digest": next_slice_digest,
                 "plan_digest": plan["plan_digest"],
                 "plan_index_digest": plan["plan_index_digest"],
-                "prior_disposition": "DONE",
+                "prior_disposition": disposition,
                 "storage_mode": CONTENT_STORAGE_MODE,
                 "target_ref": chain["provider_target"],
                 "workspace_binding": plan["workspace_binding"],
@@ -1641,7 +1723,7 @@ def _advance_goal(
                     external_effect_ref=chain["external_effect_ref"],
                 )
             )
-    elif disposition == "DONE" and isinstance(plan, dict):
+    elif disposition in {"DONE", "SKIPPED"} and isinstance(plan, dict):
         ordered = list(plan["ordered_goal_refs"])
         position = ordered.index(goal_ref)
         if position + 1 < len(ordered):
@@ -1735,6 +1817,8 @@ def _advance_goal(
             next_goal_ref = candidate
             events.append(_event("GoalActivated", goal_ref=candidate))
             events.append(_event("ExternalEffectPrepared", external_effect_ref=effect_ref))
+    if disposition == "SKIPPED":
+        events.append(_event("GoalSkipped", goal_ref=goal_ref))
     return snapshot, events, {
         "goal_state": disposition,
         "next_goal_ref": next_goal_ref,
@@ -1775,10 +1859,38 @@ def _record_policy_decision(
     ]
     response: dict[str, Any] = {"decision": decision}
     if decision == "CONTINUE_REPAIR":
-        reviews = list(snapshot.get("reviews", {}).values())
-        if not reviews or reviews[-1].get("state") != "REPAIR" or not fingerprint:
+        active_goals = [
+            (goal_ref, goal)
+            for goal_ref, goal in snapshot["goals"].items()
+            if goal.get("state") == "ACTIVE"
+        ]
+        if len(active_goals) != 1:
+            raise ProtocolRejection(
+                "INVALID_TRANSITION", "repair requires one active Goal"
+            )
+        goal_ref, _ = active_goals[0]
+        chain = active_goals[0][1].get("chain_refs")
+        current_review = (
+            snapshot.get("reviews", {}).get(chain.get("review_ref"))
+            if isinstance(chain, Mapping)
+            else None
+        )
+        if (
+            not isinstance(current_review, Mapping)
+            or current_review.get("state") != "REPAIR"
+            or not fingerprint
+        ):
             raise ProtocolRejection(
                 "INVALID_TRANSITION", "repair requires the current REPAIR review"
+            )
+        if policy.get("goal_ref") != goal_ref:
+            policy.update(
+                {
+                    "goal_ref": goal_ref,
+                    "last_failure_digest": None,
+                    "repair_attempts": 0,
+                    "same_failure_count": 0,
+                }
             )
         try:
             repair_budget = int(_binding(command, "resolved_refs", "repair_budget"))
@@ -1810,6 +1922,146 @@ def _record_policy_decision(
         if not exhausted:
             policy["repair_attempts"] = attempts + 1
             events.append(_event("RepairAuthorized", attempt_ordinal=attempts + 1))
+            allocate = command.machine_bindings["allocate_refs"]
+            if allocate:
+                plan = snapshot.get("goal_plan")
+                if (
+                    not isinstance(plan, Mapping)
+                    or plan.get("storage_mode") != CONTENT_STORAGE_MODE
+                    or len(active_goals) != 1
+                ):
+                    raise ProtocolRejection(
+                        "INVALID_TRANSITION", "repair scheduling requires one active content Goal"
+                    )
+                goal_ref, goal = active_goals[0]
+                goal_id = str(goal.get("goal_id", ""))
+                repair_ordinal = attempts + 1
+                repair_identity = domain_digest(
+                    "loopskill-repair-chain-v1\n",
+                    {
+                        "goal_id": goal_id,
+                        "goal_ref": goal_ref,
+                        "loop_ref": snapshot["loop_ref"],
+                        "plan_digest": plan["plan_digest"],
+                        "repair_ordinal": repair_ordinal,
+                    },
+                )
+                suffix = repair_identity[:24]
+                expected_allocate = {
+                    "new_artifact_ref": f"artifact-{suffix}",
+                    "new_attempt_ref": f"attempt-{suffix}",
+                    "new_external_effect_ref": f"external-effect-{suffix}",
+                    "new_host_resource_ref": f"host-target-{suffix}",
+                    "new_report_ref": f"report-{suffix}",
+                    "new_result_ref": f"result-{suffix}",
+                    "new_review_ref": f"review-{suffix}",
+                    "provider_idempotency_key": domain_digest(
+                        "loopskill-provider-idempotency-v1\n",
+                        {"repair_chain": repair_identity},
+                    ),
+                }
+                if dict(allocate) != expected_allocate:
+                    raise ProtocolRejection(
+                        "INVALID_COMMAND", "repair chain identity drift"
+                    )
+                resolved = command.machine_bindings["resolved_refs"]
+                target_ref = f"host-target-{suffix}"
+                required_resolved = {
+                    "artifact_baseline_blob_digest",
+                    "artifact_profile",
+                    "provider_request_digest",
+                    "target_ref",
+                    "workspace_identity_digest",
+                }
+                if (
+                    not required_resolved <= set(resolved)
+                    or resolved["target_ref"] != target_ref
+                    or resolved["workspace_identity_digest"] != plan["workspace_binding"]
+                    or resolved["artifact_profile"]
+                    not in {"existing_git", "non_git", "new_git"}
+                    or any(
+                        not isinstance(resolved[name], str) or len(resolved[name]) != 64
+                        for name in (
+                            "artifact_baseline_blob_digest",
+                            "provider_request_digest",
+                            "workspace_identity_digest",
+                        )
+                    )
+                    or expected_allocate["new_attempt_ref"] in snapshot["attempts"]
+                    or expected_allocate["new_external_effect_ref"]
+                    in snapshot["external_effects"]
+                ):
+                    raise ProtocolRejection(
+                        "INVALID_COMMAND", "repair materialization is incomplete"
+                    )
+                chain = {
+                    "artifact_ref": expected_allocate["new_artifact_ref"],
+                    "attempt_ref": expected_allocate["new_attempt_ref"],
+                    "external_effect_ref": expected_allocate["new_external_effect_ref"],
+                    "goal_ref": goal_ref,
+                    "host_resource_ref": expected_allocate["new_host_resource_ref"],
+                    "provider_key": expected_allocate["provider_idempotency_key"],
+                    "provider_target": target_ref,
+                    "report_ref": expected_allocate["new_report_ref"],
+                    "result_ref": expected_allocate["new_result_ref"],
+                    "review_ref": expected_allocate["new_review_ref"],
+                }
+                goal["chain_refs"] = chain
+                effect_ref = chain["external_effect_ref"]
+                attempt_ref = chain["attempt_ref"]
+                snapshot["external_effects"][effect_ref] = {
+                    "action": "create_task",
+                    "artifact_baseline_blob_digest": resolved[
+                        "artifact_baseline_blob_digest"
+                    ],
+                    "artifact_profile": resolved["artifact_profile"],
+                    "attempt_ref": attempt_ref,
+                    "goal_ref": goal_ref,
+                    "host_resource_ref": chain["host_resource_ref"],
+                    "revision": 1,
+                    "state": "ATTEMPT_COMMITTED",
+                    "target_ref": target_ref,
+                    "workspace_identity_digest": resolved[
+                        "workspace_identity_digest"
+                    ],
+                }
+                snapshot["attempts"][attempt_ref] = {
+                    "action": "create_task",
+                    "automatic_budget_consumed": True,
+                    "executor_actor_ref": command.actor_ref,
+                    "executor_grant_ref": command.authority_grant_ref,
+                    "external_effect_ref": effect_ref,
+                    "ordinal": len(snapshot["attempts"]) + 1,
+                    "provider_idempotency_key": chain["provider_key"],
+                    "provider_request": {
+                        "active_index": int(plan["active_index"]),
+                        "artifact_digest": resolved[
+                            "artifact_baseline_blob_digest"
+                        ],
+                        "goal_id": goal_id,
+                        "goal_slice_digest": goal["goal_slice_digest"],
+                        "plan_digest": plan["plan_digest"],
+                        "plan_index_digest": plan["plan_index_digest"],
+                        "prior_disposition": "REPAIR",
+                        "storage_mode": CONTENT_STORAGE_MODE,
+                        "target_ref": target_ref,
+                        "workspace_binding": plan["workspace_binding"],
+                    },
+                    "provider_request_digest": resolved["provider_request_digest"],
+                    "revision": 1,
+                    "state": "COMMITTED",
+                    "subject_kind": "ExternalEffectRef",
+                    "subject_ref": effect_ref,
+                    "target_ref": target_ref,
+                }
+                policy["state"] = "REPAIR_SCHEDULED"
+                events.append(
+                    _event(
+                        "RepairAttemptScheduled",
+                        attempt_ref=attempt_ref,
+                        goal_ref=goal_ref,
+                    )
+                )
         else:
             events.append(_event("RepairExhausted"))
         response.update(
@@ -1842,17 +2094,29 @@ def _pause_loop(
     reason = command.semantic_payload.get("reason")
     if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
         raise ProtocolRejection("INVALID_COMMAND", "pause reason is invalid")
+    wait_kind = command.semantic_payload.get("wait_kind")
+    if wait_kind is not None and wait_kind not in {
+        "BLOCKED",
+        "BUDGET",
+        "FAILURE",
+        "HUMAN",
+        "REPAIR",
+        "TIME",
+    }:
+        raise ProtocolRejection("INVALID_COMMAND", "pause wait kind is invalid")
     reason_digest = domain_digest("loopskill-pause-reason-v1\n", reason)
-    execution.update(
-        {
-            "pause_reason_digest": reason_digest,
-            "revision": execution["revision"] + 1,
-            "state": "PAUSED",
-        }
-    )
-    return snapshot, [_event("LoopPaused", reason_digest=reason_digest)], {
-        "execution_state": "PAUSED"
+    paused = {
+        "pause_reason_digest": reason_digest,
+        "revision": execution["revision"] + 1,
+        "state": "PAUSED",
     }
+    if wait_kind is not None:
+        paused["wait_kind"] = wait_kind
+    execution.update(paused)
+    events = [_event("LoopPaused", reason_digest=reason_digest)]
+    if wait_kind == "BUDGET":
+        events.insert(0, _event("BudgetWaiting"))
+    return snapshot, events, {"execution_state": "PAUSED"}
 
 
 def _resume_loop(
@@ -1864,11 +2128,114 @@ def _resume_loop(
     execution = snapshot["execution"]
     if execution["state"] != "PAUSED":
         raise ProtocolRejection("INVALID_TRANSITION", "only a paused loop can resume")
+    payload = command.semantic_payload
+    wait_kind = execution.get("wait_kind")
+    if wait_kind == "BUDGET":
+        required = {
+            "new_max_host_invocations",
+            "new_wall_clock_seconds",
+            "prior_budget_digest",
+            "reason_digest",
+        }
+        if set(payload) != required:
+            raise ProtocolRejection(
+                "INVALID_COMMAND", "budget waiting requires one bound extension"
+            )
+        plan = snapshot.get("goal_plan")
+        if (
+            not isinstance(plan, dict)
+            or plan.get("storage_mode") != CONTENT_STORAGE_MODE
+            or not isinstance(plan.get("budget"), Mapping)
+        ):
+            raise ProtocolRejection(
+                "INVALID_TRANSITION", "budget extension requires a Plan v2 Loop"
+            )
+        budget = dict(plan["budget"])
+        current_max = budget.get("max_host_invocations")
+        current_wall = budget.get("wall_clock_seconds")
+        new_max = payload["new_max_host_invocations"]
+        new_wall = payload["new_wall_clock_seconds"]
+        reason_digest = payload["reason_digest"]
+        if (
+            isinstance(current_max, bool)
+            or not isinstance(current_max, int)
+            or isinstance(current_wall, bool)
+            or not isinstance(current_wall, int)
+            or isinstance(new_max, bool)
+            or not isinstance(new_max, int)
+            or isinstance(new_wall, bool)
+            or not isinstance(new_wall, int)
+            or not current_max <= new_max <= 384
+            or not current_wall <= new_wall <= 2_592_000
+            or (new_max == current_max and new_wall == current_wall)
+            or not isinstance(reason_digest, str)
+            or len(reason_digest) != 64
+            or any(character not in "0123456789abcdef" for character in reason_digest)
+        ):
+            raise ProtocolRejection("INVALID_COMMAND", "budget extension is invalid")
+        expected_prior = domain_digest(
+            "loopskill-runtime-budget-v1\n",
+            {
+                "max_host_invocations": current_max,
+                "wall_clock_seconds": current_wall,
+            },
+        )
+        if payload["prior_budget_digest"] != expected_prior:
+            raise ProtocolRejection(
+                "STALE_SUBJECT_REVISION", "runtime budget changed before extension"
+            )
+        budget.update(
+            {
+                "max_host_invocations": new_max,
+                "wall_clock_seconds": new_wall,
+            }
+        )
+        plan["budget"] = budget
+        extension_digest = domain_digest(
+            "loopskill-budget-extension-v1\n",
+            {
+                "loop_ref": snapshot["loop_ref"],
+                "new_max_host_invocations": new_max,
+                "new_wall_clock_seconds": new_wall,
+                "prior_budget_digest": expected_prior,
+                "reason_digest": reason_digest,
+            },
+        )
+        plan["budget_extension"] = {
+            "extension_digest": extension_digest,
+            "reason_digest": reason_digest,
+            "revision": int(plan.get("budget_extension", {}).get("revision", 0))
+            + 1,
+        }
+        events = [_event("BudgetExtended", extension_digest=extension_digest)]
+    elif wait_kind in {"HUMAN", "TIME"}:
+        if set(payload) != {"gate_digest"}:
+            raise ProtocolRejection(
+                "INVALID_COMMAND", "controller gate waiting requires bound evidence"
+            )
+        gate_digest = payload["gate_digest"]
+        if (
+            not isinstance(gate_digest, str)
+            or len(gate_digest) != 64
+            or any(character not in "0123456789abcdef" for character in gate_digest)
+        ):
+            raise ProtocolRejection(
+                "INVALID_COMMAND", "controller gate digest is invalid"
+            )
+        events = [_event("ControllerGateSatisfied", gate_digest=gate_digest)]
+    elif payload:
+        raise ProtocolRejection(
+            "INVALID_COMMAND", "budget fields are invalid outside budget waiting"
+        )
+    else:
+        events = []
     execution.pop("pause_reason_digest", None)
+    execution.pop("wait_kind", None)
     execution.update(
         {"revision": execution["revision"] + 1, "state": "ACTIVE"}
     )
-    return snapshot, [_event("LoopResumed")], {"execution_state": "ACTIVE"}
+    events.append(_event("LoopResumed"))
+    return snapshot, events, {"execution_state": "ACTIVE"}
 
 
 def _stop_loop(
@@ -1926,14 +2293,15 @@ def _prepare_finalization(
     unfinished = [
         goal_ref
         for goal_ref, goal in snapshot["goals"].items()
-        if goal.get("state") not in {"DONE", "FAILED", "LIMITATION", "STOPPED"}
+        if goal.get("state")
+        not in {"DONE", "SKIPPED", "FAILED", "LIMITATION", "STOPPED"}
     ]
     if unfinished:
         raise ProtocolRejection(
             "FINALIZATION_PRECONDITION_FAILED", "Goal plan is not terminal"
         )
     result_outcome = snapshot["results"][chain["result_ref"]]["outcome"]
-    if goal_state not in {"DONE", "FAILED", "LIMITATION"}:
+    if goal_state not in {"DONE", "SKIPPED", "FAILED", "LIMITATION"}:
         raise ProtocolRejection(
             "FINALIZATION_PRECONDITION_FAILED", "current chain incomplete"
         )
@@ -1951,6 +2319,16 @@ def _prepare_finalization(
         ):
             raise ProtocolRejection(
                 "FINALIZATION_PRECONDITION_FAILED", "strict success unavailable"
+            )
+    elif disposition == "SUCCEEDED_WITH_LIMITATIONS":
+        if (
+            not any(goal.get("state") == "SKIPPED" for goal in snapshot["goals"].values())
+            or goal_state not in {"DONE", "SKIPPED"}
+            or subject_state != "OBSERVED"
+        ):
+            raise ProtocolRejection(
+                "FINALIZATION_PRECONDITION_FAILED",
+                "success-with-limitations chain is inconsistent",
             )
     elif disposition == "FAILED":
         if goal_state != "FAILED" or result_outcome != "FAILED":
@@ -2024,7 +2402,10 @@ def _close_execution(
             "FINALIZATION_PRECONDITION_FAILED", "subject chain changed"
         )
     strict = receipt.trust_class == "strict" and receipt.outcome == "acknowledged"
-    if finalization["disposition"] == "SUCCEEDED" and not strict:
+    if finalization["disposition"] in {
+        "SUCCEEDED",
+        "SUCCEEDED_WITH_LIMITATIONS",
+    } and not strict:
         raise ProtocolRejection(
             "FINALIZATION_PRECONDITION_FAILED", "strict receipt required"
         )

@@ -12,6 +12,7 @@ from .service import (
     confirm_loop,
     control_loop,
     diagnostics,
+    extend_budget,
     intake_loop,
     intake_report_loop,
     prepare_loop,
@@ -19,10 +20,12 @@ from .service import (
     record_external_observation,
     review_prepared,
     revise_goal_plan,
+    satisfy_gate,
     start_loop,
     steer_loop,
     status,
     sync_loop,
+    worker_profile,
 )
 
 __all__ = [
@@ -34,6 +37,7 @@ __all__ = [
     "confirm_loop",
     "control_loop",
     "diagnostics",
+    "extend_budget",
     "intake_loop",
     "intake_report_loop",
     "prepare_loop",
@@ -41,8 +45,10 @@ __all__ = [
     "record_external_observation",
     "review_prepared",
     "revise_goal_plan",
+    "satisfy_gate",
     "start_loop",
     "steer_loop",
     "status",
     "sync_loop",
+    "worker_profile",
 ]

@@ -9,8 +9,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from loop_architect.v4_alpha.kernel import AuthorityContext, policy_context
+from loop_architect.v4_alpha.kernel import (
+    AuthorityContext,
+    policy_context,
+    policy_context_digest,
+)
 from loop_architect.v4_adapters.codex import CodexHostAdapter, HostUnavailable
+from loop_architect.v4_adapters.codex.adapter import HOST_SCHEMA_VERSION
 from loop_architect.v4_adapters.codex.contract import CodexProviderPort
 from loop_architect.v4_artifacts import (
     ArtifactCaptureError,
@@ -19,6 +24,7 @@ from loop_architect.v4_artifacts import (
     persist_baseline_blobs,
     persist_capture_blobs,
     prepare_artifact_baseline,
+    verifier_capability,
     verify_artifact,
     workspace_identity,
 )
@@ -26,6 +32,7 @@ from loop_architect.v4_alpha.protocol import (
     ActorRef,
     AuthorityGrant,
     AuthorityGrantV2,
+    CAPABILITY_NAMES,
     CAPACITY_CONTRACT,
     CommandEnvelope,
     classify_persisted_storage_mode,
@@ -43,6 +50,7 @@ from loop_architect.v4_alpha.protocol import (
     domain_digest,
     parse_json_bytes,
     snapshot_digest,
+    result_payload_schema,
     validate_result_payload,
 )
 from loop_architect.v4_alpha.plan_codec import (
@@ -59,6 +67,7 @@ from loop_architect.v4_alpha.plan_codec import (
     max_collection_members,
     parse_plan_bytes,
     plan_digest,
+    repair_chain,
     validate_plan_index,
 )
 from loop_architect.v4_entry.preparation import (
@@ -86,6 +95,114 @@ DEFAULT_CODEX_RECEIPT_TRUST = "local-codex-adapter"
 LOCAL_ARTIFACT_ISSUER = "loopskill-local-artifact-verifier-v1"
 LOCAL_ARTIFACT_TRUST = "local-artifact-capability"
 STORE_FILENAME = "loopskill-v4.sqlite3"
+
+
+class _LocalGateProvider:
+    """Strict process-local evidence adapter for an already-authorized controller gate."""
+
+    def __init__(
+        self,
+        gate_digest: str,
+        *,
+        clock: Callable[[], datetime],
+        outcome: str = "PASS",
+    ) -> None:
+        self.gate_digest = gate_digest
+        self.clock = clock
+        self.outcome = outcome
+        self.record: dict[str, Any] | None = None
+
+    def capability_snapshot(self) -> Mapping[str, Any]:
+        now = self.clock()
+        rows = []
+        for name in CAPABILITY_NAMES:
+            rows.append(
+                {
+                    "assurance": "STRICT",
+                    "availability": "AVAILABLE",
+                    "details": {
+                        "expires_at": _iso(now + timedelta(minutes=5)),
+                        "identity_ref": "local-gate-" + self.gate_digest[:24],
+                        "issuer_ref": DEFAULT_CODEX_RECEIPT_ISSUER,
+                        "issuer_trust": DEFAULT_CODEX_RECEIPT_TRUST,
+                        "observed_at": _iso(now - timedelta(seconds=1)),
+                        "source": "loopskill-local-gate-v1",
+                    },
+                    "name": name,
+                    "receipt_ref": "capability-gate-"
+                    + domain_digest(
+                        "loopskill-local-gate-capability-v1\n",
+                        {"gate_digest": self.gate_digest, "name": name},
+                    )[:24],
+                }
+            )
+        return {"capabilities": rows, "schema_version": HOST_SCHEMA_VERSION}
+
+    def invoke(
+        self,
+        action: str,
+        payload: Mapping[str, Any],
+        provider_idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        provider_id = "local-gate-" + self.gate_digest[:24]
+        self.record = {
+            "action": action,
+            "idempotency_key": provider_idempotency_key,
+            "provider_id": provider_id,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "status": "OBSERVED",
+            "subject_id": payload["target_ref"],
+            "trust": "authoritative",
+        }
+        return {**self.record, "status": "ACCEPTED", "trust": "cooperative"}
+
+    def readback(
+        self, action: str, provider_idempotency_key: str
+    ) -> Mapping[str, Any] | None:
+        if (
+            self.record is None
+            or self.record["action"] != action
+            or self.record["idempotency_key"] != provider_idempotency_key
+        ):
+            return None
+        return dict(self.record)
+
+    def read_resource(self, resource_kind: str, provider_id: str) -> Mapping[str, Any]:
+        matched = self.record is not None and self.record["provider_id"] == provider_id
+        return {
+            "provider_id": provider_id,
+            "resource_kind": resource_kind,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "state": "TERMINAL" if matched else "NOT_FOUND",
+            "trust": "authoritative" if matched else "none",
+        }
+
+    def read_task_result(self, provider_id: str) -> Mapping[str, Any]:
+        if self.record is None or self.record["provider_id"] != provider_id:
+            raise HostUnavailable("Local gate evidence is unavailable")
+        result = {
+            "outcome": self.outcome,
+            "summary": (
+                "The bound controller gate was satisfied."
+                if self.outcome == "PASS"
+                else "The optional capability is unavailable in the prepared profile."
+            ),
+        }
+        schema_digest = domain_digest(
+            "loopskill-codex-result-schema-v1\n", result_payload_schema()
+        )
+        return {
+            "provider_id": provider_id,
+            "result": result,
+            "result_digest": domain_digest(
+                "loopskill-host-result-v1\n",
+                {"result": result, "result_schema_digest": schema_digest},
+            ),
+            "result_schema_digest": schema_digest,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "status": "COMPLETED",
+            "trust": "authoritative",
+        }
 
 
 class EntryError(Exception):
@@ -632,6 +749,65 @@ def start_loop(
         ) from exc
 
 
+def _pause_for_provider_budget(
+    store: SQLiteStore,
+    snapshot: Mapping[str, Any],
+    *,
+    loop_ref: str,
+    provider: CodexProviderPort,
+    attempt: Any,
+    clock: Callable[[], datetime],
+) -> UserFacingStatus | None:
+    row = store.outbox_attempt(attempt.attempt_ref)
+    invocation_state = None if row is None else row.get("invocation_state")
+    checker = (
+        getattr(provider, "recovery_budget_block_reason", None)
+        if invocation_state in {"STARTED", "UNKNOWN", "UNVERIFIABLE"}
+        else getattr(provider, "budget_block_reason", None)
+    )
+    if not callable(checker):
+        return None
+    reason = (
+        checker(attempt.payload, attempt.provider_idempotency_key)
+        if invocation_state in {"STARTED", "UNKNOWN", "UNVERIFIABLE"}
+        else checker(attempt.payload)
+    )
+    if reason is None:
+        return None
+    if not isinstance(reason, str) or not reason:
+        raise EntryError(
+            "USER_INTERNAL_ERROR",
+            "The runtime budget preflight returned invalid evidence.",
+            "Preserve the Loop and inspect the Provider budget evidence.",
+        )
+    if snapshot["execution"]["state"] == "ACTIVE":
+        store.apply(
+            _machine_command(
+                store,
+                snapshot,
+                command_type="PauseLoop",
+                operation_label="budget-wait-" + str(snapshot["loop_revision"]),
+                subject_kind="LoopRef",
+                subject_ref=loop_ref,
+                expected_subject_revisions={
+                    "execution": snapshot["execution"]["revision"]
+                },
+                machine_bindings={
+                    "allocate_refs": {},
+                    "receipt_refs": {},
+                    "resolved_refs": {},
+                },
+                semantic_payload={
+                    "reason": "Plan-bound runtime budget requires an extension.",
+                    "wait_kind": "BUDGET",
+                },
+                clock=clock,
+            )
+        )
+        store.verify_integrity()
+    return _status_from_store(store, loop_ref)
+
+
 def _run_startup_provider(
     path: Path,
     provider: CodexProviderPort,
@@ -640,6 +816,7 @@ def _run_startup_provider(
     issuer_trust: str,
     clock: Callable[[], datetime],
     workspace_root: Path | str | None,
+    allow_gate_execution: bool = False,
 ) -> UserFacingStatus:
     with SQLiteStore(path) as store:
         descriptors = store.loop_descriptors()
@@ -665,6 +842,43 @@ def _run_startup_provider(
                 "Inspect diagnostics and preserve the store.",
             )
         effect_ref, effect = next(iter(effects.items()))
+        active_goals = [
+            goal_ref
+            for goal_ref, goal_state in snapshot["goals"].items()
+            if goal_state.get("state") == "ACTIVE"
+        ]
+        if len(active_goals) == 1:
+            content = _content_goal(store, snapshot, active_goals[0])
+            if (
+                not allow_gate_execution
+                and
+                content is not None
+                and content[0].get("schema") == "loopskill-plan-v2"
+                and content[2].get("gate") in {"human", "time"}
+            ):
+                if snapshot["execution"]["state"] == "ACTIVE":
+                    store.apply(
+                        _machine_command(
+                            store,
+                            snapshot,
+                            command_type="PauseLoop",
+                            operation_label="wait-gate-" + content[2]["goal_id"],
+                            subject_kind="LoopRef",
+                            subject_ref=loop_ref,
+                            expected_subject_revisions={},
+                            machine_bindings={
+                                "allocate_refs": {},
+                                "receipt_refs": {},
+                                "resolved_refs": {},
+                            },
+                            semantic_payload={
+                                "reason": "Controller gate requires bound evidence.",
+                                "wait_kind": content[2]["gate"].upper(),
+                            },
+                            clock=clock,
+                        )
+                    )
+                return _status_from_store(store, loop_ref)
         expected_workspace = effect.get("workspace_identity_digest")
         expected_profile = effect.get("artifact_profile")
         if (
@@ -688,8 +902,23 @@ def _run_startup_provider(
                 "The startup Attempt is unavailable.",
                 "Inspect diagnostics and preserve the store.",
             )
+        optional_provider = _optional_skip_provider(
+            store, snapshot, effect=effect, clock=clock
+        )
+        effective_provider = optional_provider or provider
+        if optional_provider is None:
+            budget_wait = _pause_for_provider_budget(
+                store,
+                snapshot,
+                loop_ref=loop_ref,
+                provider=provider,
+                attempt=attempt,
+                clock=clock,
+            )
+            if budget_wait is not None:
+                return budget_wait
         receipt = CodexHostAdapter(
-            provider,
+            effective_provider,
             store,
             executor_ref="loopskill-entry-executor-v1",
             issuer_ref=issuer_ref,
@@ -704,7 +933,15 @@ def _run_startup_provider(
             and receipt.outcome != "observed"
         ):
             return _status_from_store(store, loop_ref)
-    return record_external_observation(receipt, root=path.parent)
+    view = record_external_observation(receipt, root=path.parent)
+    if optional_provider is not None:
+        return sync_loop(
+            root=path.parent,
+            host_provider=optional_provider,
+            workspace_root=workspace_root,
+            clock=clock,
+        )
+    return view
 
 
 def _status_from_store(store: SQLiteStore, loop_ref: str) -> UserFacingStatus:
@@ -730,7 +967,38 @@ def _status_from_store(store: SQLiteStore, loop_ref: str) -> UserFacingStatus:
     result = "Pending"
     if snapshot["execution"]["state"] == "PAUSED":
         progress = "Paused"
+        wait_kind = snapshot["execution"].get("wait_kind")
         next_actions = ("Resume or stop the loop after reviewing its boundary.",)
+        active = [
+            goal_ref
+            for goal_ref, goal_state in snapshot["goals"].items()
+            if goal_state.get("state") == "ACTIVE"
+        ]
+        if len(active) == 1:
+            content = _content_goal(store, snapshot, active[0])
+            gate = None if content is None else content[2].get("gate")
+            if gate == "human":
+                progress = "Waiting"
+                result = "WAITING_HUMAN"
+                next_actions = (
+                    "Record one digest-bound human approval, then continue this Loop.",
+                )
+            elif gate == "time":
+                progress = "Waiting"
+                result = "WAITING_TIME"
+                next_actions = ("Continue after the declared real-time boundary.",)
+        if wait_kind in {"BLOCKED", "FAILURE"}:
+            progress = "Waiting"
+            result = "WAITING"
+            next_actions = (
+                "Resolve the recorded blocker, then continue this Loop.",
+            )
+        elif wait_kind == "BUDGET":
+            progress = "Waiting"
+            result = "WAITING_BUDGET"
+            next_actions = (
+                "Authorize a digest-bound budget extension before continuing.",
+            )
     if "UNKNOWN" in delivery_states or "UNKNOWN" in external_effect_states:
         progress = "Needs attention"
         limitations = ("An external outcome is unknown.",)
@@ -745,12 +1013,25 @@ def _status_from_store(store: SQLiteStore, loop_ref: str) -> UserFacingStatus:
         )
     reviews = list(snapshot.get("reviews", {}).values())
     if reviews and reviews[-1].get("state") == "REPAIR":
-        progress = "Needs attention"
-        result = "Repair required"
-        limitations = ("The verified acceptance criterion was not satisfied.",)
-        next_actions = (
-            "Choose a bounded repair successor, wait, or stop.",
-        )
+        repair_state = snapshot.get("policy", {}).get("state")
+        if repair_state == "REPAIR_SCHEDULED":
+            progress = "Active"
+            result = "Repair scheduled"
+            limitations = ()
+            next_actions = ("Continue the current Loop to run its bounded repair.",)
+        else:
+            progress = (
+                "Waiting"
+                if snapshot["execution"]["state"] == "PAUSED"
+                else "Needs attention"
+            )
+            result = (
+                "WAITING_REPAIR"
+                if snapshot["execution"]["state"] == "PAUSED"
+                else "Repair required"
+            )
+            limitations = ("The verified acceptance criterion was not satisfied.",)
+            next_actions = ("Resume after reviewing the bounded repair evidence.",)
     if snapshot["execution"]["state"] == "TERMINAL":
         progress = "Finished"
         result = snapshot["execution"]["disposition"] or "Unknown"
@@ -761,6 +1042,10 @@ def _status_from_store(store: SQLiteStore, loop_ref: str) -> UserFacingStatus:
             )
         elif result == "FAILED":
             limitations = ("The Host task reported a failed result.",)
+        elif result == "SUCCEEDED_WITH_LIMITATIONS":
+            limitations = (
+                "The required Goals passed; at least one optional Goal was skipped with evidence.",
+            )
     return UserFacingStatus(
         goal=descriptor["goal"],
         progress=progress,
@@ -773,7 +1058,7 @@ def _status_from_store(store: SQLiteStore, loop_ref: str) -> UserFacingStatus:
 def status(*, root: Path | str) -> UserFacingStatus:
     path = _existing_store_path(root)
     try:
-        with SQLiteStore(path) as store:
+        with SQLiteStore(path, readonly=True) as store:
             descriptors = store.loop_descriptors()
             if len(descriptors) != 1:
                 raise EntryError(
@@ -836,6 +1121,16 @@ def control_loop(
                 or (command_type == "StopLoop" and execution_state == "TERMINAL")
             ):
                 return _status_from_store(store, loop_ref)
+            if (
+                command_type == "ResumeLoop"
+                and snapshot["execution"].get("wait_kind")
+                in {"BUDGET", "HUMAN", "TIME"}
+            ):
+                raise EntryError(
+                    "USER_INPUT_INVALID",
+                    "This wait cannot be bypassed by a generic resume.",
+                    "Use the bound approval, real-time, or budget continuation action.",
+                )
             semantic_payload = {"reason": reason.strip()} if command_type != "ResumeLoop" else {}
             store.apply(
                 _machine_command(
@@ -867,6 +1162,163 @@ def control_loop(
         ) from exc
 
 
+def _resume_controller_gate(
+    *,
+    root: Path | str,
+    gate_digest: str,
+    clock: Callable[[], datetime],
+) -> UserFacingStatus:
+    """Resume one human/time wait only with its already verified evidence digest."""
+
+    path = _existing_store_path(root)
+    with SQLiteStore(path) as store:
+        descriptors = store.loop_descriptors()
+        if len(descriptors) != 1:
+            raise EntryError(
+                "USER_STORE_UNAVAILABLE",
+                "The selected data location is not one Loop.",
+                "Select one exact Loop and try again.",
+            )
+        loop_ref = descriptors[0]["loop_ref"]
+        snapshot = store.snapshot(loop_ref)
+        if (
+            snapshot is None
+            or snapshot["execution"].get("state") != "PAUSED"
+            or snapshot["execution"].get("wait_kind") not in {"HUMAN", "TIME"}
+        ):
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The Loop is not waiting for bound controller-gate evidence.",
+                "Read status before supplying gate evidence.",
+            )
+        store.apply(
+            _machine_command(
+                store,
+                snapshot,
+                command_type="ResumeLoop",
+                operation_label="satisfy-gate-" + gate_digest[:16],
+                subject_kind="LoopRef",
+                subject_ref=loop_ref,
+                expected_subject_revisions={
+                    "execution": snapshot["execution"]["revision"]
+                },
+                machine_bindings={
+                    "allocate_refs": {},
+                    "receipt_refs": {},
+                    "resolved_refs": {},
+                },
+                semantic_payload={"gate_digest": gate_digest},
+                clock=clock,
+            )
+        )
+        store.verify_integrity()
+        return _status_from_store(store, loop_ref)
+
+
+def extend_budget(
+    *,
+    root: Path | str,
+    new_max_host_invocations: int,
+    new_wall_clock_seconds: int,
+    reason: str,
+    clock: Callable[[], datetime] = _now,
+) -> UserFacingStatus:
+    """Resume one budget-waiting Plan v2 Loop with a digest-bound increase."""
+
+    if (
+        isinstance(new_max_host_invocations, bool)
+        or not isinstance(new_max_host_invocations, int)
+        or isinstance(new_wall_clock_seconds, bool)
+        or not isinstance(new_wall_clock_seconds, int)
+        or not reason.strip()
+        or len(reason) > 512
+    ):
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The runtime budget extension is invalid.",
+            "Provide larger bounded invocation and active-compute limits with a reason.",
+        )
+    path = _existing_store_path(root)
+    try:
+        with SQLiteStore(path) as store:
+            descriptors = store.loop_descriptors()
+            if len(descriptors) != 1:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The selected data location is not one Loop.",
+                    "Select one exact Loop and try again.",
+                )
+            loop_ref = descriptors[0]["loop_ref"]
+            snapshot = store.snapshot(loop_ref)
+            if (
+                snapshot is None
+                or snapshot["execution"].get("state") != "PAUSED"
+                or snapshot["execution"].get("wait_kind") != "BUDGET"
+                or not isinstance(snapshot.get("goal_plan"), Mapping)
+                or not isinstance(snapshot["goal_plan"].get("budget"), Mapping)
+            ):
+                raise EntryError(
+                    "USER_INPUT_INVALID",
+                    "This Loop is not waiting for a runtime budget extension.",
+                    "Inspect status and extend only the current budget-bound wait.",
+                )
+            budget = snapshot["goal_plan"]["budget"]
+            prior_budget_digest = domain_digest(
+                "loopskill-runtime-budget-v1\n",
+                {
+                    "max_host_invocations": budget["max_host_invocations"],
+                    "wall_clock_seconds": budget["wall_clock_seconds"],
+                },
+            )
+            reason_digest = domain_digest(
+                "loopskill-budget-extension-reason-v1\n", reason.strip()
+            )
+            extension_request_digest = domain_digest(
+                "loopskill-budget-extension-request-v1\n",
+                {
+                    "new_max_host_invocations": new_max_host_invocations,
+                    "new_wall_clock_seconds": new_wall_clock_seconds,
+                    "prior_budget_digest": prior_budget_digest,
+                    "reason_digest": reason_digest,
+                },
+            )
+            store.apply(
+                _machine_command(
+                    store,
+                    snapshot,
+                    command_type="ResumeLoop",
+                    operation_label="extend-budget-" + extension_request_digest[:16],
+                    subject_kind="LoopRef",
+                    subject_ref=loop_ref,
+                    expected_subject_revisions={
+                        "execution": snapshot["execution"]["revision"]
+                    },
+                    machine_bindings={
+                        "allocate_refs": {},
+                        "receipt_refs": {},
+                        "resolved_refs": {},
+                    },
+                    semantic_payload={
+                        "new_max_host_invocations": new_max_host_invocations,
+                        "new_wall_clock_seconds": new_wall_clock_seconds,
+                        "prior_budget_digest": prior_budget_digest,
+                        "reason_digest": reason_digest,
+                    },
+                    clock=clock,
+                )
+            )
+            store.verify_integrity()
+            return _status_from_store(store, loop_ref)
+    except EntryError:
+        raise
+    except (OSError, PersistenceError, ProtocolRejection) as exc:
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "LoopSkill rejected the runtime budget extension.",
+            "Increase only the current limits and keep the confirmed task scope unchanged.",
+        ) from exc
+
+
 def policy_view(*, root: Path | str) -> Mapping[str, Any]:
     """Read the optional policy projection without granting it write authority."""
     from loop_architect.v4_policy import (
@@ -880,7 +1332,7 @@ def policy_view(*, root: Path | str) -> Mapping[str, Any]:
     )
 
     path = _existing_store_path(root)
-    with SQLiteStore(path) as store:
+    with SQLiteStore(path, readonly=True) as store:
         descriptors = store.loop_descriptors()
         if len(descriptors) != 1:
             raise EntryError(
@@ -1560,7 +2012,12 @@ def _local_artifact_receipt(
                 )
             capture = capture_artifact_transition(workspace_root, baseline)
             persist_capture_blobs(store, capture)
-            verification = verify_artifact(store, capture, acceptance_criteria)
+            verification = verify_artifact(
+                store,
+                capture,
+                acceptance_criteria,
+                workspace_root=workspace_root,
+            )
             capture_state = "CAPTURED"
             artifact_digest = capture.artifact_digest
             manifest_digest = capture.manifest_digest
@@ -1606,6 +2063,338 @@ def _local_artifact_receipt(
     }, verification_state
 
 
+def _content_goal(
+    store: SQLiteStore,
+    snapshot: Mapping[str, Any],
+    goal_ref: str,
+) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]] | None:
+    plan_state = snapshot.get("goal_plan")
+    if (
+        not isinstance(plan_state, Mapping)
+        or plan_state.get("storage_mode") != "CONTENT_ADDRESSED_V1"
+    ):
+        return None
+    plan_raw = store.get_blob(str(plan_state["plan_digest"]))
+    index_raw = store.get_blob(str(plan_state["plan_index_digest"]))
+    if plan_raw is None or index_raw is None:
+        raise EntryError(
+            "STORE_RECOVERY_REQUIRED",
+            "The current Goal plan blobs are unavailable.",
+            "Preserve the Store and restore an exact private backup.",
+        )
+    plan_document = parse_plan_bytes(plan_raw)
+    index_document = validate_plan_index(parse_json_bytes(index_raw), plan_document)
+    goal_state = snapshot["goals"].get(goal_ref)
+    if not isinstance(goal_state, Mapping):
+        raise EntryError(
+            "STORE_RECOVERY_REQUIRED",
+            "The active Goal descriptor is unavailable.",
+            "Preserve the Store and inspect its immutable evidence.",
+        )
+    goal_id = str(goal_state.get("goal_id", ""))
+    goal_document = next(
+        (goal for goal in plan_document["goals"] if goal["goal_id"] == goal_id),
+        None,
+    )
+    if goal_document is None:
+        raise EntryError(
+            "STORE_RECOVERY_REQUIRED",
+            "The active Goal is absent from the immutable plan.",
+            "Preserve the Store and inspect its immutable evidence.",
+        )
+    return plan_document, index_document, goal_document
+
+
+def _unavailable_goal_capabilities(
+    plan: Mapping[str, Any],
+    goal: Mapping[str, Any],
+    *,
+    artifact_profile: str,
+) -> tuple[str, ...]:
+    profile = plan["worker_profile"]
+    available = {"workspace-write"}
+    if artifact_profile != "UNBOUND":
+        available.add("artifact-capture")
+    if artifact_profile in {"existing_git", "new_git"}:
+        available.add("git")
+    if profile["network_access"]:
+        available.add("network")
+    if profile["local_verification"]:
+        available.update({"local-command", "local-http"})
+    declared = set(goal["capabilities"])
+    for verifier in goal["verifiers"]:
+        try:
+            capability = verifier_capability(verifier)
+        except (ArtifactCaptureError, ValueError):
+            capability = None
+        if capability is None:
+            declared.add("unsupported-verifier")
+        else:
+            declared.add(capability)
+    if goal["gate"] in {"human", "time"}:
+        declared.discard(goal["gate"] + "-gate")
+    return tuple(sorted(declared - available))
+
+
+def _optional_skip_provider(
+    store: SQLiteStore,
+    snapshot: Mapping[str, Any],
+    *,
+    effect: Mapping[str, Any],
+    clock: Callable[[], datetime],
+) -> _LocalGateProvider | None:
+    active = [
+        goal_ref
+        for goal_ref, value in snapshot["goals"].items()
+        if value.get("state") == "ACTIVE"
+    ]
+    if len(active) != 1:
+        return None
+    content = _content_goal(store, snapshot, active[0])
+    if content is None or content[0].get("schema") != "loopskill-plan-v2":
+        return None
+    plan, _, goal = content
+    if goal["requirement"] != "optional" or goal["gate"] != "worker":
+        return None
+    unavailable = _unavailable_goal_capabilities(
+        plan,
+        goal,
+        artifact_profile=str(effect.get("artifact_profile", "UNBOUND")),
+    )
+    if not unavailable:
+        return None
+    digest = domain_digest(
+        "loopskill-optional-capability-skip-v1\n",
+        {
+            "goal_id": goal["goal_id"],
+            "loop_ref": snapshot["loop_ref"],
+            "plan_digest": snapshot["goal_plan"]["plan_digest"],
+            "unavailable": list(unavailable),
+        },
+    )
+    return _LocalGateProvider(digest, clock=clock, outcome="LIMITATION")
+
+
+def satisfy_gate(
+    *,
+    root: Path | str,
+    workspace_root: Path | str,
+    approval_digest: str | None = None,
+    clock: Callable[[], datetime] = _now,
+) -> UserFacingStatus:
+    """Satisfy one paused Plan v2 human/time gate with bound local evidence."""
+
+    path = _existing_store_path(root)
+    with SQLiteStore(path) as store:
+        descriptors = store.loop_descriptors()
+        if len(descriptors) != 1:
+            raise EntryError(
+                "USER_STORE_UNAVAILABLE",
+                "The selected data location is not a single Loop.",
+                "Select one exact Loop and try again.",
+            )
+        loop_ref = descriptors[0]["loop_ref"]
+        snapshot = store.snapshot(loop_ref)
+        active = [] if snapshot is None else [
+            goal_ref
+            for goal_ref, value in snapshot["goals"].items()
+            if value.get("state") == "ACTIVE"
+        ]
+        if (
+            snapshot is None
+            or snapshot["execution"]["state"] != "PAUSED"
+            or len(active) != 1
+        ):
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The Loop is not waiting at one controller gate.",
+                "Read status before supplying gate evidence.",
+            )
+        content = _content_goal(store, snapshot, active[0])
+        if content is None or content[0].get("schema") != "loopskill-plan-v2":
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The active Goal has no Plan v2 controller gate.",
+                "Read status and continue through the available action.",
+            )
+        goal = content[2]
+        gate = goal["gate"]
+        if gate == "human":
+            if (
+                not isinstance(approval_digest, str)
+                or len(approval_digest) != 64
+                or any(character not in "0123456789abcdef" for character in approval_digest)
+            ):
+                raise EntryError(
+                    "USER_INPUT_INVALID",
+                    "A human gate requires one lowercase SHA-256 approval digest.",
+                    "Bind the approval to the reviewed Goal and artifact summary.",
+                )
+            evidence = {"approval_digest": approval_digest, "gate": gate}
+        elif gate == "time":
+            declarations = [
+                value[len("time-after:") :]
+                for value in goal["verifiers"]
+                if value.startswith("time-after:")
+            ]
+            if len(declarations) != 1:
+                raise EntryError(
+                    "USER_PREPARATION_INVALID",
+                    "The time gate lacks one exact time-after verifier.",
+                    "Prepare a successor with one timezone-aware real-time boundary.",
+                )
+            due = datetime.fromisoformat(declarations[0].replace("Z", "+00:00"))
+            if clock().astimezone(timezone.utc) < due.astimezone(timezone.utc):
+                return _status_from_store(store, loop_ref)
+            evidence = {"gate": gate, "time_after": _iso(due)}
+        else:
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The active Goal is not a human or time gate.",
+                "Continue the worker Goal normally.",
+            )
+        gate_digest = domain_digest(
+            "loopskill-controller-gate-v1\n",
+            {
+                **evidence,
+                "goal_id": goal["goal_id"],
+                "goal_slice_digest": snapshot["goals"][active[0]]["goal_slice_digest"],
+                "loop_ref": loop_ref,
+                "plan_digest": content[1]["plan_digest"],
+            },
+        )
+    _resume_controller_gate(root=root, gate_digest=gate_digest, clock=clock)
+    provider = _LocalGateProvider(gate_digest, clock=clock)
+    _run_startup_provider(
+        path,
+        provider,
+        issuer_ref=DEFAULT_CODEX_RECEIPT_ISSUER,
+        issuer_trust=DEFAULT_CODEX_RECEIPT_TRUST,
+        clock=clock,
+        workspace_root=workspace_root,
+        allow_gate_execution=True,
+    )
+    return sync_loop(
+        root=root,
+        host_provider=provider,
+        workspace_root=workspace_root,
+        clock=clock,
+    )
+
+
+def _schedule_repair_attempt(
+    store: SQLiteStore,
+    snapshot: Mapping[str, Any],
+    *,
+    goal_ref: str,
+    workspace_root: Path | str,
+    failure_fingerprint: str,
+    clock: Callable[[], datetime],
+) -> bool:
+    content = _content_goal(store, snapshot, goal_ref)
+    if content is None:
+        return False
+    plan_document, index_document, goal_document = content
+    if plan_document.get("schema") != "loopskill-plan-v2":
+        return False
+    if goal_document["on_failure"] != "repair":
+        return False
+    policy = snapshot.get("policy", {})
+    repair_attempts = (
+        int(policy.get("repair_attempts", 0))
+        if policy.get("goal_ref") == goal_ref
+        else 0
+    )
+    repair_budget = int(goal_document["max_attempts"]) - 1
+    if repair_budget < 1 or repair_attempts >= repair_budget:
+        return False
+    plan_state = snapshot["goal_plan"]
+    if len(snapshot["attempts"]) >= int(plan_state["budget"]["max_host_invocations"]):
+        return False
+    baseline = prepare_artifact_baseline(
+        workspace_root,
+        expected_profile=str(
+            snapshot["external_effects"][
+                snapshot["goals"][goal_ref]["chain_refs"]["external_effect_ref"]
+            ]["artifact_profile"]
+        ),
+        expected_workspace_identity_digest=str(plan_state["workspace_binding"]),
+    )
+    baseline_digest = persist_baseline_blobs(store, baseline)
+    repair_ordinal = repair_attempts + 1
+    chain = repair_chain(
+        str(snapshot["loop_ref"]),
+        str(plan_state["plan_digest"]),
+        goal_ref,
+        str(goal_document["goal_id"]),
+        repair_ordinal,
+    )
+    provider_request = materialize_provider_request(
+        plan_document,
+        index_document,
+        int(plan_state["active_index"]),
+        target_ref=chain["provider_target"],
+        artifact_digest=baseline_digest,
+        prior_disposition="REPAIR",
+    )
+    result = store.apply(
+        _machine_command(
+            store,
+            snapshot,
+            command_type="RecordPolicyDecision",
+            operation_label=f"repair-{goal_document['goal_id']}-{repair_ordinal}",
+            subject_kind="LoopRef",
+            subject_ref=str(snapshot["loop_ref"]),
+            expected_subject_revisions={
+                "execution": snapshot["execution"]["revision"]
+            },
+            machine_bindings={
+                "allocate_refs": {
+                    "new_artifact_ref": chain["artifact_ref"],
+                    "new_attempt_ref": chain["attempt_ref"],
+                    "new_external_effect_ref": chain["external_effect_ref"],
+                    "new_host_resource_ref": chain["host_resource_ref"],
+                    "new_report_ref": chain["report_ref"],
+                    "new_result_ref": chain["result_ref"],
+                    "new_review_ref": chain["review_ref"],
+                    "provider_idempotency_key": chain["provider_key"],
+                },
+                "receipt_refs": {},
+                "resolved_refs": {
+                    "artifact_baseline_blob_digest": baseline_digest,
+                    "artifact_profile": baseline.profile,
+                    "context_digest": policy_context_digest(snapshot),
+                    "decision_card_digest": domain_digest(
+                        "loopskill-automatic-repair-card-v1\n",
+                        {
+                            "failure_fingerprint": failure_fingerprint,
+                            "goal_ref": goal_ref,
+                            "loop_revision": snapshot["loop_revision"],
+                            "repair_ordinal": repair_ordinal,
+                        },
+                    ),
+                    "provider_request_digest": domain_digest(
+                        "loopskill-provider-request-v1\n", provider_request
+                    ),
+                    "repair_budget": str(repair_budget),
+                    "same_failure_budget": "2",
+                    "target_ref": chain["provider_target"],
+                    "workspace_identity_digest": baseline.workspace_identity_digest,
+                },
+            },
+            semantic_payload={
+                "decision": "CONTINUE_REPAIR",
+                "failure_fingerprint": failure_fingerprint,
+            },
+            clock=clock,
+        )
+    )
+    store.verify_integrity()
+    return bool(result.response.get("repair_authorized")) and bool(
+        result.response.get("repair_state") == "REPAIR_SCHEDULED"
+    )
+
+
 def sync_loop(
     *,
     root: Path | str,
@@ -1618,18 +2407,24 @@ def sync_loop(
     """Advance the exact Host-result chain; every local step is replay-safe."""
     path = _existing_store_path(root)
     pending_receipt = None
+    pending_effect_state = None
+    effective_host_provider = host_provider
     with SQLiteStore(path) as store:
         descriptors = store.loop_descriptors()
         if len(descriptors) == 1:
             pending_snapshot = store.snapshot(descriptors[0]["loop_ref"])
             if pending_snapshot is not None:
+                if pending_snapshot["execution"]["state"] == "PAUSED":
+                    return _status_from_store(store, descriptors[0]["loop_ref"])
                 committed = [
                     effect
                     for effect in pending_snapshot.get("external_effects", {}).values()
-                    if effect.get("state") == "ATTEMPT_COMMITTED"
+                    if effect.get("state")
+                    in {"ATTEMPT_COMMITTED", "UNKNOWN", "UNVERIFIABLE"}
                 ]
                 if len(committed) == 1:
                     pending_effect = committed[0]
+                    pending_effect_state = pending_effect.get("state")
                     attempt = store.effect_attempt(pending_effect["attempt_ref"])
                     if attempt is None:
                         raise EntryError(
@@ -1637,14 +2432,42 @@ def sync_loop(
                             "The current Host Attempt is unavailable.",
                             "Preserve the store and inspect diagnostics.",
                         )
+                    optional_provider = _optional_skip_provider(
+                        store,
+                        pending_snapshot,
+                        effect=pending_effect,
+                        clock=clock,
+                    )
+                    if optional_provider is not None:
+                        effective_host_provider = optional_provider
+                    else:
+                        budget_wait = _pause_for_provider_budget(
+                            store,
+                            pending_snapshot,
+                            loop_ref=descriptors[0]["loop_ref"],
+                            provider=effective_host_provider,
+                            attempt=attempt,
+                            clock=clock,
+                        )
+                        if budget_wait is not None:
+                            return budget_wait
                     pending_receipt = CodexHostAdapter(
-                        host_provider,
+                        effective_host_provider,
                         store,
                         executor_ref="loopskill-entry-executor-v1",
                         issuer_ref=host_issuer_ref,
                         issuer_trust=host_issuer_trust,
                         clock=clock,
                     ).execute(attempt)
+                    if (
+                        pending_effect_state == "UNKNOWN"
+                        and pending_receipt.outcome == "unknown"
+                    ) or (
+                        pending_effect_state == "UNVERIFIABLE"
+                        and pending_receipt.trust_class == "cooperative"
+                        and pending_receipt.outcome != "observed"
+                    ):
+                        pending_receipt = None
                 elif len(committed) > 1:
                     raise EntryError(
                         "USER_STORE_UNAVAILABLE",
@@ -1724,7 +2547,7 @@ def sync_loop(
                     "Preserve the store and inspect diagnostics.",
                 )
             adapter = CodexHostAdapter(
-                host_provider,
+                effective_host_provider,
                 store,
                 executor_ref="loopskill-entry-executor-v1",
                 issuer_ref=host_issuer_ref,
@@ -1738,6 +2561,7 @@ def sync_loop(
             review_ref = allocated["review"]
             finalization_ref = allocated["finalization"]
             observation = None
+            summary = ""
             if result_ref not in snapshot["results"] or snapshot["results"][result_ref]["state"] == "STAGED":
                 observation = adapter.read_task_result(provider_id)
                 if observation["status"] == "PENDING":
@@ -1794,7 +2618,19 @@ def sync_loop(
                         "The current Goal request cannot be materialized.",
                         "Preserve the Store and restore its exact plan blobs.",
                     )
-                criteria = tuple(materialized_attempt.payload["acceptance_criteria"])
+                current_content = _content_goal(store, snapshot, goal_ref)
+                current_goal_document = (
+                    None if current_content is None else current_content[2]
+                )
+                criteria = tuple(
+                    ("no-file-change",)
+                    if current_goal_document is not None
+                    and current_goal_document.get("gate") in {"human", "time"}
+                    else current_goal_document["verifiers"]
+                    if current_goal_document is not None
+                    and "verifiers" in current_goal_document
+                    else materialized_attempt.payload["acceptance_criteria"]
+                )
                 artifact_receipt, artifact_bindings, _ = _local_artifact_receipt(
                     store,
                     effect=effect,
@@ -1832,12 +2668,41 @@ def sync_loop(
 
             if review_ref not in snapshot["reviews"]:
                 artifact = snapshot["artifacts"][artifact_ref]
+                current_content = _content_goal(store, snapshot, goal_ref)
+                current_goal_document = (
+                    None if current_content is None else current_content[2]
+                )
+                is_v2_goal = bool(
+                    current_content is not None
+                    and current_content[0].get("schema") == "loopskill-plan-v2"
+                )
+                repair_requested = (
+                    is_v2_goal
+                    and current_goal_document is not None
+                    and current_goal_document.get("on_failure") == "repair"
+                    and outcome in {"FAILED"}
+                )
                 verdict = (
                     "PASS"
                     if outcome == "PASS" and artifact["state"] == "VERIFIED"
                     else "REPAIR"
-                    if outcome == "PASS"
-                    and artifact.get("verification_state") == "FAILED"
+                    if repair_requested
+                    or (
+                        outcome == "PASS"
+                        and (
+                            (
+                                not is_v2_goal
+                                and artifact.get("verification_state") == "FAILED"
+                            )
+                            or (
+                                is_v2_goal
+                                and artifact.get("verification_state")
+                                in {"FAILED", "UNVERIFIABLE"}
+                                and current_goal_document is not None
+                                and current_goal_document.get("on_failure") == "repair"
+                            )
+                        )
+                    )
                     else "LIMITATION"
                 )
                 store.apply(
@@ -1865,13 +2730,130 @@ def sync_loop(
                 snapshot = store.snapshot(loop_ref)
                 assert snapshot is not None
                 if verdict == "REPAIR":
+                    fingerprint = domain_digest(
+                        "loopskill-repair-failure-v1\n",
+                        {
+                            "goal_ref": goal_ref,
+                            "outcome": outcome,
+                            "verification_digest": snapshot["artifacts"][artifact_ref][
+                                "verification_digest"
+                            ],
+                        },
+                    )
+                    scheduled = (
+                        workspace_root is not None
+                        and _schedule_repair_attempt(
+                            store,
+                            snapshot,
+                            goal_ref=goal_ref,
+                            workspace_root=workspace_root,
+                            failure_fingerprint=fingerprint,
+                            clock=clock,
+                        )
+                    )
+                    if scheduled:
+                        return _status_from_store(store, loop_ref)
+                    if is_v2_goal:
+                        snapshot = store.snapshot(loop_ref)
+                        assert snapshot is not None
+                        store.apply(
+                            _machine_command(
+                                store,
+                                snapshot,
+                                command_type="PauseLoop",
+                                operation_label="repair-wait",
+                                subject_kind="LoopRef",
+                                subject_ref=loop_ref,
+                                expected_subject_revisions={},
+                                machine_bindings={
+                                    "allocate_refs": {},
+                                    "receipt_refs": {},
+                                    "resolved_refs": {},
+                                },
+                                semantic_payload={
+                                    "reason": "Repair budget exhausted or repeated failure.",
+                                    "wait_kind": "REPAIR",
+                                },
+                                clock=clock,
+                            )
+                        )
                     return _status_from_store(store, loop_ref)
 
             if snapshot["goals"][goal_ref]["state"] == "ACTIVE":
                 review_state = snapshot["reviews"][review_ref]["state"]
+                current_content = _content_goal(store, snapshot, goal_ref)
+                current_goal_document = (
+                    None if current_content is None else current_content[2]
+                )
+                blocked_wait = (
+                    current_goal_document is not None
+                    and review_state == "LIMITATION"
+                    and outcome in {"BLOCKED", "LIMITATION", "UNVERIFIABLE"}
+                    and current_goal_document.get("on_blocked") == "wait"
+                )
+                failure_wait = (
+                    current_goal_document is not None
+                    and outcome == "FAILED"
+                    and current_goal_document.get("on_failure") == "wait"
+                )
+                if blocked_wait or failure_wait:
+                    if blocked_wait and not summary:
+                        try:
+                            replayed_observation = adapter.read_task_result(provider_id)
+                            if (
+                                replayed_observation.get("status") == "COMPLETED"
+                                and replayed_observation.get("result_digest")
+                                == result.get("source_observation_digest")
+                            ):
+                                _, summary = _result_semantics(replayed_observation)
+                        except HostUnavailable:
+                            # The Loop can still stop safely at a generic wait.  A
+                            # missing readback must never trigger another Host call.
+                            summary = ""
+                    budget_wait = blocked_wait and "budget" in summary.casefold()
+                    store.apply(
+                        _machine_command(
+                            store,
+                            snapshot,
+                            command_type="PauseLoop",
+                            operation_label=(
+                                "failure-wait" if failure_wait else "blocked-wait"
+                            ),
+                            subject_kind="LoopRef",
+                            subject_ref=loop_ref,
+                            expected_subject_revisions={},
+                            machine_bindings={
+                                "allocate_refs": {},
+                                "receipt_refs": {},
+                                "resolved_refs": {},
+                            },
+                            semantic_payload={
+                                "reason": (
+                                    "Goal failed and awaits a safe recovery decision."
+                                    if failure_wait
+                                    else "Goal is blocked and awaits a safe recovery decision."
+                                ),
+                                "wait_kind": (
+                                    "FAILURE"
+                                    if failure_wait
+                                    else "BUDGET"
+                                    if budget_wait
+                                    else "BLOCKED"
+                                ),
+                            },
+                            clock=clock,
+                        )
+                    )
+                    return _status_from_store(store, loop_ref)
                 goal_disposition = (
                     "DONE"
                     if outcome == "PASS" and review_state == "PASS"
+                    else "SKIPPED"
+                    if current_goal_document is not None
+                    and current_goal_document.get("requirement") == "optional"
+                    and current_goal_document.get("on_blocked") == "skip"
+                    and review_state == "LIMITATION"
+                    and outcome in {"BLOCKED", "LIMITATION", "UNVERIFIABLE"}
                     else "FAILED"
                     if outcome == "FAILED"
                     else "LIMITATION"
@@ -1882,7 +2864,7 @@ def sync_loop(
                 expected_plan_revision: dict[str, int] = {}
                 plan = snapshot.get("goal_plan")
                 if (
-                    goal_disposition == "DONE"
+                    goal_disposition in {"DONE", "SKIPPED"}
                     and isinstance(plan, Mapping)
                     and plan.get("storage_mode") == "CONTENT_ADDRESSED_V1"
                 ):
@@ -1951,7 +2933,7 @@ def sync_loop(
                             next_index,
                             target_ref=next_chain["provider_target"],
                             artifact_digest=next_baseline_digest,
-                            prior_disposition="DONE",
+                            prior_disposition=goal_disposition,
                         )
                         next_allocate = {
                             "new_attempt_ref": next_chain["attempt_ref"],
@@ -1988,6 +2970,17 @@ def sync_loop(
                                 ),
                             }
                         )
+                        if plan_document.get("schema") == "loopskill-plan-v2":
+                            next_resolved.update(
+                                {
+                                    "next_goal_requirement": str(
+                                        next_goal["requirement"]
+                                    ),
+                                    "next_max_attempts": str(
+                                        next_goal["max_attempts"]
+                                    ),
+                                }
+                            )
                     expected_plan_revision = {"goal_plan": int(plan["revision"])}
                     advance_operation_label = "advance-" + domain_digest(
                         "loopskill-advance-operation-v1\n",
@@ -2055,11 +3048,17 @@ def sync_loop(
                 return _status_from_store(store, loop_ref)
 
             review_state = snapshot["reviews"][review_ref]["state"]
+            goal_states = {
+                goal.get("state") for goal in snapshot["goals"].values()
+            }
             final_disposition = (
-                "SUCCEEDED"
+                "FAILED"
+                if "FAILED" in goal_states
+                else "SUCCEEDED_WITH_LIMITATIONS"
+                if "SKIPPED" in goal_states
+                and goal_states <= {"DONE", "SKIPPED"}
+                else "SUCCEEDED"
                 if outcome == "PASS" and review_state == "PASS"
-                else "FAILED"
-                if outcome == "FAILED"
                 else "LIMITATION"
             )
             if not snapshot["finalizations"]:
@@ -2134,7 +3133,7 @@ def sync_loop(
 def diagnostics(*, root: Path | str) -> dict[str, Any]:
     path = _existing_store_path(root)
     try:
-        with SQLiteStore(path) as store:
+        with SQLiteStore(path, readonly=True) as store:
             descriptors = store.loop_descriptors()
             if len(descriptors) != 1:
                 raise EntryError(
@@ -2164,4 +3163,60 @@ def diagnostics(*, root: Path | str) -> dict[str, Any]:
             "USER_STORE_UNAVAILABLE",
             "The LoopSkill diagnostics could not be read safely.",
             "Restore a verified backup or choose a new data location.",
+        ) from exc
+
+
+def worker_profile(*, root: Path | str) -> Mapping[str, Any]:
+    """Read the active Plan-bound worker profile without exposing plan content."""
+
+    path = _existing_store_path(root)
+    try:
+        with SQLiteStore(path, readonly=True) as store:
+            descriptors = store.loop_descriptors()
+            if len(descriptors) != 1:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The selected data location is not one Loop.",
+                    "Select one Loop and try again.",
+                )
+            snapshot = store.snapshot(descriptors[0]["loop_ref"])
+            if snapshot is None:
+                raise EntryError(
+                    "USER_STORE_UNAVAILABLE",
+                    "The Loop state is unavailable.",
+                    "Preserve the Store and inspect diagnostics.",
+                )
+            plan_state = snapshot.get("goal_plan")
+            if isinstance(plan_state, Mapping):
+                raw = store.get_blob(str(plan_state.get("plan_digest", "")))
+                if raw is not None:
+                    plan = parse_plan_bytes(raw)
+                    if plan.get("schema") == "loopskill-plan-v2":
+                        profile = dict(plan["worker_profile"])
+                        runtime_budget = plan_state.get("budget")
+                        if isinstance(runtime_budget, Mapping):
+                            profile["budget_override"] = {
+                                "max_host_invocations": runtime_budget[
+                                    "max_host_invocations"
+                                ],
+                                "wall_clock_seconds": runtime_budget[
+                                    "wall_clock_seconds"
+                                ],
+                            }
+                        return profile
+            return {
+                "attempt_timeout_seconds": 30_000,
+                "local_verification": True,
+                "model": None,
+                "network_access": False,
+                "reasoning_effort": None,
+                "sandbox": "workspace-write",
+            }
+    except EntryError:
+        raise
+    except (OSError, PersistenceError, PlanCodecError, ProtocolRejection) as exc:
+        raise EntryError(
+            "USER_STORE_UNAVAILABLE",
+            "The Plan-bound worker profile is unavailable.",
+            "Preserve the Store and inspect diagnostics.",
         ) from exc

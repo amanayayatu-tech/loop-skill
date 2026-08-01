@@ -35,21 +35,27 @@ from loop_architect.v4_alpha.protocol import (  # noqa: E402
     domain_digest,
     result_payload_schema,
 )
-from loop_architect.v4_adapters.codex.adapter import HOST_SCHEMA_VERSION  # noqa: E402
+from loop_architect.v4_adapters.codex.adapter import (  # noqa: E402
+    HOST_SCHEMA_VERSION,
+    HostResponseLost,
+)
 from loop_architect.v4_entry import (  # noqa: E402
     EntryError,
     confirm_loop,
     control_loop,
     diagnostics,
+    extend_budget,
     intake_report_loop,
     prepare_loop,
     policy_view,
     record_external_observation,
     revise_goal_plan,
+    satisfy_gate,
     start_loop,
     steer_loop,
     status,
     sync_loop,
+    worker_profile,
 )
 from loop_architect.v4_entry.preparation import (  # noqa: E402
     CONFIRMATION_FILENAME,
@@ -73,6 +79,7 @@ class EntryProviderFixture:
         result_status="COMPLETED",
         result_payload=None,
         lifecycle_state="TERMINAL",
+        budget_reason=None,
     ):
         self.invoke_count = 0
         self.result_read_count = 0
@@ -81,6 +88,11 @@ class EntryProviderFixture:
         self.result_status = result_status
         self.result_payload = result_payload
         self.lifecycle_state = lifecycle_state
+        self.budget_reason = budget_reason
+
+    def budget_block_reason(self, payload):
+        del payload
+        return self.budget_reason
 
     def capability_snapshot(self):
         now = self.now or datetime.now(timezone.utc)
@@ -151,6 +163,70 @@ class EntryProviderFixture:
         }
 
 
+class RecoveringEntryProvider(EntryProviderFixture):
+    def __init__(self, *, now=None):
+        super().__init__(now=now)
+        self.recover_count = 0
+
+    def recover(self, action, payload, provider_idempotency_key):
+        self.recover_count += 1
+        return super().invoke(action, payload, provider_idempotency_key)
+
+
+class LostEntryProvider(EntryProviderFixture):
+    def invoke(self, action, payload, provider_idempotency_key):
+        del action, payload, provider_idempotency_key
+        self.invoke_count += 1
+        raise HostResponseLost("synthetic interrupted response")
+
+
+class SequencedEntryProvider(EntryProviderFixture):
+    def __init__(self, results, *, now=None):
+        super().__init__(now=now)
+        self.results = list(results)
+        self.results_by_provider = {}
+
+    def invoke(self, action, payload, provider_idempotency_key):
+        if not self.results:
+            raise AssertionError("unexpected Host invocation")
+        self.invoke_count += 1
+        provider_id = f"synthetic-entry-thread-{self.invoke_count}"
+        self.results_by_provider[provider_id] = self.results.pop(0)
+        self.records[provider_idempotency_key] = {
+            "action": action,
+            "idempotency_key": provider_idempotency_key,
+            "provider_id": provider_id,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "status": "OBSERVED",
+            "subject_id": payload["target_ref"],
+            "trust": "authoritative",
+        }
+        return {
+            **self.records[provider_idempotency_key],
+            "status": "ACCEPTED",
+            "trust": "cooperative",
+        }
+
+    def read_task_result(self, provider_id):
+        self.result_read_count += 1
+        result = self.results_by_provider[provider_id]
+        schema_digest = domain_digest(
+            "loopskill-codex-result-schema-v1\n", result_payload_schema()
+        )
+        return {
+            "provider_id": provider_id,
+            "result": result,
+            "result_digest": domain_digest(
+                "loopskill-host-result-v1\n",
+                {"result": result, "result_schema_digest": schema_digest},
+            ),
+            "result_schema_digest": schema_digest,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "status": "COMPLETED",
+            "trust": "authoritative",
+        }
+
+
 def fixed_tokens():
     values = iter(
         (
@@ -178,6 +254,96 @@ def ready_request(goal="Ship a bounded public change", *, horizon="long"):
         stop_conditions=("stop on UNKNOWN",),
         authorization_boundaries=("no commit, push, publish, or deploy",),
     )
+
+
+def v2_request(goals, *, requirements=None):
+    """Build one closed PlanDocument v2 intake for long-horizon regressions."""
+
+    first = goals[0]["objective"]
+    plan = {
+        "boundaries": {
+            "destructive_actions_allowed": False,
+            "external_actions": [],
+            "forbidden_actions": ["no publish"],
+            "forbidden_paths": [],
+            "write_scope": ["."],
+        },
+        "budget": {
+            "currency": None,
+            "max_cost_minor_units": 0,
+            "max_host_invocations": sum(
+                goal["max_attempts"] for goal in goals if goal["gate"] == "worker"
+            )
+            or 1,
+            "wall_clock_seconds": 3600,
+        },
+        "completion_evidence": ["all required Goals independently verified"],
+        "goals": goals,
+        "objective": first,
+        "requirements": requirements or {},
+        "roadmap_policy": {"max_reorders": 0, "mode": "STANDARD"},
+        "schema": "loopskill-plan-v2",
+        "source": {
+            "kind": "canonical_plan_json",
+            "source_content_retained": False,
+            "source_digest": "a" * 64,
+        },
+        "stop_conditions": ["wait on a repeated failure fingerprint"],
+        "worker_profile": {
+            "attempt_timeout_seconds": 30_000,
+            "local_verification": True,
+            "model": "gpt-5.6-sol",
+            "network_access": True,
+            "reasoning_effort": "medium",
+            "sandbox": "workspace-write",
+        },
+    }
+    return LoopIntakeInput(
+        goal=first,
+        goal_plan=tuple(goal["objective"] for goal in goals),
+        task_horizon="long",
+        write_scope=(".",),
+        budget=json.dumps(plan["budget"], sort_keys=True),
+        external_actions=(),
+        acceptance_criteria=("all required Goals independently verified",),
+        stop_conditions=("wait on a repeated failure fingerprint",),
+        authorization_boundaries=("no publish",),
+        canonical_plan=plan,
+        source_kind="canonical_plan_json",
+        source_digest="a" * 64,
+        source_bytes=len(canonical_bytes(plan)),
+    )
+
+
+def v2_goal(
+    goal_id,
+    objective,
+    *,
+    requirement="required",
+    capabilities=(),
+    verifiers=("no-file-change",),
+    gate="worker",
+    on_failure="repair",
+    on_blocked="wait",
+    recovery_policy="resume",
+    replay_safety="file_local",
+    max_attempts=3,
+):
+    return {
+        "acceptance_criteria": list(verifiers) or ["bound controller gate"],
+        "capabilities": list(capabilities),
+        "gate": gate,
+        "goal_id": goal_id,
+        "max_attempts": max_attempts,
+        "objective": objective,
+        "on_blocked": on_blocked,
+        "on_failure": on_failure,
+        "recovery_policy": recovery_policy,
+        "replay_safety": replay_safety,
+        "requirement": requirement,
+        "requirement_refs": [],
+        "verifiers": list(verifiers),
+    }
 
 
 def prepare_confirm(
@@ -212,6 +378,601 @@ def load_cli_module():
 
 
 class V4SingleEntryUXTests(unittest.TestCase):
+    def test_v2_optional_capability_skip_advances_and_finishes_with_limitations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request(
+                [
+                    v2_goal(
+                        "g000",
+                        "Attempt one optional unavailable integration",
+                        requirement="optional",
+                        capabilities=("unavailable-image-provider",),
+                        on_blocked="skip",
+                    ),
+                    v2_goal("g001", "Complete the required local stage"),
+                ]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000001",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(now=NOW)
+            data = root / "data"
+            started = start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(started.progress, "Starting")
+            self.assertEqual(provider.invoke_count, 0)
+            closed = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(closed.progress, "Finished")
+            self.assertEqual(closed.result, "SUCCEEDED_WITH_LIMITATIONS")
+            self.assertEqual(provider.invoke_count, 1)
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                self.assertEqual(
+                    {goal["state"] for goal in snapshot["goals"].values()},
+                    {"DONE", "SKIPPED"},
+                )
+
+    def test_v2_human_gate_waits_without_host_then_accepts_bound_approval(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request(
+                [
+                    v2_goal(
+                        "g000",
+                        "Wait for one exact human approval",
+                        verifiers=("human-approval",),
+                        gate="human",
+                        recovery_policy="human",
+                        replay_safety="non_replayable",
+                    )
+                ]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000002",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(now=NOW)
+            data = root / "data"
+            waiting = start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(waiting.result, "WAITING_HUMAN")
+            self.assertEqual(provider.invoke_count, 0)
+            with self.assertRaises(EntryError):
+                control_loop("resume", root=data, clock=lambda: NOW)
+            closed = satisfy_gate(
+                root=data,
+                workspace_root=workspace,
+                approval_digest="b" * 64,
+                clock=lambda: NOW,
+            )
+            self.assertEqual(closed.result, "SUCCEEDED")
+            self.assertEqual(provider.invoke_count, 0)
+
+    def test_started_outbox_reaches_provider_recovery_after_controller_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request([v2_goal("g000", "Recover the same claimed Attempt")])
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000020",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            data = root / "data"
+            lost = LostEntryProvider(now=NOW)
+            started = start_loop(
+                prepared,
+                root=data,
+                host_provider=lost,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(started.progress, "Needs attention")
+            self.assertEqual(lost.invoke_count, 1)
+
+            recovered = RecoveringEntryProvider(now=NOW)
+            value = sync_loop(
+                root=data,
+                host_provider=recovered,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            for _ in range(8):
+                if value.progress == "Finished":
+                    break
+                value = sync_loop(
+                    root=data,
+                    host_provider=recovered,
+                    clock=lambda: NOW,
+                    workspace_root=workspace,
+                )
+            self.assertEqual(
+                value.result,
+                "SUCCEEDED",
+                f"recover={recovered.recover_count} invoke={recovered.invoke_count} reads={recovered.result_read_count} progress={value.progress}",
+            )
+            self.assertEqual(recovered.recover_count, 1)
+            self.assertEqual(recovered.invoke_count, 1)
+
+    def test_repair_attempt_budgets_are_scoped_per_goal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request(
+                [
+                    v2_goal("g000", "Repair first Goal", max_attempts=2),
+                    v2_goal("g001", "Repair second Goal", max_attempts=2),
+                ]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000021",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = SequencedEntryProvider(
+                [
+                    {"outcome": "FAILED", "summary": "first failure"},
+                    {"outcome": "PASS", "summary": "first repaired"},
+                    {"outcome": "FAILED", "summary": "second failure"},
+                    {"outcome": "PASS", "summary": "second repaired"},
+                ],
+                now=NOW,
+            )
+            data = root / "data"
+            value = start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            for _ in range(24):
+                if value.progress == "Finished":
+                    break
+                value = sync_loop(
+                    root=data,
+                    host_provider=provider,
+                    clock=lambda: NOW,
+                    workspace_root=workspace,
+                )
+            self.assertEqual(value.result, "SUCCEEDED")
+            self.assertEqual(provider.invoke_count, 4)
+
+    def test_v2_failure_wait_policy_pauses_instead_of_terminalizing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request(
+                [
+                    v2_goal(
+                        "g000",
+                        "Pause safely when the worker reports a failure",
+                        on_failure="wait",
+                    )
+                ]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000003",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(
+                now=NOW,
+                result_payload={"outcome": "FAILED", "summary": "synthetic failure"},
+            )
+            data = root / "data"
+            start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            waiting = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(waiting.progress, "Waiting")
+            self.assertEqual(waiting.result, "WAITING")
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                self.assertEqual(snapshot["execution"]["state"], "PAUSED")
+                self.assertEqual(snapshot["execution"]["wait_kind"], "FAILURE")
+                self.assertEqual(
+                    next(iter(snapshot["goals"].values()))["state"], "ACTIVE"
+                )
+
+    def test_v2_budget_exhaustion_enters_distinct_recoverable_wait(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request(
+                [v2_goal("g000", "Wait for a digest-bound budget extension")]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000007",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(
+                now=NOW,
+                result_payload={
+                    "outcome": "LIMITATION",
+                    "summary": "The Plan-bound Host invocation budget is exhausted.",
+                },
+            )
+            data = root / "data"
+            start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            waiting = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(waiting.progress, "Waiting")
+            self.assertEqual(waiting.result, "WAITING_BUDGET")
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                snapshot = store.snapshot(store.loop_descriptors()[0]["loop_ref"])
+                self.assertEqual(snapshot["execution"]["state"], "PAUSED")
+                self.assertEqual(snapshot["execution"]["wait_kind"], "BUDGET")
+
+    def test_v2_budget_preflight_extends_and_resumes_without_a_blocked_host_call(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request(
+                [v2_goal("g000", "Resume after a bound runtime budget extension")]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000008",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(
+                now=NOW,
+                budget_reason="The Plan-bound Host invocation budget is exhausted.",
+            )
+            data = root / "data"
+            waiting = start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(waiting.result, "WAITING_BUDGET")
+            self.assertEqual(provider.invoke_count, 0)
+            with self.assertRaises(EntryError):
+                control_loop("resume", root=data, clock=lambda: NOW)
+            with self.assertRaises(EntryError):
+                extend_budget(
+                    root=data,
+                    new_max_host_invocations=True,
+                    new_wall_clock_seconds=7200,
+                    reason="invalid boolean budget",
+                    clock=lambda: NOW,
+                )
+            with self.assertRaises(EntryError):
+                extend_budget(
+                    root=data,
+                    new_max_host_invocations=3,
+                    new_wall_clock_seconds=3600,
+                    reason="unchanged budgets cannot resume a wait",
+                    clock=lambda: NOW,
+                )
+            with self.assertRaises(EntryError):
+                extend_budget(
+                    root=data,
+                    new_max_host_invocations=385,
+                    new_wall_clock_seconds=7200,
+                    reason="bounded budgets reject oversized requests",
+                    clock=lambda: NOW,
+                )
+
+            active = extend_budget(
+                root=data,
+                new_max_host_invocations=4,
+                new_wall_clock_seconds=7200,
+                reason="Continue the unchanged confirmed Goal.",
+                clock=lambda: NOW,
+            )
+            self.assertIn(active.progress, {"Active", "Starting"})
+            profile = worker_profile(root=data)
+            self.assertEqual(
+                profile["budget_override"],
+                {"max_host_invocations": 4, "wall_clock_seconds": 7200},
+            )
+            provider.budget_reason = None
+            closed = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(closed.result, "SUCCEEDED")
+            self.assertEqual(provider.invoke_count, 1)
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                loop_ref = store.loop_descriptors()[0]["loop_ref"]
+                events = [event["type"] for event in store.events(loop_ref)]
+                self.assertIn("BudgetWaiting", events)
+                self.assertIn("BudgetExtended", events)
+
+    def test_v2_repair_stays_in_same_loop_and_can_succeed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request(
+                [v2_goal("g000", "Repair one failed worker result in place")]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000004",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(
+                now=NOW,
+                result_payload={"outcome": "FAILED", "summary": "first failure"},
+            )
+            data = root / "data"
+            start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            repairing = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(repairing.result, "Repair scheduled")
+            provider.result_payload = {
+                "outcome": "PASS",
+                "summary": "repair completed",
+            }
+            closed = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(closed.result, "SUCCEEDED")
+            self.assertEqual(provider.invoke_count, 2)
+            with SQLiteStore(data / STORE_FILENAME) as store:
+                self.assertEqual(len(store.loop_descriptors()), 1)
+
+    def test_v2_repeated_repair_fingerprint_waits_after_second_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request(
+                [v2_goal("g000", "Stop mechanical retries for one repeated failure")]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000005",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(
+                now=NOW,
+                result_payload={"outcome": "FAILED", "summary": "same failure"},
+            )
+            data = root / "data"
+            start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            waiting = sync_loop(
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(waiting.result, "WAITING_REPAIR")
+            self.assertEqual(provider.invoke_count, 2)
+
+    def test_v2_time_gate_uses_real_clock_and_never_calls_host(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            threshold = (NOW + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+            request = v2_request(
+                [
+                    v2_goal(
+                        "g000",
+                        "Wait for the declared real time",
+                        verifiers=("time-after:" + threshold,),
+                        gate="time",
+                        recovery_policy="human",
+                    )
+                ]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000006",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = EntryProviderFixture(now=NOW)
+            data = root / "data"
+            waiting = start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(waiting.result, "WAITING_TIME")
+            still_waiting = satisfy_gate(
+                root=data,
+                workspace_root=workspace,
+                clock=lambda: NOW,
+            )
+            self.assertEqual(still_waiting.result, "WAITING_TIME")
+            closed = satisfy_gate(
+                root=data,
+                workspace_root=workspace,
+                clock=lambda: NOW + timedelta(hours=2),
+            )
+            self.assertEqual(closed.result, "SUCCEEDED")
+            self.assertEqual(provider.invoke_count, 0)
+
+    def test_v2_controller_gate_verifiers_are_complete_before_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            invalid_goals = (
+                v2_goal(
+                    "g000",
+                    "Invalid human gate",
+                    verifiers=(),
+                    gate="human",
+                    recovery_policy="human",
+                    replay_safety="non_replayable",
+                ),
+                v2_goal(
+                    "g000",
+                    "Ambiguous time gate",
+                    verifiers=(
+                        "time-after:2026-08-01T00:00:00Z",
+                        "time-after:2026-08-02T00:00:00Z",
+                    ),
+                    gate="time",
+                    recovery_policy="human",
+                ),
+            )
+            for index, goal in enumerate(invalid_goals):
+                prepared = root / f"prepared-{index}"
+                with self.assertRaises(EntryError):
+                    prepare_loop(
+                        v2_request([goal]),
+                        prepared,
+                        clock=lambda: NOW,
+                        workspace_root=workspace,
+                    )
+                self.assertFalse(prepared.exists())
+
+    def test_public_cli_discovers_and_requires_selection_for_multiple_loops(self):
+        cli = load_cli_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = root / "store-root"
+            loop_refs = []
+            for ordinal in range(2):
+                prepared = prepare_confirm(
+                    root / f"case-{ordinal}",
+                    goal=f"Keep loop {ordinal} independently selectable",
+                    token=f"20000000000000000000000{ordinal}",
+                )
+                loop_ref = prepared.manifest.loop_ref
+                loop_refs.append(loop_ref)
+                start_loop(
+                    prepared.directory,
+                    root=base / "loops" / loop_ref,
+                    clock=lambda: NOW,
+                    workspace_root=root / f"case-{ordinal}" / "workspace",
+                )
+
+            discovered = cli._discover_loops(base)
+            self.assertEqual(
+                [item["loop_ref"] for item in discovered], sorted(loop_refs)
+            )
+            with self.assertRaises(EntryError) as ambiguous:
+                cli._selected_loop_root(base, None)
+            self.assertEqual(ambiguous.exception.code, "USER_STORE_UNAVAILABLE")
+            selected = cli._selected_loop_root(base, loop_refs[1])
+            self.assertEqual(selected, base / "loops" / loop_refs[1])
+
     def test_public_cli_preserves_literal_suffix_and_explicit_path_intent(self):
         cli = load_cli_module()
         literal_requests = (
@@ -441,6 +1202,23 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 revised.assert_called_once()
             with mock.patch.object(cli, "_interactive_start", return_value=visible):
                 self.assertEqual(invoke(["start", "goal", "--root", str(root)])[0], 0)
+            started_root = root / "loops" / "loop-started-diagnostics"
+
+            def start_with_root(_args, *, started_roots):
+                started_roots.append(started_root)
+                return visible
+
+            with mock.patch.object(
+                cli, "_interactive_start", side_effect=start_with_root
+            ), mock.patch.object(
+                cli, "diagnostics", return_value={"internal": "started-loop"}
+            ) as start_diagnostics:
+                code, output, _ = invoke(
+                    ["start", "goal", "--diagnostics", "--root", str(root)]
+                )
+                self.assertEqual(code, 0)
+                self.assertIn("Diagnostics:", output)
+                start_diagnostics.assert_called_once_with(root=started_root)
             for action in ("pause", "resume", "stop"):
                 with self.subTest(action=action), mock.patch.object(
                     cli, "control_loop", return_value=visible
@@ -855,7 +1633,9 @@ class V4SingleEntryUXTests(unittest.TestCase):
             self.assertIn("LoopSkill 4 start boundary", stdout.getvalue())
             self.assertIn("Progress: Active", stdout.getvalue())
             self.assertEqual(provider.invoke_count, 1)
-            self.assertTrue((data / STORE_FILENAME).is_file())
+            loop_directories = tuple((data / "loops").iterdir())
+            self.assertEqual(len(loop_directories), 1)
+            self.assertTrue((loop_directories[0] / STORE_FILENAME).is_file())
             self.assertTrue((prepared / CONFIRMATION_FILENAME).is_file())
 
     def test_public_host_result_refresh_closes_exact_external_subject_chain(self):
@@ -1552,6 +2332,28 @@ class V4SingleEntryUXTests(unittest.TestCase):
             with self.assertRaises(EntryError):
                 diagnostics(root=root)
             self.assertFalse(root.exists())
+
+    def test_status_list_policy_and_diagnostics_use_read_only_store_connections(self):
+        cli = load_cli_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared = prepare_confirm(root, "Inspect without becoming a writer")
+            data = root / "data"
+            start_loop(prepared, root=data, clock=lambda: NOW)
+            database = data / STORE_FILENAME
+            before_bytes = database.read_bytes()
+            before_entries = tuple(sorted(path.name for path in data.iterdir()))
+
+            status(root=data)
+            diagnostics(root=data)
+            policy_view(root=data)
+            worker_profile(root=data)
+            self.assertEqual(len(cli._discover_loops(data)), 1)
+
+            self.assertEqual(database.read_bytes(), before_bytes)
+            self.assertEqual(
+                tuple(sorted(path.name for path in data.iterdir())), before_entries
+            )
 
     def test_goal_and_authority_registry_corruption_fail_closed(self):
         for target in ("goal", "actor"):

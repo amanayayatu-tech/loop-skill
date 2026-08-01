@@ -1,4 +1,4 @@
-# LoopSkill 4.1
+# LoopSkill 4.2
 
 [![v4 Release CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
@@ -7,7 +7,7 @@
 [中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> This document describes LoopSkill 4.1.1. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
+> This document describes LoopSkill 4.2.0. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
 
 **Describe the job in one sentence. LoopSkill fixes the boundary first, starts once after confirmation, and uses machine evidence to show what worked and what remains uncertain.**
 
@@ -49,10 +49,10 @@ Intake returns `READY_FOR_LOOP`, `NEEDS_CLARIFICATION`, `BLOCKED`, or `DIRECT_TA
 
 Prerequisites: macOS or Linux, Git, Python 3.11–3.14, and an authenticated official Codex installation. The LoopSkill 4 runtime uses only the Python standard library.
 
-The command below installs the published `v4.1.1` tag:
+The command below installs the published `v4.2.0` tag:
 
 ```bash
-git clone --branch v4.1.1 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+git clone --branch v4.2.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
 bash scripts/install.sh
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
@@ -131,11 +131,17 @@ Machines generate, parse, or verify these values. A value appearing in model tex
 
 ```bash
 "$LOOPSKILL4" status --root ./loopskill4-data
-"$LOOPSKILL4" status --refresh --root ./loopskill4-data
-"$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
+"$LOOPSKILL4" list --root ./loopskill4-data
+"$LOOPSKILL4" run --root ./loopskill4-data --loop loop-example
+"$LOOPSKILL4" continue --root ./loopskill4-data --loop loop-example
+"$LOOPSKILL4" pause --root ./loopskill4-data --loop loop-example
 ```
 
-Plain `status` reads local state only. `status --refresh` may perform the **one first invocation** only while the durable Attempt remains unclaimed. After a process starts there is no cross-process automatic recovery. It never performs a **second spawn** or resend.
+Plain `status` and `list` read local state only. `run`/`continue` advance the
+selected Loop until completion or a real waiting boundary. Plan v2 Attempts use
+owner-only persistent evidence: a completed result is read back after restart,
+and an interrupted non-ephemeral session may consume one recorded
+`codex exec resume`. A live prior process is waited on and never resent.
 
 - `UNKNOWN`: an external action may have happened, but terminal evidence is lost or ambiguous.
 - `UNVERIFIABLE`: available Host capabilities cannot provide the required evidence.
@@ -156,7 +162,7 @@ The minimal task requires no policy pack to install, understand, or select. When
 These capabilities may submit authorized semantic commands. They cannot write the Store directly, sign Host receipts, or become a Supervisor.
 
 <!-- parity: architecture -->
-## How 4.1 is built
+## How 4.2 is built
 
 The default path stays small: Entry composes the Kernel, one SQLite Store, a content-addressed PlanDocument, artifact/review/finalization libraries, and one Codex Host Adapter. CreateLoop registers only the current Goal; later Goals reuse atomic `AdvanceGoal` activation without a second writer, Supervisor, daemon, or queue service.
 
@@ -170,7 +176,7 @@ flowchart LR
     E -. optional .-> O["Standard / Adaptive policy"]
 ```
 
-The Store does not control the Host; Artifact and Host code do not write canonical state. See the [architecture map](docs/v4/architecture-map.md), [ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md), [ADR 0013](docs/adr/0013-content-addressed-plan-capacity.md), [compatibility matrix](docs/v4/compatibility-matrix-v4.1.md), and [typed protocol](protocol/v4/README.md).
+The Store does not control the Host; Artifact and Host code do not write canonical state. See the [architecture map](docs/v4/architecture-map.md), [ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md), [ADR 0013](docs/adr/0013-content-addressed-plan-capacity.md), [compatibility matrix](docs/v4/compatibility-matrix-v4.2.md), and [typed protocol](protocol/v4/README.md).
 
 <!-- parity: safety -->
 ## Safety, recovery, and honest failure
@@ -178,7 +184,9 @@ The Store does not control the Host; Artifact and Host code do not write canonic
 - Local operation, per-loop CAS, outbox, event, and snapshot changes commit in one SQLite transaction.
 - Replaying the same operation ID and request does not create a second event, handle, or effect.
 - External execution promises only at-most-one automatic attempt; there is no end-to-end exactly-once guarantee across SQLite, Codex, Git, or network boundaries.
-- Lost result evidence remains `UNKNOWN`; there is no automatic resend or `codex exec resume`.
+- Terminal Attempt evidence survives controller restart. An interrupted session
+  can consume one recorded resume; a non-replayable external action waits for
+  human confirmation and is never blindly resent.
 - Path traversal, symlinks, case-fold aliases, special files, and open/read races fail closed.
 - On the first real Host call, the Host itself may append one workspace trust record. Release validation preserves the **real nonzero** changed-byte count. The installer and uninstaller still do not edit Codex configuration.
 
@@ -201,7 +209,7 @@ Unit tests, fault injection, conformance, isolated installation, and disposable 
 
 When v4 encounters a v3 root, state, or Controller Pack, it performs zero writes and returns `USER_UNSUPPORTED_LEGACY_VERSION`. It ships no importer, repair path, legacy CLI alias, Pack runtime, or v3 MCP State Gateway, and it does not migrate automatically.
 
-If the current working directory still carries a v3 `.codex-loop` marker, 4.1.1 stops before `PREPARE`, `START`, or `status --refresh`; it creates no prepared artifacts, Store, or Host task. Switch to a new v4 workspace before running it.
+If the current working directory still carries a v3 `.codex-loop` marker, 4.2.0 stops before `PREPARE`, `START`, or a workspace-bound run; it creates no prepared artifacts, Store, or Host task. Switch to a new v4 workspace before running it.
 
 For old data, continue using the independent [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8).
 
@@ -217,12 +225,16 @@ The uninstaller removes only the receipt-bound v4 installation. It does not modi
 <!-- parity: limitations -->
 ## Current limitations and capacity contract
 
-- Version 4.1.1 supports 1–32 confirmed Goals. A canonical plan is at most 128 KiB, and one explicitly authorized UTF-8 text/Markdown source is at most 256 KiB.
+- Version 4.2.0 supports 1–128 confirmed Goals. A canonical plan is at most 512 KiB, and one explicitly authorized UTF-8 text/Markdown source is at most 256 KiB.
 - The CreateLoop release target is 8 KiB / 64 members (hard limits remain 16 KiB / 128); the materialized Host prompt target is 24 KiB (32 KiB hard limit). Overflow is blocked before Host execution and never truncated.
 - New Loops write only `CONTENT_ADDRESSED_V1`; `EAGER_V4_0` supports status, export, and original-reducer continuation only, with no migration, rewrite, or dual write.
-- Version 4.1.1 supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
+- Version 4.2.0 supports only the Codex Host Adapter; a host-neutral Kernel is not a multi-host claim.
 - The default is one cwd-bound foreground Codex Host task; Desktop-visible saved projects/tasks are not promised.
-- The foreground observation window is at most 300 seconds; unlimited tasks, automatic resume, and cross-process readback are not promised.
+- A single Attempt is bounded at 30000 seconds. Plan v2 supports persistent
+  terminal readback and one recorded session resume; this is not an unlimited
+  daemon or a cross-system exactly-once guarantee.
+- Budgets are checked before Host invocation. `WAITING_BUDGET` resumes only
+  through digest-bound, increase-only `budget-extend` without scope changes.
 - There is no provider idempotency or cross-system exactly-once claim.
 - There is no claim of improved patch success or proven long-horizon superiority.
 - Memory isolation is reported only to the strength the Host can attest and may be unavailable or unverifiable.
@@ -249,9 +261,9 @@ CI also runs the Linux/macOS × Python 3.11–3.14 install/uninstall matrix, pro
 ## Release, security, and historical versions
 
 - [v4 release process](docs/RELEASING.md)
-- [4.1.1 release notes](docs/v4/release-notes-v4.1.md)
+- [4.2.0 release notes](docs/v4/release-notes-v4.2.md)
 - [4.0.0 historical release notes](docs/v4/release-notes.md)
-- [v4.1 compatibility matrix](docs/v4/compatibility-matrix-v4.1.md)
+- [v4.2 compatibility matrix](docs/v4/compatibility-matrix-v4.2.md)
 - [Security policy](SECURITY.md)
 - [MIT License](LICENSE)
 - [v3.3.8 historical release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)

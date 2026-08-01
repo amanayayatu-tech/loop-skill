@@ -88,9 +88,17 @@ class V4RcDistributionTests(unittest.TestCase):
     def _install(
         self, *, extra_env: dict[str, str] | None = None
     ) -> subprocess.CompletedProcess[str]:
+        return self._install_from(ROOT, extra_env=extra_env)
+
+    def _install_from(
+        self,
+        source_root: Path,
+        *,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [str(INSTALLER)],
-            cwd=ROOT,
+            [str(source_root / "scripts/install.sh")],
+            cwd=source_root,
             env={
                 **os.environ,
                 "CODEX_HOME": str(self.codex_home),
@@ -102,6 +110,95 @@ class V4RcDistributionTests(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
         )
+
+    def _extract_tag(self, tag: str, name: str) -> Path:
+        historical = self.temp_root / name
+        historical.mkdir()
+        archive = self.temp_root / f"{name}.tar"
+        archived = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(ROOT),
+                "archive",
+                "--format=tar",
+                f"--output={archive}",
+                tag,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(archived.returncode, 0, archived.stderr)
+        extracted = subprocess.run(
+            ["tar", "-xf", str(archive), "-C", str(historical)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(extracted.returncode, 0, extracted.stderr)
+        return historical
+
+    def test_real_v4_1_1_tag_upgrades_transactionally_to_v4_2_0(self) -> None:
+        config, legacy = self._seed_config_and_v3()
+        historical = self._extract_tag("v4.1.1", "v4.1.1-source")
+        old_install = self._install_from(historical)
+        self.assertEqual(old_install.returncode, 0, old_install.stderr)
+        old_receipt = json.loads(self._latest_receipt().read_text(encoding="utf-8"))
+        self.assertEqual(old_receipt["version"], "4.1.1")
+        old_manager = self.management_uninstaller.read_bytes()
+        old_target = tree_state(self.target)
+
+        upgraded = self._install()
+        self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+        active_pointer = json.loads(
+            (self.codex_home / "install-receipts/loopskill4/active-receipt").read_text(
+                encoding="utf-8"
+            )
+        )
+        active_receipt = json.loads(
+            (
+                self.codex_home
+                / "install-receipts/loopskill4"
+                / active_pointer["receipt"]
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(active_receipt["version"], "4.2.0")
+        self.assertNotEqual(tree_state(self.target), old_target)
+        self.assertNotEqual(self.management_uninstaller.read_bytes(), old_manager)
+        self.assertEqual((self.codex_home / "config.toml").read_bytes(), config)
+        self.assertEqual(tree_bytes(self.legacy_target), legacy)
+        self.assertGreaterEqual(len(self._receipts()), 2)
+
+    def test_v4_1_1_upgrade_fault_boundaries_restore_exact_old_install(self) -> None:
+        historical = self._extract_tag("v4.1.1", "v4.1.1-fault-source")
+        for boundary in ("after_target", "after_manager", "after_receipt"):
+            with self.subTest(boundary=boundary):
+                self.codex_home = self.temp_root / f"v4.1.1-upgrade-{boundary}"
+                self._seed_config_and_v3()
+                old_install = self._install_from(historical)
+                self.assertEqual(old_install.returncode, 0, old_install.stderr)
+                before = tree_state(self.codex_home)
+                failed = self._install(
+                    extra_env={"LOOPSKILL4_TEST_INSTALL_FAULT": boundary}
+                )
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn(f"V4_INSTALL_TEST_FAULT: {boundary}", failed.stderr)
+                self.assertEqual(tree_state(self.codex_home), before)
+                active_pointer = json.loads(
+                    (
+                        self.codex_home
+                        / "install-receipts/loopskill4/active-receipt"
+                    ).read_text(encoding="utf-8")
+                )
+                active_receipt = json.loads(
+                    (
+                        self.codex_home
+                        / "install-receipts/loopskill4"
+                        / active_pointer["receipt"]
+                    ).read_text(encoding="utf-8")
+                )
+                self.assertEqual(active_receipt["version"], "4.1.1")
 
     def _receipts(self) -> list[Path]:
         root = self.codex_home / "install-receipts/loopskill4"
@@ -159,7 +256,7 @@ class V4RcDistributionTests(unittest.TestCase):
 
         receipt = json.loads(self._latest_receipt().read_text(encoding="utf-8"))
         self.assertEqual(receipt["artifact"], "loopskill4-install-receipt-v1")
-        self.assertEqual(receipt["version"], "4.1.1")
+        self.assertEqual(receipt["version"], "4.2.0")
         self.assertEqual(receipt["repo_commit"], expected_repo_commit)
         self.assertEqual(receipt["source_install_drift"], [])
         self.assertEqual(
@@ -249,7 +346,7 @@ class V4RcDistributionTests(unittest.TestCase):
         replacement = self._install()
         self.assertEqual(replacement.returncode, 0, replacement.stderr)
         current = json.loads(self._latest_receipt().read_text(encoding="utf-8"))
-        self.assertEqual(current["version"], "4.1.1")
+        self.assertEqual(current["version"], "4.2.0")
         self.assertEqual(tree_state(data_root), data_before)
         self.assertEqual((self.codex_home / "config.toml").read_bytes(), config)
         self.assertEqual(tree_bytes(self.legacy_target), legacy)

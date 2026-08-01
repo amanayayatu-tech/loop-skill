@@ -83,7 +83,7 @@ class V4AlphaPureKernelTests(unittest.TestCase):
         return store
 
     def test_manifest_freezes_slice_and_per_loop_cas(self):
-        self.assertEqual(PROTOCOL_MANIFEST["protocol_version"], "4.1.0")
+        self.assertEqual(PROTOCOL_MANIFEST["protocol_version"], "4.2.0")
         self.assertEqual(PROTOCOL_MANIFEST["write_cas"], "per_loop_revision")
         self.assertEqual(len(PROTOCOL_MANIFEST["commands"]), 19)
         self.assertNotIn("RegisterGoalPlan", PROTOCOL_MANIFEST["commands"])
