@@ -6,8 +6,8 @@
 
 要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。4.2.0 的
 发布验证覆盖直接 v3-cwd 零写入回归、完整确定性测试，以及 Linux/macOS ×
-Python 3.11、3.12、3.13、3.14 的八个 release-CI runtime/distribution lane。
-这个窄范围补丁不声称完成新的真实 Host canary。以下命令安装公开发布的 tag。
+Python 3.11、3.12、3.13、3.14 的八个 release-CI runtime/distribution lane，
+并要求三层一次性 canary。以下命令安装公开发布的 tag。
 
 ```bash
 git clone --branch v4.2.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
@@ -88,6 +88,8 @@ cwd-bound 前台 `codex exec` invocation，不承诺 Desktop-visible saved proje
 时，`run`/`continue` 必须明确选择一个。完成的持久 Attempt 可在控制器重启后回读；
 已捕获的非 ephemeral session 最多恢复一次。旧进程仍存活时等待，不可安全重放的
 动作进入人工门。
+人工门和时间门只能通过与当前 Goal 及门内容摘要绑定的凭据解除；普通 `resume`
+不能绕过它们。修复次数和重复失败指纹按 Goal 分别计算。
 `UNKNOWN`/`UNVERIFIABLE` 是有意的可见限制，不是成功，也不触发盲重发。
 
 ## 容量与兼容

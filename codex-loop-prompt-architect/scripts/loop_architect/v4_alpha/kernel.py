@@ -423,33 +423,53 @@ def policy_context(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     goals = sorted(snapshot.get("goals", {}).items())
     artifacts = sorted(snapshot.get("artifacts", {}).items())
     reviews = sorted(snapshot.get("reviews", {}).items())
+    active = [item for item in goals if item[1].get("state") == "ACTIVE"]
+    if len(active) == 1 and isinstance(active[0][1].get("chain_refs"), Mapping):
+        chain = active[0][1]["chain_refs"]
+        goal_entry = active[0]
+        artifact = snapshot.get("artifacts", {}).get(chain.get("artifact_ref"))
+        review = snapshot.get("reviews", {}).get(chain.get("review_ref"))
+        artifact_entry = (
+            (str(chain["artifact_ref"]), artifact)
+            if isinstance(artifact, Mapping)
+            else None
+        )
+        review_entry = (
+            (str(chain["review_ref"]), review)
+            if isinstance(review, Mapping)
+            else None
+        )
+    else:
+        goal_entry = None if not goals else goals[-1]
+        artifact_entry = None if not artifacts else artifacts[-1]
+        review_entry = None if not reviews else reviews[-1]
     return {
         "artifact": None
-        if not artifacts
+        if artifact_entry is None
         else {
-            "ref": artifacts[-1][0],
-            "revision": artifacts[-1][1]["revision"],
-            "state": artifacts[-1][1]["state"],
+            "ref": artifact_entry[0],
+            "revision": artifact_entry[1]["revision"],
+            "state": artifact_entry[1]["state"],
         },
         "execution": {
             "revision": snapshot["execution"]["revision"],
             "state": snapshot["execution"]["state"],
         },
         "goal": None
-        if not goals
+        if goal_entry is None
         else {
-            "ref": goals[-1][0],
-            "revision": goals[-1][1]["revision"],
-            "state": goals[-1][1]["state"],
+            "ref": goal_entry[0],
+            "revision": goal_entry[1]["revision"],
+            "state": goal_entry[1]["state"],
         },
         "loop_ref": snapshot["loop_ref"],
         "loop_revision": snapshot["loop_revision"],
         "review": None
-        if not reviews
+        if review_entry is None
         else {
-            "ref": reviews[-1][0],
-            "revision": reviews[-1][1]["revision"],
-            "state": reviews[-1][1]["state"],
+            "ref": review_entry[0],
+            "revision": review_entry[1]["revision"],
+            "state": review_entry[1]["state"],
         },
     }
 
@@ -1839,10 +1859,38 @@ def _record_policy_decision(
     ]
     response: dict[str, Any] = {"decision": decision}
     if decision == "CONTINUE_REPAIR":
-        reviews = list(snapshot.get("reviews", {}).values())
-        if not reviews or reviews[-1].get("state") != "REPAIR" or not fingerprint:
+        active_goals = [
+            (goal_ref, goal)
+            for goal_ref, goal in snapshot["goals"].items()
+            if goal.get("state") == "ACTIVE"
+        ]
+        if len(active_goals) != 1:
+            raise ProtocolRejection(
+                "INVALID_TRANSITION", "repair requires one active Goal"
+            )
+        goal_ref, _ = active_goals[0]
+        chain = active_goals[0][1].get("chain_refs")
+        current_review = (
+            snapshot.get("reviews", {}).get(chain.get("review_ref"))
+            if isinstance(chain, Mapping)
+            else None
+        )
+        if (
+            not isinstance(current_review, Mapping)
+            or current_review.get("state") != "REPAIR"
+            or not fingerprint
+        ):
             raise ProtocolRejection(
                 "INVALID_TRANSITION", "repair requires the current REPAIR review"
+            )
+        if policy.get("goal_ref") != goal_ref:
+            policy.update(
+                {
+                    "goal_ref": goal_ref,
+                    "last_failure_digest": None,
+                    "repair_attempts": 0,
+                    "same_failure_count": 0,
+                }
             )
         try:
             repair_budget = int(_binding(command, "resolved_refs", "repair_budget"))
@@ -1877,11 +1925,6 @@ def _record_policy_decision(
             allocate = command.machine_bindings["allocate_refs"]
             if allocate:
                 plan = snapshot.get("goal_plan")
-                active_goals = [
-                    (goal_ref, goal)
-                    for goal_ref, goal in snapshot["goals"].items()
-                    if goal.get("state") == "ACTIVE"
-                ]
                 if (
                     not isinstance(plan, Mapping)
                     or plan.get("storage_mode") != CONTENT_STORAGE_MODE
@@ -2165,6 +2208,21 @@ def _resume_loop(
             + 1,
         }
         events = [_event("BudgetExtended", extension_digest=extension_digest)]
+    elif wait_kind in {"HUMAN", "TIME"}:
+        if set(payload) != {"gate_digest"}:
+            raise ProtocolRejection(
+                "INVALID_COMMAND", "controller gate waiting requires bound evidence"
+            )
+        gate_digest = payload["gate_digest"]
+        if (
+            not isinstance(gate_digest, str)
+            or len(gate_digest) != 64
+            or any(character not in "0123456789abcdef" for character in gate_digest)
+        ):
+            raise ProtocolRejection(
+                "INVALID_COMMAND", "controller gate digest is invalid"
+            )
+        events = [_event("ControllerGateSatisfied", gate_digest=gate_digest)]
     elif payload:
         raise ProtocolRejection(
             "INVALID_COMMAND", "budget fields are invalid outside budget waiting"

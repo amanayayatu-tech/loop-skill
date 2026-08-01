@@ -29,6 +29,24 @@ _INHERITED_ENV_ALLOWLIST = frozenset({"LANG", "LC_ALL", "PATH", "TMPDIR"})
 _MAX_VERIFIER_OUTPUT = 1024 * 1024
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
+def _valid_loopback_route(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith("/")
+        and not value.startswith("//")
+        and "\r" not in value
+        and "\n" not in value
+        and "#" not in value
+        and len(value.encode("utf-8")) <= 2048
+    )
+
+
 @dataclass(frozen=True)
 class LocalVerification:
     state: str
@@ -106,8 +124,7 @@ def verifier_capability(criterion: str) -> str | None:
             if (
                 not isinstance(route, dict)
                 or set(route) != {"contains", "path", "status"}
-                or not isinstance(route["path"], str)
-                or not route["path"].startswith("/")
+                or not _valid_loopback_route(route["path"])
                 or not isinstance(route["contains"], str)
                 or isinstance(route["status"], bool)
                 or not isinstance(route["status"], int)
@@ -406,8 +423,7 @@ def _verify_http(root: Path, raw: str) -> Mapping[str, Any]:
         if (
             not isinstance(route, dict)
             or set(route) != {"contains", "path", "status"}
-            or not isinstance(route["path"], str)
-            or not route["path"].startswith("/")
+            or not _valid_loopback_route(route["path"])
             or not isinstance(route["contains"], str)
             or isinstance(route["status"], bool)
             or not isinstance(route["status"], int)
@@ -425,6 +441,7 @@ def _verify_http(root: Path, raw: str) -> Mapping[str, Any]:
         start_new_session=True,
     )
     responses: list[Mapping[str, Any]] = []
+    opener = urllib.request.build_opener(_NoRedirect())
     deadline = time.monotonic() + startup_timeout
     try:
         for route in normalized_routes:
@@ -434,11 +451,18 @@ def _verify_http(root: Path, raw: str) -> Mapping[str, Any]:
                 if process.poll() is not None:
                     break
                 try:
-                    with urllib.request.urlopen(
+                    with opener.open(
                         f"http://127.0.0.1:{port}{route['path']}", timeout=1
                     ) as response:
                         response_body = response.read(256 * 1024)
                         response_status = response.status
+                    break
+                except urllib.error.HTTPError as response:
+                    try:
+                        response_body = response.read(256 * 1024)
+                        response_status = response.code
+                    finally:
+                        response.close()
                     break
                 except (urllib.error.URLError, TimeoutError):
                     time.sleep(0.05)

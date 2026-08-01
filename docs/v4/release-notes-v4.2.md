@@ -21,16 +21,22 @@ long-horizon Build Loop while retaining the explicit
   session, JSONL, result controls, elapsed time, and terminal result.
 - A restart reads back a completed Attempt. An interrupted replay-safe session
   may consume one recorded `codex exec resume`; a live process is never resent.
+  PID plus process-start identity prevents PID reuse from impersonating it, and
+  interrupted active compute is conservatively charged to the persisted budget.
 - Independent verification now supports exact argv commands, loopback HTTP
   routes, file existence/change/SHA-256, human approval, real-time gates, and
   optional capability skip-with-evidence.
-- Repairable failures stay in the same Loop. A repeated failure fingerprint
-  waits with a concrete recovery action instead of terminalizing the PRD.
+- Repairable failures stay in the same Loop. Attempt counts and repeated
+  failure fingerprints are scoped per Goal; a repeated fingerprint waits with
+  a concrete recovery action instead of terminalizing the PRD.
 - Plan v2 supports 1–128 Goals and a 512 KiB canonical Plan while sending only
   the current Goal and referenced requirements to Host.
 - Receipt-valid v4.1.1 installs upgrade transactionally to v4.2.0. The installer
   preserves config, Store data, old receipts, and exact rollback bytes until
   the new active pointer commits.
+- Public discovery and status projections open Stores read-only. Human and time
+  waits require an exact Goal-bound gate digest; generic resume cannot bypass
+  those gates.
 
 ## Safety boundary
 

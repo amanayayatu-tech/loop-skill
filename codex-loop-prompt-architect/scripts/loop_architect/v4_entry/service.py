@@ -758,10 +758,20 @@ def _pause_for_provider_budget(
     attempt: Any,
     clock: Callable[[], datetime],
 ) -> UserFacingStatus | None:
-    checker = getattr(provider, "budget_block_reason", None)
+    row = store.outbox_attempt(attempt.attempt_ref)
+    invocation_state = None if row is None else row.get("invocation_state")
+    checker = (
+        getattr(provider, "recovery_budget_block_reason", None)
+        if invocation_state in {"STARTED", "UNKNOWN", "UNVERIFIABLE"}
+        else getattr(provider, "budget_block_reason", None)
+    )
     if not callable(checker):
         return None
-    reason = checker(attempt.payload)
+    reason = (
+        checker(attempt.payload, attempt.provider_idempotency_key)
+        if invocation_state in {"STARTED", "UNKNOWN", "UNVERIFIABLE"}
+        else checker(attempt.payload)
+    )
     if reason is None:
         return None
     if not isinstance(reason, str) or not reason:
@@ -1048,7 +1058,7 @@ def _status_from_store(store: SQLiteStore, loop_ref: str) -> UserFacingStatus:
 def status(*, root: Path | str) -> UserFacingStatus:
     path = _existing_store_path(root)
     try:
-        with SQLiteStore(path) as store:
+        with SQLiteStore(path, readonly=True) as store:
             descriptors = store.loop_descriptors()
             if len(descriptors) != 1:
                 raise EntryError(
@@ -1111,6 +1121,16 @@ def control_loop(
                 or (command_type == "StopLoop" and execution_state == "TERMINAL")
             ):
                 return _status_from_store(store, loop_ref)
+            if (
+                command_type == "ResumeLoop"
+                and snapshot["execution"].get("wait_kind")
+                in {"BUDGET", "HUMAN", "TIME"}
+            ):
+                raise EntryError(
+                    "USER_INPUT_INVALID",
+                    "This wait cannot be bypassed by a generic resume.",
+                    "Use the bound approval, real-time, or budget continuation action.",
+                )
             semantic_payload = {"reason": reason.strip()} if command_type != "ResumeLoop" else {}
             store.apply(
                 _machine_command(
@@ -1140,6 +1160,59 @@ def control_loop(
             "LoopSkill could not safely apply the lifecycle action.",
             "Preserve the store and inspect diagnostics.",
         ) from exc
+
+
+def _resume_controller_gate(
+    *,
+    root: Path | str,
+    gate_digest: str,
+    clock: Callable[[], datetime],
+) -> UserFacingStatus:
+    """Resume one human/time wait only with its already verified evidence digest."""
+
+    path = _existing_store_path(root)
+    with SQLiteStore(path) as store:
+        descriptors = store.loop_descriptors()
+        if len(descriptors) != 1:
+            raise EntryError(
+                "USER_STORE_UNAVAILABLE",
+                "The selected data location is not one Loop.",
+                "Select one exact Loop and try again.",
+            )
+        loop_ref = descriptors[0]["loop_ref"]
+        snapshot = store.snapshot(loop_ref)
+        if (
+            snapshot is None
+            or snapshot["execution"].get("state") != "PAUSED"
+            or snapshot["execution"].get("wait_kind") not in {"HUMAN", "TIME"}
+        ):
+            raise EntryError(
+                "USER_INPUT_INVALID",
+                "The Loop is not waiting for bound controller-gate evidence.",
+                "Read status before supplying gate evidence.",
+            )
+        store.apply(
+            _machine_command(
+                store,
+                snapshot,
+                command_type="ResumeLoop",
+                operation_label="satisfy-gate-" + gate_digest[:16],
+                subject_kind="LoopRef",
+                subject_ref=loop_ref,
+                expected_subject_revisions={
+                    "execution": snapshot["execution"]["revision"]
+                },
+                machine_bindings={
+                    "allocate_refs": {},
+                    "receipt_refs": {},
+                    "resolved_refs": {},
+                },
+                semantic_payload={"gate_digest": gate_digest},
+                clock=clock,
+            )
+        )
+        store.verify_integrity()
+        return _status_from_store(store, loop_ref)
 
 
 def extend_budget(
@@ -1259,7 +1332,7 @@ def policy_view(*, root: Path | str) -> Mapping[str, Any]:
     )
 
     path = _existing_store_path(root)
-    with SQLiteStore(path) as store:
+    with SQLiteStore(path, readonly=True) as store:
         descriptors = store.loop_descriptors()
         if len(descriptors) != 1:
             raise EntryError(
@@ -2190,7 +2263,7 @@ def satisfy_gate(
                 "plan_digest": content[1]["plan_digest"],
             },
         )
-    control_loop("resume", root=root, clock=clock)
+    _resume_controller_gate(root=root, gate_digest=gate_digest, clock=clock)
     provider = _LocalGateProvider(gate_digest, clock=clock)
     _run_startup_provider(
         path,
@@ -2227,7 +2300,11 @@ def _schedule_repair_attempt(
     if goal_document["on_failure"] != "repair":
         return False
     policy = snapshot.get("policy", {})
-    repair_attempts = int(policy.get("repair_attempts", 0))
+    repair_attempts = (
+        int(policy.get("repair_attempts", 0))
+        if policy.get("goal_ref") == goal_ref
+        else 0
+    )
     repair_budget = int(goal_document["max_attempts"]) - 1
     if repair_budget < 1 or repair_attempts >= repair_budget:
         return False
@@ -2265,7 +2342,7 @@ def _schedule_repair_attempt(
             store,
             snapshot,
             command_type="RecordPolicyDecision",
-            operation_label=f"repair-{repair_ordinal}",
+            operation_label=f"repair-{goal_document['goal_id']}-{repair_ordinal}",
             subject_kind="LoopRef",
             subject_ref=str(snapshot["loop_ref"]),
             expected_subject_revisions={
@@ -2330,6 +2407,7 @@ def sync_loop(
     """Advance the exact Host-result chain; every local step is replay-safe."""
     path = _existing_store_path(root)
     pending_receipt = None
+    pending_effect_state = None
     effective_host_provider = host_provider
     with SQLiteStore(path) as store:
         descriptors = store.loop_descriptors()
@@ -2341,10 +2419,12 @@ def sync_loop(
                 committed = [
                     effect
                     for effect in pending_snapshot.get("external_effects", {}).values()
-                    if effect.get("state") == "ATTEMPT_COMMITTED"
+                    if effect.get("state")
+                    in {"ATTEMPT_COMMITTED", "UNKNOWN", "UNVERIFIABLE"}
                 ]
                 if len(committed) == 1:
                     pending_effect = committed[0]
+                    pending_effect_state = pending_effect.get("state")
                     attempt = store.effect_attempt(pending_effect["attempt_ref"])
                     if attempt is None:
                         raise EntryError(
@@ -2379,6 +2459,15 @@ def sync_loop(
                         issuer_trust=host_issuer_trust,
                         clock=clock,
                     ).execute(attempt)
+                    if (
+                        pending_effect_state == "UNKNOWN"
+                        and pending_receipt.outcome == "unknown"
+                    ) or (
+                        pending_effect_state == "UNVERIFIABLE"
+                        and pending_receipt.trust_class == "cooperative"
+                        and pending_receipt.outcome != "observed"
+                    ):
+                        pending_receipt = None
                 elif len(committed) > 1:
                     raise EntryError(
                         "USER_STORE_UNAVAILABLE",
@@ -3044,7 +3133,7 @@ def sync_loop(
 def diagnostics(*, root: Path | str) -> dict[str, Any]:
     path = _existing_store_path(root)
     try:
-        with SQLiteStore(path) as store:
+        with SQLiteStore(path, readonly=True) as store:
             descriptors = store.loop_descriptors()
             if len(descriptors) != 1:
                 raise EntryError(
@@ -3082,7 +3171,7 @@ def worker_profile(*, root: Path | str) -> Mapping[str, Any]:
 
     path = _existing_store_path(root)
     try:
-        with SQLiteStore(path) as store:
+        with SQLiteStore(path, readonly=True) as store:
             descriptors = store.loop_descriptors()
             if len(descriptors) != 1:
                 raise EntryError(

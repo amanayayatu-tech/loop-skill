@@ -296,6 +296,10 @@
     },
     "ResumeLoop": {
       "semantic_payload": {
+        "gate_digest": {
+          "required": false,
+          "type": "string"
+        },
         "new_max_host_invocations": {
           "minimum": 1,
           "required": false,
@@ -480,6 +484,7 @@
     "VerifierExecuted",
     "BudgetWaiting",
     "BudgetExtended",
+    "ControllerGateSatisfied",
     "LoopPaused",
     "LoopResumed",
     "LoopStopped",
@@ -489,7 +494,7 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "manifest_sha256": "ab35be557fd633ccf858f868af963bbb830cce7500059c3fcaa339b0c1f6be3f",
+  "manifest_sha256": "9b52f9db8a15658db40be76930342092b028a7974afda3d24b6d269dc7751b3c",
   "protocol_version": "4.2.0",
   "reference_kinds": [
     "LoopRef",

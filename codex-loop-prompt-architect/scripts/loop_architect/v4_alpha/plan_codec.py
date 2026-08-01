@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Mapping, Sequence
 
 from .generated_protocol import CAPACITY_CONTRACT, PLAN_SOURCE_KINDS
@@ -521,6 +522,28 @@ def _canonicalize_plan_v2(value: Any) -> dict[str, Any]:
             raise PlanCodecError("USER_PREPARATION_INVALID", "goal_replay_safety")
         if gate != "worker" and recovery != "human":
             raise PlanCodecError("USER_PREPARATION_INVALID", "gate_recovery_policy")
+        verifiers = _string_array(
+            goal["verifiers"],
+            f"goal_{index}_verifiers",
+            maximum_items=int(limits["goal_verifiers"]),
+            allow_empty=False,
+            item_maximum=4096,
+        )
+        if gate == "human" and verifiers != ["human-approval"]:
+            raise PlanCodecError("USER_PREPARATION_INVALID", "human_gate_verifier")
+        if gate == "time":
+            if len(verifiers) != 1 or not verifiers[0].startswith("time-after:"):
+                raise PlanCodecError("USER_PREPARATION_INVALID", "time_gate_verifier")
+            try:
+                due = datetime.fromisoformat(
+                    verifiers[0][len("time-after:") :].replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise PlanCodecError(
+                    "USER_PREPARATION_INVALID", "time_gate_verifier"
+                ) from exc
+            if due.tzinfo is None:
+                raise PlanCodecError("USER_PREPARATION_INVALID", "time_gate_verifier")
         goals.append(
             {
                 "acceptance_criteria": _string_array(
@@ -553,13 +576,7 @@ def _canonicalize_plan_v2(value: Any) -> dict[str, Any]:
                 "replay_safety": replay,
                 "requirement": requirement,
                 "requirement_refs": requirement_refs,
-                "verifiers": _string_array(
-                    goal["verifiers"],
-                    f"goal_{index}_verifiers",
-                    maximum_items=int(limits["goal_verifiers"]),
-                    allow_empty=gate != "worker",
-                    item_maximum=4096,
-                ),
+                "verifiers": verifiers,
             }
         )
     goal_ids = [goal["goal_id"] for goal in goals]

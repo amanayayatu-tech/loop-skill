@@ -283,7 +283,10 @@ class ExecProviderTests(unittest.TestCase):
             attempt = next(attempts.iterdir())
             self.assertEqual(
                 json.loads((attempt / "process.json").read_text()),
-                {"pid": os.getpid()},
+                {
+                    "pid": os.getpid(),
+                    "start_token": exec_provider._process_start_token(os.getpid()),
+                },
             )
             self.assertEqual(
                 json.loads((attempt / "session.json").read_text()),
@@ -380,6 +383,85 @@ class ExecProviderTests(unittest.TestCase):
                 provider.invoke("create_task", self.v2_payload(maximum_calls=3), key)
             self.assertEqual(drift.exception.provider_code, "CONTROL_IDENTITY_DRIFT")
             self.assertEqual(len(runner.calls), 2)  # version/help preflight only
+
+    def test_pid_reuse_identity_mismatch_does_not_wait_for_unrelated_process(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            attempts.mkdir(mode=0o700)
+            key = "pid-reuse-key"
+            attempt = attempts / exec_provider._private_attempt_name(key)
+            attempt.mkdir(mode=0o700)
+            for name, value in (
+                (
+                    "intent.json",
+                    {
+                        "attempt_timeout_milliseconds": 30_000_000,
+                        "started_at": NOW.isoformat().replace("+00:00", "Z"),
+                    },
+                ),
+                ("process.json", {"pid": os.getpid(), "start_token": "0" * 64}),
+                ("session.json", {"thread_id": "thread-machine"}),
+            ):
+                path = attempt / name
+                path.write_bytes(canonical_bytes(value))
+                path.chmod(0o600)
+            runner = FakeRunner()
+            provider = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=runner,
+            )
+            observation = provider.invoke(
+                "create_task", self.v2_payload(maximum_calls=3), key
+            )
+            self.assertEqual(observation["provider_id"], "thread-machine")
+            self.assertEqual(runner.calls[-1][0][:3], (provider.executable, "exec", "resume"))
+
+    def test_recovery_budget_blocks_only_a_new_session_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            attempts.mkdir(mode=0o700)
+            key = "resume-budget-key"
+            attempt = attempts / exec_provider._private_attempt_name(key)
+            attempt.mkdir(mode=0o700)
+            for name, value in (
+                (
+                    "intent.json",
+                    {
+                        "attempt_timeout_milliseconds": 30_000_000,
+                        "started_at": NOW.isoformat().replace("+00:00", "Z"),
+                    },
+                ),
+                ("session.json", {"thread_id": "thread-machine"}),
+            ):
+                path = attempt / name
+                path.write_bytes(canonical_bytes(value))
+                path.chmod(0o600)
+            provider = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            reason = provider.recovery_budget_block_reason(
+                self.v2_payload(maximum_calls=1), key
+            )
+            self.assertIn("invocation budget is exhausted", reason)
+            self.assertFalse((attempt / "resume.json").exists())
+            self.assertIsNone(
+                provider.recovery_budget_block_reason(
+                    self.v2_payload(maximum_calls=2), key
+                )
+            )
 
     def test_persisted_invocation_budget_blocks_before_a_second_exec(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -497,7 +579,13 @@ class ExecProviderTests(unittest.TestCase):
             attempt = attempts / exec_provider._private_attempt_name(key)
             attempt.mkdir(mode=0o700)
             for name, value in (
-                ("intent.json", {}),
+                (
+                    "intent.json",
+                    {
+                        "attempt_timeout_milliseconds": 30_000_000,
+                        "started_at": NOW.isoformat().replace("+00:00", "Z"),
+                    },
+                ),
                 ("session.json", {"thread_id": "thread-machine"}),
             ):
                 path = attempt / name
@@ -537,8 +625,18 @@ class ExecProviderTests(unittest.TestCase):
 
     def test_incomplete_attempt_recovery_routes_to_specific_wait_without_resend(self):
         cases = (
-            ("failure", {"failure.json": {"code": "PROCESS_TIMEOUT"}}, "without resumable"),
-            ("reconcile", {}, "RECONCILE_WORKSPACE"),
+            (
+                "failure",
+                {"failure.json": {"code": "PROCESS_TIMEOUT"}},
+                "RECONCILE_WORKSPACE",
+                "PASS",
+            ),
+            (
+                "reconcile",
+                {"session.json": {"thread_id": "thread-machine"}},
+                "RECONCILE_WORKSPACE",
+                "PASS",
+            ),
             (
                 "resume-consumed",
                 {
@@ -546,14 +644,16 @@ class ExecProviderTests(unittest.TestCase):
                     "resume.json": {"thread_id": "thread-machine"},
                 },
                 "already consumed",
+                "PASS",
             ),
             (
                 "non-replayable",
                 {"session.json": {"thread_id": "thread-machine"}},
                 "Human confirmation",
+                "LIMITATION",
             ),
         )
-        for label, files, expected in cases:
+        for label, files, expected, expected_outcome in cases:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary).resolve()
                 workspace = root / "workspace"
@@ -584,9 +684,17 @@ class ExecProviderTests(unittest.TestCase):
                             "replay_safety": "non_replayable",
                         },
                     }
+                elif label == "reconcile":
+                    selected_payload = {
+                        **selected_payload,
+                        "goal_policy": {
+                            **selected_payload["goal_policy"],
+                            "recovery_policy": "reconcile",
+                        },
+                    }
                 observation = provider.invoke("create_task", selected_payload, key)
                 result = provider.read_task_result(observation["provider_id"])
-                self.assertEqual(result["result"]["outcome"], "LIMITATION")
+                self.assertEqual(result["result"]["outcome"], expected_outcome)
                 self.assertIn(expected, result["result"]["summary"])
                 self.assertEqual(len(runner.calls), 2)  # version/help only
 

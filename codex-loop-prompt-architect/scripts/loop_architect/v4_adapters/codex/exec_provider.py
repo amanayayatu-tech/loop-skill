@@ -557,6 +557,42 @@ def _private_attempt_name(provider_key: str) -> str:
     return "attempt-" + hashlib.sha256(provider_key.encode("utf-8")).hexdigest()[:24]
 
 
+def _process_start_token(pid: int) -> str | None:
+    proc_stat = Path("/proc") / str(pid) / "stat"
+    try:
+        raw = proc_stat.read_bytes()
+    except OSError:
+        raw = b""
+    if raw:
+        closing = raw.rfind(b")")
+        fields = raw[closing + 2 :].split() if closing >= 0 else []
+        if len(fields) > 19:
+            return _sha256(b"proc-start-v1\0" + fields[19])
+    ps = next(
+        (
+            candidate
+            for candidate in ("/bin/ps", "/usr/bin/ps")
+            if _safe_executable(Path(candidate)) is not None
+        ),
+        None,
+    )
+    if ps is None:
+        return None
+    try:
+        completed = subprocess.run(
+            (ps, "-o", "lstart=", "-p", str(pid)),
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    start = completed.stdout.strip()
+    return None if completed.returncode or not start else _sha256(b"ps-start-v1\0" + start)
+
+
 def _process_identity_alive(path: Path) -> bool:
     if not os.path.lexists(path):
         return False
@@ -568,12 +604,20 @@ def _process_identity_alive(path: Path) -> bool:
         raise _coded_error(
             "CONTROL_IDENTITY_DRIFT", "persistent process identity is invalid"
         ) from exc
-    if not isinstance(value, Mapping) or set(value) != {"pid"}:
+    if not isinstance(value, Mapping) or set(value) != {"pid", "start_token"}:
         raise _coded_error(
             "CONTROL_IDENTITY_DRIFT", "persistent process identity is invalid"
         )
     pid = value["pid"]
-    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
+    start_token = value["start_token"]
+    if (
+        isinstance(pid, bool)
+        or not isinstance(pid, int)
+        or pid <= 1
+        or not isinstance(start_token, str)
+        or len(start_token) != 64
+        or any(character not in "0123456789abcdef" for character in start_token)
+    ):
         raise _coded_error(
             "CONTROL_IDENTITY_DRIFT", "persistent process identity is invalid"
         )
@@ -582,8 +626,68 @@ def _process_identity_alive(path: Path) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
-    return True
+        pass
+    observed = _process_start_token(pid)
+    if observed is None:
+        raise _coded_error(
+            "PROCESS_IDENTITY_UNVERIFIABLE",
+            "The persisted process identity cannot be rebound safely; it was not resent.",
+            unavailable=True,
+        )
+    return observed == start_token
+
+
+def _prior_active_compute_ms(directory: Path, now: datetime) -> int:
+    resume_path = directory / "resume.json"
+    if os.path.lexists(resume_path):
+        try:
+            value = json.loads(
+                _read_private_regular(resume_path, limit=2048).decode("utf-8", "strict")
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _coded_error(
+                "BUDGET_EVIDENCE_INVALID", "resume budget evidence is invalid"
+            ) from exc
+        prior = value.get("prior_active_compute_ms") if isinstance(value, Mapping) else None
+        if isinstance(prior, bool) or not isinstance(prior, int) or prior < 0:
+            raise _coded_error(
+                "BUDGET_EVIDENCE_INVALID", "resume budget evidence is invalid"
+            )
+        return prior
+    try:
+        intent = json.loads(
+            _read_private_regular(directory / "intent.json", limit=4096).decode(
+                "utf-8", "strict"
+            )
+        )
+        started = datetime.fromisoformat(str(intent["started_at"]).replace("Z", "+00:00"))
+        bound = intent["attempt_timeout_milliseconds"]
+    except (
+        KeyError,
+        TypeError,
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as exc:
+        raise _coded_error(
+            "BUDGET_EVIDENCE_INVALID", "Attempt active-compute evidence is invalid"
+        ) from exc
+    if (
+        not isinstance(intent, Mapping)
+        or started.tzinfo is None
+        or isinstance(bound, bool)
+        or not isinstance(bound, int)
+        or bound < 1
+    ):
+        raise _coded_error(
+            "BUDGET_EVIDENCE_INVALID", "Attempt active-compute evidence is invalid"
+        )
+    elapsed = int(
+        max(0.0, (now.astimezone(timezone.utc) - started.astimezone(timezone.utc)).total_seconds())
+        * 1000
+    )
+    return min(bound, elapsed)
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -676,7 +780,14 @@ def _run_bounded_process(
             unavailable=True,
         ) from exc
     if process_observer is not None:
-        process_observer(process.pid)
+        try:
+            process_observer(process.pid)
+        except BaseException:
+            _terminate_process_group(process)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+            raise
     assert process.stdin is not None
     assert process.stdout is not None
     assert process.stderr is not None
@@ -1144,6 +1255,36 @@ class CodexExecProvider:
         payload: Mapping[str, Any],
         provider_idempotency_key: str,
     ) -> Mapping[str, Any]:
+        return self._invoke(
+            action,
+            payload,
+            provider_idempotency_key,
+            recovery_only=False,
+        )
+
+    def recover(
+        self,
+        action: str,
+        payload: Mapping[str, Any],
+        provider_idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        """Recover one already-started durable Attempt without creating a new one."""
+
+        return self._invoke(
+            action,
+            payload,
+            provider_idempotency_key,
+            recovery_only=True,
+        )
+
+    def _invoke(
+        self,
+        action: str,
+        payload: Mapping[str, Any],
+        provider_idempotency_key: str,
+        *,
+        recovery_only: bool,
+    ) -> Mapping[str, Any]:
         if action != "create_task" or set(payload) not in {
             LEGACY_PAYLOAD_FIELDS,
             CONTENT_PAYLOAD_FIELDS,
@@ -1158,23 +1299,6 @@ class CodexExecProvider:
         self._invoked_key = provider_idempotency_key
         if self._restore_persistent_record(provider_idempotency_key):
             return self._observation(action, provider_idempotency_key)
-        self._task_create_count += 1
-        budget_reason = self._budget_block_reason(payload)
-        if budget_reason is not None:
-            schema_digest = domain_digest(
-                "loopskill-codex-result-schema-v1\n", result_payload_schema()
-            )
-            self._record = {
-                "idempotency_key": provider_idempotency_key,
-                "result": {
-                    "outcome": "LIMITATION",
-                    "summary": budget_reason,
-                },
-                "result_schema_digest": schema_digest,
-                "thread_id": "budget-"
-                + hashlib.sha256(provider_idempotency_key.encode("utf-8")).hexdigest()[:24],
-            }
-            return self._observation(action, provider_idempotency_key)
         attempt_directory: Path | None = None
         resumed = False
         if self.attempt_root is not None:
@@ -1186,10 +1310,47 @@ class CodexExecProvider:
                     attempt_directory,
                     payload=payload,
                     provider_key=provider_idempotency_key,
+                    authorize_resume=False,
                 )
                 if recovered is not None:
                     return recovered
                 resumed = True
+            else:
+                if recovery_only:
+                    raise _coded_error(
+                        "ATTEMPT_EVIDENCE_MISSING",
+                        "The claimed Attempt has no persistent Provider evidence; it was not resent.",
+                        unavailable=True,
+                    )
+        elif recovery_only:
+            raise _coded_error(
+                "ATTEMPT_EVIDENCE_MISSING",
+                "Recovery requires a persistent Attempt root; it was not resent.",
+                unavailable=True,
+            )
+        budget_reason = self._budget_block_reason(payload)
+        if budget_reason is not None:
+            return self._local_wait_observation(
+                payload,
+                provider_idempotency_key,
+                budget_reason,
+            )
+        self._task_create_count += 1
+        if self.attempt_root is not None:
+            assert attempt_directory is not None
+            if resumed:
+                assert self.resume_thread_id is not None
+                _write_private_once(
+                    attempt_directory / "resume.json",
+                    canonical_bytes(
+                        {
+                            "prior_active_compute_ms": _prior_active_compute_ms(
+                                attempt_directory, self.clock()
+                            ),
+                            "thread_id": self.resume_thread_id,
+                        }
+                    ),
+                )
             else:
                 attempt_directory = _private_attempt_directory(
                     self.attempt_root, provider_idempotency_key
@@ -1210,6 +1371,11 @@ class CodexExecProvider:
                                 if isinstance(payload.get("goal_policy"), Mapping)
                                 else None
                             ),
+                            "recovery_policy": (
+                                payload.get("goal_policy", {}).get("recovery_policy")
+                                if isinstance(payload.get("goal_policy"), Mapping)
+                                else None
+                            ),
                             "started_at": _iso(self.clock()),
                             "transport": EXEC_TRANSPORT,
                         }
@@ -1220,9 +1386,17 @@ class CodexExecProvider:
         def observe_process(pid: int) -> None:
             if attempt_directory is None:
                 return
+            start_token = _process_start_token(pid)
+            if start_token is None:
+                raise _coded_error(
+                    "PROCESS_IDENTITY_UNVERIFIABLE",
+                    "The spawned process identity could not be bound safely.",
+                    unavailable=True,
+                )
             name = "resume-process.json" if resumed else "process.json"
             _write_private_once(
-                attempt_directory / name, canonical_bytes({"pid": pid})
+                attempt_directory / name,
+                canonical_bytes({"pid": pid, "start_token": start_token}),
             )
 
         def observe_stdout(chunk: bytes) -> None:
@@ -1383,11 +1557,33 @@ class CodexExecProvider:
         *,
         payload: Mapping[str, Any],
         provider_key: str,
+        authorize_resume: bool = True,
     ) -> Mapping[str, Any] | None:
         if directory.is_symlink() or not directory.is_dir():
             raise _coded_error(
                 "CONTROL_IDENTITY_DRIFT", "persistent Attempt directory is unsafe"
             )
+        policy = payload.get("goal_policy")
+        replay_safety = (
+            policy.get("replay_safety") if isinstance(policy, Mapping) else None
+        )
+        recovery_policy = (
+            policy.get("recovery_policy") if isinstance(policy, Mapping) else None
+        )
+
+        def reconcile_or_wait(summary: str) -> Mapping[str, Any]:
+            if replay_safety == "file_local" and recovery_policy in {
+                "reconcile",
+                "resume",
+            }:
+                return self._local_wait_observation(
+                    payload,
+                    provider_key,
+                    "RECONCILE_WORKSPACE: " + summary,
+                    outcome="PASS",
+                )
+            return self._local_wait_observation(payload, provider_key, summary)
+
         key_digest = hashlib.sha256(provider_key.encode("utf-8")).hexdigest()
         if os.path.lexists(directory / "attempt.json"):
             if self._restore_persistent_directory(
@@ -1401,10 +1597,8 @@ class CodexExecProvider:
                 "persistent terminal Attempt evidence is inconsistent",
             )
         if (directory / "failure.json").exists():
-            return self._local_wait_observation(
-                payload,
-                provider_key,
-                "The prior Host Attempt ended without resumable terminal evidence.",
+            return reconcile_or_wait(
+                "the prior Host Attempt ended without terminal evidence; verify current local artifacts before repair."
             )
         process_paths = tuple(
             directory / name for name in ("resume-process.json", "process.json")
@@ -1423,10 +1617,8 @@ class CodexExecProvider:
                     "persistent terminal Attempt evidence is inconsistent",
                 )
             if (directory / "failure.json").exists():
-                return self._local_wait_observation(
-                    payload,
-                    provider_key,
-                    "The prior Host Attempt ended without resumable terminal evidence.",
+                return reconcile_or_wait(
+                    "the prior Host Attempt ended without terminal evidence; verify current local artifacts before repair."
                 )
             if time.monotonic() >= deadline:
                 raise _coded_error(
@@ -1437,16 +1629,12 @@ class CodexExecProvider:
             time.sleep(0.25)
         session_path = directory / "session.json"
         if not os.path.lexists(session_path):
-            return self._local_wait_observation(
-                payload,
-                provider_key,
-                "RECONCILE_WORKSPACE: no Host session identity was captured; inspect local artifacts before continuing.",
+            return reconcile_or_wait(
+                "no Host session identity was captured; verify current local artifacts before repair."
             )
         if (directory / "resume.json").exists():
-            return self._local_wait_observation(
-                payload,
-                provider_key,
-                "The recorded Host session has already consumed its single automatic resume.",
+            return reconcile_or_wait(
+                "the Host session already consumed its single automatic resume; verify current local artifacts before repair."
             )
         try:
             session = json.loads(
@@ -1463,20 +1651,40 @@ class CodexExecProvider:
             raise _coded_error(
                 "THREAD_IDENTITY_INVALID", "persistent Host session identity is invalid"
             )
-        policy = payload.get("goal_policy")
-        replay_safety = (
-            policy.get("replay_safety") if isinstance(policy, Mapping) else None
-        )
         if replay_safety == "non_replayable":
             return self._local_wait_observation(
                 payload,
                 provider_key,
                 "Human confirmation is required before recovering a non-replayable action.",
             )
-        _write_private_once(
-            directory / "resume.json",
-            canonical_bytes({"thread_id": thread_id}),
-        )
+        if recovery_policy == "human":
+            return self._local_wait_observation(
+                payload,
+                provider_key,
+                "Human confirmation is required by the Goal recovery policy.",
+            )
+        if recovery_policy == "reconcile":
+            return reconcile_or_wait(
+                "the Goal requires local artifact reconciliation before another Host action."
+            )
+        if recovery_policy != "resume":
+            return self._local_wait_observation(
+                payload,
+                provider_key,
+                "The Goal recovery policy is unavailable; the Host action was not resent.",
+            )
+        if authorize_resume:
+            _write_private_once(
+                directory / "resume.json",
+                canonical_bytes(
+                    {
+                        "prior_active_compute_ms": _prior_active_compute_ms(
+                            directory, self.clock()
+                        ),
+                        "thread_id": thread_id,
+                    }
+                ),
+            )
         self.resume_thread_id = thread_id
         return None
 
@@ -1485,6 +1693,8 @@ class CodexExecProvider:
         payload: Mapping[str, Any],
         provider_key: str,
         summary: str,
+        *,
+        outcome: str = "LIMITATION",
     ) -> Mapping[str, Any]:
         del payload
         schema_digest = domain_digest(
@@ -1492,7 +1702,7 @@ class CodexExecProvider:
         )
         self._record = {
             "idempotency_key": provider_key,
-            "result": {"outcome": "LIMITATION", "summary": summary},
+            "result": {"outcome": outcome, "summary": summary},
             "result_schema_digest": schema_digest,
             "thread_id": "waiting-"
             + hashlib.sha256(provider_key.encode("utf-8")).hexdigest()[:24],
@@ -1525,6 +1735,12 @@ class CodexExecProvider:
             if (directory / "resume.json").is_file():
                 used_calls += 1
             if not record.is_file():
+                try:
+                    used_milliseconds += _prior_active_compute_ms(
+                        directory, self.clock()
+                    )
+                except (HostResponseLost, HostUnavailable, OSError, ValueError):
+                    return "The persisted active-compute budget evidence is unverifiable."
                 continue
             try:
                 raw = _read_private_regular(record, limit=MAX_INSPECTION_BYTES)
@@ -1537,6 +1753,13 @@ class CodexExecProvider:
             if isinstance(elapsed, bool) or not isinstance(elapsed, int) or elapsed < 0:
                 return "The persisted active-compute budget evidence is unverifiable."
             used_milliseconds += elapsed
+            if value.get("resumed") is True:
+                try:
+                    used_milliseconds += _prior_active_compute_ms(
+                        directory, self.clock()
+                    )
+                except (HostResponseLost, HostUnavailable, OSError, ValueError):
+                    return "The persisted active-compute budget evidence is unverifiable."
         if used_calls >= maximum_calls:
             return "The Plan-bound Host invocation budget is exhausted."
         if used_milliseconds >= wall_seconds * 1000:
@@ -1550,6 +1773,45 @@ class CodexExecProvider:
     def budget_block_reason(self, payload: Mapping[str, Any]) -> str | None:
         """Read persisted usage before the Adapter commits a provider side effect."""
 
+        return self._budget_block_reason(payload)
+
+    def recovery_budget_block_reason(
+        self,
+        payload: Mapping[str, Any],
+        provider_idempotency_key: str,
+    ) -> str | None:
+        """Check budget only when recovery would spawn one recorded session resume."""
+
+        if self.attempt_root is None:
+            return None
+        directory = self.attempt_root / _private_attempt_name(
+            provider_idempotency_key
+        )
+        if (
+            not directory.is_dir()
+            or directory.is_symlink()
+            or (directory / "attempt.json").exists()
+            or (directory / "failure.json").exists()
+            or (directory / "resume.json").exists()
+            or not (directory / "session.json").exists()
+        ):
+            return None
+        try:
+            if any(
+                _process_identity_alive(directory / name)
+                for name in ("resume-process.json", "process.json")
+            ):
+                return None
+        except (HostResponseLost, HostUnavailable):
+            return None
+        policy = payload.get("goal_policy")
+        if not isinstance(policy, Mapping):
+            return None
+        if (
+            policy.get("recovery_policy") != "resume"
+            or policy.get("replay_safety") == "non_replayable"
+        ):
+            return None
         return self._budget_block_reason(payload)
 
     def readback(

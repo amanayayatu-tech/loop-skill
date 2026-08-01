@@ -35,7 +35,10 @@ from loop_architect.v4_alpha.protocol import (  # noqa: E402
     domain_digest,
     result_payload_schema,
 )
-from loop_architect.v4_adapters.codex.adapter import HOST_SCHEMA_VERSION  # noqa: E402
+from loop_architect.v4_adapters.codex.adapter import (  # noqa: E402
+    HOST_SCHEMA_VERSION,
+    HostResponseLost,
+)
 from loop_architect.v4_entry import (  # noqa: E402
     EntryError,
     confirm_loop,
@@ -156,6 +159,70 @@ class EntryProviderFixture:
             "result_schema_digest": schema_digest,
             "schema_version": HOST_SCHEMA_VERSION,
             "status": self.result_status,
+            "trust": "authoritative",
+        }
+
+
+class RecoveringEntryProvider(EntryProviderFixture):
+    def __init__(self, *, now=None):
+        super().__init__(now=now)
+        self.recover_count = 0
+
+    def recover(self, action, payload, provider_idempotency_key):
+        self.recover_count += 1
+        return super().invoke(action, payload, provider_idempotency_key)
+
+
+class LostEntryProvider(EntryProviderFixture):
+    def invoke(self, action, payload, provider_idempotency_key):
+        del action, payload, provider_idempotency_key
+        self.invoke_count += 1
+        raise HostResponseLost("synthetic interrupted response")
+
+
+class SequencedEntryProvider(EntryProviderFixture):
+    def __init__(self, results, *, now=None):
+        super().__init__(now=now)
+        self.results = list(results)
+        self.results_by_provider = {}
+
+    def invoke(self, action, payload, provider_idempotency_key):
+        if not self.results:
+            raise AssertionError("unexpected Host invocation")
+        self.invoke_count += 1
+        provider_id = f"synthetic-entry-thread-{self.invoke_count}"
+        self.results_by_provider[provider_id] = self.results.pop(0)
+        self.records[provider_idempotency_key] = {
+            "action": action,
+            "idempotency_key": provider_idempotency_key,
+            "provider_id": provider_id,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "status": "OBSERVED",
+            "subject_id": payload["target_ref"],
+            "trust": "authoritative",
+        }
+        return {
+            **self.records[provider_idempotency_key],
+            "status": "ACCEPTED",
+            "trust": "cooperative",
+        }
+
+    def read_task_result(self, provider_id):
+        self.result_read_count += 1
+        result = self.results_by_provider[provider_id]
+        schema_digest = domain_digest(
+            "loopskill-codex-result-schema-v1\n", result_payload_schema()
+        )
+        return {
+            "provider_id": provider_id,
+            "result": result,
+            "result_digest": domain_digest(
+                "loopskill-host-result-v1\n",
+                {"result": result, "result_schema_digest": schema_digest},
+            ),
+            "result_schema_digest": schema_digest,
+            "schema_version": HOST_SCHEMA_VERSION,
+            "status": "COMPLETED",
             "trust": "authoritative",
         }
 
@@ -401,6 +468,8 @@ class V4SingleEntryUXTests(unittest.TestCase):
             )
             self.assertEqual(waiting.result, "WAITING_HUMAN")
             self.assertEqual(provider.invoke_count, 0)
+            with self.assertRaises(EntryError):
+                control_loop("resume", root=data, clock=lambda: NOW)
             closed = satisfy_gate(
                 root=data,
                 workspace_root=workspace,
@@ -409,6 +478,106 @@ class V4SingleEntryUXTests(unittest.TestCase):
             )
             self.assertEqual(closed.result, "SUCCEEDED")
             self.assertEqual(provider.invoke_count, 0)
+
+    def test_started_outbox_reaches_provider_recovery_after_controller_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request([v2_goal("g000", "Recover the same claimed Attempt")])
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000020",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            data = root / "data"
+            lost = LostEntryProvider(now=NOW)
+            started = start_loop(
+                prepared,
+                root=data,
+                host_provider=lost,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            self.assertEqual(started.progress, "Needs attention")
+            self.assertEqual(lost.invoke_count, 1)
+
+            recovered = RecoveringEntryProvider(now=NOW)
+            value = sync_loop(
+                root=data,
+                host_provider=recovered,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            for _ in range(8):
+                if value.progress == "Finished":
+                    break
+                value = sync_loop(
+                    root=data,
+                    host_provider=recovered,
+                    clock=lambda: NOW,
+                    workspace_root=workspace,
+                )
+            self.assertEqual(
+                value.result,
+                "SUCCEEDED",
+                f"recover={recovered.recover_count} invoke={recovered.invoke_count} reads={recovered.result_read_count} progress={value.progress}",
+            )
+            self.assertEqual(recovered.recover_count, 1)
+            self.assertEqual(recovered.invoke_count, 1)
+
+    def test_repair_attempt_budgets_are_scoped_per_goal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            request = v2_request(
+                [
+                    v2_goal("g000", "Repair first Goal", max_attempts=2),
+                    v2_goal("g001", "Repair second Goal", max_attempts=2),
+                ]
+            )
+            prepared = root / "prepared"
+            prepare_loop(
+                request,
+                prepared,
+                clock=lambda: NOW,
+                token_factory=lambda: "100000000000000000000021",
+                workspace_root=workspace,
+            )
+            confirm_loop(prepared, confirmed=True, clock=lambda: NOW)
+            provider = SequencedEntryProvider(
+                [
+                    {"outcome": "FAILED", "summary": "first failure"},
+                    {"outcome": "PASS", "summary": "first repaired"},
+                    {"outcome": "FAILED", "summary": "second failure"},
+                    {"outcome": "PASS", "summary": "second repaired"},
+                ],
+                now=NOW,
+            )
+            data = root / "data"
+            value = start_loop(
+                prepared,
+                root=data,
+                host_provider=provider,
+                clock=lambda: NOW,
+                workspace_root=workspace,
+            )
+            for _ in range(24):
+                if value.progress == "Finished":
+                    break
+                value = sync_loop(
+                    root=data,
+                    host_provider=provider,
+                    clock=lambda: NOW,
+                    workspace_root=workspace,
+                )
+            self.assertEqual(value.result, "SUCCEEDED")
+            self.assertEqual(provider.invoke_count, 4)
 
     def test_v2_failure_wait_policy_pauses_instead_of_terminalizing(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -736,6 +905,42 @@ class V4SingleEntryUXTests(unittest.TestCase):
             )
             self.assertEqual(closed.result, "SUCCEEDED")
             self.assertEqual(provider.invoke_count, 0)
+
+    def test_v2_controller_gate_verifiers_are_complete_before_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            invalid_goals = (
+                v2_goal(
+                    "g000",
+                    "Invalid human gate",
+                    verifiers=(),
+                    gate="human",
+                    recovery_policy="human",
+                    replay_safety="non_replayable",
+                ),
+                v2_goal(
+                    "g000",
+                    "Ambiguous time gate",
+                    verifiers=(
+                        "time-after:2026-08-01T00:00:00Z",
+                        "time-after:2026-08-02T00:00:00Z",
+                    ),
+                    gate="time",
+                    recovery_policy="human",
+                ),
+            )
+            for index, goal in enumerate(invalid_goals):
+                prepared = root / f"prepared-{index}"
+                with self.assertRaises(EntryError):
+                    prepare_loop(
+                        v2_request([goal]),
+                        prepared,
+                        clock=lambda: NOW,
+                        workspace_root=workspace,
+                    )
+                self.assertFalse(prepared.exists())
 
     def test_public_cli_discovers_and_requires_selection_for_multiple_loops(self):
         cli = load_cli_module()
@@ -2110,6 +2315,28 @@ class V4SingleEntryUXTests(unittest.TestCase):
             with self.assertRaises(EntryError):
                 diagnostics(root=root)
             self.assertFalse(root.exists())
+
+    def test_status_list_policy_and_diagnostics_use_read_only_store_connections(self):
+        cli = load_cli_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared = prepare_confirm(root, "Inspect without becoming a writer")
+            data = root / "data"
+            start_loop(prepared, root=data, clock=lambda: NOW)
+            database = data / STORE_FILENAME
+            before_bytes = database.read_bytes()
+            before_entries = tuple(sorted(path.name for path in data.iterdir()))
+
+            status(root=data)
+            diagnostics(root=data)
+            policy_view(root=data)
+            worker_profile(root=data)
+            self.assertEqual(len(cli._discover_loops(data)), 1)
+
+            self.assertEqual(database.read_bytes(), before_bytes)
+            self.assertEqual(
+                tuple(sorted(path.name for path in data.iterdir())), before_entries
+            )
 
     def test_goal_and_authority_registry_corruption_fail_closed(self):
         for target in ("goal", "actor"):

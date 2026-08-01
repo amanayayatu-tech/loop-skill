@@ -25,7 +25,7 @@ after interruption with a captured session, one recorded same-session resume:
 | Local condition | Provider action | Recovery |
 | --- | --- | --- |
 | Attempt committed but unclaimed | one claimant may invoke `codex exec` | the same durable Attempt may make its first call |
-| process started and still live | wait; do not spawn | read its persistent terminal evidence when available |
+| process started and the recorded PID plus process-start identity are still live | wait; do not spawn | read its persistent terminal evidence when available |
 | complete valid JSONL lifecycle + one schema-valid result file + zero exit | bind persistent terminal observation and schema/result digests | local result/artifact/review/finalization may advance |
 | interrupted with session and replay-safe policy | record and run one `codex exec resume` | no second automatic resume |
 | no session or non-replayable action | no blind call | reconcile local workspace or wait for human confirmation |
@@ -98,7 +98,9 @@ diagnostic only; the Adapter still maps ambiguous external completion to
 canonical `UNKNOWN` and never resends.
 
 For Plan v2, the Provider copies terminal schema/result/transcript bytes and a
-digest manifest into one owner-only Attempt directory. `readback`,
+digest manifest into one owner-only Attempt directory. The process record binds
+both PID and process-start identity so PID reuse cannot impersonate the original
+Attempt. `readback`,
 `read_task_result`, and lifecycle reads validate those files after restart.
 Partial stdout binds `thread.started` as soon as observed; recovery never parses
 unrelated rollout files.
@@ -106,9 +108,10 @@ unrelated rollout files.
 ## Capability truth
 
 `task_create`, `resource_read`, and `lifecycle_readback` are available strictly
-only for the directly captured same-process transcript. The capability source
-explicitly identifies this scope. These are unavailable as cross-process Host
-lookups.
+for the directly captured transcript and its digest-bound persistent copy. A
+later controller process may validate that copy, but cannot perform a general
+cross-process Host lookup. The capability source explicitly identifies this
+scope.
 
 `project_registration`, independent `thread_create`, `message_send`,
 `heartbeat`, and `provider_idempotency` are unavailable. Sandbox, trust, model,

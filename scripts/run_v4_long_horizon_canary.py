@@ -23,12 +23,19 @@ TESTS = (
     "tests.test_v4_single_entry_ux.V4SingleEntryUXTests.test_v2_budget_preflight_extends_and_resumes_without_a_blocked_host_call",
     "tests.test_v4_single_entry_ux.V4SingleEntryUXTests.test_v2_repair_stays_in_same_loop_and_can_succeed",
     "tests.test_v4_single_entry_ux.V4SingleEntryUXTests.test_v2_repeated_repair_fingerprint_waits_after_second_attempt",
+    "tests.test_v4_single_entry_ux.V4SingleEntryUXTests.test_repair_attempt_budgets_are_scoped_per_goal",
+    "tests.test_v4_single_entry_ux.V4SingleEntryUXTests.test_started_outbox_reaches_provider_recovery_after_controller_restart",
     "tests.test_v4_single_entry_ux.V4SingleEntryUXTests.test_v2_time_gate_uses_real_clock_and_never_calls_host",
+    "tests.test_v4_single_entry_ux.V4SingleEntryUXTests.test_v2_controller_gate_verifiers_are_complete_before_start",
     "tests.test_v4_single_entry_ux.V4SingleEntryUXTests.test_public_cli_discovers_and_requires_selection_for_multiple_loops",
+    "tests.test_v4_single_entry_ux.V4SingleEntryUXTests.test_status_list_policy_and_diagnostics_use_read_only_store_connections",
     "tests.test_v4_artifact_capabilities.V4ArtifactCapabilityTests.test_exact_argv_command_verifier_runs_independently",
     "tests.test_v4_artifact_capabilities.V4ArtifactCapabilityTests.test_loopback_http_verifier_starts_checks_and_reaps_service",
+    "tests.test_v4_artifact_capabilities.V4ArtifactCapabilityTests.test_loopback_http_verifier_never_follows_redirects",
     "tests.test_v4_exec_provider.ExecProviderTests.test_persistent_terminal_attempt_survives_provider_restart",
     "tests.test_v4_exec_provider.ExecProviderTests.test_incomplete_persisted_session_uses_one_recorded_resume",
+    "tests.test_v4_exec_provider.ExecProviderTests.test_pid_reuse_identity_mismatch_does_not_wait_for_unrelated_process",
+    "tests.test_v4_exec_provider.ExecProviderTests.test_recovery_budget_blocks_only_a_new_session_resume",
 )
 
 

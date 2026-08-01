@@ -264,6 +264,31 @@ class CodexHostAdapter:
                 response_lost = True
             except HostUnavailable:
                 response_lost = True
+        elif row.get("invocation_state") in {"STARTED", "UNKNOWN", "UNVERIFIABLE"}:
+            observed = self._bounded_readback(attempt)
+            if observed is not None:
+                authoritative = (
+                    observed["trust"] == "authoritative"
+                    and self._strict_observation_allowed(attempt.action, capabilities)
+                )
+                return self._receipt(
+                    attempt,
+                    observed,
+                    capabilities=capabilities,
+                    trust_class="strict" if authoritative else "cooperative",
+                    outcome="observed" if authoritative else "responded",
+                )
+            recover = getattr(self.provider, "recover", None)
+            if callable(recover):
+                try:
+                    response = recover(
+                        attempt.action,
+                        attempt.payload,
+                        attempt.provider_idempotency_key,
+                    )
+                    self._validate_observation(response, attempt)
+                except (HostResponseLost, HostUnavailable):
+                    response_lost = True
 
         observed = self._bounded_readback(attempt)
         if observed is not None:

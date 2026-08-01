@@ -264,6 +264,10 @@
     },
     "ResumeLoop": {
       "semantic_payload": {
+        "gate_digest": {
+          "required": false,
+          "type": "string"
+        },
         "new_max_host_invocations": {
           "minimum": 1,
           "required": false,
@@ -440,6 +444,7 @@
     "VerifierExecuted",
     "BudgetWaiting",
     "BudgetExtended",
+    "ControllerGateSatisfied",
     "LoopPaused",
     "LoopResumed",
     "LoopStopped",

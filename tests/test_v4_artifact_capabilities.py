@@ -320,6 +320,46 @@ class V4ArtifactCapabilityTests(unittest.TestCase):
             with socket.socket() as closed:
                 self.assertNotEqual(closed.connect_ex(("127.0.0.1", port)), 0)
 
+    def test_loopback_http_verifier_never_follows_redirects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            baseline = capture_non_git_baseline(root)
+            capture = capture_non_git_delta(root, baseline)
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            script = (
+                "from http.server import BaseHTTPRequestHandler,HTTPServer\n"
+                "class H(BaseHTTPRequestHandler):\n"
+                " def do_GET(self):\n"
+                "  if self.path=='/':\n"
+                f"   self.send_response(302);self.send_header('Location','http://127.0.0.1:{port}/ok');self.end_headers()\n"
+                "  else:\n"
+                "   self.send_response(200);self.end_headers();self.wfile.write(b'redirected')\n"
+                " def log_message(self,*args): pass\n"
+                f"HTTPServer(('127.0.0.1',{port}),H).serve_forever()\n"
+            )
+            criterion = "http-json:" + json.dumps(
+                {
+                    "cwd": ".",
+                    "env": [],
+                    "port": port,
+                    "routes": [
+                        {"contains": "redirected", "path": "/", "status": 200}
+                    ],
+                    "start_argv": [sys.executable, "-c", script],
+                    "startup_timeout_seconds": 10,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            with SQLiteStore(root / "store.sqlite3", fixture_authority()) as store:
+                persist_capture_blobs(store, capture)
+                result = verify_artifact(
+                    store, capture, (criterion,), workspace_root=root
+                )
+            self.assertEqual(result.state, "FAILED")
+
     def test_verifier_declarations_reject_unsafe_shapes_and_accept_local_gates(self):
         self.assertEqual(
             artifact_verifier.verifier_capability("human-approval"), "human-gate"

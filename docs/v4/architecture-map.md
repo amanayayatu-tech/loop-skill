@@ -46,7 +46,9 @@ The Store durably records one `AttemptRef` before execution ownership is
 claimed. Invocation and observed active-compute budgets are checked before the
 Host call. Provider idempotency is not assumed: one provider key maps to one
 owner-only Attempt directory, and recovery may only read its terminal evidence,
-wait on its recorded live PID, or use its one bound session resume. A late
+wait on its recorded live PID plus process-start identity, or use its one bound
+session resume. Interrupted active compute is conservatively charged from the
+persisted start time up to the Attempt bound. A late
 authoritative observation can strengthen the same subject identity but cannot
 invent a new Goal Attempt or rewrite workflow history.
 Budget exhaustion pauses before the Adapter invokes the Host. A digest-bound
@@ -75,7 +77,7 @@ session, replay-safe recovery may issue exactly one recorded
 
 Codex Desktop's folder-open → `list_projects` → `projectId` → `create_thread`
 route has historical verified provisioning receipts. That evidence establishes
-the Desktop provisioning route, not a capability in the v4.2 Provider. The 4.1
+the Desktop provisioning route, not a capability in the v4.2 Provider. The 4.2
 default is a foreground cwd-bound `codex exec` invocation and does not promise
 a Desktop-visible saved project/task. Optional saved-project convenience is
 outside the current release boundary.
@@ -89,6 +91,11 @@ If a crash follows the local Attempt commit but precedes its provider call,
 start, recovery is restricted to the persistent PID/session/result evidence
 above. The directly captured Host-result digest remains in the canonical Result
 binding so changed local evidence fails closed.
+
+Public `list`, `status`, policy, and diagnostics views open SQLite in read-only
+mode. Repair ordinals, attempt limits, and repeated-failure fingerprints are
+scoped to the active Goal, so one Goal cannot consume another Goal's repair
+budget.
 
 ## State and evidence
 

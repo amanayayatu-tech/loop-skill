@@ -158,7 +158,7 @@ def _discover_loops(base: Path) -> list[dict[str, object]]:
     seen: set[str] = set()
     try:
         for root in roots:
-            with SQLiteStore(root / _STORE_FILENAME) as store:
+            with SQLiteStore(root / _STORE_FILENAME, readonly=True) as store:
                 descriptors = store.loop_descriptors()
                 if len(descriptors) != 1:
                     raise ValueError("store is not single-loop")
