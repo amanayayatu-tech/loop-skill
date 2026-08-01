@@ -18,7 +18,7 @@ from .capture import (
     workspace_identity,
 )
 from .paths import ArtifactCaptureError
-from .verifier import LocalVerification, verify_artifact
+from .verifier import LocalVerification, verifier_capability, verify_artifact
 
 __all__ = [
     "ArtifactBaseline",
@@ -37,6 +37,7 @@ __all__ = [
     "persist_baseline_blobs",
     "persist_capture_blobs",
     "prepare_artifact_baseline",
+    "verifier_capability",
     "verify_artifact",
     "workspace_identity",
 ]

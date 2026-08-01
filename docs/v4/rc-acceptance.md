@@ -1,27 +1,17 @@
 # LoopSkill 4 release acceptance boundary
 
-LoopSkill 4.1.1 is publicly released only after the exact merged-main commit,
-annotated `v4.1.1` tag, tag CI, and public GitHub Release have all been read
+LoopSkill 4.2.0 is publicly released only after the exact merged-main commit,
+annotated `v4.2.0` tag, tag CI, and public GitHub Release have all been read
 back. A local candidate, RC packet, exec canary, pushed branch, merged PR, or tag
 alone is not a release.
 
 ## Candidate gates
 
-### v4.1.1 scoped boundary-hotfix exception
-
-For v4.1.1 only, the author explicitly replaces the fresh real Host canary
-requirement below with the direct v3-cwd zero-write subprocess regression, the
-complete deterministic suite, isolated distribution validation, and exact-SHA
-pull-request/main/tag CI. The changed branch rejects before Provider
-construction, while the ordinary non-v3 Provider route is unchanged; a fresh
-non-v3 canary cannot exercise the repaired branch. No Host invocation or canary
-receipt is claimed for v4.1.1.
-
-The superseded development candidate remains terminal evidence: both semantic
-Goals passed, shared Host
-config integrity failed, no receipt was emitted, and the 8-Goal route never
-started. That evidence is not reused or relabeled. All non-Host candidate and
-publication gates below remain required.
+v4.2.0 has no version-scoped exception. It requires the deterministic and
+distribution gates plus three ordered exact-SHA canary layers: base 2+8 Host
+routes, a long-horizon recovery scenario, and a disposable Nepha copy. A failed
+identity remains terminal predecessor evidence and is never relabeled or
+reused.
 
 - every v4 protocol, Store, Artifact, Adapter, Entry, policy, projection,
   distribution, fault, liveness, cost, UX, preservation, and hard-break case;
@@ -33,7 +23,7 @@ publication gates below remain required.
 - privacy-safe risk/audit/archive/metrics, secret/private-path/raw-identity/
   large-artifact scan, dependency/license inventory, and SBOM;
 - bilingual README parity, real command syntax/smoke, local links, exact
-  4.1.1 version/changelog/release-note identity, and no stale v3 current-product
+  4.2.0 version/changelog/release-note identity, and no stale v3 current-product
   wording;
 - content-addressed PlanDocument/PlanIndex parity, 1/4/8/16/32 Goal capacity,
   33-Goal and prompt-overflow zero-effect rejection, canonical property/fuzz,
@@ -58,6 +48,12 @@ publication gates below remain required.
   result digests are bound to private evidence; JSONL is lifecycle-only, bounded
   stderr is diagnostic, and no `agent_message`/text-marker fallback or raw
   public transcript is allowed;
+- a deterministic long-horizon canary proving continuous advancement,
+  same-Loop repair, persistent terminal readback, one recorded session resume,
+  human/time/budget waits, optional skip, multi-Loop selection, exact command
+  verification, and loopback HTTP smoke;
+- a disposable Nepha copy proving Chinese-path startup, tests, listener and
+  four routes, with no write to the real Nepha project;
 - independent read-only architecture, UX, installer, CI, privacy, artifact,
   preservation, and documentation review bound to the same SHA.
 
@@ -75,11 +71,8 @@ reconstructing protocol literals. `UX-009-a` binds the 2-Goal receipt and
 is exactly 10. Their public receipts contain no absolute private path,
 task/thread/turn identity, prompt, transcript, secret, or raw log.
 
-For v4.1.1, no live-canary bindings or receipts in the preceding paragraph are
-emitted or claimed; hosted-unit conformance remains deterministic evidence.
-For releases using the normal canary path, that minimized JSON is not
-self-authenticating and cannot satisfy the final
-gate alone. Final validation opens the exact disposable v4 store and recomputes
+The minimized canary JSON is not self-authenticating and cannot satisfy the
+final gate alone. Final validation opens the exact disposable v4 store and recomputes
 the closed same-process evidence binding; it does not start another process or
 claim post-process Host readback. A domain-separated attestation binds the
 candidate goal digest, hashed machine-emitted identity, Host-result digest,
@@ -93,21 +86,19 @@ acceptance. The active release gate requires the stable zero-write
 `USER_UNSUPPORTED_LEGACY_VERSION` boundary and absence of v3 importer/runtime/
 MCP/Pack/State-Writer/dual-write production surfaces.
 
-For v4.1.1, the local validator runs only in `--static-only` mode and does not
-emit or imply a Host-canary publication receipt. For releases using the normal
-canary path, the final local validator emits
-`LOOPSKILL_4_1_PUBLICATION_CANDIDATE_VALIDATED`, not a publication claim. Only
-the GitHub readback at the end of this document establishes that 4.1.1 is
+The final local validator emits
+`LOOPSKILL_4_2_PUBLICATION_CANDIDATE_VALIDATED`, not a publication claim. Only
+the GitHub readback at the end of this document establishes that 4.2.0 is
 public, latest, and non-prerelease.
 
 ## Publication gates
 
 Before external Git writes, fetch origin/tags, integrate any main drift
-non-destructively, confirm intended clean diff and no v4.1.1 tag/Release, and
+non-destructively, confirm intended clean diff and no v4.2.0 tag/Release, and
 rerun affected gates. The feature branch must pass v4 PR CI before a
-non-destructive merge. The merged-main SHA is separately verified; v4.1.1 uses
-the scoped exception above instead of a new canary. Annotated tag CI must pass
-before creating GitHub Release 4.1.1 as latest
+non-destructive merge. The merged-main SHA is separately verified with all
+three canary layers. Annotated tag CI must pass
+before creating GitHub Release 4.2.0 as latest
 and non-prerelease.
 
 Final readback binds Release URL, tag object and peeled commit, verified main

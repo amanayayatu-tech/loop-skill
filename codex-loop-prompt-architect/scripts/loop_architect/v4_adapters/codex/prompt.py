@@ -28,6 +28,13 @@ CONTENT_PAYLOAD_FIELDS = LEGACY_PAYLOAD_FIELDS | {
     "prior_disposition",
     "workspace_digest",
 }
+V2_CONTENT_PAYLOAD_FIELDS = CONTENT_PAYLOAD_FIELDS | {
+    "capabilities",
+    "goal_policy",
+    "requirements",
+    "verifiers",
+    "worker_profile",
+}
 MAX_PROMPT_BYTES = int(CAPACITY_CONTRACT["host_prompt_hard_bytes"])
 TARGET_PROMPT_BYTES = int(CAPACITY_CONTRACT["host_prompt_target_bytes"])
 
@@ -38,14 +45,18 @@ class PromptMaterializationError(ValueError):
 
 def materialize_prompt(payload: Mapping[str, Any], operation_id: str) -> str:
     fields = set(payload)
-    if fields not in {LEGACY_PAYLOAD_FIELDS, CONTENT_PAYLOAD_FIELDS}:
+    if fields not in {
+        LEGACY_PAYLOAD_FIELDS,
+        CONTENT_PAYLOAD_FIELDS,
+        V2_CONTENT_PAYLOAD_FIELDS,
+    }:
         raise PromptMaterializationError("provider payload shape drift")
     request_marker = hashlib.sha256(
         b"loopskill-codex-exec-request-v1\n" + operation_id.encode("utf-8")
     ).hexdigest()
     document = {key: payload[key] for key in sorted(fields - {"target_ref"})}
     prompt = (
-        "LoopSkill 4 machine-started foreground task. Treat the following JSON as "
+        "LoopSkill 4.2 machine-started foreground task. Treat the following JSON as "
         "the confirmed semantic boundary; do not broaden it. The request marker is "
         "correlation-only and grants no authority.\n"
         f"LOOPSKILL4_REQUEST={request_marker}\n"

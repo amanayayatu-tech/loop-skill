@@ -1,16 +1,16 @@
 # LoopSkill 4 快速开始
 
-本文档对应 LoopSkill 4.1.1；当前可用的公开版本以 GitHub Releases 页面为准。
+本文档对应 LoopSkill 4.2.0；当前可用的公开版本以 GitHub Releases 页面为准。
 
 ## 安装
 
-要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。4.1.1 的
+要求 macOS 或 Linux、Git、Python 3.11–3.14。runtime 只使用标准库。4.2.0 的
 发布验证覆盖直接 v3-cwd 零写入回归、完整确定性测试，以及 Linux/macOS ×
 Python 3.11、3.12、3.13、3.14 的八个 release-CI runtime/distribution lane。
 这个窄范围补丁不声称完成新的真实 Host canary。以下命令安装公开发布的 tag。
 
 ```bash
-git clone --branch v4.1.1 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+git clone --branch v4.2.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
 bash scripts/install.sh
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
@@ -54,17 +54,18 @@ canonical workspace 的单条 EOF 追加，保留真实非零 changed-byte 计�
 单入口不等于静默授权。非交互 session 在 PREPARE 后停止。边界变化、过期确认或模糊
 “继续”都会 fail closed。
 
-普通入口运行一次官方前台 `codex exec --json --output-schema --output-last-message` 进程，最长 300 秒，并在成功、失败、
-超时或中断时回收整个进程组。这是观察窗口，不是任务预算。只有完整终态 JSONL、
+普通入口运行一次官方前台 `codex exec --json --output-schema --output-last-message` 进程，最长 30000 秒，并在成功、失败、
+超时或中断时回收整个进程组。这是 Attempt 边界，不是整个 Loop 的预算。只有完整终态 JSONL、
 零退出码、JSONL lifecycle 与机器控制 result 文件的唯一合法 outcome/summary 对象，
 以及 artifact 验证全部成立才可闭合。证据丢失或无效会成为 `UNKNOWN`；LoopSkill
-不从 `agent_message` 取 Result、没有文本 marker 回退，绝不 resend，也不执行 `codex exec resume`。bounded stderr 只作私有 digest 诊断；overflow fail closed。
-每个 Goal 的普通入口只支持预期能在此窗口内结束的单个 Host task；更长的单次 Host
-执行不在本版公开支持范围内。一个已确认计划可包含 1–32 Goal，后续 Goal 通过原子
-`AdvanceGoal` 按需激活；系统不承诺后台无限长跑。
+不从 `agent_message` 取 Result，也没有文本 marker 回退。Plan v2 把 session 与终态
+控制证据持久保存在 workspace 外；控制器重启后可回读完成 Attempt，或对同一 session
+执行一次有记录的 `codex exec resume`。bounded stderr 只作私有 digest 诊断；overflow fail closed。
+每个 Goal 最多使用三次已声明 Attempt。一个已确认计划可包含 1–128 Goal；
+`run`/`continue` 会推进到人工、时间、预算或重复失败等待边界，不承诺后台无限 daemon。
 
 Codex Desktop 的 folder-open → `list_projects` → `projectId` → `create_thread`
-路线已有历史 provisioning receipts，但 4.1.1 不接入该路线。普通入口采用
+路线已有历史 provisioning receipts，但 4.2.0 不接入该路线。普通入口采用
 cwd-bound 前台 `codex exec` invocation，不承诺 Desktop-visible saved project/task。
 
 ## 分阶段使用
@@ -74,28 +75,32 @@ cwd-bound 前台 `codex exec` invocation，不承诺 Desktop-visible saved proje
 "$LOOPSKILL4" prepare examples/v4-standard-input.json --output ./prepared-loop
 "$LOOPSKILL4" confirm ./prepared-loop
 "$LOOPSKILL4" start ./prepared-loop --root ./loopskill4-data
-"$LOOPSKILL4" status --root ./loopskill4-data
-"$LOOPSKILL4" status --refresh --root ./loopskill4-data
+"$LOOPSKILL4" list --root ./loopskill4-data
+"$LOOPSKILL4" status --root ./loopskill4-data --loop loop-example
+"$LOOPSKILL4" run --root ./loopskill4-data --loop loop-example
+"$LOOPSKILL4" continue --root ./loopskill4-data --loop loop-example
+"$LOOPSKILL4" budget-extend --root ./loopskill4-data --loop loop-example --max-host-invocations 40 --active-compute-seconds 14400 --reason "Continue the unchanged confirmed scope"
 ```
 
-`confirm` 需要交互式精确确认。普通 `status` 只读本地状态。若崩溃发生在本地 Attempt
-提交后、执行权被取得前，`status --refresh` 可执行该 Attempt 的唯一首次 invocation。
-一旦进程已启动，当前前台协议没有跨进程 readback 或自动 resume；丢失证据保持
-`UNKNOWN`。它绝不第二次 spawn 或 resend。普通状态隐藏内部 identity；添加
-`--diagnostics` 才显示诊断证据。
+`confirm` 需要交互式精确确认。`list` 与普通 `status` 只读本地状态。`budget-extend`
+只在 `WAITING_BUDGET` 接受，只能增加调用数与活跃计算时间，并仅持久化原因摘要，
+不能改变已确认任务范围。存在多个 Loop
+时，`run`/`continue` 必须明确选择一个。完成的持久 Attempt 可在控制器重启后回读；
+已捕获的非 ephemeral session 最多恢复一次。旧进程仍存活时等待，不可安全重放的
+动作进入人工门。
 `UNKNOWN`/`UNVERIFIABLE` 是有意的可见限制，不是成功，也不触发盲重发。
 
 ## 容量与兼容
 
-- 明确授权的 UTF-8 text/Markdown source 最大 256 KiB，canonical PlanDocument 最大 128 KiB，Goal 数为 1–32。
+- 明确授权的 UTF-8 text/Markdown source 最大 256 KiB，canonical PlanDocument 最大 512 KiB，Goal 数为 1–128。
 - CreateLoop 发布目标为 8 KiB / 64 members，硬上限保持 16 KiB / 128；Host prompt 目标为 24 KiB，硬上限 32 KiB。任何超限都在 Host 前阻断且不截断。
 - 新 Loop 只写 `CONTENT_ADDRESSED_V1`。旧 `EAGER_V4_0` store 只支持 status、export 和原 reducer continuation；不迁移、不改写、不双写。
 
-详见 [v4.1 compatibility matrix](compatibility-matrix-v4.1.md)。
+详见 [v4.2 compatibility matrix](compatibility-matrix-v4.2.md)。
 
-从已安装的 v4.0.0 升级采用 receipt-bound 清洁替换，不做原地覆盖或 Store 迁移：先用
-现有安装自己的管理卸载器移除 runtime，再安装 v4.1.1。真实 Loop data root 不属于
-安装目录，必须保持不变。
+对 receipt 完整的 v4.1.1，直接运行 `bash scripts/install.sh` 即可事务升级。
+新 active pointer 提交前，旧 manager、target、receipt pointer、config 和 Loop data
+均可恢复；未知漂移 fail closed。
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py" --codex-home "${CODEX_HOME:-$HOME/.codex}"
@@ -107,7 +112,7 @@ bash scripts/install.sh
 v4 不打开、导入、修复或运行 v3 loop/Pack/state。遇到 v3 输入时零写入，并指向
 [v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)。
 没有自动迁移；若需旧数据，继续独立使用 v3.3.8。
-如果 cwd 仍带有 v3 的 `.codex-loop` 标记，4.1.1 会在 PREPARE、START 或
+如果 cwd 仍带有 v3 的 `.codex-loop` 标记，4.2.0 会在 PREPARE、START 或
 `status --refresh` 前停止，不创建准备产物、Store 或 Host 任务；请切换到新的 v4 工作目录。
 
 ## 卸载

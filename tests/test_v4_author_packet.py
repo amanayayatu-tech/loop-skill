@@ -114,6 +114,38 @@ def receipt_for(key: str, candidate: str) -> dict:
             "unexpected_changed_input_count": 0,
             "v3_bytes_changed": 0,
         }
+    if key == "long_horizon_canary":
+        return {
+            **common,
+            "budget_wait_count": 1,
+            "command_verifier_count": 1,
+            "http_route_count": 4,
+            "human_wait_count": 1,
+            "multi_loop_selection_count": 1,
+            "optional_skip_count": 1,
+            "provider_resend_count": 0,
+            "same_loop_repair_count": 1,
+            "scenario_count": 12,
+            "session_resume_count": 1,
+            "status": "PASS",
+            "suite_sha256": digest,
+            "time_wait_count": 1,
+        }
+    if key == "nepha_copy_canary":
+        return {
+            **common,
+            "chinese_path_supported": True,
+            "copy_tree_sha256": digest,
+            "host_child_separation_verified": True,
+            "http_route_count": 4,
+            "listener_count": 1,
+            "main_project_bytes_changed": 0,
+            "provider_resend_count": 0,
+            "public_release_effects": 0,
+            "source_tree_sha256": digest,
+            "status": "PASS",
+            "test_command_count": 1,
+        }
     if key == "coverage":
         return {
             **common,
@@ -376,6 +408,8 @@ class V4AuthorPacketTests(unittest.TestCase):
         status_fields = {
             "exec_canary_2_goal": ("status", "FAIL"),
             "exec_canary_8_goal": ("status", "FAIL"),
+            "long_horizon_canary": ("status", "FAIL"),
+            "nepha_copy_canary": ("status", "FAIL"),
             "coverage": ("status", "FAIL"),
             "distribution": ("status", "FAIL"),
             "final_conformance": ("status", "FAIL"),

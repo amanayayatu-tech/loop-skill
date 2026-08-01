@@ -523,7 +523,7 @@
           "type": "string"
         },
         "capacity_contract_version": {
-          "const": "loopskill-capacity-v1",
+          "const": "loopskill-capacity-v2",
           "type": "string"
         },
         "capacity_status": {
@@ -700,18 +700,97 @@
                 },
                 "type": "array"
               },
+              "capabilities": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "gate": {
+                "enum": [
+                  "worker",
+                  "human",
+                  "time"
+                ],
+                "type": "string"
+              },
               "goal_id": {
                 "pattern": "^g[0-9]{3}$",
                 "type": "string"
               },
+              "max_attempts": {
+                "maximum": 3,
+                "minimum": 1,
+                "type": "integer"
+              },
               "objective": {
                 "type": "string"
+              },
+              "on_blocked": {
+                "enum": [
+                  "wait",
+                  "skip"
+                ],
+                "type": "string"
+              },
+              "on_failure": {
+                "enum": [
+                  "repair",
+                  "wait",
+                  "fail"
+                ],
+                "type": "string"
+              },
+              "recovery_policy": {
+                "enum": [
+                  "resume",
+                  "reconcile",
+                  "human"
+                ],
+                "type": "string"
+              },
+              "replay_safety": {
+                "enum": [
+                  "file_local",
+                  "idempotent",
+                  "non_replayable"
+                ],
+                "type": "string"
+              },
+              "requirement": {
+                "enum": [
+                  "required",
+                  "optional"
+                ],
+                "type": "string"
+              },
+              "requirement_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verifiers": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               }
             },
             "required": [
               "acceptance_criteria",
+              "capabilities",
+              "gate",
               "goal_id",
-              "objective"
+              "max_attempts",
+              "objective",
+              "on_blocked",
+              "on_failure",
+              "recovery_policy",
+              "replay_safety",
+              "requirement",
+              "requirement_refs",
+              "verifiers"
             ],
             "type": "object"
           },
@@ -719,6 +798,12 @@
         },
         "objective": {
           "type": "string"
+        },
+        "requirements": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
         },
         "roadmap_policy": {
           "additionalProperties": false,
@@ -742,7 +827,7 @@
           "type": "object"
         },
         "schema": {
-          "const": "loopskill-plan-v1",
+          "const": "loopskill-plan-v2",
           "type": "string"
         },
         "source": {
@@ -778,6 +863,48 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "worker_profile": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_timeout_seconds": {
+              "maximum": 30000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "local_verification": {
+              "type": "boolean"
+            },
+            "model": {
+              "type": "string"
+            },
+            "network_access": {
+              "type": "boolean"
+            },
+            "reasoning_effort": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "type": "string"
+            },
+            "sandbox": {
+              "const": "workspace-write",
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempt_timeout_seconds",
+            "local_verification",
+            "model",
+            "network_access",
+            "reasoning_effort",
+            "sandbox"
+          ],
+          "type": "object"
         }
       },
       "required": [
@@ -787,6 +914,8 @@
         "boundaries",
         "budget",
         "roadmap_policy",
+        "requirements",
+        "worker_profile",
         "completion_evidence",
         "stop_conditions",
         "goals"
@@ -800,7 +929,7 @@
           "type": "string"
         },
         "capacity_contract_version": {
-          "const": "loopskill-capacity-v1",
+          "const": "loopskill-capacity-v2",
           "type": "string"
         },
         "goal_count": {
@@ -827,7 +956,7 @@
           "type": "integer"
         },
         "schema": {
-          "const": "loopskill-plan-index-v1",
+          "const": "loopskill-plan-index-v2",
           "type": "string"
         },
         "workspace_binding": {
@@ -915,7 +1044,7 @@
           "type": "string"
         },
         "capacity_contract_version": {
-          "const": "loopskill-capacity-v1",
+          "const": "loopskill-capacity-v2",
           "type": "string"
         },
         "capacity_report_digest": {
@@ -969,7 +1098,7 @@
           "type": "string"
         },
         "product_version": {
-          "const": "4.1.0",
+          "const": "4.2.0",
           "type": "string"
         },
         "protocol_manifest_digest": {
@@ -1194,6 +1323,6 @@
   },
   "$id": "https://loopskill.local/protocol/v4/loopskill-v4.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifest_sha256": "5a46d9c4d31d2964821165a66a07ca67ac4eee53cd58976438ae3eb19ba9f2c2",
+  "manifest_sha256": "ab35be557fd633ccf858f868af963bbb830cce7500059c3fcaa339b0c1f6be3f",
   "title": "LoopSkill 4 protocol wire shapes"
 }

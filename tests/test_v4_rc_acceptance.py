@@ -852,7 +852,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (repo / "LICENSE").write_text("MIT License\n", encoding="utf-8")
-            (repo / "VERSION").write_text("4.1.1\n", encoding="utf-8")
+            (repo / "VERSION").write_text("4.2.0\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=repo, check=True)
             subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True)
             sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
@@ -874,7 +874,7 @@ class V4RcAcceptanceTests(unittest.TestCase):
             self.assertEqual(receipt["distribution_archive"]["findings"], [])
             self.assertEqual(receipt["distribution_archive"]["file_count"], 3)
             self.assertEqual(receipt["sbom"]["spdxVersion"], "SPDX-2.3")
-            self.assertEqual(receipt["sbom"]["packages"][0]["versionInfo"], "4.1.1")
+            self.assertEqual(receipt["sbom"]["packages"][0]["versionInfo"], "4.2.0")
             self.assertEqual(
                 receipt["sbom_sha256"],
                 hashlib.sha256(validator._canonical(receipt["sbom"])).hexdigest(),

@@ -41,6 +41,7 @@ REQUIRED_TRACKED_FILES = (
     "docs/conformance/loopskill-4-conformance-corpus-design.md",
     "docs/v4/architecture-map.md",
     "docs/v4/compatibility-matrix-v4.1.md",
+    "docs/v4/compatibility-matrix-v4.2.md",
     "docs/v4/known-limitations.md",
     "docs/v4/migration-and-rollback.md",
     "docs/v4/quickstart.en.md",
@@ -48,12 +49,17 @@ REQUIRED_TRACKED_FILES = (
     "docs/v4/rc-acceptance.md",
     "docs/v4/release-notes.md",
     "docs/v4/release-notes-v4.1.md",
+    "docs/v4/release-notes-v4.2.md",
     "protocol/v4/loopskill-v4.protocol.json",
+    "scripts/run_v4_long_horizon_canary.py",
+    "scripts/run_v4_nepha_copy_canary.py",
 )
 
 REQUIRED_EVIDENCE_RECEIPTS = (
     "exec_canary_2_goal",
     "exec_canary_8_goal",
+    "long_horizon_canary",
+    "nepha_copy_canary",
     "coverage",
     "distribution",
     "final_conformance",
@@ -134,6 +140,8 @@ _SECRET_TEXT_PATTERNS = (
 _EVIDENCE_ARTIFACTS = {
     "exec_canary_2_goal": "loopskill-v4-disposable-codex-exec-canary-v1",
     "exec_canary_8_goal": "loopskill-v4-disposable-codex-exec-canary-v1",
+    "long_horizon_canary": "loopskill-v4.2-long-horizon-canary-v1",
+    "nepha_copy_canary": "loopskill-v4.2-nepha-copy-canary-v1",
     "coverage": "loopskill-v4-coverage-receipt-v1",
     "distribution": "loopskill-v4-distribution-receipt-v1",
     "final_conformance": "loopskill-v4-conformance-execution-v2",
@@ -421,6 +429,52 @@ def _validate_exec_canary_8_goal(value: Mapping[str, Any]) -> None:
     _validate_exec_canary(value, expected_goal_count=8)
 
 
+def _validate_long_horizon_canary(value: Mapping[str, Any]) -> None:
+    _require_fields(
+        value,
+        {
+            "budget_wait_count": 1,
+            "command_verifier_count": 1,
+            "human_wait_count": 1,
+            "multi_loop_selection_count": 1,
+            "optional_skip_count": 1,
+            "provider_resend_count": 0,
+            "same_loop_repair_count": 1,
+            "session_resume_count": 1,
+            "status": "PASS",
+            "time_wait_count": 1,
+        },
+    )
+    if (
+        not _is_int(value.get("scenario_count"), minimum=10)
+        or not _is_int(value.get("http_route_count"), minimum=1)
+    ):
+        raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
+    _require_digest(value, "suite_sha256")
+
+
+def _validate_nepha_copy_canary(value: Mapping[str, Any]) -> None:
+    _require_fields(
+        value,
+        {
+            "chinese_path_supported": True,
+            "host_child_separation_verified": True,
+            "main_project_bytes_changed": 0,
+            "provider_resend_count": 0,
+            "public_release_effects": 0,
+            "status": "PASS",
+        },
+    )
+    if (
+        not _is_int(value.get("test_command_count"), minimum=1)
+        or not _is_int(value.get("listener_count"), minimum=1)
+        or not _is_int(value.get("http_route_count"), minimum=4)
+    ):
+        raise AuthorPacketError("AUTHOR_PACKET_EVIDENCE_SEMANTICS_INVALID")
+    for field in ("source_tree_sha256", "copy_tree_sha256"):
+        _require_digest(value, field)
+
+
 def _validate_canary_pair(values: Mapping[str, Mapping[str, Any]]) -> None:
     two = values["exec_canary_2_goal"]
     eight = values["exec_canary_8_goal"]
@@ -635,6 +689,8 @@ def _validate_test_fault_matrix(value: Mapping[str, Any]) -> None:
 _EVIDENCE_VALIDATORS = {
     "exec_canary_2_goal": _validate_exec_canary_2_goal,
     "exec_canary_8_goal": _validate_exec_canary_8_goal,
+    "long_horizon_canary": _validate_long_horizon_canary,
+    "nepha_copy_canary": _validate_nepha_copy_canary,
     "coverage": _validate_coverage,
     "distribution": _validate_distribution,
     "final_conformance": _validate_final_conformance,

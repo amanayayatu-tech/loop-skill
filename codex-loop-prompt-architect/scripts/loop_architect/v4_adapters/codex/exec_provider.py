@@ -3,8 +3,8 @@
 The official executable owns its internal thread/turn lifecycle.  LoopSkill owns
 one foreground process, accepts lifecycle evidence from its bounded JSONL
 stream, and accepts semantic result bytes only from the official
-``--output-last-message`` file.  There is no resume, resend, or post-process
-Host readback path.
+``--output-last-message`` file.  Completed Attempts may be read back from the
+owner-only persistent evidence directory after a controller restart.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from loop_architect.v4_adapters.codex.prompt import (
     CONTENT_PAYLOAD_FIELDS,
     LEGACY_PAYLOAD_FIELDS,
     PromptMaterializationError,
+    V2_CONTENT_PAYLOAD_FIELDS,
     materialize_prompt,
 )
 
@@ -54,6 +55,7 @@ MAX_RESULT_BYTES = 16 * 1024
 MAX_JSONL_LINE_BYTES = 1024 * 1024
 MAX_INSPECTION_BYTES = 256 * 1024
 PROCESS_REAP_GRACE_SECONDS = 2.0
+MAX_ATTEMPT_TIMEOUT_SECONDS = 30_000.0
 _VERSION = re.compile(r"^codex-cli ([0-9A-Za-z][0-9A-Za-z.+-]*)$")
 _REQUIRED_EXEC_HELP = (
     "--cd",
@@ -76,6 +78,7 @@ class _ProcessResult:
     returncode: int
     stdout: bytes
     stderr: bytes
+    elapsed_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -207,6 +210,13 @@ def build_exec_argv(
     workspace: Path,
     output_schema: Path,
     output_last_message: Path,
+    *,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    network_access: bool = False,
+    sandbox: str = "workspace-write",
+    ephemeral: bool = False,
+    resume_thread_id: str | None = None,
 ) -> tuple[str, ...]:
     """Build the reviewed argv without a shell or model-carried control fields."""
 
@@ -217,9 +227,16 @@ def build_exec_argv(
         or not output_last_message.is_absolute()
     ):
         raise ValueError("exec argv requires absolute machine-owned paths")
-    return (
-        executable,
-        "exec",
+    if sandbox != "workspace-write":
+        raise ValueError("LoopSkill 4.2 supports only workspace-write sandbox")
+    if reasoning_effort not in {None, "low", "medium", "high", "xhigh", "max"}:
+        raise ValueError("invalid reasoning effort")
+    command = [executable, "exec"]
+    if resume_thread_id is not None:
+        if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:-]{0,127}", resume_thread_id):
+            raise ValueError("invalid resume thread identity")
+        command.extend(["resume"])
+    command.extend((
         "--json",
         "--output-schema",
         str(output_schema),
@@ -228,16 +245,31 @@ def build_exec_argv(
         "--strict-config",
         "--ignore-user-config",
         "--ignore-rules",
-        "--ephemeral",
-        "--sandbox",
-        "workspace-write",
+    ))
+    if ephemeral:
+        command.append("--ephemeral")
+    if model:
+        command.extend(("--model", model))
+    if reasoning_effort:
+        command.extend(("--config", f'model_reasoning_effort="{reasoning_effort}"'))
+    if resume_thread_id is None:
+        command.extend(("--sandbox", sandbox))
+    else:
+        command.extend(("--config", f'sandbox_mode="{sandbox}"'))
+    command.extend((
         "--config",
-        "sandbox_workspace_write.network_access=false",
-        "--cd",
-        str(workspace),
+        "sandbox_workspace_write.network_access="
+        + ("true" if network_access else "false"),
+    ))
+    if resume_thread_id is None:
+        command.extend(("--cd", str(workspace)))
+    command.extend((
         "--skip-git-repo-check",
-        "-",
-    )
+    ))
+    if resume_thread_id is not None:
+        command.append(resume_thread_id)
+    command.append("-")
+    return tuple(command)
 
 
 def _verify_control_identity(control: _ControlFile, *, code: str) -> None:
@@ -411,6 +443,149 @@ def _result_controls(workspace: Path):
             raise cleanup_error
 
 
+def _write_private_once(path: Path, content: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _append_private(path: Path, content: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise _coded_error(
+                "CONTROL_IDENTITY_DRIFT", "persistent Attempt stream is unsafe"
+            )
+        view = memoryview(content)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short persistent Attempt stream write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _read_private_regular(path: Path, *, limit: int) -> bytes:
+    """Read one owner-only persistent control without following replacements."""
+
+    if limit <= 0:
+        raise ValueError("private read limit must be positive")
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise _coded_error(
+            "CONTROL_IDENTITY_DRIFT", "persistent Attempt evidence is unavailable"
+        ) from exc
+    if (
+        resolved != path
+        or not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+    ):
+        raise _coded_error(
+            "CONTROL_IDENTITY_DRIFT", "persistent Attempt evidence is unsafe"
+        )
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != metadata.st_dev
+                or opened.st_ino != metadata.st_ino
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or (hasattr(os, "getuid") and opened.st_uid != os.getuid())
+            ):
+                raise _coded_error(
+                    "CONTROL_IDENTITY_DRIFT",
+                    "persistent Attempt evidence changed while opening",
+                )
+            raw = stream.read(limit + 1)
+            finished = os.fstat(stream.fileno())
+            if (
+                finished.st_dev != opened.st_dev
+                or finished.st_ino != opened.st_ino
+                or stat.S_IMODE(finished.st_mode) != 0o600
+            ):
+                raise _coded_error(
+                    "CONTROL_IDENTITY_DRIFT",
+                    "persistent Attempt evidence changed while reading",
+                )
+    except OSError as exc:
+        raise _coded_error(
+            "CONTROL_IDENTITY_DRIFT", "persistent Attempt evidence is unreadable"
+        ) from exc
+    if len(raw) > limit:
+        raise _coded_error(
+            "CONTROL_IDENTITY_DRIFT", "persistent Attempt evidence exceeded its bound"
+        )
+    return raw
+
+
+def _private_attempt_directory(root: Path, provider_key: str) -> Path:
+    name = _private_attempt_name(provider_key)
+    directory = root / name
+    directory.mkdir(mode=0o700, exist_ok=False)
+    metadata = directory.lstat()
+    if (
+        directory.is_symlink()
+        or not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+    ):
+        raise _coded_error(
+            "CONTROL_IDENTITY_DRIFT", "persistent Attempt directory is unsafe"
+        )
+    return directory
+
+
+def _private_attempt_name(provider_key: str) -> str:
+    return "attempt-" + hashlib.sha256(provider_key.encode("utf-8")).hexdigest()[:24]
+
+
+def _process_identity_alive(path: Path) -> bool:
+    if not os.path.lexists(path):
+        return False
+    try:
+        value = json.loads(
+            _read_private_regular(path, limit=1024).decode("utf-8", "strict")
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _coded_error(
+            "CONTROL_IDENTITY_DRIFT", "persistent process identity is invalid"
+        ) from exc
+    if not isinstance(value, Mapping) or set(value) != {"pid"}:
+        raise _coded_error(
+            "CONTROL_IDENTITY_DRIFT", "persistent process identity is invalid"
+        )
+    pid = value["pid"]
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
+        raise _coded_error(
+            "CONTROL_IDENTITY_DRIFT", "persistent process identity is invalid"
+        )
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
@@ -468,6 +643,8 @@ def _run_bounded_process(
     timeout_seconds: float,
     stdout_limit: int,
     stderr_limit: int,
+    process_observer: Callable[[int], None] | None = None,
+    stdout_observer: Callable[[bytes], None] | None = None,
 ) -> _ProcessResult:
     """Run one process group while bounding both output channels and lifetime."""
 
@@ -479,6 +656,7 @@ def _run_bounded_process(
         or not cwd.is_absolute()
     ):
         raise ValueError("invalid bounded process contract")
+    started_ns = time.monotonic_ns()
     try:
         process = subprocess.Popen(
             list(argv),
@@ -497,6 +675,8 @@ def _run_bounded_process(
             "Codex exec process is unavailable",
             unavailable=True,
         ) from exc
+    if process_observer is not None:
+        process_observer(process.pid)
     assert process.stdin is not None
     assert process.stdout is not None
     assert process.stderr is not None
@@ -572,6 +752,8 @@ def _run_bounded_process(
                     selector.unregister(key.fd)
                     continue
                 output[channel].extend(chunk)
+                if channel == "stdout" and stdout_observer is not None:
+                    stdout_observer(chunk)
                 limit = stdout_limit if channel == "stdout" else stderr_limit
                 if len(output[channel]) > limit:
                     code = (
@@ -594,6 +776,7 @@ def _run_bounded_process(
             returncode=returncode,
             stdout=bytes(output["stdout"]),
             stderr=bytes(output["stderr"]),
+            elapsed_ms=(time.monotonic_ns() - started_ns) // 1_000_000,
         )
     except KeyboardInterrupt as exc:
         raise _coded_error(
@@ -788,14 +971,28 @@ class CodexExecProvider:
         issuer_ref: str = "loopskill-codex-adapter-v1",
         issuer_trust: str = "local-codex-adapter",
         clock: Callable[[], datetime] = _now,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float = MAX_ATTEMPT_TIMEOUT_SECONDS,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        network_access: bool = False,
+        sandbox: str = "workspace-write",
+        ephemeral: bool = False,
+        attempt_root: Path | str | None = None,
+        resume_thread_id: str | None = None,
+        budget_override: Mapping[str, Any] | None = None,
         runner: Callable[..., _ProcessResult] = _run_bounded_process,
     ) -> None:
         resolved = Path(workspace).resolve(strict=True)
         if not resolved.is_dir() or resolved.is_symlink():
             raise ValueError("Host workspace must be one existing directory")
-        if timeout_seconds <= 0 or timeout_seconds > 600:
+        if timeout_seconds <= 0 or timeout_seconds > MAX_ATTEMPT_TIMEOUT_SECONDS:
             raise ValueError("invalid Codex exec timeout")
+        if sandbox != "workspace-write":
+            raise ValueError("invalid Codex exec sandbox")
+        if reasoning_effort not in {None, "low", "medium", "high", "xhigh", "max"}:
+            raise ValueError("invalid Codex exec reasoning effort")
+        if model is not None and (not model.strip() or len(model.encode("utf-8")) > 128):
+            raise ValueError("invalid Codex exec model")
         self.workspace = resolved
         self.executable = executable or resolve_codex_executable()
         selected = _safe_executable(Path(self.executable))
@@ -806,10 +1003,50 @@ class CodexExecProvider:
         self.issuer_trust = issuer_trust
         self.clock = clock
         self.timeout_seconds = timeout_seconds
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        self.network_access = network_access
+        self.sandbox = sandbox
+        self.ephemeral = ephemeral
+        self.resume_thread_id = resume_thread_id
+        self.budget_override: dict[str, Any] | None = None
+        if budget_override is not None:
+            maximum_calls = budget_override.get("max_host_invocations")
+            wall_seconds = budget_override.get("wall_clock_seconds")
+            if (
+                isinstance(maximum_calls, bool)
+                or not isinstance(maximum_calls, int)
+                or maximum_calls < 1
+                or isinstance(wall_seconds, bool)
+                or not isinstance(wall_seconds, int)
+                or wall_seconds < 1
+            ):
+                raise ValueError("invalid runtime budget override")
+            self.budget_override = {
+                "max_host_invocations": maximum_calls,
+                "wall_clock_seconds": wall_seconds,
+            }
+        self.attempt_root: Path | None = None
+        if attempt_root is not None:
+            candidate = Path(attempt_root)
+            candidate.mkdir(parents=True, exist_ok=True, mode=0o700)
+            candidate = candidate.resolve(strict=True)
+            metadata = candidate.lstat()
+            if (
+                candidate == self.workspace
+                or self.workspace in candidate.parents
+                or candidate in self.workspace.parents
+                or candidate.is_symlink()
+                or not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_mode & 0o077
+                or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+            ):
+                raise ValueError("invalid persistent Attempt root")
+            self.attempt_root = candidate
         self._runner = runner
         self._contract: _ExecContract | None = None
         self._invoked_key: str | None = None
-        self._record: dict[str, str] | None = None
+        self._record: dict[str, Any] | None = None
         self._terminal_diagnostic: _TerminalDiagnostic | None = None
         self._task_create_count = 0
         self._delivery_readback_count = 0
@@ -910,6 +1147,7 @@ class CodexExecProvider:
         if action != "create_task" or set(payload) not in {
             LEGACY_PAYLOAD_FIELDS,
             CONTENT_PAYLOAD_FIELDS,
+            V2_CONTENT_PAYLOAD_FIELDS,
         }:
             raise HostUnavailable("Unsupported Codex exec action or payload")
         if self._invoked_key is not None:
@@ -918,7 +1156,100 @@ class CodexExecProvider:
         self.preflight()
         prompt = self._prompt(payload, provider_idempotency_key)
         self._invoked_key = provider_idempotency_key
+        if self._restore_persistent_record(provider_idempotency_key):
+            return self._observation(action, provider_idempotency_key)
         self._task_create_count += 1
+        budget_reason = self._budget_block_reason(payload)
+        if budget_reason is not None:
+            schema_digest = domain_digest(
+                "loopskill-codex-result-schema-v1\n", result_payload_schema()
+            )
+            self._record = {
+                "idempotency_key": provider_idempotency_key,
+                "result": {
+                    "outcome": "LIMITATION",
+                    "summary": budget_reason,
+                },
+                "result_schema_digest": schema_digest,
+                "thread_id": "budget-"
+                + hashlib.sha256(provider_idempotency_key.encode("utf-8")).hexdigest()[:24],
+            }
+            return self._observation(action, provider_idempotency_key)
+        attempt_directory: Path | None = None
+        resumed = False
+        if self.attempt_root is not None:
+            attempt_directory = self.attempt_root / _private_attempt_name(
+                provider_idempotency_key
+            )
+            if attempt_directory.exists():
+                recovered = self._recover_incomplete_attempt(
+                    attempt_directory,
+                    payload=payload,
+                    provider_key=provider_idempotency_key,
+                )
+                if recovered is not None:
+                    return recovered
+                resumed = True
+            else:
+                attempt_directory = _private_attempt_directory(
+                    self.attempt_root, provider_idempotency_key
+                )
+                _write_private_once(
+                    attempt_directory / "intent.json",
+                    canonical_bytes(
+                        {
+                            "attempt_timeout_milliseconds": int(
+                                self.timeout_seconds * 1000
+                            ),
+                            "input_sha256": _sha256(prompt.encode("utf-8") + b"\n"),
+                            "provider_idempotency_key_digest": hashlib.sha256(
+                                provider_idempotency_key.encode("utf-8")
+                            ).hexdigest(),
+                            "replay_safety": (
+                                payload.get("goal_policy", {}).get("replay_safety")
+                                if isinstance(payload.get("goal_policy"), Mapping)
+                                else None
+                            ),
+                            "started_at": _iso(self.clock()),
+                            "transport": EXEC_TRANSPORT,
+                        }
+                    ),
+                )
+        stream_buffer = bytearray()
+
+        def observe_process(pid: int) -> None:
+            if attempt_directory is None:
+                return
+            name = "resume-process.json" if resumed else "process.json"
+            _write_private_once(
+                attempt_directory / name, canonical_bytes({"pid": pid})
+            )
+
+        def observe_stdout(chunk: bytes) -> None:
+            if attempt_directory is None:
+                return
+            name = "resume-transcript.partial.jsonl" if resumed else "transcript.partial.jsonl"
+            _append_private(attempt_directory / name, chunk)
+            stream_buffer.extend(chunk)
+            while b"\n" in stream_buffer:
+                encoded, _, remaining = stream_buffer.partition(b"\n")
+                stream_buffer[:] = remaining
+                if not encoded or (attempt_directory / "session.json").exists():
+                    continue
+                try:
+                    event = json.loads(encoded.decode("utf-8", "strict"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                thread_id = event.get("thread_id") if isinstance(event, Mapping) else None
+                if (
+                    isinstance(event, Mapping)
+                    and event.get("type") == "thread.started"
+                    and isinstance(thread_id, str)
+                ):
+                    _write_private_once(
+                        attempt_directory / "session.json",
+                        canonical_bytes({"thread_id": thread_id}),
+                    )
         process_result: _ProcessResult | None = None
         transcript: _TerminalTranscript | None = None
         result_raw = b""
@@ -933,12 +1264,20 @@ class CodexExecProvider:
                         self.workspace,
                         controls.schema.path,
                         controls.result.path,
+                        model=self.model,
+                        reasoning_effort=self.reasoning_effort,
+                        network_access=self.network_access,
+                        sandbox=self.sandbox,
+                        ephemeral=self.ephemeral,
+                        resume_thread_id=self.resume_thread_id,
                     ),
                     cwd=self.workspace,
                     stdin_bytes=prompt.encode("utf-8") + b"\n",
                     timeout_seconds=self.timeout_seconds,
                     stdout_limit=MAX_STDOUT_BYTES,
                     stderr_limit=MAX_STDERR_BYTES,
+                    process_observer=observe_process,
+                    stdout_observer=observe_stdout,
                 )
                 if process_result.returncode != 0:
                     raise _coded_error(
@@ -954,8 +1293,57 @@ class CodexExecProvider:
                         "RESULT_SCHEMA_INVALID",
                         "Codex exec result file contract drift",
                     ) from exc
+                if attempt_directory is not None:
+                    session_path = attempt_directory / "session.json"
+                    if not session_path.exists():
+                        _write_private_once(
+                            session_path,
+                            canonical_bytes({"thread_id": transcript.thread_id}),
+                        )
+                    _write_private_once(
+                        attempt_directory / "result.schema.json", controls.schema.raw
+                    )
+                    _write_private_once(
+                        attempt_directory / "result.json", result_raw
+                    )
+                    _write_private_once(
+                        attempt_directory / "transcript.jsonl", process_result.stdout
+                    )
+                    _write_private_once(
+                        attempt_directory / "attempt.json",
+                        canonical_bytes(
+                            {
+                                "argv_digest": domain_digest(
+                                    "loopskill-codex-argv-v1\n",
+                                    list(process_result.argv),
+                                ),
+                                "executable_digest": self._contract.executable_digest,
+                                "model": self.model,
+                                "network_access": self.network_access,
+                                "elapsed_ms": process_result.elapsed_ms,
+                                "provider_idempotency_key_digest": hashlib.sha256(
+                                    provider_idempotency_key.encode("utf-8")
+                                ).hexdigest(),
+                                "reasoning_effort": self.reasoning_effort,
+                                "resumed": resumed,
+                                "result_sha256": _sha256(result_raw),
+                                "sandbox": self.sandbox,
+                                "schema_digest": controls.schema.digest,
+                                "thread_id": transcript.thread_id,
+                                "transcript_sha256": _sha256(process_result.stdout),
+                                "transport": EXEC_TRANSPORT,
+                            }
+                        ),
+                    )
         except Exception as exc:
             code = _error_code(exc, "UNCLASSIFIED_PROVIDER_FAILURE")
+            if attempt_directory is not None and not (
+                attempt_directory / "failure.json"
+            ).exists():
+                _write_private_once(
+                    attempt_directory / "failure.json",
+                    canonical_bytes({"code": code}),
+                )
             self._terminal_diagnostic = self._diagnostic(
                 code=code,
                 primary_code=getattr(exc, "primary_provider_code", None),
@@ -989,12 +1377,189 @@ class CodexExecProvider:
         }
         return self._observation(action, provider_idempotency_key)
 
+    def _recover_incomplete_attempt(
+        self,
+        directory: Path,
+        *,
+        payload: Mapping[str, Any],
+        provider_key: str,
+    ) -> Mapping[str, Any] | None:
+        if directory.is_symlink() or not directory.is_dir():
+            raise _coded_error(
+                "CONTROL_IDENTITY_DRIFT", "persistent Attempt directory is unsafe"
+            )
+        key_digest = hashlib.sha256(provider_key.encode("utf-8")).hexdigest()
+        if os.path.lexists(directory / "attempt.json"):
+            if self._restore_persistent_directory(
+                directory,
+                expected_key_digest=key_digest,
+                provider_key=provider_key,
+            ):
+                return self._observation("create_task", provider_key)
+            raise _coded_error(
+                "CONTROL_IDENTITY_DRIFT",
+                "persistent terminal Attempt evidence is inconsistent",
+            )
+        if (directory / "failure.json").exists():
+            return self._local_wait_observation(
+                payload,
+                provider_key,
+                "The prior Host Attempt ended without resumable terminal evidence.",
+            )
+        process_paths = tuple(
+            directory / name for name in ("resume-process.json", "process.json")
+        )
+        deadline = time.monotonic() + self.timeout_seconds
+        while any(_process_identity_alive(path) for path in process_paths):
+            if os.path.lexists(directory / "attempt.json"):
+                if self._restore_persistent_directory(
+                    directory,
+                    expected_key_digest=key_digest,
+                    provider_key=provider_key,
+                ):
+                    return self._observation("create_task", provider_key)
+                raise _coded_error(
+                    "CONTROL_IDENTITY_DRIFT",
+                    "persistent terminal Attempt evidence is inconsistent",
+                )
+            if (directory / "failure.json").exists():
+                return self._local_wait_observation(
+                    payload,
+                    provider_key,
+                    "The prior Host Attempt ended without resumable terminal evidence.",
+                )
+            if time.monotonic() >= deadline:
+                raise _coded_error(
+                    "PROCESS_STILL_RUNNING",
+                    "The prior Codex exec process remained active through its bound; it was not resent.",
+                    unavailable=True,
+                )
+            time.sleep(0.25)
+        session_path = directory / "session.json"
+        if not os.path.lexists(session_path):
+            return self._local_wait_observation(
+                payload,
+                provider_key,
+                "RECONCILE_WORKSPACE: no Host session identity was captured; inspect local artifacts before continuing.",
+            )
+        if (directory / "resume.json").exists():
+            return self._local_wait_observation(
+                payload,
+                provider_key,
+                "The recorded Host session has already consumed its single automatic resume.",
+            )
+        try:
+            session = json.loads(
+                _read_private_regular(session_path, limit=1024).decode(
+                    "utf-8", "strict"
+                )
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _coded_error(
+                "THREAD_IDENTITY_INVALID", "persistent Host session identity is invalid"
+            ) from exc
+        thread_id = session.get("thread_id") if isinstance(session, Mapping) else None
+        if not isinstance(thread_id, str) or not thread_id:
+            raise _coded_error(
+                "THREAD_IDENTITY_INVALID", "persistent Host session identity is invalid"
+            )
+        policy = payload.get("goal_policy")
+        replay_safety = (
+            policy.get("replay_safety") if isinstance(policy, Mapping) else None
+        )
+        if replay_safety == "non_replayable":
+            return self._local_wait_observation(
+                payload,
+                provider_key,
+                "Human confirmation is required before recovering a non-replayable action.",
+            )
+        _write_private_once(
+            directory / "resume.json",
+            canonical_bytes({"thread_id": thread_id}),
+        )
+        self.resume_thread_id = thread_id
+        return None
+
+    def _local_wait_observation(
+        self,
+        payload: Mapping[str, Any],
+        provider_key: str,
+        summary: str,
+    ) -> Mapping[str, Any]:
+        del payload
+        schema_digest = domain_digest(
+            "loopskill-codex-result-schema-v1\n", result_payload_schema()
+        )
+        self._record = {
+            "idempotency_key": provider_key,
+            "result": {"outcome": "LIMITATION", "summary": summary},
+            "result_schema_digest": schema_digest,
+            "thread_id": "waiting-"
+            + hashlib.sha256(provider_key.encode("utf-8")).hexdigest()[:24],
+        }
+        return self._observation("create_task", provider_key)
+
+    def _budget_block_reason(self, payload: Mapping[str, Any]) -> str | None:
+        budget = self.budget_override or payload.get("budget")
+        if not isinstance(budget, Mapping) or self.attempt_root is None:
+            return None
+        maximum_calls = budget.get("max_host_invocations")
+        wall_seconds = budget.get("wall_clock_seconds")
+        if (
+            isinstance(maximum_calls, bool)
+            or not isinstance(maximum_calls, int)
+            or isinstance(wall_seconds, bool)
+            or not isinstance(wall_seconds, int)
+        ):
+            return "The Plan-bound runtime budget is invalid."
+        used_calls = 0
+        used_milliseconds = 0
+        for directory in self.attempt_root.iterdir():
+            record = directory / "attempt.json"
+            intent = directory / "intent.json"
+            if not directory.is_dir() or directory.is_symlink():
+                continue
+            if not intent.is_file() and not record.is_file():
+                continue
+            used_calls += 1
+            if (directory / "resume.json").is_file():
+                used_calls += 1
+            if not record.is_file():
+                continue
+            try:
+                raw = _read_private_regular(record, limit=MAX_INSPECTION_BYTES)
+                value = json.loads(raw.decode("utf-8", "strict"))
+            except (HostResponseLost, UnicodeDecodeError, json.JSONDecodeError):
+                return "The persisted active-compute budget evidence is unverifiable."
+            if not isinstance(value, Mapping):
+                return "The persisted active-compute budget evidence is unverifiable."
+            elapsed = value.get("elapsed_ms")
+            if isinstance(elapsed, bool) or not isinstance(elapsed, int) or elapsed < 0:
+                return "The persisted active-compute budget evidence is unverifiable."
+            used_milliseconds += elapsed
+        if used_calls >= maximum_calls:
+            return "The Plan-bound Host invocation budget is exhausted."
+        if used_milliseconds >= wall_seconds * 1000:
+            return "The Plan-bound active-compute budget is exhausted."
+        self.timeout_seconds = min(
+            self.timeout_seconds,
+            max(0.001, wall_seconds - used_milliseconds / 1000),
+        )
+        return None
+
+    def budget_block_reason(self, payload: Mapping[str, Any]) -> str | None:
+        """Read persisted usage before the Adapter commits a provider side effect."""
+
+        return self._budget_block_reason(payload)
+
     def readback(
         self, action: str, provider_idempotency_key: str
     ) -> Mapping[str, Any] | None:
         if action != "create_task":
             return None
         self._delivery_readback_count += 1
+        if self._record is None:
+            self._restore_persistent_record(provider_idempotency_key)
         if (
             self._record is None
             or self._record["idempotency_key"] != provider_idempotency_key
@@ -1007,6 +1572,8 @@ class CodexExecProvider:
             raise HostUnavailable("Unsupported Codex exec resource kind")
         if resource_kind == "lifecycle":
             self._lifecycle_read_count += 1
+        if self._record is None:
+            self._restore_persistent_thread(provider_id)
         matched = self._record is not None and self._record["thread_id"] == provider_id
         return {
             "provider_id": provider_id,
@@ -1018,6 +1585,8 @@ class CodexExecProvider:
 
     def read_task_result(self, provider_id: str) -> Mapping[str, Any]:
         self._task_result_read_count += 1
+        if self._record is None:
+            self._restore_persistent_thread(provider_id)
         if self._record is None or self._record["thread_id"] != provider_id:
             raise HostUnavailable("Codex exec terminal result is unavailable")
         result = self._record["result"]
@@ -1038,11 +1607,11 @@ class CodexExecProvider:
     def wait_for_terminal(
         self,
         *,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float = MAX_ATTEMPT_TIMEOUT_SECONDS,
         poll_interval_seconds: float = 0.5,
     ) -> None:
         del poll_interval_seconds
-        if timeout_seconds <= 0 or timeout_seconds > 600:
+        if timeout_seconds <= 0 or timeout_seconds > MAX_ATTEMPT_TIMEOUT_SECONDS:
             raise ValueError("invalid terminal wait bound")
         self._terminal_wait_read_count += 1
         if self._record is None:
@@ -1066,6 +1635,112 @@ class CodexExecProvider:
 
     def close(self) -> None:
         """No Host process survives ``invoke``; retained state is local evidence only."""
+
+    def _restore_persistent_thread(self, thread_id: str) -> bool:
+        if self.attempt_root is None:
+            return False
+        for directory in sorted(self.attempt_root.iterdir()):
+            manifest = directory / "attempt.json"
+            if (
+                not directory.is_dir()
+                or directory.is_symlink()
+                or not os.path.lexists(manifest)
+            ):
+                continue
+            try:
+                value = json.loads(
+                    _read_private_regular(manifest, limit=MAX_INSPECTION_BYTES).decode(
+                        "utf-8", "strict"
+                    )
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise _coded_error(
+                    "CONTROL_IDENTITY_DRIFT",
+                    "persistent terminal Attempt manifest is invalid",
+                ) from exc
+            if isinstance(value, Mapping) and value.get("thread_id") == thread_id:
+                key_digest = value.get("provider_idempotency_key_digest")
+                if not isinstance(key_digest, str):
+                    return False
+                return self._restore_persistent_directory(
+                    directory, expected_key_digest=key_digest
+                )
+        return False
+
+    def _restore_persistent_record(self, provider_key: str) -> bool:
+        if self.attempt_root is None:
+            return False
+        directory = self.attempt_root / _private_attempt_name(provider_key)
+        if not directory.is_dir() or directory.is_symlink():
+            return False
+        if not os.path.lexists(directory / "attempt.json"):
+            return False
+        return self._restore_persistent_directory(
+            directory,
+            expected_key_digest=hashlib.sha256(
+                provider_key.encode("utf-8")
+            ).hexdigest(),
+            provider_key=provider_key,
+        )
+
+    def _restore_persistent_directory(
+        self,
+        directory: Path,
+        *,
+        expected_key_digest: str,
+        provider_key: str | None = None,
+    ) -> bool:
+        if directory.is_symlink() or not directory.is_dir():
+            raise _coded_error(
+                "CONTROL_IDENTITY_DRIFT", "persistent Attempt directory is unsafe"
+            )
+        try:
+            manifest_raw = _read_private_regular(
+                directory / "attempt.json", limit=MAX_INSPECTION_BYTES
+            )
+            manifest = json.loads(manifest_raw.decode("utf-8", "strict"))
+            result_raw = _read_private_regular(
+                directory / "result.json", limit=MAX_RESULT_BYTES
+            )
+            schema_raw = _read_private_regular(
+                directory / "result.schema.json", limit=MAX_INSPECTION_BYTES
+            )
+            transcript_raw = _read_private_regular(
+                directory / "transcript.jsonl", limit=MAX_STDOUT_BYTES
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        expected_schema_digest = domain_digest(
+            "loopskill-codex-result-schema-v1\n", result_payload_schema()
+        )
+        if (
+            not isinstance(manifest, Mapping)
+            or manifest.get("provider_idempotency_key_digest") != expected_key_digest
+            or manifest.get("result_sha256") != _sha256(result_raw)
+            or manifest.get("transcript_sha256") != _sha256(transcript_raw)
+            or manifest.get("schema_digest") != expected_schema_digest
+            or manifest.get("transport") != EXEC_TRANSPORT
+            or schema_raw != canonical_bytes(result_payload_schema())
+        ):
+            return False
+        try:
+            transcript = _parse_jsonl(transcript_raw)
+            result = parse_result_payload(result_raw)
+        except (ProtocolRejection, RuntimeError):
+            return False
+        if transcript.thread_id != manifest.get("thread_id"):
+            return False
+        if provider_key is None:
+            provider_key = "restored-" + expected_key_digest
+        self._record = {
+            "idempotency_key": provider_key,
+            "result": result,
+            "result_schema_digest": domain_digest(
+                "loopskill-codex-result-schema-v1\n", result_payload_schema()
+            ),
+            "thread_id": transcript.thread_id,
+        }
+        return True
 
     def _observation(self, action: str, key: str) -> Mapping[str, Any]:
         assert self._record is not None

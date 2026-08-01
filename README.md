@@ -1,4 +1,4 @@
-# LoopSkill 4.1
+# LoopSkill 4.2
 
 [![v4 Release CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
@@ -7,7 +7,7 @@
 [English](README.en.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
 
 <!-- parity: identity -->
-> 本文档对应 LoopSkill 4.1.1；当前可用的公开版本以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
+> 本文档对应 LoopSkill 4.2.0；当前可用的公开版本以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
 
 **一句话说明要做什么，LoopSkill 帮你先锁定边界，确认后只启动一次，并用机器证据告诉你做成了什么、哪里还不确定。**
 
@@ -49,10 +49,10 @@ LoopSkill 4 是 **v4-only hard break**。它保留 v3 的安全原则，但不�
 
 先决条件：macOS 或 Linux、Git、Python 3.11–3.14，以及已经登录的官方 Codex。LoopSkill 4 runtime 只依赖 Python 标准库。
 
-以下命令安装公开发布的 `v4.1.1` tag：
+以下命令安装公开发布的 `v4.2.0` tag：
 
 ```bash
-git clone --branch v4.1.1 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
+git clone --branch v4.2.0 --depth 1 https://github.com/amanayayatu-tech/loop-skill.git
 cd loop-skill
 bash scripts/install.sh
 LOOPSKILL4="${CODEX_HOME:-$HOME/.codex}/skills/loopskill4/scripts/loopskill4"
@@ -131,11 +131,16 @@ INTAKE 严格只读。PREPARE 只生成 owner-only 的本地 manifest、边界�
 
 ```bash
 "$LOOPSKILL4" status --root ./loopskill4-data
-"$LOOPSKILL4" status --refresh --root ./loopskill4-data
-"$LOOPSKILL4" status --root ./loopskill4-data --diagnostics
+"$LOOPSKILL4" list --root ./loopskill4-data
+"$LOOPSKILL4" run --root ./loopskill4-data --loop loop-example
+"$LOOPSKILL4" continue --root ./loopskill4-data --loop loop-example
+"$LOOPSKILL4" pause --root ./loopskill4-data --loop loop-example
 ```
 
-普通 `status` 只读本地状态。`status --refresh` 只有在 durable Attempt 尚未被取走时，才可能完成**唯一首次 invocation**；进程一旦启动，就没有跨进程自动恢复。它绝不执行**第二次 spawn**或 resend。
+普通 `status` 和 `list` 只读本地状态。`run`/`continue` 会持续推进选中的
+Loop，直到完成或遇到真实等待边界。Plan v2 Attempt 使用 owner-only 持久证据：
+完成结果可在控制器重启后回读；中断的非 ephemeral session 最多执行一次有记录的
+`codex exec resume`。若旧进程仍存活则等待，绝不重发。
 
 - `UNKNOWN`：外部动作可能发生过，但终态证据丢失或有歧义。
 - `UNVERIFIABLE`：现有 Host 能力无法给出要求的证明。
@@ -156,7 +161,7 @@ INTAKE 严格只读。PREPARE 只生成 owner-only 的本地 manifest、边界�
 这些能力只能提交受权 semantic command，不能直接写 Store、签 Host receipt 或成为 Supervisor。
 
 <!-- parity: architecture -->
-## 4.1 的内部结构
+## 4.2 的内部结构
 
 默认路径保持简单：Entry 组合 Kernel、一个 SQLite Store、content-addressed PlanDocument、artifact/review/finalization libraries 和一个 Codex Host Adapter。CreateLoop 只注册当前 Goal；后续 Goal 复用原子 `AdvanceGoal` 按需激活，不新增第二 writer、Supervisor、daemon 或队列服务。
 
@@ -170,7 +175,7 @@ flowchart LR
     E -. 可选 .-> O["Standard / Adaptive policy"]
 ```
 
-Store 不控制 Host；Artifact 和 Host 也不写 canonical state。进一步内容见 [架构图](docs/v4/architecture-map.md)、[ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md)、[ADR 0013](docs/adr/0013-content-addressed-plan-capacity.md)、[兼容矩阵](docs/v4/compatibility-matrix-v4.1.md) 和 [typed protocol](protocol/v4/README.md)。
+Store 不控制 Host；Artifact 和 Host 也不写 canonical state。进一步内容见 [架构图](docs/v4/architecture-map.md)、[ADR 0011](docs/adr/0011-loopskill-4-compatible-kernel-refactor.md)、[ADR 0013](docs/adr/0013-content-addressed-plan-capacity.md)、[兼容矩阵](docs/v4/compatibility-matrix-v4.2.md) 和 [typed protocol](protocol/v4/README.md)。
 
 <!-- parity: safety -->
 ## 安全、恢复与诚实失败
@@ -178,7 +183,8 @@ Store 不控制 Host；Artifact 和 Host 也不写 canonical state。进一步�
 - 本地 operation、per-loop CAS、outbox、event 和 snapshot 在一个 SQLite transaction 中提交。
 - 相同 operation ID 与相同请求重放不会产生第二个 event、handle 或 effect。
 - 外部执行只承诺 at-most-one automatic attempt；没有跨 SQLite、Codex、Git 或 network 的端到端 exactly-once。
-- 结果证据丢失时保持 `UNKNOWN`，不自动 resend，也不运行 `codex exec resume`。
+- 终态 Attempt 证据可跨控制器重启恢复；中断 session 最多进行一次有记录的
+  resume。不可安全重放的外部动作进入人工确认，绝不盲目重发。
 - path traversal、symlink、casefold alias、special file 和 open/read race 都 fail closed。
 - 首次真实 Host 调用时，Host 自身可能为当前 workspace 追加一条 trust 记录；发行验证会保留**真实非零** changed-byte 计数。安装器和卸载器仍不编辑 Codex 配置。
 
@@ -201,7 +207,7 @@ LoopSkill 分开记录四件事：
 
 v4 遇到 v3 root、state 或 Controller Pack 时零写入，并返回 `USER_UNSUPPORTED_LEGACY_VERSION`。它不提供 importer、repair、legacy CLI alias、Pack runtime 或 v3 MCP State Gateway，也不会自动迁移。
 
-如果当前工作目录仍带有 v3 的 `.codex-loop` 标记，4.1.1 会在 `PREPARE`、`START` 或 `status --refresh` 前停止，不创建准备产物、Store 或 Host 任务。切换到新的 v4 工作目录后再运行。
+如果当前工作目录仍带有 v3 的 `.codex-loop` 标记，4.2.0 会在 `PREPARE`、`START` 或 `status --refresh` 前停止，不创建准备产物、Store 或 Host 任务。切换到新的 v4 工作目录后再运行。
 
 需要旧数据时，请继续使用独立的 [LoopSkill v3.3.8](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)。
 
@@ -217,12 +223,15 @@ python3 "${CODEX_HOME:-$HOME/.codex}/install-receipts/loopskill4/uninstall_v4.py
 <!-- parity: limitations -->
 ## 当前限制与容量合同
 
-- 4.1.1 支持 1–32 个已确认 Goal；canonical plan 最大 128 KiB，明确授权的 UTF-8 text/Markdown source 最大 256 KiB。
+- 4.2.0 支持 1–128 个已确认 Goal；canonical plan 最大 512 KiB，明确授权的 UTF-8 text/Markdown source 最大 256 KiB。
 - CreateLoop 发布目标为 8 KiB / 64 members（硬上限仍为 16 KiB / 128）；materialized Host prompt 目标为 24 KiB（硬上限 32 KiB），超限不截断且在 Host 前阻断。
 - 新 Loop 只写 `CONTENT_ADDRESSED_V1`；`EAGER_V4_0` 仅支持 status、export 和原 reducer continuation，不迁移、不改写、不双写。
-- 4.1.1 只支持 Codex Host Adapter；Kernel host-neutral 不代表已经支持 multi-host。
+- 4.2.0 只支持 Codex Host Adapter；Kernel host-neutral 不代表已经支持 multi-host。
 - 默认路径是一个 cwd-bound 前台 Codex Host 任务；不承诺 Desktop-visible saved project/task。
-- 单次前台观察窗口最长 300 秒；不承诺无限长任务、自动 resume 或跨进程 readback。
+- 单次 Attempt 最长 30000 秒。Plan v2 支持持久终态回读和一次有记录的
+  session resume，但这不是无限 daemon，也不构成跨系统 exactly-once。
+- 预算在 Host 调用前检查；`WAITING_BUDGET` 只能通过摘要绑定、只增不减且不改变
+  已确认范围的 `budget-extend` 恢复。
 - 没有 provider idempotency 或跨系统 exactly-once 承诺。
 - 不声称 patch 成功率提高，也不声称已经证明 long-horizon superiority。
 - memory isolation 只按 Host 实际可证明的强度报告，可能 unavailable 或 unverifiable。
@@ -249,9 +258,9 @@ CI 还运行 Linux/macOS × Python 3.11–3.14 安装卸载矩阵、协议漂移
 ## 发布、安全与历史版本
 
 - [v4 发布流程](docs/RELEASING.md)
-- [4.1.1 发布说明](docs/v4/release-notes-v4.1.md)
+- [4.2.0 发布说明](docs/v4/release-notes-v4.2.md)
 - [4.0.0 historical release notes](docs/v4/release-notes.md)
-- [v4.1 compatibility matrix](docs/v4/compatibility-matrix-v4.1.md)
+- [v4.2 compatibility matrix](docs/v4/compatibility-matrix-v4.2.md)
 - [Security policy](SECURITY.md)
 - [MIT License](LICENSE)
 - [v3.3.8 historical release](https://github.com/amanayayatu-tech/loop-skill/releases/tag/v3.3.8)

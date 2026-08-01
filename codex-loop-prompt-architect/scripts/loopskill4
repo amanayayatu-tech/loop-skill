@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 from collections.abc import Mapping
@@ -26,17 +27,21 @@ from loop_architect.v4_entry import (
     confirm_loop,
     control_loop,
     diagnostics,
+    extend_budget,
     intake_report_loop,
     prepare_loop,
     policy_view,
     review_prepared,
     revise_goal_plan,
+    satisfy_gate,
     start_loop,
     steer_loop,
     status,
     sync_loop,
+    worker_profile,
 )
 from loop_architect.v4_entry.preparation import boundary_display
+from loop_architect.v4_persistence.sqlite_store import PersistenceError, SQLiteStore
 from loop_architect.v4_entry.legacy_boundary import (
     is_legacy_input,
     unsupported_legacy_error,
@@ -74,17 +79,36 @@ def parser() -> PublicParser:
     start.add_argument("--root", type=Path, default=default_root())
     start.add_argument("--prepared-output", type=Path)
     start.add_argument("--diagnostics", action="store_true")
+    listing = subcommands.add_parser("list")
+    listing.add_argument("--root", type=Path, default=default_root())
     show = subcommands.add_parser("status")
     show.add_argument("--root", type=Path, default=default_root())
+    show.add_argument("--loop")
     show.add_argument("--diagnostics", action="store_true")
     show.add_argument("--refresh", action="store_true")
+    for run_action in ("run", "continue"):
+        run = subcommands.add_parser(run_action)
+        run.add_argument("--root", type=Path, default=default_root())
+        run.add_argument("--loop")
+        run.add_argument("--diagnostics", action="store_true")
     for lifecycle_action in ("pause", "resume", "stop"):
         lifecycle = subcommands.add_parser(lifecycle_action)
         lifecycle.add_argument("--root", type=Path, default=default_root())
+        lifecycle.add_argument("--loop")
         if lifecycle_action != "resume":
             lifecycle.add_argument(
                 "--reason", default="User requested lifecycle control."
             )
+    approve = subcommands.add_parser("approve")
+    approve.add_argument("--root", type=Path, default=default_root())
+    approve.add_argument("--loop")
+    approve.add_argument("--approval-digest", required=True)
+    budget_extend = subcommands.add_parser("budget-extend")
+    budget_extend.add_argument("--root", type=Path, default=default_root())
+    budget_extend.add_argument("--loop")
+    budget_extend.add_argument("--max-host-invocations", type=int, required=True)
+    budget_extend.add_argument("--active-compute-seconds", type=int, required=True)
+    budget_extend.add_argument("--reason", required=True)
     doctor = subcommands.add_parser("doctor")
     doctor.add_argument("--diagnostics", action="store_true")
     canary = subcommands.add_parser("canary")
@@ -97,15 +121,109 @@ def parser() -> PublicParser:
     compile_prepared.add_argument("prepared_directory", type=Path)
     policy = subcommands.add_parser("policy")
     policy.add_argument("--root", type=Path, default=default_root())
+    policy.add_argument("--loop")
     revise = subcommands.add_parser("roadmap-revise")
     revise.add_argument("objectives", nargs="+")
     revise.add_argument("--reason", required=True)
     revise.add_argument("--root", type=Path, default=default_root())
+    revise.add_argument("--loop")
     steer = subcommands.add_parser("steer")
     steer.add_argument("choice", choices=("continue-repair", "wait", "stop"))
     steer.add_argument("--failure-fingerprint", default="")
     steer.add_argument("--root", type=Path, default=default_root())
+    steer.add_argument("--loop")
     return result
+
+
+_STORE_FILENAME = "loopskill-v4.sqlite3"
+_LOOP_REF = re.compile(r"loop-[0-9a-zA-Z._-]{1,128}\Z")
+
+
+def _discover_loops(base: Path) -> list[dict[str, object]]:
+    """Rebuild the read-only discovery view from canonical per-Loop stores."""
+
+    roots: list[Path] = []
+    if (base / _STORE_FILENAME).is_file():
+        roots.append(base)
+    container = base / "loops"
+    if container.is_dir() and not container.is_symlink():
+        roots.extend(
+            child
+            for child in sorted(container.iterdir(), key=lambda item: item.name)
+            if child.is_dir()
+            and not child.is_symlink()
+            and (child / _STORE_FILENAME).is_file()
+        )
+    discovered: list[dict[str, object]] = []
+    seen: set[str] = set()
+    try:
+        for root in roots:
+            with SQLiteStore(root / _STORE_FILENAME) as store:
+                descriptors = store.loop_descriptors()
+                if len(descriptors) != 1:
+                    raise ValueError("store is not single-loop")
+                descriptor = descriptors[0]
+                loop_ref = str(descriptor["loop_ref"])
+                if loop_ref in seen:
+                    raise ValueError("duplicate loop identity")
+                if root != base and root.name != loop_ref:
+                    raise ValueError("loop directory identity mismatch")
+                snapshot = store.snapshot(loop_ref)
+                if snapshot is None:
+                    raise ValueError("missing loop snapshot")
+                seen.add(loop_ref)
+                discovered.append(
+                    {
+                        "created_at": descriptor["created_at"],
+                        "disposition": snapshot["execution"].get("disposition"),
+                        "goal": descriptor["goal"],
+                        "loop_ref": loop_ref,
+                        "root": str(root),
+                        "state": snapshot["execution"]["state"],
+                    }
+                )
+    except (OSError, PersistenceError, ValueError) as exc:
+        raise EntryError(
+            "USER_STORE_UNAVAILABLE",
+            "The Loop discovery view could not be rebuilt safely.",
+            "Preserve the stores and inspect the selected data location.",
+        ) from exc
+    return sorted(discovered, key=lambda item: (str(item["created_at"]), str(item["loop_ref"])))
+
+
+def _selected_loop_root(base: Path, loop_ref: str | None) -> Path:
+    if loop_ref is not None and not _LOOP_REF.fullmatch(loop_ref):
+        raise EntryError(
+            "USER_INPUT_INVALID",
+            "The Loop reference is invalid.",
+            "Use an exact loop_ref shown by loopskill4 list.",
+        )
+    choices = _discover_loops(base)
+    if loop_ref is not None:
+        choices = [item for item in choices if item["loop_ref"] == loop_ref]
+    # Preserve the v4.0/v4.1 direct-root lookup when no Store exists yet.  The
+    # selected command remains responsible for reporting the missing Store;
+    # discovery only becomes mandatory once more than one Loop is present or
+    # the caller supplied an exact identity.
+    if not choices and loop_ref is None:
+        return base
+    if len(choices) != 1:
+        raise EntryError(
+            "USER_STORE_UNAVAILABLE",
+            "No unique Loop was selected.",
+            "Run loopskill4 list and pass --loop with one exact loop_ref.",
+        )
+    return Path(str(choices[0]["root"]))
+
+
+def _new_loop_root(base: Path, loop_ref: str) -> Path:
+    if not _LOOP_REF.fullmatch(loop_ref):
+        raise EntryError(
+            "USER_PREPARATION_INVALID",
+            "The prepared Loop reference is invalid.",
+            "Prepare again in a new owner-only directory.",
+        )
+    return base / "loops" / loop_ref
 
 
 _INTAKE_FIELDS = {
@@ -187,7 +305,7 @@ def _canonical_plan_input(document, raw: bytes) -> LoopIntakeInput:
     except PlanCodecError as exc:
         raise EntryError(
             exc.code,
-            "The canonical plan does not satisfy the closed v4.1 contract.",
+            "The canonical plan does not satisfy the closed v4.2 contract.",
             f"Repair the plan and try again ({exc.reason}).",
         ) from exc
     admitted_digest = raw_domain_digest("loopskill-prd-source-v1\n", raw)
@@ -506,7 +624,10 @@ def _decode_intake_bytes(raw: bytes, *, json_document: bool) -> LoopIntakeInput:
             "The input file is not valid UTF-8 JSON.",
             "Use one JSON object containing documented semantic intake fields.",
         ) from exc
-    if isinstance(document, dict) and document.get("schema") == "loopskill-plan-v1":
+    if isinstance(document, dict) and document.get("schema") in {
+        "loopskill-plan-v1",
+        "loopskill-plan-v2",
+    }:
         return _canonical_plan_input(document, raw)
     return _intake_value(document, source_raw=raw)
 
@@ -659,6 +780,7 @@ def _interactive_start(args):
                 directory_entries=admitted[1],
             ):
                 raise EntryError(*unsupported_legacy_error())
+            _effect_workspace_root()
             return _start_with_owned_provider(subject, root=args.root)
         request = _decode_admitted_input(value, subject, maximum, admitted)
     report = intake_report_loop(request)
@@ -734,7 +856,7 @@ def _finish_owned_provider_task(
             "Preserve the local state and inspect diagnostics; do not repeat start or resume.",
         )
     try:
-        waiter(timeout_seconds=300.0)
+        waiter(timeout_seconds=float(getattr(provider, "timeout_seconds", 30_000.0)))
         if synchronize_after_wait:
             return sync_loop(
                 root=root,
@@ -750,29 +872,86 @@ def _finish_owned_provider_task(
         ) from exc
 
 
+def _provider_from_profile(
+    workspace_root: Path,
+    *,
+    root: Path,
+    profile: Mapping[str, object],
+    ephemeral: bool,
+):
+    return CodexExecProvider(
+        workspace_root,
+        timeout_seconds=float(profile["attempt_timeout_seconds"]),
+        model=(None if profile.get("model") is None else str(profile["model"])),
+        reasoning_effort=(
+            None
+            if profile.get("reasoning_effort") is None
+            else str(profile["reasoning_effort"])
+        ),
+        network_access=bool(profile["network_access"]),
+        sandbox=str(profile["sandbox"]),
+        ephemeral=ephemeral,
+        attempt_root=None if ephemeral else root / "attempts",
+        budget_override=(
+            profile.get("budget_override")
+            if isinstance(profile.get("budget_override"), Mapping)
+            else None
+        ),
+    )
+
+
+def _prepared_profile(prepared) -> tuple[Mapping[str, object], bool]:
+    context = prepared if hasattr(prepared, "plan") else review_prepared(prepared)
+    profile = context.plan.get("worker_profile")
+    if isinstance(profile, Mapping):
+        return dict(profile), False
+    return {
+        "attempt_timeout_seconds": 30_000,
+        "local_verification": True,
+        "model": None,
+        "network_access": False,
+        "reasoning_effort": None,
+        "sandbox": "workspace-write",
+    }, True
+
+
 def _start_with_owned_provider(prepared, *, root: Path):
+    context = prepared if hasattr(prepared, "manifest") else review_prepared(prepared)
+    root = _new_loop_root(root, context.manifest.loop_ref)
     workspace_root = _effect_workspace_root()
-    provider = CodexExecProvider(workspace_root)
+    profile, ephemeral = _prepared_profile(context)
+    provider = _provider_from_profile(
+        workspace_root, root=root, profile=profile, ephemeral=ephemeral
+    )
     try:
         value = start_loop(
-            prepared,
+            context,
             root=root,
             host_provider=provider,
             workspace_root=workspace_root,
         )
-        return _finish_owned_provider_task(
+        value = _finish_owned_provider_task(
             value,
             provider,
             root=root,
             workspace_root=workspace_root,
         )
+        if not ephemeral and value.progress in {"Active", "Starting"}:
+            return _run_to_blocking(root=root)
+        return value
     finally:
         _close_provider(provider)
 
 
 def _refresh_with_owned_provider(*, root: Path):
     workspace_root = _effect_workspace_root()
-    provider = CodexExecProvider(workspace_root)
+    profile = worker_profile(root=root)
+    provider = _provider_from_profile(
+        workspace_root,
+        root=root,
+        profile=profile,
+        ephemeral=profile.get("model") is None,
+    )
     try:
         value = sync_loop(
             root=root,
@@ -788,6 +967,19 @@ def _refresh_with_owned_provider(*, root: Path):
         )
     finally:
         _close_provider(provider)
+
+
+def _run_to_blocking(*, root: Path):
+    value = status(root=root)
+    for _ in range(384):
+        if value.progress not in {"Active", "Starting"}:
+            return value
+        value = _refresh_with_owned_provider(root=root)
+    raise EntryError(
+        "RESOURCE_LIMIT_EXCEEDED",
+        "The foreground run exceeded the v4.2 bounded transition limit.",
+        "Inspect status and budgets before continuing.",
+    )
 
 
 def _interactive_canary(args):
@@ -906,10 +1098,42 @@ def main(argv=None) -> int:
                 )
             )
             return 0
+        if args.action == "list":
+            print(
+                json.dumps(
+                    {"loops": _discover_loops(args.root)},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        if args.action == "status" and args.refresh:
+            # Refresh is workspace-bound and must reject a legacy v3 cwd before
+            # even inspecting a v4 Store.  Plain status remains read-only and
+            # intentionally works from a legacy cwd.
+            _effect_workspace_root()
+        selected_root = None
+        if args.action in {
+            "status",
+            "run",
+            "continue",
+            "pause",
+            "resume",
+            "stop",
+            "policy",
+            "roadmap-revise",
+            "steer",
+            "approve",
+            "budget-extend",
+        }:
+            selected_root = _selected_loop_root(
+                args.root, getattr(args, "loop", None)
+            )
         if args.action == "policy":
             print(
                 json.dumps(
-                    policy_view(root=args.root),
+                    policy_view(root=selected_root),
                     ensure_ascii=False,
                     sort_keys=True,
                     separators=(",", ":"),
@@ -921,7 +1145,7 @@ def main(argv=None) -> int:
                 json.dumps(
                     revise_goal_plan(
                         tuple(args.objectives),
-                        root=args.root,
+                        root=selected_root,
                         reason=args.reason,
                     ),
                     ensure_ascii=False,
@@ -932,30 +1156,61 @@ def main(argv=None) -> int:
             return 0
         if args.action == "start":
             value = _interactive_start(args)
+        elif args.action == "approve":
+            value = satisfy_gate(
+                root=selected_root,
+                workspace_root=_effect_workspace_root(),
+                approval_digest=args.approval_digest,
+            )
+            if value.progress in {"Active", "Starting"}:
+                value = _run_to_blocking(root=selected_root)
+        elif args.action == "budget-extend":
+            value = extend_budget(
+                root=selected_root,
+                new_max_host_invocations=args.max_host_invocations,
+                new_wall_clock_seconds=args.active_compute_seconds,
+                reason=args.reason,
+            )
+            if value.progress in {"Active", "Starting"}:
+                value = _run_to_blocking(root=selected_root)
+        elif args.action in {"run", "continue"}:
+            value = _run_to_blocking(root=selected_root)
+            if args.action == "continue" and value.result == "WAITING_TIME":
+                value = satisfy_gate(
+                    root=selected_root,
+                    workspace_root=_effect_workspace_root(),
+                )
+                if value.progress in {"Active", "Starting"}:
+                    value = _run_to_blocking(root=selected_root)
+            elif args.action == "continue" and (
+                value.result == "WAITING" or value.progress == "Paused"
+            ):
+                value = control_loop("resume", root=selected_root)
+                value = _run_to_blocking(root=selected_root)
         elif args.action in {"pause", "resume", "stop"}:
             value = control_loop(
                 args.action,
-                root=args.root,
+                root=selected_root,
                 reason=getattr(args, "reason", "User requested lifecycle control."),
             )
         elif args.action == "steer":
             value = steer_loop(
                 args.choice,
-                root=args.root,
+                root=selected_root,
                 failure_fingerprint=args.failure_fingerprint,
             )
         else:
             value = (
-                _refresh_with_owned_provider(root=args.root)
+                _refresh_with_owned_provider(root=selected_root)
                 if args.refresh
-                else status(root=args.root)
+                else status(root=selected_root)
             )
         print_status(value)
         if getattr(args, "diagnostics", False):
             print(
                 "Diagnostics: "
                 + json.dumps(
-                    diagnostics(root=args.root),
+                    diagnostics(root=selected_root),
                     ensure_ascii=False,
                     sort_keys=True,
                     separators=(",", ":"),

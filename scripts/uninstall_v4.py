@@ -213,7 +213,7 @@ def _load_receipt(path: Path) -> dict:
         not isinstance(value, dict)
         or not required <= set(value)
         or value["artifact"] != "loopskill4-install-receipt-v1"
-        or value["version"] not in {"4.0.0", "4.1.0", "4.1.1"}
+        or value["version"] not in {"4.0.0", "4.1.0", "4.1.1", "4.2.0"}
         or value["source_install_drift"] != []
         or value["mcp_entries_added"] != 0
         or value["mcp_processes_created"] != 0

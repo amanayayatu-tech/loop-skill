@@ -170,6 +170,21 @@ class ArtifactRunner(FakeRunner):
         return result
 
 
+class StreamingFakeRunner(FakeRunner):
+    def __call__(self, argv, **kwargs):
+        if tuple(argv)[-1:] == ("-",):
+            observer = kwargs.get("process_observer")
+            if observer is not None:
+                observer(os.getpid())
+            stdout_observer = kwargs.get("stdout_observer")
+            if stdout_observer is not None:
+                stdout_observer(b"not-json\n\n")
+                stdout_observer(
+                    b'{"thread_id":"thread-machine","type":"thread.started"}\n'
+                )
+        return super().__call__(argv, **kwargs)
+
+
 class ExecProviderTests(unittest.TestCase):
     def provider(self, root, runner):
         return CodexExecProvider(
@@ -178,6 +193,402 @@ class ExecProviderTests(unittest.TestCase):
             clock=lambda: NOW,
             runner=runner,
         )
+
+    @staticmethod
+    def v2_payload(*, maximum_calls=3, wall_seconds=3600):
+        return {
+            **payload(),
+            "artifact_digest": "a" * 64,
+            "capabilities": [],
+            "goal_id": "g000",
+            "goal_policy": {
+                "max_attempts": 3,
+                "on_blocked": "wait",
+                "on_failure": "repair",
+                "recovery_policy": "resume",
+                "replay_safety": "file_local",
+                "requirement": "required",
+            },
+            "prior_disposition": "",
+            "requirements": [],
+            "verifiers": ["no-file-change"],
+            "worker_profile": {
+                "attempt_timeout_seconds": 30_000,
+                "local_verification": True,
+                "model": "gpt-5.6-sol",
+                "network_access": True,
+                "reasoning_effort": "medium",
+                "sandbox": "workspace-write",
+            },
+            "workspace_digest": "b" * 64,
+            "budget": {
+                "currency": None,
+                "max_cost_minor_units": 0,
+                "max_host_invocations": maximum_calls,
+                "wall_clock_seconds": wall_seconds,
+            },
+        }
+
+    def test_persistent_terminal_attempt_survives_provider_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            first = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            observation = first.invoke("create_task", payload(), KEY)
+            self.assertEqual(observation["provider_id"], "thread-machine")
+
+            restored = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            self.assertEqual(
+                restored.readback("create_task", KEY)["provider_id"],
+                "thread-machine",
+            )
+            self.assertEqual(
+                restored.read_task_result("thread-machine")["result"], RESULT
+            )
+            attempt_directories = tuple(attempts.iterdir())
+            self.assertEqual(len(attempt_directories), 1)
+            self.assertEqual(attempt_directories[0].stat().st_mode & 0o777, 0o700)
+            self.assertTrue(
+                all(path.stat().st_mode & 0o777 == 0o600 for path in attempt_directories[0].iterdir())
+            )
+
+    def test_persistent_stream_binds_process_and_session_before_terminal_write(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            provider = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=StreamingFakeRunner(),
+            )
+            provider.invoke("create_task", payload(), KEY)
+            attempt = next(attempts.iterdir())
+            self.assertEqual(
+                json.loads((attempt / "process.json").read_text()),
+                {"pid": os.getpid()},
+            )
+            self.assertEqual(
+                json.loads((attempt / "session.json").read_text()),
+                {"thread_id": "thread-machine"},
+            )
+            self.assertIn(b"thread.started", (attempt / "transcript.partial.jsonl").read_bytes())
+
+            no_persistence = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                runner=StreamingFakeRunner(),
+            )
+            no_persistence.invoke("create_task", payload(), "no-persistence")
+
+    def test_private_persistent_reader_rejects_missing_symlink_and_oversize(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            with self.assertRaises(ValueError):
+                exec_provider._read_private_regular(root / "missing", limit=0)
+            with self.assertRaises(HostResponseLost) as missing:
+                exec_provider._read_private_regular(root / "missing", limit=10)
+            self.assertEqual(missing.exception.provider_code, "CONTROL_IDENTITY_DRIFT")
+            target = root / "target"
+            target.write_bytes(b"safe")
+            target.chmod(0o600)
+            self.assertEqual(
+                exec_provider._read_private_regular(target, limit=4), b"safe"
+            )
+            with self.assertRaises(HostResponseLost) as oversized:
+                exec_provider._read_private_regular(target, limit=3)
+            self.assertEqual(oversized.exception.provider_code, "CONTROL_IDENTITY_DRIFT")
+            link = root / "link"
+            link.symlink_to(target)
+            with self.assertRaises(HostResponseLost) as symlink:
+                exec_provider._read_private_regular(link, limit=10)
+            self.assertEqual(symlink.exception.provider_code, "CONTROL_IDENTITY_DRIFT")
+
+    def test_persistent_terminal_readback_rejects_owner_visible_mode_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            first = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            first.invoke("create_task", payload(), KEY)
+            attempt = next(attempts.iterdir())
+            (attempt / "result.json").chmod(0o644)
+
+            restored = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            with self.assertRaises(HostResponseLost) as drift:
+                restored.readback("create_task", KEY)
+            self.assertEqual(drift.exception.provider_code, "CONTROL_IDENTITY_DRIFT")
+
+    def test_incomplete_attempt_rejects_invalid_process_identity_without_resend(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            attempts.mkdir(mode=0o700)
+            key = "invalid-process-key"
+            attempt = attempts / exec_provider._private_attempt_name(key)
+            attempt.mkdir(mode=0o700)
+            for name, value in (
+                ("intent.json", {}),
+                ("process.json", {"pid": "not-a-pid"}),
+                ("session.json", {"thread_id": "thread-machine"}),
+            ):
+                path = attempt / name
+                path.write_bytes(canonical_bytes(value))
+                path.chmod(0o600)
+            runner = FakeRunner()
+            provider = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=runner,
+            )
+            with self.assertRaises(HostResponseLost) as drift:
+                provider.invoke("create_task", self.v2_payload(maximum_calls=3), key)
+            self.assertEqual(drift.exception.provider_code, "CONTROL_IDENTITY_DRIFT")
+            self.assertEqual(len(runner.calls), 2)  # version/help preflight only
+
+    def test_persisted_invocation_budget_blocks_before_a_second_exec(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            first = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            first.invoke(
+                "create_task", self.v2_payload(maximum_calls=1), "first-key"
+            )
+            runner = FakeRunner()
+            second = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=runner,
+            )
+            observation = second.invoke(
+                "create_task", self.v2_payload(maximum_calls=1), "second-key"
+            )
+            result = second.read_task_result(observation["provider_id"])
+            self.assertEqual(result["result"]["outcome"], "LIMITATION")
+            self.assertIn("invocation budget is exhausted", result["result"]["summary"])
+            self.assertEqual(len(runner.calls), 2)
+
+    def test_budget_override_and_active_compute_preflight_are_enforced(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            with self.assertRaises(ValueError):
+                CodexExecProvider(
+                    workspace,
+                    executable=sys.executable,
+                    budget_override={
+                        "max_host_invocations": True,
+                        "wall_clock_seconds": 3600,
+                    },
+                )
+
+            no_store = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                runner=FakeRunner(),
+            )
+            self.assertIsNone(no_store.budget_block_reason(self.v2_payload()))
+
+            attempts.mkdir(mode=0o700)
+            invalid = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            self.assertIn(
+                "budget is invalid",
+                invalid.budget_block_reason(
+                    self.v2_payload(maximum_calls=True)
+                ),
+            )
+
+            spent = attempts / "spent"
+            spent.mkdir(mode=0o700)
+            intent = spent / "intent.json"
+            intent.write_bytes(canonical_bytes({}))
+            intent.chmod(0o600)
+            record = spent / "attempt.json"
+            record.write_bytes(canonical_bytes({"elapsed_ms": 5000}))
+            record.chmod(0o600)
+            exhausted = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                attempt_root=attempts,
+                runner=FakeRunner(),
+            )
+            self.assertIn(
+                "active-compute budget is exhausted",
+                exhausted.budget_block_reason(
+                    self.v2_payload(maximum_calls=3, wall_seconds=5)
+                ),
+            )
+
+            record.write_bytes(canonical_bytes({"elapsed_ms": 1}))
+            override = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                attempt_root=attempts,
+                budget_override={
+                    "max_host_invocations": 2,
+                    "wall_clock_seconds": 3600,
+                },
+                runner=FakeRunner(),
+            )
+            self.assertIsNone(
+                override.budget_block_reason(self.v2_payload(maximum_calls=1))
+            )
+
+    def test_incomplete_persisted_session_uses_one_recorded_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            attempts = root / "attempts"
+            attempts.mkdir(mode=0o700)
+            key = "resume-key"
+            attempt = attempts / exec_provider._private_attempt_name(key)
+            attempt.mkdir(mode=0o700)
+            for name, value in (
+                ("intent.json", {}),
+                ("session.json", {"thread_id": "thread-machine"}),
+            ):
+                path = attempt / name
+                path.write_bytes(canonical_bytes(value))
+                path.chmod(0o600)
+            runner = FakeRunner()
+            provider = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=runner,
+            )
+            observation = provider.invoke(
+                "create_task", self.v2_payload(maximum_calls=3), key
+            )
+            self.assertEqual(observation["provider_id"], "thread-machine")
+            argv = runner.calls[-1][0]
+            self.assertEqual(argv[:3], (provider.executable, "exec", "resume"))
+            self.assertIn("thread-machine", argv)
+            self.assertTrue((attempt / "resume.json").is_file())
+            self.assertTrue((attempt / "attempt.json").is_file())
+
+            no_second_exec = FakeRunner()
+            restored = CodexExecProvider(
+                workspace,
+                executable=sys.executable,
+                clock=lambda: NOW,
+                attempt_root=attempts,
+                runner=no_second_exec,
+            )
+            self.assertEqual(
+                restored.readback("create_task", key)["provider_id"],
+                "thread-machine",
+            )
+            self.assertEqual(no_second_exec.calls, [])
+
+    def test_incomplete_attempt_recovery_routes_to_specific_wait_without_resend(self):
+        cases = (
+            ("failure", {"failure.json": {"code": "PROCESS_TIMEOUT"}}, "without resumable"),
+            ("reconcile", {}, "RECONCILE_WORKSPACE"),
+            (
+                "resume-consumed",
+                {
+                    "session.json": {"thread_id": "thread-machine"},
+                    "resume.json": {"thread_id": "thread-machine"},
+                },
+                "already consumed",
+            ),
+            (
+                "non-replayable",
+                {"session.json": {"thread_id": "thread-machine"}},
+                "Human confirmation",
+            ),
+        )
+        for label, files, expected in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                workspace = root / "workspace"
+                workspace.mkdir()
+                attempts = root / "attempts"
+                attempts.mkdir(mode=0o700)
+                key = f"recovery-{label}"
+                attempt = attempts / exec_provider._private_attempt_name(key)
+                attempt.mkdir(mode=0o700)
+                for name, value in {"intent.json": {}, **files}.items():
+                    path = attempt / name
+                    path.write_bytes(canonical_bytes(value))
+                    path.chmod(0o600)
+                runner = FakeRunner()
+                provider = CodexExecProvider(
+                    workspace,
+                    executable=sys.executable,
+                    clock=lambda: NOW,
+                    attempt_root=attempts,
+                    runner=runner,
+                )
+                selected_payload = self.v2_payload(maximum_calls=3)
+                if label == "non-replayable":
+                    selected_payload = {
+                        **selected_payload,
+                        "goal_policy": {
+                            **selected_payload["goal_policy"],
+                            "replay_safety": "non_replayable",
+                        },
+                    }
+                observation = provider.invoke("create_task", selected_payload, key)
+                result = provider.read_task_result(observation["provider_id"])
+                self.assertEqual(result["result"]["outcome"], "LIMITATION")
+                self.assertIn(expected, result["result"]["summary"])
+                self.assertEqual(len(runner.calls), 2)  # version/help only
 
     def test_pure_argv_is_exact_shell_free_contract_for_non_git_root(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -201,7 +612,6 @@ class ExecProviderTests(unittest.TestCase):
                     "--strict-config",
                     "--ignore-user-config",
                     "--ignore-rules",
-                    "--ephemeral",
                     "--sandbox",
                     "workspace-write",
                     "--config",

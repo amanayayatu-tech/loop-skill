@@ -22,6 +22,7 @@ from .prompt import (
     CONTENT_PAYLOAD_FIELDS,
     PromptMaterializationError,
     TARGET_PROMPT_BYTES,
+    V2_CONTENT_PAYLOAD_FIELDS,
     prompt_bytes,
 )
 
@@ -456,7 +457,10 @@ class CodexHostAdapter:
             raise ProtocolRejection(
                 "RECEIPT_IDENTITY_MISMATCH", "provider request digest mismatch"
             )
-        if set(attempt.payload) == CONTENT_PAYLOAD_FIELDS:
+        if set(attempt.payload) in {
+            CONTENT_PAYLOAD_FIELDS,
+            V2_CONTENT_PAYLOAD_FIELDS,
+        }:
             try:
                 materialized_bytes = prompt_bytes(
                     attempt.payload, attempt.provider_idempotency_key

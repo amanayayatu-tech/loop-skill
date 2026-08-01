@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
+import socket
 import subprocess
 import sys
 import tempfile
@@ -28,6 +31,8 @@ from loop_architect.v4_artifacts.paths import (  # noqa: E402
     reject_casefold_collisions,
     secure_read_regular,
 )
+from loop_architect.v4_artifacts.verifier import verify_artifact  # noqa: E402
+import loop_architect.v4_artifacts.verifier as artifact_verifier  # noqa: E402
 from loop_architect.v4_persistence.sqlite_store import SQLiteStore  # noqa: E402
 
 
@@ -251,6 +256,194 @@ class V4ArtifactCapabilityTests(unittest.TestCase):
                     self.assertEqual(store.get_blob(digest), expected)
                 self.assertEqual(persist_capture_blobs(store, capture), persisted)
                 store.verify_integrity()
+
+    def test_exact_argv_command_verifier_runs_independently(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            baseline = capture_non_git_baseline(root)
+            capture = capture_non_git_delta(root, baseline)
+            criterion = "command-json:" + json.dumps(
+                {
+                    "argv": [sys.executable, "-c", "print('verified')"],
+                    "cwd": ".",
+                    "env": [],
+                    "expected_exit": 0,
+                    "timeout_seconds": 10,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            with SQLiteStore(root / "store.sqlite3", fixture_authority()) as store:
+                persist_capture_blobs(store, capture)
+                result = verify_artifact(
+                    store, capture, (criterion,), workspace_root=root
+                )
+            self.assertEqual(result.state, "VERIFIED")
+            self.assertEqual(result.checked_criteria, (criterion,))
+
+    def test_loopback_http_verifier_starts_checks_and_reaps_service(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "index.html").write_text("loopskill-http-ready\n", encoding="utf-8")
+            baseline = capture_non_git_baseline(root)
+            capture = capture_non_git_delta(root, baseline)
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            criterion = "http-json:" + json.dumps(
+                {
+                    "cwd": ".",
+                    "env": [],
+                    "port": port,
+                    "routes": [
+                        {"contains": "loopskill-http-ready", "path": "/", "status": 200}
+                    ],
+                    "start_argv": [
+                        sys.executable,
+                        "-m",
+                        "http.server",
+                        str(port),
+                        "--bind",
+                        "127.0.0.1",
+                    ],
+                    "startup_timeout_seconds": 10,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            with SQLiteStore(root / "store.sqlite3", fixture_authority()) as store:
+                persist_capture_blobs(store, capture)
+                result = verify_artifact(
+                    store, capture, (criterion,), workspace_root=root
+                )
+            self.assertEqual(result.state, "VERIFIED")
+            with socket.socket() as closed:
+                self.assertNotEqual(closed.connect_ex(("127.0.0.1", port)), 0)
+
+    def test_verifier_declarations_reject_unsafe_shapes_and_accept_local_gates(self):
+        self.assertEqual(
+            artifact_verifier.verifier_capability("human-approval"), "human-gate"
+        )
+        self.assertEqual(
+            artifact_verifier.verifier_capability(
+                "time-after:2026-08-02T00:00:00Z"
+            ),
+            "time-gate",
+        )
+        self.assertEqual(
+            artifact_verifier.verifier_capability("file-exists:result.txt"),
+            "artifact-capture",
+        )
+        self.assertIsNone(artifact_verifier.verifier_capability(42))
+        self.assertIsNone(artifact_verifier.verifier_capability("natural language"))
+        invalid_documents = (
+            "command-json:not-json",
+            "command-json:{}",
+            "command-json:" + json.dumps(
+                {"argv": [], "cwd": ".", "env": [], "expected_exit": 0, "timeout_seconds": 1}
+            ),
+            "command-json:" + json.dumps(
+                {"argv": [sys.executable], "cwd": 1, "env": [], "expected_exit": 0, "timeout_seconds": 1}
+            ),
+            "command-json:" + json.dumps(
+                {"argv": [sys.executable], "cwd": ".", "env": ["SECRET"], "expected_exit": 0, "timeout_seconds": 1}
+            ),
+            "command-json:" + json.dumps(
+                {"argv": [sys.executable], "cwd": ".", "env": [], "expected_exit": True, "timeout_seconds": 1}
+            ),
+            "http-json:" + json.dumps(
+                {"cwd": ".", "env": [], "port": 80, "routes": [], "start_argv": [sys.executable], "startup_timeout_seconds": 1}
+            ),
+            "http-json:" + json.dumps(
+                {"cwd": ".", "env": [], "port": 4317, "routes": [{"contains": "x", "path": "relative", "status": 200}], "start_argv": [sys.executable], "startup_timeout_seconds": 1}
+            ),
+            "time-after:2026-08-02T00:00:00",
+        )
+        for criterion in invalid_documents:
+            with self.subTest(criterion=criterion), self.assertRaises(
+                (ValueError, ArtifactCaptureError)
+            ):
+                artifact_verifier.verifier_capability(criterion)
+
+    def test_verifier_failure_matrix_is_independently_evidenced(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            baseline = capture_non_git_baseline(root)
+            (root / "result.txt").write_text("actual\n", encoding="utf-8")
+            capture = capture_non_git_delta(root, baseline)
+            correct = hashlib.sha256(b"actual\n").hexdigest()
+            command = "command-json:" + json.dumps(
+                {
+                    "argv": [sys.executable, "-c", "raise SystemExit(7)"],
+                    "cwd": ".",
+                    "env": [],
+                    "expected_exit": 0,
+                    "timeout_seconds": 10,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            criteria = (
+                "artifact-changed",
+                "no-file-change",
+                "file-exists:result.txt",
+                "file-exists:missing.txt",
+                f"file-sha256:result.txt={correct}",
+                "file-sha256:result.txt=" + "0" * 64,
+                command,
+                "unsupported-natural-language",
+            )
+            with SQLiteStore(root / "store.sqlite3", fixture_authority()) as store:
+                persist_capture_blobs(store, capture)
+                without_workspace = verify_artifact(store, capture, (command,))
+                result = verify_artifact(
+                    store, capture, criteria, workspace_root=root
+                )
+            self.assertEqual(without_workspace.state, "FAILED")
+            self.assertEqual(result.state, "FAILED")
+            self.assertEqual(len(result.checked_criteria), 7)
+
+    def test_command_timeout_and_failed_http_route_are_bounded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            baseline = capture_non_git_baseline(root)
+            capture = capture_non_git_delta(root, baseline)
+            timeout_criterion = "command-json:" + json.dumps(
+                {
+                    "argv": [sys.executable, "-c", "import time; time.sleep(5)"],
+                    "cwd": ".",
+                    "env": [],
+                    "expected_exit": 0,
+                    "timeout_seconds": 1,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            http_criterion = "http-json:" + json.dumps(
+                {
+                    "cwd": ".",
+                    "env": [],
+                    "port": port,
+                    "routes": [{"contains": "never", "path": "/", "status": 200}],
+                    "start_argv": [sys.executable, "-c", "raise SystemExit(0)"],
+                    "startup_timeout_seconds": 1,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            with SQLiteStore(root / "store.sqlite3", fixture_authority()) as store:
+                persist_capture_blobs(store, capture)
+                timed_out = verify_artifact(
+                    store, capture, (timeout_criterion,), workspace_root=root
+                )
+                http_failed = verify_artifact(
+                    store, capture, (http_criterion,), workspace_root=root
+                )
+            self.assertEqual(timed_out.state, "FAILED")
+            self.assertEqual(http_failed.state, "FAILED")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Closed v4.1 plan codec, identity derivation, and current-Goal materializer."""
+"""Closed v4.1/v4.2 plan codecs and current-Goal materializer."""
 
 from __future__ import annotations
 
@@ -25,6 +25,11 @@ from .protocol import (
 
 PLAN_SCHEMA = "loopskill-plan-v1"
 PLAN_INDEX_SCHEMA = "loopskill-plan-index-v1"
+PLAN_SCHEMA_V2 = "loopskill-plan-v2"
+PLAN_INDEX_SCHEMA_V2 = "loopskill-plan-index-v2"
+V1_PLAN_MAX_BYTES = 128 * 1024
+V1_GOAL_COUNT_MAX = 32
+V1_OBJECTIVE_MAX_BYTES = 2 * 1024
 SOURCE_KINDS = frozenset(PLAN_SOURCE_KINDS)
 PLAN_FIELDS = frozenset(
     {
@@ -59,6 +64,34 @@ BUDGET_FIELDS = frozenset(
 )
 ROADMAP_FIELDS = frozenset({"mode", "max_reorders"})
 GOAL_FIELDS = frozenset({"goal_id", "objective", "acceptance_criteria"})
+PLAN_V2_FIELDS = PLAN_FIELDS | frozenset({"requirements", "worker_profile"})
+WORKER_PROFILE_FIELDS = frozenset(
+    {
+        "attempt_timeout_seconds",
+        "local_verification",
+        "model",
+        "network_access",
+        "reasoning_effort",
+        "sandbox",
+    }
+)
+GOAL_V2_FIELDS = frozenset(
+    {
+        "acceptance_criteria",
+        "capabilities",
+        "gate",
+        "goal_id",
+        "max_attempts",
+        "objective",
+        "on_blocked",
+        "on_failure",
+        "recovery_policy",
+        "replay_safety",
+        "requirement",
+        "requirement_refs",
+        "verifiers",
+    }
+)
 INDEX_FIELDS = frozenset(
     {
         "schema",
@@ -132,6 +165,7 @@ def _string_array(
     *,
     maximum_items: int,
     allow_empty: bool = True,
+    item_maximum: int | None = None,
 ) -> list[str]:
     if not isinstance(value, (list, tuple)):
         raise PlanCodecError("USER_PREPARATION_INVALID", f"{label}_not_array")
@@ -139,10 +173,12 @@ def _string_array(
         raise PlanCodecError("RESOURCE_LIMIT_EXCEEDED", f"{label}_items")
     if not allow_empty and not value:
         raise PlanCodecError("USER_PREPARATION_INVALID", f"{label}_empty")
-    result = [
-        _text(item, f"{label}_item", maximum=int(CAPACITY_CONTRACT["item_max_bytes"]))
-        for item in value
-    ]
+    maximum = (
+        int(CAPACITY_CONTRACT["item_max_bytes"])
+        if item_maximum is None
+        else item_maximum
+    )
+    result = [_text(item, f"{label}_item", maximum=maximum) for item in value]
     if len(result) != len(set(result)):
         raise PlanCodecError("USER_PREPARATION_INVALID", f"{label}_duplicate")
     return result
@@ -162,7 +198,7 @@ def _integer(value: Any, label: str, *, minimum: int, maximum: int) -> int:
     return value
 
 
-def canonicalize_plan(value: Any) -> dict[str, Any]:
+def _canonicalize_plan_v1(value: Any) -> dict[str, Any]:
     """Validate the closed PlanDocument v1 shape and normalize semantic strings."""
 
     plan = _closed(value, PLAN_FIELDS, "plan")
@@ -250,7 +286,7 @@ def canonicalize_plan(value: Any) -> dict[str, Any]:
     if not isinstance(raw_goals, (list, tuple)):
         raise PlanCodecError("USER_PREPARATION_INVALID", "goals_not_array")
     goal_min = int(CAPACITY_CONTRACT["goal_count_min"])
-    goal_max = int(CAPACITY_CONTRACT["goal_count_max"])
+    goal_max = V1_GOAL_COUNT_MAX
     if not goal_min <= len(raw_goals) <= goal_max:
         raise PlanCodecError("RESOURCE_LIMIT_EXCEEDED", "goal_count")
     goals: list[dict[str, Any]] = []
@@ -271,7 +307,7 @@ def canonicalize_plan(value: Any) -> dict[str, Any]:
                 "objective": _text(
                     goal["objective"],
                     f"goal_{index}_objective",
-                    maximum=int(CAPACITY_CONTRACT["objective_max_bytes"]),
+                    maximum=V1_OBJECTIVE_MAX_BYTES,
                 ),
             }
         )
@@ -281,7 +317,7 @@ def canonicalize_plan(value: Any) -> dict[str, Any]:
     objective = _text(
         plan["objective"],
         "objective",
-        maximum=int(CAPACITY_CONTRACT["objective_max_bytes"]),
+        maximum=V1_OBJECTIVE_MAX_BYTES,
     )
     if objective != goals[0]["objective"]:
         raise PlanCodecError("USER_PREPARATION_INVALID", "primary_goal_mismatch")
@@ -313,11 +349,278 @@ def canonicalize_plan(value: Any) -> dict[str, Any]:
         "stop_conditions": stops,
     }
     raw = canonical_bytes(normalized)
-    if len(raw) > int(CAPACITY_CONTRACT["canonical_plan_max_bytes"]):
+    if len(raw) > V1_PLAN_MAX_BYTES:
         raise PlanCodecError("RESOURCE_LIMIT_EXCEEDED", "canonical_plan_bytes")
     if canonical_bytes(normalized) != raw:
         raise AssertionError("canonical encoder drift")
     return normalized
+
+
+def _canonicalize_plan_v2(value: Any) -> dict[str, Any]:
+    plan = _closed(value, PLAN_V2_FIELDS, "plan")
+    if plan["schema"] != PLAN_SCHEMA_V2:
+        raise PlanCodecError("USER_PREPARATION_INVALID", "plan_schema")
+
+    source = _closed(plan["source"], SOURCE_FIELDS, "source")
+    kind = source["kind"]
+    if kind not in SOURCE_KINDS:
+        raise PlanCodecError("USER_INPUT_INVALID", "plan_source_kind")
+    source_digest = _text(source["source_digest"], "source_digest", maximum=64)
+    if not re.fullmatch(r"[0-9a-f]{64}", source_digest):
+        raise PlanCodecError("USER_PREPARATION_INVALID", "source_digest")
+    if source["source_content_retained"] is not False:
+        raise PlanCodecError("USER_PREPARATION_INVALID", "source_content_retained")
+
+    boundaries = _closed(plan["boundaries"], BOUNDARY_FIELDS, "boundaries")
+    if not isinstance(boundaries["destructive_actions_allowed"], bool):
+        raise PlanCodecError(
+            "USER_PREPARATION_INVALID", "destructive_actions_allowed"
+        )
+    limits = CAPACITY_CONTRACT["array_limits"]
+    canonical_boundaries = {
+        "destructive_actions_allowed": boundaries["destructive_actions_allowed"],
+        "external_actions": _string_array(
+            boundaries["external_actions"],
+            "external_actions",
+            maximum_items=int(limits["external_actions"]),
+        ),
+        "forbidden_actions": _string_array(
+            boundaries["forbidden_actions"],
+            "forbidden_actions",
+            maximum_items=int(limits["forbidden_actions"]),
+        ),
+        "forbidden_paths": _string_array(
+            boundaries["forbidden_paths"],
+            "forbidden_paths",
+            maximum_items=int(limits["forbidden_paths"]),
+        ),
+        "write_scope": _string_array(
+            boundaries["write_scope"],
+            "write_scope",
+            maximum_items=int(limits["write_scope"]),
+            allow_empty=False,
+        ),
+    }
+
+    budget = _closed(plan["budget"], BUDGET_FIELDS, "budget")
+    currency = budget["currency"]
+    if currency is not None:
+        currency = _text(currency, "currency", maximum=16).upper()
+    canonical_budget = {
+        "currency": currency,
+        "max_cost_minor_units": _integer(
+            budget["max_cost_minor_units"],
+            "max_cost_minor_units",
+            minimum=0,
+            maximum=2**63 - 1,
+        ),
+        "max_host_invocations": _integer(
+            budget["max_host_invocations"],
+            "max_host_invocations",
+            minimum=1,
+            maximum=1_000_000,
+        ),
+        "wall_clock_seconds": _integer(
+            budget["wall_clock_seconds"],
+            "wall_clock_seconds",
+            minimum=1,
+            maximum=31_536_000,
+        ),
+    }
+    if canonical_budget["max_cost_minor_units"] and currency is None:
+        raise PlanCodecError("USER_PREPARATION_INVALID", "budget_currency_missing")
+
+    roadmap = _closed(plan["roadmap_policy"], ROADMAP_FIELDS, "roadmap_policy")
+    if roadmap["mode"] not in {"STANDARD", "ADAPTIVE"}:
+        raise PlanCodecError("USER_PREPARATION_INVALID", "roadmap_mode")
+    max_reorders = _integer(
+        roadmap["max_reorders"], "max_reorders", minimum=0, maximum=16
+    )
+    if roadmap["mode"] == "STANDARD" and max_reorders != 0:
+        raise PlanCodecError("USER_PREPARATION_INVALID", "standard_reorders")
+
+    raw_requirements = plan["requirements"]
+    if not isinstance(raw_requirements, Mapping) or len(raw_requirements) > int(
+        limits["requirements"]
+    ):
+        raise PlanCodecError("RESOURCE_LIMIT_EXCEEDED", "requirements")
+    requirements: dict[str, str] = {}
+    for requirement_id, requirement_text in sorted(raw_requirements.items()):
+        if not isinstance(requirement_id, str) or not re.fullmatch(
+            r"r[0-9]{3}", requirement_id
+        ):
+            raise PlanCodecError("USER_PREPARATION_INVALID", "requirement_id")
+        requirements[requirement_id] = _text(
+            requirement_text,
+            f"requirement_{requirement_id}",
+            maximum=int(CAPACITY_CONTRACT["objective_max_bytes"]),
+        )
+
+    profile = _closed(plan["worker_profile"], WORKER_PROFILE_FIELDS, "worker_profile")
+    if profile["sandbox"] != "workspace-write":
+        raise PlanCodecError("USER_PREPARATION_INVALID", "worker_sandbox")
+    if profile["reasoning_effort"] not in {"low", "medium", "high", "xhigh", "max"}:
+        raise PlanCodecError("USER_PREPARATION_INVALID", "reasoning_effort")
+    if not isinstance(profile["network_access"], bool) or not isinstance(
+        profile["local_verification"], bool
+    ):
+        raise PlanCodecError("USER_PREPARATION_INVALID", "worker_boolean")
+    worker_profile = {
+        "attempt_timeout_seconds": _integer(
+            profile["attempt_timeout_seconds"],
+            "attempt_timeout_seconds",
+            minimum=1,
+            maximum=30_000,
+        ),
+        "local_verification": profile["local_verification"],
+        "model": _text(profile["model"], "model", maximum=128),
+        "network_access": profile["network_access"],
+        "reasoning_effort": profile["reasoning_effort"],
+        "sandbox": "workspace-write",
+    }
+
+    raw_goals = plan["goals"]
+    if not isinstance(raw_goals, (list, tuple)) or not int(
+        CAPACITY_CONTRACT["goal_count_min"]
+    ) <= len(raw_goals) <= int(CAPACITY_CONTRACT["goal_count_max"]):
+        raise PlanCodecError("RESOURCE_LIMIT_EXCEEDED", "goal_count")
+    goals: list[dict[str, Any]] = []
+    for index, raw_goal in enumerate(raw_goals):
+        goal = _closed(raw_goal, GOAL_V2_FIELDS, f"goal_{index}")
+        goal_id = _text(goal["goal_id"], f"goal_{index}_id", maximum=16)
+        if not re.fullmatch(r"g[0-9]{3}", goal_id):
+            raise PlanCodecError("USER_PREPARATION_INVALID", "goal_id_format")
+        requirement_refs = _string_array(
+            goal["requirement_refs"],
+            f"goal_{index}_requirement_refs",
+            maximum_items=int(limits["goal_requirement_refs"]),
+        )
+        if any(reference not in requirements for reference in requirement_refs):
+            raise PlanCodecError(
+                "USER_PREPARATION_INVALID", "unknown_requirement_ref"
+            )
+        requirement = goal["requirement"]
+        gate = goal["gate"]
+        on_failure = goal["on_failure"]
+        on_blocked = goal["on_blocked"]
+        recovery = goal["recovery_policy"]
+        replay = goal["replay_safety"]
+        if requirement not in {"required", "optional"}:
+            raise PlanCodecError("USER_PREPARATION_INVALID", "goal_requirement")
+        if gate not in {"worker", "human", "time"}:
+            raise PlanCodecError("USER_PREPARATION_INVALID", "goal_gate")
+        if on_failure not in {"repair", "wait", "fail"}:
+            raise PlanCodecError("USER_PREPARATION_INVALID", "goal_on_failure")
+        if on_blocked not in {"wait", "skip"}:
+            raise PlanCodecError("USER_PREPARATION_INVALID", "goal_on_blocked")
+        if requirement == "required" and on_blocked == "skip":
+            raise PlanCodecError("USER_PREPARATION_INVALID", "required_goal_skip")
+        if recovery not in {"resume", "reconcile", "human"}:
+            raise PlanCodecError("USER_PREPARATION_INVALID", "goal_recovery_policy")
+        if replay not in {"file_local", "idempotent", "non_replayable"}:
+            raise PlanCodecError("USER_PREPARATION_INVALID", "goal_replay_safety")
+        if gate != "worker" and recovery != "human":
+            raise PlanCodecError("USER_PREPARATION_INVALID", "gate_recovery_policy")
+        goals.append(
+            {
+                "acceptance_criteria": _string_array(
+                    goal["acceptance_criteria"],
+                    f"goal_{index}_acceptance",
+                    maximum_items=int(limits["goal_acceptance_criteria"]),
+                    allow_empty=False,
+                ),
+                "capabilities": _string_array(
+                    goal["capabilities"],
+                    f"goal_{index}_capabilities",
+                    maximum_items=int(limits["goal_capabilities"]),
+                ),
+                "gate": gate,
+                "goal_id": goal_id,
+                "max_attempts": _integer(
+                    goal["max_attempts"],
+                    f"goal_{index}_max_attempts",
+                    minimum=1,
+                    maximum=3,
+                ),
+                "objective": _text(
+                    goal["objective"],
+                    f"goal_{index}_objective",
+                    maximum=int(CAPACITY_CONTRACT["objective_max_bytes"]),
+                ),
+                "on_blocked": on_blocked,
+                "on_failure": on_failure,
+                "recovery_policy": recovery,
+                "replay_safety": replay,
+                "requirement": requirement,
+                "requirement_refs": requirement_refs,
+                "verifiers": _string_array(
+                    goal["verifiers"],
+                    f"goal_{index}_verifiers",
+                    maximum_items=int(limits["goal_verifiers"]),
+                    allow_empty=gate != "worker",
+                    item_maximum=4096,
+                ),
+            }
+        )
+    goal_ids = [goal["goal_id"] for goal in goals]
+    if len(goal_ids) != len(set(goal_ids)):
+        raise PlanCodecError("USER_PREPARATION_INVALID", "duplicate_goal_id")
+    if canonical_budget["max_host_invocations"] < sum(
+        goal["max_attempts"] for goal in goals if goal["gate"] == "worker"
+    ):
+        raise PlanCodecError("USER_PREPARATION_INVALID", "host_budget_too_small")
+
+    objective = _text(
+        plan["objective"],
+        "objective",
+        maximum=int(CAPACITY_CONTRACT["objective_max_bytes"]),
+    )
+    if objective != goals[0]["objective"]:
+        raise PlanCodecError("USER_PREPARATION_INVALID", "primary_goal_mismatch")
+    normalized = {
+        "boundaries": canonical_boundaries,
+        "budget": canonical_budget,
+        "completion_evidence": _string_array(
+            plan["completion_evidence"],
+            "completion_evidence",
+            maximum_items=int(limits["completion_evidence"]),
+            allow_empty=False,
+        ),
+        "goals": goals,
+        "objective": objective,
+        "requirements": requirements,
+        "roadmap_policy": {"max_reorders": max_reorders, "mode": roadmap["mode"]},
+        "schema": PLAN_SCHEMA_V2,
+        "source": {
+            "kind": kind,
+            "source_content_retained": False,
+            "source_digest": source_digest,
+        },
+        "stop_conditions": _string_array(
+            plan["stop_conditions"],
+            "stop_conditions",
+            maximum_items=int(limits["stop_conditions"]),
+            allow_empty=False,
+        ),
+        "worker_profile": worker_profile,
+    }
+    raw = canonical_bytes(normalized)
+    if len(raw) > int(CAPACITY_CONTRACT["canonical_plan_max_bytes"]):
+        raise PlanCodecError("RESOURCE_LIMIT_EXCEEDED", "canonical_plan_bytes")
+    return normalized
+
+
+def canonicalize_plan(value: Any) -> dict[str, Any]:
+    """Validate a closed PlanDocument v1 or v2 without lossy migration."""
+
+    if not isinstance(value, Mapping):
+        raise PlanCodecError("USER_PREPARATION_INVALID", "plan_shape")
+    schema = value.get("schema")
+    if schema == PLAN_SCHEMA:
+        return _canonicalize_plan_v1(value)
+    if schema == PLAN_SCHEMA_V2:
+        return _canonicalize_plan_v2(value)
+    raise PlanCodecError("USER_PREPARATION_INVALID", "plan_schema")
 
 
 def parse_plan_bytes(raw: bytes) -> dict[str, Any]:
@@ -461,9 +764,15 @@ def legacy_plan_from_request(request: Any) -> dict[str, Any]:
 
 
 def goal_slice_digest(goal: Mapping[str, Any]) -> str:
-    closed = _closed(goal, GOAL_FIELDS, "goal_slice")
+    expected = GOAL_V2_FIELDS if set(goal) == GOAL_V2_FIELDS else GOAL_FIELDS
+    closed = _closed(goal, expected, "goal_slice")
     return raw_domain_digest(
-        "loopskill-goal-slice-v1\n", canonical_bytes(closed)
+        (
+            "loopskill-goal-slice-v2\n"
+            if expected == GOAL_V2_FIELDS
+            else "loopskill-goal-slice-v1\n"
+        ),
+        canonical_bytes(closed),
     )
 
 
@@ -486,13 +795,21 @@ def build_plan_index(
         raise PlanCodecError("USER_PREPARATION_INVALID", "plan_index_goal_set")
     value = {
         "authority_digest": _text(authority_digest, "authority_digest", maximum=64),
-        "capacity_contract_version": CAPACITY_CONTRACT["version"],
+        "capacity_contract_version": (
+            CAPACITY_CONTRACT["version"]
+            if plan["schema"] == PLAN_SCHEMA_V2
+            else "loopskill-capacity-v1"
+        ),
         "goal_count": len(order),
         "ordered_goal_ids": order,
         "ordered_goal_slice_digests": [goal_slice_digest(goals[item]) for item in order],
         "plan_digest": _text(plan_identity, "plan_digest", maximum=64),
         "revision": _integer(revision, "plan_revision", minimum=0, maximum=2**31 - 1),
-        "schema": PLAN_INDEX_SCHEMA,
+        "schema": (
+            PLAN_INDEX_SCHEMA_V2
+            if plan["schema"] == PLAN_SCHEMA_V2
+            else PLAN_INDEX_SCHEMA
+        ),
         "workspace_binding": _text(
             workspace_binding, "workspace_binding", maximum=256
         ),
@@ -503,9 +820,19 @@ def build_plan_index(
 
 def validate_plan_index(index: Any, plan: Mapping[str, Any]) -> dict[str, Any]:
     value = _closed(index, INDEX_FIELDS, "plan_index")
-    if value["schema"] != PLAN_INDEX_SCHEMA:
+    expected_schema = (
+        PLAN_INDEX_SCHEMA_V2
+        if plan.get("schema") == PLAN_SCHEMA_V2
+        else PLAN_INDEX_SCHEMA
+    )
+    expected_capacity = (
+        CAPACITY_CONTRACT["version"]
+        if plan.get("schema") == PLAN_SCHEMA_V2
+        else "loopskill-capacity-v1"
+    )
+    if value["schema"] != expected_schema:
         raise PlanCodecError("USER_PREPARATION_INVALID", "plan_index_schema")
-    if value["capacity_contract_version"] != CAPACITY_CONTRACT["version"]:
+    if value["capacity_contract_version"] != expected_capacity:
         raise PlanCodecError("USER_PREPARATION_INVALID", "capacity_contract_version")
     plan_raw = canonical_bytes(canonicalize_plan(plan))
     if value["plan_digest"] != plan_digest(plan_raw):
@@ -697,7 +1024,7 @@ def content_create_payload(
     first_id = verified["ordered_goal_ids"][0]
     first = next(goal for goal in plan["goals"] if goal["goal_id"] == first_id)
     budget = plan["budget"]
-    return {
+    payload = {
         "acceptance_criteria": [],
         "active_index": 0,
         "authority_digest": verified["authority_digest"],
@@ -730,6 +1057,14 @@ def content_create_payload(
         "workspace_binding": verified["workspace_binding"],
         "write_scope": [],
     }
+    if plan["schema"] == PLAN_SCHEMA_V2:
+        payload.update(
+            {
+                "goal_requirement": first["requirement"],
+                "max_attempts": int(first["max_attempts"]),
+            }
+        )
+    return payload
 
 
 def content_create_command(
@@ -843,6 +1178,44 @@ def goal_chain(
     return _goal_chain(loop_ref, plan_identity, goal_id, slice_digest)
 
 
+def repair_chain(
+    loop_ref: str,
+    plan_identity: str,
+    goal_ref: str,
+    goal_id: str,
+    repair_ordinal: int,
+) -> dict[str, str]:
+    """Derive one non-colliding, plan-bound repair chain for an active Goal."""
+
+    if repair_ordinal < 1 or repair_ordinal > 2:
+        raise PlanCodecError("RESOURCE_LIMIT_EXCEEDED", "repair_ordinal")
+    identity = domain_digest(
+        "loopskill-repair-chain-v1\n",
+        {
+            "goal_id": goal_id,
+            "goal_ref": goal_ref,
+            "loop_ref": loop_ref,
+            "plan_digest": plan_identity,
+            "repair_ordinal": repair_ordinal,
+        },
+    )
+    suffix = identity[:24]
+    return {
+        "artifact_ref": f"artifact-{suffix}",
+        "attempt_ref": f"attempt-{suffix}",
+        "external_effect_ref": f"external-effect-{suffix}",
+        "goal_ref": goal_ref,
+        "host_resource_ref": f"host-target-{suffix}",
+        "provider_key": domain_digest(
+            "loopskill-provider-idempotency-v1\n", {"repair_chain": identity}
+        ),
+        "provider_target": f"host-target-{suffix}",
+        "report_ref": f"report-{suffix}",
+        "result_ref": f"result-{suffix}",
+        "review_ref": f"review-{suffix}",
+    }
+
+
 def materialize_provider_request(
     plan: Mapping[str, Any],
     index: Mapping[str, Any],
@@ -859,7 +1232,7 @@ def materialize_provider_request(
     goals = {goal["goal_id"]: goal for goal in plan["goals"]}
     goal = goals[goal_id]
     boundaries = plan["boundaries"]
-    return {
+    request = {
         "acceptance_criteria": list(goal["acceptance_criteria"]),
         "artifact_digest": artifact_digest,
         "authorization_boundaries": {
@@ -878,6 +1251,29 @@ def materialize_provider_request(
         "workspace_digest": verified_index["workspace_binding"],
         "write_scope": list(boundaries["write_scope"]),
     }
+    if plan["schema"] == PLAN_SCHEMA_V2:
+        requirement_refs = list(goal["requirement_refs"])
+        request.update(
+            {
+                "capabilities": list(goal["capabilities"]),
+                "goal_policy": {
+                    "gate": goal["gate"],
+                    "max_attempts": goal["max_attempts"],
+                    "on_blocked": goal["on_blocked"],
+                    "on_failure": goal["on_failure"],
+                    "recovery_policy": goal["recovery_policy"],
+                    "replay_safety": goal["replay_safety"],
+                    "requirement": goal["requirement"],
+                },
+                "requirements": [
+                    {"requirement_id": reference, "text": plan["requirements"][reference]}
+                    for reference in requirement_refs
+                ],
+                "verifiers": list(goal["verifiers"]),
+                "worker_profile": dict(plan["worker_profile"]),
+            }
+        )
+    return request
 
 
 def max_collection_members(value: Any) -> int:

@@ -25,24 +25,28 @@
       "forbidden_actions": 16,
       "forbidden_paths": 32,
       "goal_acceptance_criteria": 16,
-      "goals": 32,
+      "goal_capabilities": 32,
+      "goal_requirement_refs": 64,
+      "goal_verifiers": 32,
+      "goals": 128,
+      "requirements": 256,
       "stop_conditions": 16,
       "write_scope": 32
     },
-    "canonical_plan_max_bytes": 131072,
+    "canonical_plan_max_bytes": 524288,
     "collection_hard_items": 128,
     "create_loop_hard_bytes": 16384,
     "create_loop_target_bytes": 8192,
     "create_loop_target_collection_members": 64,
-    "expert_json_max_bytes": 131072,
-    "goal_count_max": 32,
+    "expert_json_max_bytes": 524288,
+    "goal_count_max": 128,
     "goal_count_min": 1,
     "host_prompt_hard_bytes": 32768,
     "host_prompt_target_bytes": 24576,
     "item_max_bytes": 1024,
-    "objective_max_bytes": 2048,
+    "objective_max_bytes": 8192,
     "source_text_max_bytes": 262144,
-    "version": "loopskill-capacity-v1"
+    "version": "loopskill-capacity-v2"
   },
   "commands": {
     "AcknowledgeResult": {
@@ -54,7 +58,8 @@
           "enum": [
             "DONE",
             "FAILED",
-            "LIMITATION"
+            "LIMITATION",
+            "SKIPPED"
           ],
           "type": "string"
         }
@@ -129,9 +134,21 @@
           },
           "type": "array"
         },
+        "goal_requirement": {
+          "enum": [
+            "required",
+            "optional"
+          ],
+          "required": false,
+          "type": "string"
+        },
         "goal_slice_digest": {
           "required": false,
           "type": "string"
+        },
+        "max_attempts": {
+          "required": false,
+          "type": "integer"
         },
         "max_cost_minor_units": {
           "required": false,
@@ -209,6 +226,18 @@
       "semantic_payload": {
         "reason": {
           "type": "string"
+        },
+        "wait_kind": {
+          "enum": [
+            "BLOCKED",
+            "BUDGET",
+            "FAILURE",
+            "HUMAN",
+            "REPAIR",
+            "TIME"
+          ],
+          "required": false,
+          "type": "string"
         }
       }
     },
@@ -217,6 +246,7 @@
         "disposition": {
           "enum": [
             "SUCCEEDED",
+            "SUCCEEDED_WITH_LIMITATIONS",
             "LIMITATION",
             "FAILED"
           ],
@@ -265,7 +295,26 @@
       }
     },
     "ResumeLoop": {
-      "semantic_payload": {}
+      "semantic_payload": {
+        "new_max_host_invocations": {
+          "minimum": 1,
+          "required": false,
+          "type": "integer"
+        },
+        "new_wall_clock_seconds": {
+          "minimum": 1,
+          "required": false,
+          "type": "integer"
+        },
+        "prior_budget_digest": {
+          "required": false,
+          "type": "string"
+        },
+        "reason_digest": {
+          "required": false,
+          "type": "string"
+        }
+      }
     },
     "ReviseGoalPlan": {
       "semantic_payload": {
@@ -422,9 +471,15 @@
     "ReviewRecorded",
     "HumanDecisionRecorded",
     "RepairAuthorized",
+    "RepairAttemptScheduled",
     "RepairExhausted",
     "RoadmapRevised",
     "GoalAdvanced",
+    "GoalSkipped",
+    "HostSessionBound",
+    "VerifierExecuted",
+    "BudgetWaiting",
+    "BudgetExtended",
     "LoopPaused",
     "LoopResumed",
     "LoopStopped",
@@ -434,8 +489,8 @@
     "ClosureAssuranceStrengthened",
     "OperationRejected"
   ],
-  "manifest_sha256": "5a46d9c4d31d2964821165a66a07ca67ac4eee53cd58976438ae3eb19ba9f2c2",
-  "protocol_version": "4.1.0",
+  "manifest_sha256": "ab35be557fd633ccf858f868af963bbb830cce7500059c3fcaa339b0c1f6be3f",
+  "protocol_version": "4.2.0",
   "reference_kinds": [
     "LoopRef",
     "ActorRef",
@@ -585,6 +640,8 @@
       "boundaries",
       "budget",
       "roadmap_policy",
+      "requirements",
+      "worker_profile",
       "completion_evidence",
       "stop_conditions",
       "goals"

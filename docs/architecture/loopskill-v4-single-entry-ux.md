@@ -68,7 +68,8 @@ missing/unsafe file, binary or PDF input, recursive include, implicit web fetch,
 and over-limit input fail before preparation or store creation.
 
 INTAKE performs zero writes and zero Loop/Host/task/heartbeat/effect actions.
-PREPARE writes exactly eight local files in a new owner-only empty directory:
+PREPARE writes eight v1 files, or nine v2 files including the capability
+feasibility report, in a new owner-only empty directory:
 the typed manifest, boundary summary, human Controller Plan, Chinese
 instructions, digest bundle, canonical PlanDocument, PlanIndex, and capacity
 report. It creates no runtime Store and performs zero canonical/Host/execution
@@ -79,17 +80,19 @@ digests with a bounded lifetime. Missing, expired, forged, wrong-scope, or
 content-stale confirmation makes START fail before creating the v4 store.
 
 The source-tree command accepts an optional `--root` for isolated development
-and testing. The default is the platform LoopSkill 4 data root. The root and
-SQLite file must be owner-only, regular, and non-symlinked. One P5.1 root
-contains one loop; exact replay of the same prepared start returns the prior
+and testing. The default is the platform LoopSkill 4 data root. Each new Loop
+has one owner-only child root and one canonical SQLite file. The rebuildable
+discovery view is not a second writer. Exact replay of the same prepared start returns the prior
 accepted result without a second commit/event/Attempt/Host call, while a
 different prepared loop fails. Plain `status` and diagnostics are read-only
-and never create an absent store. `status --refresh` is the explicit
-machine-owned recovery action. When the durable Attempt has not been claimed,
-it may acquire execution ownership and perform the unique first foreground
-Codex invocation. Once an invocation started, there is no cross-process Host
-readback or resume: lost evidence remains `UNKNOWN`, and refresh never performs
-a second spawn.
+and never create an absent store. `run`/`continue` are explicit machine-owned
+execution actions. A Plan v2 Attempt persists input/session/process/terminal
+evidence outside the workspace. Restart can read a completed Attempt, wait on
+a recorded live process, or consume one same-session resume when replay policy
+allows it. Non-replayable actions wait for human confirmation.
+Budget exhaustion pauses before Host invocation. `budget-extend` is the only
+budget-wait resume path: it binds the prior budget and a reason digest, permits
+only larger invocation/active-compute limits, and leaves Plan scope unchanged.
 
 SQLite schema v4 stores the user-visible current Goal descriptor, immutable
 content-addressed plan/index blobs, plus Actor, Grant, receipt, and trust-root
@@ -149,7 +152,7 @@ Historical P5.1 tests cover `UX-001`, `UX-010..016`, `CAP-INTAKE`, `CAP-ENTRY`, 
 report sections, zero-effect intake, five-file preparation, digest-bound
 confirmation, stale/expired/forged rejection, one canonical start, exact
 replay, non-interactive no-bypass, and policy-unavailable minimal-profile
-isolation. Current v4.1 tests supersede that preparation count with the eight
+isolation. Current v4.2 tests supersede that preparation count with the eight
 files above and add 1–32 Goal capacity, content-addressed lazy activation,
 source/confirmation negatives, privacy, property/fuzz, and 2/8-Goal canary
 routes. The historical tests retain P5 coverage of `UX-002..005`, `UX-007`, and

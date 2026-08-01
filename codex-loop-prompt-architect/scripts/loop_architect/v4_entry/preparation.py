@@ -48,6 +48,7 @@ from loop_architect.v4_adapters.codex.prompt import (
 from loop_architect.v4_artifacts import (
     ArtifactCaptureError,
     detect_artifact_profile,
+    verifier_capability,
     workspace_identity,
 )
 
@@ -58,14 +59,15 @@ PLAN_FILENAME = "CONTROLLER_PLAN.md"
 PLAN_DOCUMENT_FILENAME = "plan-document.json"
 PLAN_INDEX_FILENAME = "plan-index.json"
 CAPACITY_FILENAME = "capacity-report.json"
+CAPABILITY_FILENAME = "capability-feasibility.json"
 INSTRUCTIONS_FILENAME = "使用说明.md"
 BUNDLE_FILENAME = "prepared-bundle.json"
 CONFIRMATION_FILENAME = "start-confirmation.json"
-MANIFEST_VERSION = "loopskill-prepared-loop-v2"
-PRODUCT_VERSION = "4.1.0"
+MANIFEST_VERSION = "loopskill-prepared-loop-v3"
+PRODUCT_VERSION = "4.2.0"
 CONFIRMATION_ISSUER = "loopskill-local-confirmation-v1"
 CONFIRMATION_TRUST = "local-explicit-confirmation"
-_MAX_PREPARED_FILE_BYTES = 132 * 1024
+_MAX_PREPARED_FILE_BYTES = 520 * 1024
 _TUPLE_FIELDS = (
     "goal_plan",
     "write_scope",
@@ -95,6 +97,7 @@ class PreparedContext:
     plan: Mapping[str, Any]
     plan_index: Mapping[str, Any]
     capacity_report: Mapping[str, Any]
+    capability_report: Mapping[str, Any] | None
     confirmation: Receipt | None
 
 
@@ -160,7 +163,11 @@ def intake(request: LoopIntakeInput) -> LoopIntakeDecision:
         return LoopIntakeDecision(
             disposition="NEEDS_CLARIFICATION",
             route="UNDETERMINED",
-            reason="The Goal plan must contain 1–32 Goals and start with the primary Goal.",
+            reason=(
+                "The Goal plan must contain 1–"
+                + str(CAPACITY_CONTRACT["goal_count_max"])
+                + " Goals and start with the primary Goal."
+            ),
             questions=("Provide an ordered Goal plan whose first item is the primary Goal.",),
         )
     horizon = (
@@ -432,13 +439,14 @@ def _render_plan(
     boundary_digest: str,
     plan: Mapping[str, Any],
     index: Mapping[str, Any],
+    capability_report_digest: str | None = None,
 ) -> bytes:
     def lines(values: tuple[str, ...] | list[str]) -> str:
         return "\n".join(f"- {value}" for value in values) or "- None"
 
     plan_boundaries = plan["boundaries"]
 
-    text = f"""# LoopSkill 4.1 任务卡
+    text = f"""# LoopSkill 4.2 任务卡
 
 This is a human review/export view. `loop-manifest.json` is the machine source.
 
@@ -496,6 +504,7 @@ This is a human review/export view. `loop-manifest.json` is the machine source.
 - Plan revision: `{index["revision"]}`
 - Workspace identity: `{manifest.workspace_identity_digest}`
 - Capacity contract: `{manifest.capacity_contract_version}`
+{('- Capability report digest: `' + capability_report_digest + '`') if capability_report_digest else ''}
 - No Host task, heartbeat, delivery, or execution was created by this plan.
 """
     return text.encode("utf-8")
@@ -503,7 +512,7 @@ This is a human review/export view. `loop-manifest.json` is the machine source.
 
 def _render_instructions() -> bytes:
     return (
-        "# LoopSkill 4.1 使用说明\n\n"
+        "# LoopSkill 4.2 使用说明\n\n"
         "1. 先审阅 Controller Plan 中的 Goal、写入范围、预算、外部动作、验收和停止条件。\n"
         "2. 只有内容准确时才执行显式确认；准备阶段不会创建任何 Host task 或 heartbeat。\n"
         "3. 任一准备文件变化都会使旧确认失效；请重新 prepare/confirm。\n"
@@ -679,6 +688,85 @@ def _capacity_report(
     return asdict(report)
 
 
+def _capability_report(
+    compiled: CompiledPlan,
+    *,
+    artifact_profile: str,
+) -> dict[str, Any] | None:
+    """Preflight Plan v2 capabilities and verifier declarations without effects."""
+
+    if compiled.plan.get("schema") != "loopskill-plan-v2":
+        return None
+    profile = compiled.plan["worker_profile"]
+    available = {"workspace-write"}
+    if artifact_profile != "UNBOUND":
+        available.add("artifact-capture")
+    if artifact_profile in {"existing_git", "new_git"}:
+        available.add("git")
+    if profile["network_access"]:
+        available.add("network")
+    if profile["local_verification"]:
+        available.update({"local-command", "local-http"})
+    rows = []
+    blocked = []
+    budget_blocked = bool(compiled.plan["budget"]["max_cost_minor_units"])
+    for goal in compiled.plan["goals"]:
+        verifier_capabilities: set[str] = set()
+        unsupported_verifiers = 0
+        for verifier in goal["verifiers"]:
+            try:
+                capability = verifier_capability(verifier)
+            except (ArtifactCaptureError, ValueError):
+                capability = None
+            if capability is None:
+                unsupported_verifiers += 1
+            else:
+                verifier_capabilities.add(capability)
+        unavailable = sorted(
+            (set(goal["capabilities"]) | verifier_capabilities) - available
+        )
+        if goal["gate"] in {"human", "time"}:
+            gate_capability = goal["gate"] + "-gate"
+            unavailable = sorted(
+                item
+                for item in unavailable
+                if item != gate_capability
+            )
+        unavailable_evidence = bool(unavailable or unsupported_verifiers)
+        state = (
+            "BLOCKED"
+            if unavailable_evidence and goal["requirement"] == "required"
+            else "OPTIONAL_UNAVAILABLE"
+            if unavailable_evidence
+            else "READY"
+        )
+        if state == "BLOCKED":
+            blocked.append(goal["goal_id"])
+        rows.append(
+            {
+                "gate": goal["gate"],
+                "goal_id": goal["goal_id"],
+                "requirement": goal["requirement"],
+                "state": state,
+                "unavailable_capabilities": unavailable,
+                "unsupported_verifier_count": unsupported_verifiers,
+            }
+        )
+    return {
+        "available_capabilities": sorted(available),
+        "blocked_required_goals": blocked,
+        "goals": rows,
+        "plan_digest": compiled.plan_digest,
+        "schema": "loopskill-capability-feasibility-v1",
+        "unsupported_budget": (
+            "positive-cost-accounting"
+            if budget_blocked
+            else None
+        ),
+        "status": "BLOCKED" if blocked or budget_blocked else "PASS",
+    }
+
+
 def prepare(
     request: LoopIntakeInput,
     output_directory: Path | str,
@@ -693,14 +781,16 @@ def prepare(
         except PlanCodecError as exc:
             raise PreparationError(
                 exc.code,
-                "The execution plan does not satisfy the closed v4.1 plan contract.",
+                "The execution plan does not satisfy the closed v4.2 plan contract.",
                 f"Revise the request and prepare again ({exc.reason}).",
             ) from exc
     elif len(request.goal_plan) > int(CAPACITY_CONTRACT["goal_count_max"]):
         raise PreparationError(
             "RESOURCE_LIMIT_EXCEEDED",
-            "The Goal plan exceeds the frozen v4.1 capacity contract.",
-            "Split the work into a plan with at most 32 Goals.",
+            "The Goal plan exceeds the v4.2 capacity contract.",
+            "Split the work into a plan with at most "
+            + str(CAPACITY_CONTRACT["goal_count_max"])
+            + " Goals.",
         )
     decision = intake(request)
     if decision.disposition == "DIRECT_TASK_RECOMMENDED":
@@ -765,18 +855,29 @@ def prepare(
             artifact_profile=artifact_profile,
             source_bytes=source_bytes,
         )
+        capability = _capability_report(
+            compiled,
+            artifact_profile=artifact_profile,
+        )
     except PlanCodecError as exc:
         raise PreparationError(
             exc.code,
-            "The execution plan does not satisfy the closed v4.1 plan contract.",
+            "The execution plan does not satisfy the closed v4.2 plan contract.",
             f"Revise the request and prepare again ({exc.reason}).",
         ) from exc
     if capacity["capacity_status"] != "PASS":
         raise PreparationError(
             "RESOURCE_LIMIT_EXCEEDED",
-            "The prepared loop exceeds the frozen v4.1 release capacity target.",
+            "The prepared loop exceeds the v4.2 release capacity target.",
             "Reduce or split the indicated Goal or boundary, then prepare again: "
             + str(capacity["blocking_reason"]),
+        )
+    if capability is not None and capability["status"] != "PASS":
+        raise PreparationError(
+            "USER_CAPABILITY_UNAVAILABLE",
+            "One or more required Goals cannot be independently verified with the prepared worker profile.",
+            "Revise the blocked Goal capabilities or verifiers, then prepare again: "
+            + ",".join(capability["blocked_required_goals"]),
         )
     capacity_bytes = canonical_bytes(capacity)
     capacity_digest = raw_domain_digest(
@@ -827,12 +928,19 @@ def prepare(
     boundary_digest = domain_digest(
         "loopskill-prepared-boundary-v1\n", boundary
     )
+    capability_bytes = None if capability is None else canonical_bytes(capability)
+    capability_digest = (
+        None
+        if capability_bytes is None
+        else raw_domain_digest("loopskill-prepared-artifact-v1\n", capability_bytes)
+    )
     plan_bytes = _render_plan(
         manifest,
         manifest_digest,
         boundary_digest,
         compiled.plan,
         compiled.index,
+        capability_digest,
     )
     instructions_bytes = _render_instructions()
     bundle_base = {
@@ -862,6 +970,8 @@ def prepare(
     _write_once(output / PLAN_DOCUMENT_FILENAME, compiled.plan_bytes)
     _write_once(output / PLAN_INDEX_FILENAME, compiled.index_bytes)
     _write_once(output / CAPACITY_FILENAME, capacity_bytes)
+    if capability_bytes is not None:
+        _write_once(output / CAPABILITY_FILENAME, capability_bytes)
     _write_once(output / INSTRUCTIONS_FILENAME, instructions_bytes)
     _write_once(output / BUNDLE_FILENAME, canonical_bytes(asdict(bundle)))
     directory_fd = os.open(output, os.O_RDONLY)
@@ -877,6 +987,7 @@ def prepare(
         plan=compiled.plan,
         plan_index=compiled.index,
         capacity_report=capacity,
+        capability_report=capability,
         confirmation=None,
     )
 
@@ -972,7 +1083,7 @@ def load_prepared(
         INSTRUCTIONS_FILENAME,
         BUNDLE_FILENAME,
     }
-    allowed = required | {CONFIRMATION_FILENAME}
+    allowed = required | {CAPABILITY_FILENAME, CONFIRMATION_FILENAME}
     if not required <= entries or not entries <= allowed:
         raise PreparationError(
             "USER_PREPARATION_INVALID",
@@ -993,6 +1104,19 @@ def load_prepared(
             "The prepared plan identity is invalid.",
             f"Preserve the directory and prepare again ({exc.reason}).",
         ) from exc
+    has_capability_report = CAPABILITY_FILENAME in entries
+    expects_capability_report = compiled.plan.get("schema") == "loopskill-plan-v2"
+    if has_capability_report != expects_capability_report:
+        raise PreparationError(
+            "USER_PREPARATION_INVALID",
+            "The prepared capability report set does not match the Plan version.",
+            "Preserve the directory and prepare again.",
+        )
+    capability = (
+        _load_json(root / CAPABILITY_FILENAME)
+        if has_capability_report
+        else None
+    )
     try:
         bundle = PreparedLoopBundle(**bundle_value)
     except TypeError as exc:
@@ -1022,6 +1146,10 @@ def load_prepared(
         issued_at=manifest.prepared_at,
         artifact_profile=manifest.artifact_profile,
         source_bytes=int(capacity.get("source_bytes", -1)),
+    )
+    expected_capability = _capability_report(
+        compiled,
+        artifact_profile=manifest.artifact_profile,
     )
     expected_base = {
         "boundary_digest": domain_digest(
@@ -1066,7 +1194,19 @@ def load_prepared(
         bundle != expected_bundle
         or boundary != _boundary_value(manifest, compiled.plan, compiled.index)
         or canonical_bytes(capacity) != canonical_bytes(expected_capacity)
+        or (
+            None if capability is None else canonical_bytes(capability)
+        )
+        != (
+            None
+            if expected_capability is None
+            else canonical_bytes(expected_capability)
+        )
         or capacity.get("capacity_status") != "PASS"
+        or (
+            capability is not None
+            and capability.get("status") != "PASS"
+        )
         or not identities_match
     ):
         code = (
@@ -1126,6 +1266,7 @@ def load_prepared(
         plan=compiled.plan,
         plan_index=compiled.index,
         capacity_report=capacity,
+        capability_report=capability,
         confirmation=confirmation,
     )
 

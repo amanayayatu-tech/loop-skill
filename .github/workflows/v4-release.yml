@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: [v4.1.1]
+    tags: [v4.2.0]
   workflow_dispatch:
 
 permissions:
@@ -169,13 +169,13 @@ jobs:
           "$RUNNER_TEMP/v4-release-venv/bin/python" scripts/validate_v4_rc.py
           --candidate "$TESTED_SHA" --static-only --output v4-static-receipt.json
       - name: Enforce release wording on the exact release tag
-        if: github.ref == 'refs/tags/v4.1.1'
+        if: github.ref == 'refs/tags/v4.2.0'
         run: python scripts/check_v4_docs.py --release
       - name: Bind the annotated release tag to verified main
-        if: github.ref == 'refs/tags/v4.1.1'
+        if: github.ref == 'refs/tags/v4.2.0'
         run: >-
           python scripts/check_release_identity.py
-          --expected-sha "$TESTED_SHA" --tag v4.1.1
+          --expected-sha "$TESTED_SHA" --tag v4.2.0
           --main-ref refs/remotes/origin/main
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

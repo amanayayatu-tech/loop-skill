@@ -6,7 +6,7 @@
     "mode": "PLAN_DERIVED_V1",
     "plan_digest": "74b320f691fbb6697d5520ab5e36671a2b22d0b1767c55ae38d55b021ab2a281"
   },
-  "capacity_contract_version": "loopskill-capacity-v1",
+  "capacity_contract_version": "loopskill-capacity-v2",
   "goal_slice": {
     "acceptance_criteria": [
       "machine fixture remains canonical"
@@ -15,7 +15,7 @@
     "objective": "verify generated protocol identity"
   },
   "goal_slice_digest": "db3a31a10b9e91e19e8f0bc2c0a3465605ca4d1c5046ba3eeadfb87794e69d0f",
-  "manifest_sha256": "5a46d9c4d31d2964821165a66a07ca67ac4eee53cd58976438ae3eb19ba9f2c2",
+  "manifest_sha256": "ab35be557fd633ccf858f868af963bbb830cce7500059c3fcaa339b0c1f6be3f",
   "plan_digest": "74b320f691fbb6697d5520ab5e36671a2b22d0b1767c55ae38d55b021ab2a281",
   "plan_document": {
     "boundaries": {
@@ -64,7 +64,7 @@
   },
   "plan_index": {
     "authority_digest": "1111111111111111111111111111111111111111111111111111111111111111",
-    "capacity_contract_version": "loopskill-capacity-v1",
+    "capacity_contract_version": "loopskill-capacity-v2",
     "goal_count": 1,
     "ordered_goal_ids": [
       "g000"
@@ -77,6 +77,6 @@
     "schema": "loopskill-plan-index-v1",
     "workspace_binding": "2222222222222222222222222222222222222222222222222222222222222222"
   },
-  "plan_index_digest": "5868666b38dc1e2c8898c2ddc92f642a4477257049b3bbe901399b644e1a5f9c",
-  "protocol_version": "4.1.0"
+  "plan_index_digest": "2094256c31719ff1bb677aa1967d22cce16f892adbb09361524324171a2f26f8",
+  "protocol_version": "4.2.0"
 }

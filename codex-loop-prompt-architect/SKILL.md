@@ -1,9 +1,9 @@
 ---
 name: loopskill4
-description: Turn a sentence, pasted PRD, or one authorized UTF-8 text/Markdown file into a confirmed LoopSkill 4.1 plan and operate it through the public lifecycle.
+description: Turn a sentence, pasted PRD, or one authorized UTF-8 text/Markdown file into a confirmed LoopSkill 4.2 plan and operate it through the public lifecycle.
 ---
 
-# LoopSkill 4.1
+# LoopSkill 4.2
 
 ## Use boundary
 
@@ -79,7 +79,7 @@ The model and this Skill never supply or become the user's confirmation.
 
 ## Capacity and runtime boundary
 
-- Admit 1–32 Goals, one 256 KiB text/Markdown source, or one 128 KiB expert
+- Admit 1–128 Goals, one 256 KiB text/Markdown source, or one 512 KiB expert
   JSON/canonical plan. Never truncate or summarize away acceptance criteria.
 - PREPARE must report PASS for a CreateLoop at or below 8 KiB and 64 collection
   members, and every materialized current-Goal prompt at or below 24 KiB.
@@ -108,5 +108,5 @@ task card and wait for my separate confirmation.
 ```
 
 Do not claim unlimited background operation, multi-host support, scientific
-efficacy, or cross-system exactly-once. v4.1 has a tested 1–32 Goal contract and
+efficacy, or cross-system exactly-once. v4.2 has a tested 1–128 Goal contract and
 one Codex Host Adapter.

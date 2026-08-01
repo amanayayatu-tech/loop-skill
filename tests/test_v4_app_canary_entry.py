@@ -195,7 +195,7 @@ class FakeCanaryProvider:
             "trust": "authoritative",
         }
 
-    def wait_for_terminal(self, *, timeout_seconds=300.0):
+    def wait_for_terminal(self, *, timeout_seconds=30_000.0):
         if timeout_seconds <= 0:
             raise ValueError("invalid wait")
         self.terminal_wait_read_count += 1
@@ -358,7 +358,7 @@ class V4DisposableExecCanaryEntryTests(unittest.TestCase):
         def wait(provider, workspace):
             waits.append((provider, workspace))
             self.assertEqual(provider.task_create_count, 1)
-            provider.wait_for_terminal(timeout_seconds=300.0)
+            provider.wait_for_terminal(timeout_seconds=30_000.0)
 
         receipt = canary.run_canary(
             CANDIDATE,

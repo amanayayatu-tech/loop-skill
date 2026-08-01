@@ -3,6 +3,35 @@
 All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [4.2.0] - 2026-08-02
+
+### Added
+
+- Added PlanDocument/PlanIndex v2 with worker profiles, requirement references,
+  capability feasibility, independent command/HTTP/human/time verifiers,
+  optional Goals, and bounded recovery policies for up to 128 Goals.
+- Added multi-Loop discovery and explicit `list`, `status --loop`, `run`,
+  `continue`, and `pause` commands. Foreground execution advances until a real
+  waiting boundary or terminal closure.
+- Added owner-only persistent Attempt/session evidence, restart readback, and
+  one recorded same-session resume for interrupted replay-safe work.
+
+### Fixed
+
+- Unified the per-Attempt timeout contract at a Plan-bound maximum of 30000
+  seconds and made Host invocation/observed active-compute budgets effective.
+- Repair, required blockers, optional capability gaps, and human/time gates no
+  longer collapse into an irreversible `LIMITATION` terminal state.
+- Receipt-valid v4.1.1 installations now upgrade transactionally, with exact
+  rollback at each pre-commit fault boundary and unchanged config/Loop data.
+
+### Validation boundary
+
+- Added real old-tag upgrade tests, command and loopback HTTP verification,
+  repair/wait/skip/resume/multi-Loop regressions, the full platform/runtime
+  matrix, and three exact-SHA canary layers. Long-term four-week efficacy remains
+  a separate real-time Validation successor and is not claimed by this release.
+
 ## [4.1.1] - 2026-08-01
 
 ### Fixed
@@ -648,6 +677,7 @@ The archived Codex App run proves only the bounded environment described in its
 evidence file. It is not production, long-run, cross-version, formal, science,
 or public acceptance.
 
+[4.2.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.2.0
 [4.1.1]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.1.1
 [4.1.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.1.0
 [4.0.0]: https://github.com/amanayayatu-tech/loop-skill/releases/tag/v4.0.0

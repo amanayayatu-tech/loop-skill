@@ -194,7 +194,7 @@ def generate_summary(manifest: dict[str, Any], digest: str) -> bytes:
 
 
 def generate_fixtures(manifest: dict[str, Any], digest: str) -> bytes:
-    """Generate the normative v4.1 identity examples from the same manifest."""
+    """Generate the normative v4.2 identity examples from the same manifest."""
 
     capacity_version = manifest["capacity_contract"]["version"]
     goal = {
