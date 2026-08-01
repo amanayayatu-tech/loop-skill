@@ -165,12 +165,7 @@ def validate(root: Path) -> dict[str, object]:
                 options = step.get("with")
                 if not isinstance(options, dict) or options.get("persist-credentials") != "false":
                     raise CiError(f"CI_CHECKOUT_CREDENTIALS_INVALID:{name}")
-                if name in {
-                    "protocol-architecture-docs",
-                    "unit",
-                    "coverage",
-                    "release-hygiene",
-                } and options.get("fetch-depth") not in {0, "0"}:
+                if options.get("fetch-depth") not in {0, "0"}:
                     raise CiError(f"CI_PROVENANCE_HISTORY_UNAVAILABLE:{name}")
     for literal in (
         "name: LoopSkill 4 Release CI",
