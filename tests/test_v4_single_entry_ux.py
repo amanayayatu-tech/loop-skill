@@ -35,6 +35,10 @@ from loop_architect.v4_alpha.protocol import (  # noqa: E402
     domain_digest,
     result_payload_schema,
 )
+from loop_architect.v4_alpha.plan_codec import (  # noqa: E402
+    PlanCodecError,
+    canonicalize_plan,
+)
 from loop_architect.v4_adapters.codex.adapter import (  # noqa: E402
     HOST_SCHEMA_VERSION,
     HostResponseLost,
@@ -760,6 +764,21 @@ class V4SingleEntryUXTests(unittest.TestCase):
                 events = [event["type"] for event in store.events(loop_ref)]
                 self.assertIn("BudgetWaiting", events)
                 self.assertIn("BudgetExtended", events)
+
+    def test_v2_plan_budget_admission_matches_the_extension_ceiling(self):
+        cases = (
+            ("max_host_invocations", 385, "max_host_invocations_range"),
+            ("wall_clock_seconds", 2_592_001, "wall_clock_seconds_range"),
+        )
+        for field, value, reason in cases:
+            with self.subTest(field=field):
+                request = v2_request([v2_goal("g000", "bounded budget")])
+                plan = request.canonical_plan
+                assert isinstance(plan, dict)
+                plan["budget"][field] = value
+                with self.assertRaises(PlanCodecError) as raised:
+                    canonicalize_plan(plan)
+                self.assertEqual(raised.exception.reason, reason)
 
     def test_v2_repair_stays_in_same_loop_and_can_succeed(self):
         with tempfile.TemporaryDirectory() as temporary:

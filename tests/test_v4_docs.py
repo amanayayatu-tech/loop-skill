@@ -44,6 +44,14 @@ class V4DocsTests(unittest.TestCase):
         self.assertIn("v4.2.0 has no canary exception", releasing)
         self.assertIn("three ordered layers", releasing)
         self.assertIn("one recorded `codex exec resume`", release_notes)
+        quickstart_zh = (ROOT / "docs/v4/quickstart.zh-CN.md").read_text(
+            encoding="utf-8"
+        )
+        quickstart_en = (ROOT / "docs/v4/quickstart.en.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(docs.QUICKSTART_CANARY_STATUS_ZH, quickstart_zh)
+        self.assertIn(docs.QUICKSTART_CANARY_STATUS_EN, quickstart_en)
 
     def test_section_command_link_and_stale_wording_drift_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -176,6 +184,20 @@ class V4DocsTests(unittest.TestCase):
             ):
                 docs.validate(root, mode="release")
             release_notes.write_text(release_notes_text, encoding="utf-8")
+            quickstart_en = root / "docs/v4/quickstart.en.md"
+            quickstart_en_text = quickstart_en.read_text(encoding="utf-8")
+            quickstart_en.write_text(
+                quickstart_en_text.replace(
+                    docs.QUICKSTART_CANARY_STATUS_EN,
+                    "This scoped patch does not claim a new real Host canary.",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                docs.DocsError, "DOC_CANARY_CLAIM_DRIFT"
+            ):
+                docs.validate(root, mode="release")
+            quickstart_en.write_text(quickstart_en_text, encoding="utf-8")
             stale_zh = root / "README.md"
             stale_zh.write_text(
                 stale_zh.read_text(encoding="utf-8") + "\n此源码树是稳定发行\n",

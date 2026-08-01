@@ -69,9 +69,11 @@ README_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.2.0；当前可用的公
 README_RELEASE_STATUS_EN = "This document describes LoopSkill 4.2.0. See"
 QUICKSTART_RELEASE_STATUS_ZH = "本文档对应 LoopSkill 4.2.0；当前可用的公开版本以 GitHub Releases 页面为准"
 QUICKSTART_RELEASE_STATUS_EN = "This document describes LoopSkill 4.2.0. See GitHub Releases for the public versions currently available."
-SECURITY_RELEASE_STATUS = "LoopSkill 4.2.0 is the currently supported public line."
-RELEASE_NOTES_RELEASE_STATUS = "Status: LoopSkill 4.2.0 is the current public v4 release."
+SECURITY_RELEASE_STATUS = "When GitHub Releases lists LoopSkill 4.2.0, it is the supported public v4 line."
+RELEASE_NOTES_RELEASE_STATUS = "Status: publication is established only by the public v4.2.0 tag and GitHub\nRelease readback."
 SECURITY_STATUS = "Security support follows the versions listed on GitHub Releases."
+QUICKSTART_CANARY_STATUS_ZH = "并要求三层有序的一次性 canary。"
+QUICKSTART_CANARY_STATUS_EN = "and requires three ordered one-shot canary layers."
 README_ASSETS = (
     (
         "docs/readme-assets/durable-handoff.png",
@@ -411,6 +413,11 @@ def validate(root: Path, *, mode: str = "auto") -> dict[str, object]:
         and SECURITY_RELEASE_STATUS in security
         and RELEASE_NOTES_RELEASE_STATUS in release_notes_v42
     )
+    if (
+        QUICKSTART_CANARY_STATUS_ZH not in quickstart_zh
+        or QUICKSTART_CANARY_STATUS_EN not in quickstart_en
+    ):
+        raise DocsError("DOC_CANARY_CLAIM_DRIFT")
     if (
         SECURITY_STATUS not in security
         or (mode == "candidate" and not candidate_status)

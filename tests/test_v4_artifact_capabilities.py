@@ -532,6 +532,29 @@ class V4ArtifactCapabilityTests(unittest.TestCase):
             self.assertEqual(timed_out.state, "FAILED")
             self.assertEqual(http_failed.state, "FAILED")
 
+    def test_http_verifier_rejects_a_preoccupied_port_before_spawn(self):
+        with tempfile.TemporaryDirectory() as temporary, socket.socket() as occupied:
+            root = Path(temporary)
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen()
+            port = occupied.getsockname()[1]
+            document = json.dumps(
+                {
+                    "cwd": ".",
+                    "env": [],
+                    "port": port,
+                    "routes": [{"contains": "unrelated", "path": "/", "status": 200}],
+                    "start_argv": [sys.executable, "-c", "import time; time.sleep(5)"],
+                    "startup_timeout_seconds": 1,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            with mock.patch.object(artifact_verifier.subprocess, "Popen") as spawn:
+                with self.assertRaisesRegex(ValueError, "port is already in use"):
+                    artifact_verifier._verify_http(root, document)
+            spawn.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

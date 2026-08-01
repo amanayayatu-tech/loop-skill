@@ -419,13 +419,13 @@ def _canonicalize_plan_v2(value: Any) -> dict[str, Any]:
             budget["max_host_invocations"],
             "max_host_invocations",
             minimum=1,
-            maximum=1_000_000,
+            maximum=384,
         ),
         "wall_clock_seconds": _integer(
             budget["wall_clock_seconds"],
             "wall_clock_seconds",
             minimum=1,
-            maximum=31_536_000,
+            maximum=2_592_000,
         ),
     }
     if canonical_budget["max_cost_minor_units"] and currency is None:
