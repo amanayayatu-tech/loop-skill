@@ -1,0 +1,574 @@
+#!/usr/bin/env python3
+"""LoopSkill 5.0 Phase 2: the single GJ-1 walking skeleton."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import http.client
+import json
+import multiprocessing
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Any, Callable, Sequence
+
+
+EXPECTED_HEAD = "a3b57ecea7e7e2f6e000820b06e7c895efd4a84b"
+OWNER_NOTE = "OWNER-NOTES.md"
+OWNER_NOTE_BYTES = b"Owner draft: keep this byte-for-byte.\n"
+OWNER_NOTE_SHA256 = "0e2ec45eb2cbf607487b376c57f11c48fea06443c4748f312bb3fdb23f11aa5d"
+ALLOWED_FILES = ("src/server.js", "test/server.test.js")
+INJECT_VERIFIER_EXIT = "LOOPSKILL_V5_TEST_INJECT_VERIFIER_EXIT"
+PRIVATE_PREPARE_ROOT = Path(tempfile.gettempdir()) / f"loopskill5-{os.getuid()}"
+REQUEST = (
+    "修复这个仓库里 `/api/intake` 永远返回 501 的问题。只做一个最小可用的直接文本 intake："
+    "合法同源会话提交标题和文本后返回成功结果，不回显原始私密文本；保留现有四个页面和安全边界。"
+    "只修改直接相关源码和测试，保留我的未提交备注，运行相关测试和真实 loopback HTTP smoke。"
+    "不要 commit、push、访问外部网络、发布或修改仓库外文件。"
+)
+FACTS_MARKER = "\n\n--- LOOPSKILL5 PREPARED FACTS ---\n"
+
+
+class LaunchError(RuntimeError):
+    pass
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _command(
+    argv: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    input_text: str | None = None,
+    timeout: int = 30,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            list(argv),
+            cwd=cwd,
+            env=env,
+            input=input_text,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise LaunchError(f"command timed out: {argv[0]}") from exc
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[-1000:]
+        raise LaunchError(f"command failed ({result.returncode}): {argv[0]}: {detail}")
+    return result
+
+
+def _git(workspace: Path, *argv: str, check: bool = True) -> str:
+    return _command(("git", "-C", str(workspace), *argv), check=check).stdout.strip()
+
+
+def _regular_owner_file(path: Path, *, private: bool = False) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as exc:
+        raise LaunchError(f"missing file: {path.name}") from exc
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        raise LaunchError(f"unsafe file identity: {path.name}")
+    if private and stat.S_IMODE(info.st_mode) & 0o077:
+        raise LaunchError(f"private file permissions are too broad: {path.name}")
+
+
+def _resolved_tool(name: str) -> dict[str, str]:
+    selected = shutil.which(name)
+    if not selected:
+        raise LaunchError(f"missing executable before START: {name}")
+    path = Path(selected).resolve(strict=True)
+    version = _command((str(path), "--version")).stdout.strip()
+    return {"path": str(path), "sha256": _sha256_file(path), "version": version}
+
+
+def _tools() -> dict[str, Any]:
+    codex = _resolved_tool("codex")
+    node = _resolved_tool("node")
+    path_parts = [str(Path(codex["path"]).parent), str(Path(node["path"]).parent)]
+    for part in os.environ.get("PATH", "").split(os.pathsep):
+        if part and part not in path_parts:
+            path_parts.append(part)
+    safe_path = os.pathsep.join(path_parts)
+    for name, expected in (("codex", codex), ("node", node)):
+        selected = shutil.which(name, path=safe_path)
+        if not selected or Path(selected).resolve(strict=True) != Path(expected["path"]):
+            raise LaunchError(f"{name} identity changed in the final PATH")
+    return {"codex": codex, "node": node, "path": safe_path}
+
+
+def _workspace(workspace_arg: str) -> Path:
+    workspace = Path(workspace_arg).resolve(strict=True)
+    if not workspace.is_dir() or workspace.stat().st_uid != os.getuid():
+        raise LaunchError("workspace is not an owner-controlled directory")
+    if _git(workspace, "rev-parse", "--show-toplevel") != str(workspace):
+        raise LaunchError("workspace must be the Git root")
+    if _git(workspace, "rev-parse", "HEAD") != EXPECTED_HEAD:
+        raise LaunchError("workspace is not the exact GJ-1 source commit")
+    if _git(workspace, "remote"):
+        raise LaunchError("the disposable GJ-1 workspace must not have a Git remote")
+    _regular_owner_file(workspace / OWNER_NOTE)
+    if (workspace / OWNER_NOTE).read_bytes() != OWNER_NOTE_BYTES:
+        raise LaunchError("Owner note bytes do not match the fixed journey")
+    for relative in ALLOWED_FILES:
+        _regular_owner_file(workspace / relative)
+    return workspace
+
+
+def _status(workspace: Path) -> set[str]:
+    output = _command(
+        ("git", "-C", str(workspace), "status", "--porcelain=v1", "--untracked-files=all")
+    ).stdout.rstrip("\n")
+    return set(filter(None, output.splitlines()))
+
+
+def _facts(workspace: Path, tools: dict[str, Any], contract_body: str) -> dict[str, Any]:
+    return {
+        "workspace": str(workspace),
+        "head": _git(workspace, "rev-parse", "HEAD"),
+        "owner_note_sha256": _sha256_file(workspace / OWNER_NOTE),
+        "allowed_file_baseline": {
+            relative: _sha256_file(workspace / relative) for relative in ALLOWED_FILES
+        },
+        "codex": tools["codex"],
+        "node": tools["node"],
+        "contract_sha256": _sha256_bytes(contract_body.encode()),
+    }
+
+
+def _preparation_path(workspace: Path) -> Path:
+    parent = PRIVATE_PREPARE_ROOT
+    parent.mkdir(mode=0o700, exist_ok=True)
+    info = parent.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise LaunchError("private prepare directory is unsafe")
+    workspace_identity = _sha256_bytes(str(workspace).encode())
+    return parent / f"{workspace_identity}.contract"
+
+
+def _probe_prepare_conditions(workspace: Path) -> None:
+    fd, probe_name = tempfile.mkstemp(prefix=".loopskill5-write-probe-", dir=workspace)
+    try:
+        os.write(fd, b"write-probe\n")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+        Path(probe_name).unlink(missing_ok=True)
+
+    scratch = Path(tempfile.mkdtemp(prefix="loopskill5-gj1-"))
+    scratch.chmod(0o700)
+    if stat.S_IMODE(scratch.stat().st_mode) != 0o700:
+        raise LaunchError("scratch is not private")
+    scratch.rmdir()
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        if listener.getsockname()[1] <= 0:
+            raise LaunchError("loopback probe failed")
+
+
+def _contract_body(workspace: Path, tools: dict[str, Any]) -> str:
+    return "\n".join(
+        (
+            "# LoopSkill 5.0 Launch Contract — GJ-1 DEVELOPMENT",
+            "",
+            f"最终意图：{REQUEST}",
+            "本次承诺：一次 START 内完成最窄修复、直接测试、真实 loopback HTTP smoke、一次 verifier crash 恢复和业务优先报告。",
+            "关键验收：合法 POST 非 501；缺 Origin、Session 或 CSRF 均拒绝；私密原文不回显。",
+            f"写范围：仅 {workspace}/src/server.js 与 {workspace}/test/server.test.js；Owner note 保持 exact bytes。",
+            "已验证：exact HEAD、workspace 写权限、0700 scratch、loopback、Codex/Node exact executable。",
+            "自动处理：测试注入的首次 verifier exit 73 后只重建 verifier 一次；Worker 绝不重跑。",
+            "业务 Gate：无。START 后不请求技术性人工介入。",
+            "停止边界：指纹漂移、越界 diff、Owner note 变化、外部效果不确定或真实 HTTP 失败。",
+            "外部效果：Codex 使用 workspace-write sandbox；明确禁止项目外部网络、commit、push、发布和仓库外写入。",
+            "时长边界：本 DEVELOPMENT 纵切目标 30 分钟内；不证明自动 wake 或 48 小时耐久。",
+            f"Executable：Codex {tools['codex']['version']}；Node {tools['node']['version']}。",
+        )
+    )
+
+
+def prepare(workspace_arg: str, request: str) -> str:
+    if request.strip() != REQUEST:
+        raise LaunchError("this walking skeleton accepts only the fixed GJ-1 natural-language request")
+    workspace = _workspace(workspace_arg)
+    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+        raise LaunchError("workspace contains changes outside the fixed Owner note")
+    tools = _tools()
+    _probe_prepare_conditions(workspace)
+    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+        raise LaunchError("prepare probes changed the workspace")
+    contract = _contract_body(workspace, tools)
+    facts = _facts(workspace, tools, contract)
+    contract_path = _preparation_path(workspace)
+    if contract_path.exists() or contract_path.is_symlink():
+        _regular_owner_file(contract_path, private=True)
+    contract_path.write_text(
+        contract + FACTS_MARKER + json.dumps(facts, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    contract_path.chmod(0o600)
+    _regular_owner_file(contract_path, private=True)
+    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+        raise LaunchError("prepare contract escaped the private scratch")
+    return contract
+
+
+def _read_prepared_contract(contract_path: Path) -> tuple[str, dict[str, Any]]:
+    _regular_owner_file(contract_path, private=True)
+    payload = contract_path.read_text(encoding="utf-8")
+    if FACTS_MARKER not in payload:
+        raise LaunchError("prepared Launch Contract is unreadable")
+    contract, raw_facts = payload.split(FACTS_MARKER, 1)
+    try:
+        facts = json.loads(raw_facts)
+    except json.JSONDecodeError as exc:
+        raise LaunchError("prepared facts are unreadable") from exc
+    if not isinstance(facts, dict):
+        raise LaunchError("prepared facts are invalid")
+    return contract, facts
+
+
+def _worker_environment(tools: dict[str, Any], scratch: str) -> dict[str, str]:
+    environment = {"PATH": tools["path"], "TMPDIR": scratch}
+    for name in ("HOME", "CODEX_HOME", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL"):
+        if os.environ.get(name):
+            environment[name] = os.environ[name]
+    return environment
+
+
+def _worker_prompt() -> str:
+    return "\n".join(
+        (
+            "You are the single DEVELOPMENT Codex work segment for LoopSkill 5.0 GJ-1.",
+            REQUEST,
+            "Modify only src/server.js and test/server.test.js. Preserve OWNER-NOTES.md byte-for-byte.",
+            "Do not add, stage, commit, reset, push, use project external network, or access paths outside this repository.",
+            "Implement the smallest direct JSON title/text intake. A valid same-origin session and CSRF gets a 2xx response other than 501; raw text never appears in responses or logs.",
+            "Keep the four GET pages and add direct tests for the successful path and Origin/session/CSRF rejection. Run only directly relevant tests.",
+        )
+    )
+
+
+def _run_worker(workspace: Path, tools: dict[str, Any]) -> None:
+    with tempfile.TemporaryDirectory(prefix="loopskill5-worker-") as scratch:
+        Path(scratch).chmod(0o700)
+        result = _command(
+            (
+                tools["codex"]["path"],
+                "exec",
+                "--ignore-user-config",
+                "--sandbox",
+                "workspace-write",
+                "--ephemeral",
+                "--cd",
+                str(workspace),
+                "--json",
+                "-",
+            ),
+            cwd=workspace,
+            env=_worker_environment(tools, scratch),
+            input_text=_worker_prompt(),
+            timeout=1800,
+        )
+    event_types = set()
+    for line in result.stdout.splitlines():
+        try:
+            event_types.add(json.loads(line).get("type"))
+        except json.JSONDecodeError:
+            continue
+    if not {"thread.started", "turn.completed"}.issubset(event_types):
+        raise LaunchError("Codex Worker did not complete its Host event stream")
+
+
+def _assert_worker_result(workspace: Path) -> None:
+    if _git(workspace, "rev-parse", "HEAD") != EXPECTED_HEAD:
+        raise LaunchError("HEAD changed after START")
+    if _sha256_file(workspace / OWNER_NOTE) != OWNER_NOTE_SHA256:
+        raise LaunchError("Owner note changed after START")
+    if _command(("git", "-C", str(workspace), "diff", "--cached", "--quiet"), check=False).returncode:
+        raise LaunchError("Worker staged changes")
+    changed = set(filter(None, _git(workspace, "diff", "--name-only").splitlines()))
+    if changed != set(ALLOWED_FILES):
+        raise LaunchError(f"Worker changed files outside the contract: {sorted(changed)}")
+    expected_status = {f" M {relative}" for relative in ALLOWED_FILES} | {f"?? {OWNER_NOTE}"}
+    if _status(workspace) != expected_status:
+        raise LaunchError(f"unexpected workspace status: {sorted(_status(workspace))}")
+    _command(("git", "-C", str(workspace), "diff", "--check"))
+
+
+def _request(
+    port: int,
+    method: str,
+    path: str,
+    *,
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, list[tuple[str, str]], bytes]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        connection.request(method, path, body=body, headers=headers or {})
+        response = connection.getresponse()
+        return response.status, response.getheaders(), response.read()
+    finally:
+        connection.close()
+
+
+def _verify_gj1(workspace: Path, tools: dict[str, Any]) -> dict[str, Any]:
+    environment = os.environ.copy()
+    environment["PATH"] = tools["path"]
+    node = tools["node"]["path"]
+    _command((node, "--test", "test/server.test.js"), cwd=workspace, env=environment, timeout=90)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = int(listener.getsockname()[1])
+    server_environment = environment.copy()
+    server_environment["PORT"] = str(port)
+    server = subprocess.Popen(
+        (node, "src/server.js"),
+        cwd=workspace,
+        env=server_environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    private_text = f"PRIVATE_GJ1_{secrets.token_hex(16)}"
+    private_bytes = private_text.encode()
+    stdout = b""
+    stderr = b""
+    try:
+        page: tuple[int, list[tuple[str, str]], bytes] | None = None
+        for _ in range(60):
+            if server.poll() is not None:
+                break
+            try:
+                candidate = _request(port, "GET", "/today")
+                if candidate[0] == 200:
+                    page = candidate
+                    break
+            except OSError:
+                time.sleep(0.05)
+        if page is None:
+            raise LaunchError("loopback server did not become ready")
+
+        headers = {name.lower(): value for name, value in page[1]}
+        cookie = headers.get("set-cookie", "").split(";", 1)[0]
+        csrf_match = re.search(rb'<meta name="csrf-token" content="([^"]+)">', page[2])
+        if not cookie.startswith("nepha_session=") or not csrf_match:
+            raise LaunchError("session/CSRF bootstrap failed")
+        csrf = csrf_match.group(1).decode()
+        origin = f"http://127.0.0.1:{port}"
+        body = json.dumps(
+            {"title": "LoopSkill GJ-1 smoke", "text": private_text},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+        base = {"content-type": "application/json", "content-length": str(len(body))}
+        legal_status, _, legal_body = _request(
+            port,
+            "POST",
+            "/api/intake",
+            body=body,
+            headers={**base, "origin": origin, "cookie": cookie, "x-csrf-token": csrf},
+        )
+        origin_status, _, origin_body = _request(
+            port,
+            "POST",
+            "/api/intake",
+            body=body,
+            headers={**base, "cookie": cookie, "x-csrf-token": csrf},
+        )
+        session_status, _, session_body = _request(
+            port,
+            "POST",
+            "/api/intake",
+            body=body,
+            headers={**base, "origin": origin, "x-csrf-token": csrf},
+        )
+        csrf_status, _, csrf_body = _request(
+            port,
+            "POST",
+            "/api/intake",
+            body=body,
+            headers={**base, "origin": origin, "cookie": cookie},
+        )
+        if legal_status == 501 or not 200 <= legal_status < 300:
+            raise LaunchError(f"legal intake returned HTTP {legal_status}")
+        if (origin_status, session_status, csrf_status) != (403, 403, 403):
+            raise LaunchError(
+                f"security rejection drifted: Origin={origin_status}, Session={session_status}, CSRF={csrf_status}"
+            )
+        for response_body in (legal_body, origin_body, session_body, csrf_body):
+            if private_bytes in response_body:
+                raise LaunchError("private intake text was echoed")
+    finally:
+        if server.poll() is None:
+            server.terminate()
+            try:
+                stdout, stderr = server.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                stdout, stderr = server.communicate(timeout=3)
+        else:
+            stdout, stderr = server.communicate(timeout=3)
+    if private_bytes in stdout or private_bytes in stderr:
+        raise LaunchError("private intake text appeared in server logs")
+    return {
+        "legal": legal_status,
+        "origin": origin_status,
+        "session": session_status,
+        "csrf": csrf_status,
+    }
+
+
+def _injected_verifier_exit() -> None:
+    os._exit(73)
+
+
+def _verifier_target(connection: Any, workspace: Path, tools: dict[str, Any]) -> None:
+    try:
+        connection.send({"ok": True, "result": _verify_gj1(workspace, tools)})
+    except BaseException as exc:
+        connection.send({"ok": False, "error": str(exc)})
+    finally:
+        connection.close()
+
+
+def _launch_verifier(
+    workspace: Path,
+    tools: dict[str, Any],
+    *,
+    injected_exit: bool,
+) -> tuple[int, dict[str, Any] | None]:
+    context = multiprocessing.get_context("fork")
+    if injected_exit:
+        process = context.Process(target=_injected_verifier_exit)
+        process.start()
+        process.join(30)
+        return int(process.exitcode or 0), None
+
+    parent_connection, child_connection = context.Pipe(duplex=False)
+    process = context.Process(target=_verifier_target, args=(child_connection, workspace, tools))
+    process.start()
+    child_connection.close()
+    process.join(180)
+    if process.is_alive():
+        process.terminate()
+        process.join(3)
+        parent_connection.close()
+        return -1, {"ok": False, "error": "verifier timed out"}
+    payload = parent_connection.recv() if parent_connection.poll(3) else None
+    parent_connection.close()
+    return int(process.exitcode or 0), payload
+
+
+Worker = Callable[[Path, dict[str, Any]], None]
+Verifier = Callable[..., tuple[int, dict[str, Any] | None]]
+
+
+def start(
+    workspace_arg: str,
+    *,
+    worker: Worker | None = None,
+    verifier: Verifier | None = None,
+) -> str:
+    workspace = _workspace(workspace_arg)
+    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+        raise LaunchError("workspace drifted after prepare")
+    contract_path = _preparation_path(workspace)
+    contract, prepared_facts = _read_prepared_contract(contract_path)
+    tools = _tools()
+    current_contract = _contract_body(workspace, tools)
+    current_facts = _facts(workspace, tools, current_contract)
+    if contract != current_contract or prepared_facts != current_facts:
+        raise LaunchError("Launch Contract, workspace, or executable drifted before START")
+    _probe_prepare_conditions(workspace)
+    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+        raise LaunchError("START probes changed the workspace")
+    contract_path.unlink()
+    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+        raise LaunchError("START preflight changed the workspace")
+
+    (worker or _run_worker)(workspace, tools)
+    _assert_worker_result(workspace)
+
+    launch_verifier = verifier or _launch_verifier
+    verifier_rebuilt = os.environ.get(INJECT_VERIFIER_EXIT) == "1"
+    if verifier_rebuilt:
+        exit_code, payload = launch_verifier(workspace, tools, injected_exit=True)
+        if exit_code != 73 or payload is not None:
+            raise LaunchError("the injected verifier did not exit with the fixed zero-effect failure")
+        _assert_worker_result(workspace)
+    exit_code, payload = launch_verifier(workspace, tools, injected_exit=False)
+    if exit_code != 0 or not payload or not payload.get("ok"):
+        detail = payload.get("error") if payload else "no verifier result"
+        raise LaunchError(f"real verifier failed: {detail}")
+    _assert_worker_result(workspace)
+    result = payload["result"]
+    return "\n".join(
+        (
+            f"业务结果：PASS — /api/intake 真实 loopback POST 返回 HTTP {result['legal']}，原 501 已消失。",
+            "安全边界：缺 Origin / Session / CSRF 均为 403；私密原文未出现在响应或 server logs。",
+            "直接测试：PASS。",
+            f"恢复：Worker 1 次；verifier {'首次 crash 后重建 1 次' if verifier_rebuilt else '1 次'}；Worker 未重跑。",
+            "Diff：仅 src/server.js 与 test/server.test.js；Owner note exact digest 未变；HEAD 未变。",
+            "外部效果边界：workspace-write sandbox 与明确 prompt 禁止项目外部网络；commit 0；push 0；发布 0。",
+            "限制：本结果只证明 Phase 2 DEVELOPMENT GJ-1，不证明通用任务、自动 wake 或 48 小时耐久。",
+        )
+    )
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="loopskill5")
+    actions = parser.add_subparsers(dest="action", required=True)
+    prepare_parser = actions.add_parser("prepare", help="read the fixed natural-language request from stdin")
+    prepare_parser.add_argument("workspace")
+    start_parser = actions.add_parser("start", help="recheck and run the prepared GJ-1 contract")
+    start_parser.add_argument("workspace")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        if args.action == "prepare":
+            contract = prepare(args.workspace, sys.stdin.read())
+            sys.stdout.write(f"{contract}\n\n准备结果：READY_FOR_START\n")
+        else:
+            sys.stdout.write(f"{start(args.workspace)}\n")
+    except (LaunchError, OSError, ValueError) as exc:
+        sys.stderr.write(f"业务结果：FAIL — {exc}\n")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
