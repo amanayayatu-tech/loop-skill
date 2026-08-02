@@ -173,3 +173,25 @@ run identity `pQPjua` 绑定 clean candidate `ae8284c2ffeec0d2a9e9e5f613b09976e8
 - 最终业务状态是 `OWNER_GATE_REACHED`，推荐不公开；没有发布调用或虚假 `PublicationRecord`。准确分类为 **`OWNER_GATE_REACHED / GJ2_DEVELOPMENT_PASS`**。
 
 本身份闭合 Phase-0 GJ-2 基础 DEVELOPMENT 路径以及 A43hpY 漏掉的真实 repeated-export acceptance，但不是冻结 release candidate 上的连续第二次全新干净环境、故障注入 canary、48 小时/多日耐久或正式发布证据。IB-08 没有因本次无等待旅程而闭合；IB-11 仍缺运行中 Owner 跳过 Telegram/缩小范围、旧批准失效和最终主张降格的原始冲突复现。
+
+## 实际 Skill 表面的 GJ-3 DEVELOPMENT 失败身份
+
+### 身份与 PREPARE 偏差
+
+- business identity 永久固定为 `GJ3-DEVELOPMENT-SURFACE-Y58h8e`；唯一业务 task/thread 为 `019fc1d7-b776-7583-a5c8-cdea92f7e458`。disposable workspace 为 `/tmp/loopskill-v5-gj3-surface.Y58h8e/workspace`，baseline HEAD `1f33b3d906a29a5eb66858eed2f225cb731d0f31`，remote 为空。
+- nested Host PREPARE 表面没有受支持的 heartbeat 写入口，却越界创建了三个被禁止的 subagent：`workspace_audit` / `019fc2de-d52d-7153-bbe7-b2488fad9797`、`host_heartbeat_audit` / `019fc2de-f4be-7be2-85cc-b805b1fc950c`、`gj3_crosscheck` / `019fc2df-1b15-7c91-aaac-c1bb91a44b49`。父 PREPARE 中断后精确进程 readback 均无残留；已完成者报告零写入、零 heartbeat、零外网，未完成者没有可判定业务效果。该范围偏差保留，不改写为产品机制。
+- 同一 PREPARE 改绑 Desktop 原生 automation 后只创建 heartbeat `loopskill-v5-gj3-surface-y58h8e`。create 请求携带 `PAUSED`，但 Host 于 `2026-08-02T14:39:51.647Z` 实际持久化为 `ACTIVE`；监督在 START 前于 `14:40:44.679Z` 用同一受支持 API、同一 identity 自动纠正为 `PAUSED`。这段 `53.032s` 窗口没有该 heartbeat 的新 turn 或业务效果。后续 readback 的持久化 target 精确为上述同一 thread，identity 数量始终为 `1`。
+
+### START、同线程投递与已知效果
+
+- session JSONL 于 `2026-08-02T14:49:23.810Z` 持久化唯一独立 `START`；准入复核后的 effect fact 另记录 `START observed at=14:50:02.616Z`。A readback 后，唯一 owner-only fact 于 `14:50:23.714Z` 形成，`not_before=14:53:23.714Z`、`latest acceptance=14:55:23.714Z`，初始 SHA-256 为 `680021732f2d9a26d21518e4cfcc071aff32b649c2a31cd5e647eae8a84d99ac`。
+- artifact A 为 195 bytes（含末尾 LF），effect key `GJ3-DEVELOPMENT-SURFACE-Y58h8e:artifact-A:v1`，写入次数 `1`，SHA-256 `262bd923cbfcdcaa6b72d1de06376ea6120e0d4291dab0afc71ce8973a26c6ac`。`2026-08-02T14:53:18.033Z` 的首次同线程 delivery 比 `not_before` 早 `5.681s`，该 turn readback fact/A 后零写入结束，B 仍为 `0`，同一 heartbeat 保留。
+- 第二次 Host-native same-thread delivery 为 `2026-08-02T14:54:48.047Z`，进入时仍在合同窗口内，但距最终完成上限只剩 `35.667s`。artifact B 的 birth/mtime 为 `14:55:44Z`，从 delivery 到效果约 `55.953s`，比 `latest acceptance` 晚约 `20.286s`。B 为已知单次效果：304 bytes、effect key `GJ3-DEVELOPMENT-SURFACE-Y58h8e:artifact-B:v1`、写入次数 `1`、SHA-256 `0346d7ca4d8f26aa7a7bf98e3361267e77609e6ef2ee25b1cb07444f55133748`；它正确引用 A digest，但按时业务效果没有完成。
+- 同一 fact 追加 terminal emergency-stop readback 后仍为 uid 501 / mode 0600，最终 SHA-256 为 `8cc83ebec4c10cfa8119b020c49e5135494027127b15cf8b60527b6ab5bee06a`。A/B 均保留且各出现一次；workspace HEAD 未变、remote 为空、Git status 仅 A/B。唯一 heartbeat 已通过受支持 API 删除，automation 文件、identity 搜索和匹配进程 readback 均为不存在。
+- 从唯一 START 到 terminal stop，外层技术消息为 `0`；除两次 Host heartbeat delivery 外没有第二次 START、继续指令、路径、恢复提示或新 task。任务业务工具没有调用网络、commit、push、publication 或发布接口；Codex Host 必需模型/控制面流量不在“业务网络为 0”的主张内。
+
+### 严格判定与最窄根因
+
+本身份永久分类为 **`DEVELOPMENT FAIL / LATE_EFFECT_AFTER_ACCEPTANCE_WINDOW`**。B 的 bytes 与 digest 正确不能覆盖时长 Gate；不得重试、删除 B、改判、复活或把该身份写成 IB-08/GJ-3 PASS。它也不证明 48 小时、多日、OS 关机恢复或任意 task crash recovery，IB-08 仍保持未闭合。
+
+最窄根因是 Launch Contract 容量预算不足：300 秒总完成窗把前 180 秒全部分配给 `not_before`，首次早醒又占用一次 Host cadence；合格 delivery 到来时只剩 `35.667s`，而同源 fact/A readback 与 B 业务写入实际约需 `55.953s`。因此“唤醒在截止前开始”不等于“业务效果在截止前完成”。修正应在 START 前用真实探测为 Host 调度/投递和醒后 verifier/业务执行预留明确预算，不需要 Controller、retry、状态机、schema 或新恢复层。

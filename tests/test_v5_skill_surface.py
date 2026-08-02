@@ -66,6 +66,8 @@ class LoopSkill5SurfaceTest(unittest.TestCase):
             "Treat START-after technical intervention as a product failure",
             "Use the current Codex task/thread as the business execution identity",
             "Host-native heartbeat scheduling and same-thread turn reentry",
+            "actually persisted heartbeat target and status before committing to the wait; requested parameters are not evidence",
+            "reserve an explicit contract window between `not_before` and the final completion deadline for Host scheduling/delivery plus wake-time verifier and business execution, sized from real probes; a wake beginning before the deadline does not prove the business effect completed on time",
             "at most one owner-only, human-readable effect fact",
             "Host idle/active is not a business state",
             "Stop only at a true business Gate",
