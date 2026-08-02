@@ -395,6 +395,10 @@ def _verify_gj1(workspace: Path, tools: dict[str, Any]) -> dict[str, Any]:
             except OSError:
                 time.sleep(0.05)
         if page is None:
+            if server.poll() is not None:
+                stdout, stderr = server.communicate(timeout=3)
+                if b"EADDRINUSE" in stderr:
+                    raise LaunchError("loopback verifier port collision")
             raise LaunchError("loopback server did not become ready")
 
         pages = {"today": page}
@@ -549,24 +553,38 @@ def start(
 
     launch_verifier = verifier or _launch_verifier
     verifier_rebuilt = os.environ.get(INJECT_VERIFIER_EXIT) == "1"
+    port_collision_rebuilt = False
     if verifier_rebuilt:
         exit_code, payload = launch_verifier(workspace, tools, injected_exit=True)
         if exit_code != 73 or payload is not None:
             raise LaunchError("the injected verifier did not exit with the fixed zero-effect failure")
         _assert_worker_result(workspace, tools)
     exit_code, payload = launch_verifier(workspace, tools, injected_exit=False)
+    detail = payload.get("error") if payload else "no verifier result"
+    if (exit_code != 0 or not payload or not payload.get("ok")) and detail == "loopback verifier port collision":
+        _assert_worker_result(workspace, tools)
+        exit_code, payload = launch_verifier(workspace, tools, injected_exit=False)
+        port_collision_rebuilt = True
     if exit_code != 0 or not payload or not payload.get("ok"):
         detail = payload.get("error") if payload else "no verifier result"
         raise LaunchError(f"real verifier failed: {detail}")
     _assert_worker_result(workspace, tools)
     result = payload["result"]
+    if verifier_rebuilt and port_collision_rebuilt:
+        verifier_summary = "首次 crash 后重建 1 次；随后端口竞态换临时端口再重建 1 次"
+    elif verifier_rebuilt:
+        verifier_summary = "首次 crash 后重建 1 次"
+    elif port_collision_rebuilt:
+        verifier_summary = "端口竞态后换临时端口重建 1 次"
+    else:
+        verifier_summary = "1 次"
     return "\n".join(
         (
             f"业务结果：PASS — /api/intake 真实 loopback POST 返回 HTTP {result['legal']}，原 501 已消失。",
             "业务页面：/today、/inbox、/content、/settings 真实 loopback GET 均为 200 且 data-view 正确。",
             "安全边界：缺 Origin / Session / CSRF 均为 403；私密原文未出现在响应或 server logs。",
             "直接测试：PASS。",
-            f"恢复：Worker 1 次；verifier {'首次 crash 后重建 1 次' if verifier_rebuilt else '1 次'}；Worker 未重跑。",
+            f"恢复：Worker 1 次；verifier {verifier_summary}；Worker 未重跑。",
             "Diff：仅 src/server.js 与 test/server.test.js；Owner note exact digest 未变；HEAD 未变。",
             "外部效果边界：workspace-write sandbox 与明确 prompt 禁止项目外部网络；commit 0；push 0；发布 0。",
             "限制：本结果只证明 Phase 2 DEVELOPMENT GJ-1，不证明通用任务、自动 wake 或 48 小时耐久。",

@@ -4,6 +4,7 @@ import importlib.util
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -203,6 +204,22 @@ class WalkingSkeletonTests(unittest.TestCase):
             [f"?? {loopskill5.OWNER_NOTE}"],
         )
 
+    def test_empty_optional_environment_keeps_the_prepared_safe_path(self):
+        with tempfile.TemporaryDirectory(prefix="loopskill5-worker-env-") as scratch:
+            with mock.patch.dict(os.environ, {}, clear=True):
+                environment = loopskill5._worker_environment(self.tools, scratch)
+            self.assertEqual(environment, {"PATH": self.tools["path"], "TMPDIR": scratch})
+            self.assertEqual(
+                subprocess.run(
+                    (self.tools["node"]["path"], "--version"),
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip(),
+                self.tools["node"]["version"],
+            )
+
     def test_gj1_real_loopback_recovers_one_verifier_crash_without_rerunning_worker(self):
         loopskill5.prepare(str(self.workspace), loopskill5.REQUEST)
         worker_calls = 0
@@ -221,6 +238,49 @@ class WalkingSkeletonTests(unittest.TestCase):
         self.assertIn("verifier 首次 crash 后重建 1 次", report)
         self.assertFalse(loopskill5._preparation_path(self.workspace).exists())
         self.assertEqual((self.workspace / loopskill5.OWNER_NOTE).read_bytes(), loopskill5.OWNER_NOTE_BYTES)
+
+    def test_gj1_rebuilds_verifier_once_after_a_real_port_collision(self):
+        loopskill5.prepare(str(self.workspace), loopskill5.REQUEST)
+        worker_calls = 0
+        verifier_calls = 0
+        real_popen = subprocess.Popen
+
+        def worker(workspace, _tools):
+            nonlocal worker_calls
+            worker_calls += 1
+            (workspace / "src/server.js").write_text(FIXED_SERVER, encoding="utf-8")
+            (workspace / "test/server.test.js").write_text(FIXED_TEST, encoding="utf-8")
+
+        def verifier(workspace, tools, *, injected_exit):
+            nonlocal verifier_calls
+            verifier_calls += 1
+            self.assertFalse(injected_exit)
+            if verifier_calls > 1:
+                return loopskill5._launch_verifier(workspace, tools, injected_exit=False)
+
+            blocker = None
+
+            def collide_on_server_start(argv, **kwargs):
+                nonlocal blocker
+                if tuple(argv)[-1] == "src/server.js":
+                    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    blocker.bind(("127.0.0.1", int(kwargs["env"]["PORT"])))
+                return real_popen(argv, **kwargs)
+
+            try:
+                with mock.patch.object(loopskill5.subprocess, "Popen", side_effect=collide_on_server_start):
+                    loopskill5._verify_gj1(workspace, tools)
+            except loopskill5.LaunchError as exc:
+                return 1, {"ok": False, "error": str(exc)}
+            finally:
+                if blocker is not None:
+                    blocker.close()
+            self.fail("the real port collision did not fail the first verifier")
+
+        report = loopskill5.start(str(self.workspace), worker=worker, verifier=verifier)
+        self.assertEqual(worker_calls, 1)
+        self.assertEqual(verifier_calls, 2)
+        self.assertIn("verifier 端口竞态后换临时端口重建 1 次", report)
 
 
 def json_copy(value):
