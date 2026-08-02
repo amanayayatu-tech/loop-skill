@@ -9,7 +9,7 @@
 | 最终意图 | 修复真实仓库的 `/api/intake` 501，同时保护用户脏改动并完成真实 HTTP 验收。 |
 | 本次承诺结果 | 在一次 START 内完成最窄代码/测试修改、直接测试、HTTP smoke、一次 verifier 故障恢复和最终报告。 |
 | 为何是最远结果 | 用户明确禁止 commit/push/发布；因此工作区内可用修复与证据是当前最远安全结果，不把内部工作段设为 Gate。 |
-| 推荐路线 | 从 `a3b57ec` archive 开始；写范围先限直接源码和测试；保留脏文件摘要；独立 verifier 在 Worker 后运行。 |
+| 推荐路线 | 从 `a3b57ecea7e7e2f6e000820b06e7c895efd4a84b` archive 开始；写范围先限直接源码和测试；保留脏文件摘要；独立 verifier 在 Worker 后运行。 |
 | 已验证条件 | exact 历史 commit 与 501 字节存在；Node/npm/Codex executable 当前可解析。目标 sandbox 下真实 Host 写入、进程恢复和 START 前后指纹复核尚未验证。 |
 | 授权与外部效果 | 仅一次性 archive、私有 scratch 和本机 loopback 验收；无 commit、push、外部网络、发布、付费、安装或源仓库修改。 |
 | 验收 | 合法 POST 非 501、安全拒绝仍成立、私密文本不回显、直接测试 PASS、脏字节不变、diff 不越界。 |
@@ -28,7 +28,7 @@
 | 最终意图 | 在中文路径把真实输入推进到四个可 readback 文本导出，并停在公开发布 Owner Gate。 |
 | 本次承诺结果 | intake → 主题 → Claim/Brief → 测试型确认 → Draft → 四包 → 质量 → 测试型批准 → 导出 → 重启 readback。 |
 | 为何是最远结果 | 用户未授权平台发布；四包导出后是否公开是不可由系统替代的最终业务判断。 |
-| 推荐路线 | 固定 `74051f…` archive；使用项目已有 core verification 与真实 Web API 旅程；数据全部进入私有 scratch。 |
+| 推荐路线 | 固定 `74051fbaecced9feb326fe53bff43738fd439856` archive；使用项目已有 core verification 与真实 Web API 旅程；数据全部进入私有 scratch。 |
 | 已验证条件 | 源 commit 当前干净；Node/npm 和现有 verify/smoke 入口存在。中文 archive、全四包旅程、端口竞态恢复、Host 包络和重启 readback 需在候选上重验。 |
 | 授权与外部效果 | 只写副本和私有数据根；不写源仓库、Codex auth/config、v3/v4 数据、Telegram、Git remote 或平台。 |
 | 验收 | 四包精确版本、四份 manifest、幂等导出、重启 readback、无未批准/秘密内容、源和 Host 身份不变。 |

@@ -14,7 +14,7 @@
 | 本机执行环境 | macOS `26.5.2` arm64；Python `3.14.6`；Node `22.22.1`；npm `10.9.4`；Codex CLI `0.144.4`；Git `2.50.1` | 这些 executable 当前可解析；尚不能推出 START 时仍未漂移 |
 | Codex Host 表面能力 | `codex exec` 提供 JSON、schema、workspace sandbox；`codex exec resume` 可按 session id 续接；Desktop 暴露 thread heartbeat/automation 能力 | 只证明接口当前存在，不证明小时级主动执行或多日级耐久续接可靠 |
 | Nepha 真实项目 | 干净 commit `74051fbaecced9feb326fe53bff43738fd439856` 可读取，现有 `verify:core-shippable`、Web smoke 和持久化 readback 路径可用作 GJ-2 输入 | 可把该 commit 归档到中文路径做独立验证；不得改写源仓库 |
-| v4.3 事故样本 | 只读 worktree 的 HEAD 仍为 `476f6ba…`，存在大量 tracked/untracked 改动；其 porcelain 清单 SHA-256 为 `f10716a9f79d042b22ddc21fa47d6dae3d203363b620ed1a4c3ce892f06c1264` | 只能提取行为和拟议回归，不能把其中测试或实现当作 v5 基线或已通过证据 |
+| v4.3 事故样本 | 只读 worktree 的 HEAD 仍为 `476f6ba298151c4a6930d4a8c9e60945e1c4d37d`，存在大量 tracked/untracked 改动；其 porcelain 清单 SHA-256 为 `f10716a9f79d042b22ddc21fa47d6dae3d203363b620ed1a4c3ce892f06c1264` | 只能提取行为和拟议回归，不能把其中测试或实现当作 v5 基线或已通过证据 |
 
 ## Phase 0 产物
 

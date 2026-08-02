@@ -27,7 +27,7 @@
 1. intake 保存原始输入和 provenance，创建候选主题。
 2. 选择主题，生成 Claim Ledger 与 PerspectiveBrief；按固定 fixture 确认观点边界。
 3. 生成 MasterDraft，再生成四个独立 PlatformPackage。
-4. 对每个包运行质量检查；X 中英文分别版本化、检查和测试型批准。
+4. 对四个平台包逐一运行质量检查，并用预置测试 fixture 分别批准各自的 exact version；X 中英文仍分别版本化、检查和批准。
 5. 对四个已批准精确版本分别导出，重复导出返回相同逻辑结果和 manifest identity。
 6. 停止服务并使用同一数据目录重启；readback 项目、版本、批准和四个 export manifest。
 7. 输出最终业务报告并停在公开发布 Owner Gate。

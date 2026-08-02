@@ -13,11 +13,11 @@
 
 固定证据身份：
 
-- `E-MASTER`：主计划 SHA-256 `69e88ed2…3a13bb1`，第 14 节为 Owner 批准的事故行为表。
-- `E-V43-REG`：只读 v4.3 `test_v4_3_incident_regressions.py` SHA-256 `fb2e1332…365077d`；它是未提交草稿。
-- `E-V43-RECOVERY`：只读 v4.3 deterministic runner SHA-256 `84c1f414…1a83b0b`；其文件自述“不是 Host 可用性证明”。
-- `E-NEPHA-501`：Nepha commit `a3b57ec` 的 `src/server.js` blob `91309979…5bf6` 明确返回 501；同 commit 的 `test/server.test.js` blob `756c2b45…5662` 只覆盖 GET/Host 安全路径。
-- `E-V4-SAFETY`：基线 `SPEC.md` blob `594c6e7c…fe38` 与 `SECURITY.md` blob `84f97b99…e2a`，仅保留 UNKNOWN、秘密、证据不可改写和真实旧字节验证等安全行为。
+- `E-MASTER`：主计划 SHA-256 `69e88ed2b543033c12bf74bc753092b8e66316b8fc5759f765633792c3a13bb1`，第 14 节为 Owner 批准的事故行为表。
+- `E-V43-REG`：只读 v4.3 `test_v4_3_incident_regressions.py` SHA-256 `fb2e13320c0eeb614b8abd07868815f74692d2911934e0c171101bea7365077d`；它是未提交草稿。
+- `E-V43-RECOVERY`：只读 v4.3 deterministic runner SHA-256 `84c1f4144ce5bde77156db545f86ba08bbcf4b5a63f608a76966f275e1a83b0b`；其文件自述“不是 Host 可用性证明”。
+- `E-NEPHA-501`：Nepha commit `a3b57ecea7e7e2f6e000820b06e7c895efd4a84b` 的 `src/server.js` blob `91309979c83be3192d62387e5e1825cbedfe5bf6` 明确返回 501；同 commit 的 `test/server.test.js` blob `756c2b45c8bc532cf1c7d6c4ee9a350ddbe5662c` 只覆盖 GET/Host 安全路径。
+- `E-V4-SAFETY`：基线 `SPEC.md` blob `594c6e7c514c74135b4598a92b74239b831afe38` 与 `SECURITY.md` blob `84f97b99d454cb8987649e63781ec4f74da85e2a`，仅保留 UNKNOWN、秘密、证据不可改写和真实旧字节验证等安全行为。
 
 ## 行为案例
 
