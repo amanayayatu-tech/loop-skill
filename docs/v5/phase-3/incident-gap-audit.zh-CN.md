@@ -1,6 +1,6 @@
 # Phase 3 事故行为缺口审计
 
-状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS / GJ2_OWNER_GATE_REACHED_SPEC_INCOMPLETE`
+状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS / GJ2_A43_OWNER_GATE_REACHED_SPEC_INCOMPLETE / GJ2_SCOPQP_DEVELOPMENT_PASS`
 
 证据日期：`2026-08-02`（Asia/Shanghai）
 
@@ -137,3 +137,39 @@ run identity `pQPjua` 绑定 clean candidate `ae8284c2ffeec0d2a9e9e5f613b09976e8
 - 本身份只对四个 exact version 各执行一次导出。Phase 0 GJ-2 规格中的“重复导出返回相同逻辑结果和 manifest identity”没有逐项映射进本次 Launch Contract，START 因而没有真实发起第二次同版本导出。最终只有 4 个 ExportRecord 和 8 个内容文件，证明没有重复效果，但不能从幂等键设计或最终计数推定该漏项已通过。
 
 因此本身份的准确结论是 **`OWNER_GATE_REACHED / GJ2_SPEC_INCOMPLETE`**，不得记为 GJ-2 PASS。它也不是连续第二次干净运行、全新正式安装、故障注入 canary 或 release candidate 证据。IB-08 仍缺等待/报告同源 effect fact 的真实用户表面回归；IB-11 仍缺运行中缩小范围与旧批准失效的原始冲突复现。
+
+## GJ-2 exact repeated-export DEVELOPMENT 成功身份
+
+### 身份、合同与一次 START
+
+- business identity：`GJ2-DEVELOPMENT-scOpQp`；唯一 Codex task/thread：`019fc2a4-12b4-7c23-a84c-7fbcdb4ecbe5`。
+- clean Skill candidate：`675cc9c437f8b1f25d8a826d898622b61acc88f1`；开发态安装的 `SKILL.md` SHA-256 为 `3637909ee48b58724b093652831078ebaec4d8cf3360599a22ead30fa79e9c85`，`agents/openai.yaml` SHA-256 为 `d46efb72a0309a53729499e90b2200e9f872bb6eeaba691c589c7108680a6740`，均与 candidate 匹配。显式 `$loopskill5` 实际加载再次成立；全局 description budget 下的隐式自然语言发现仍为未知。
+- source 仍为只读 exact commit `74051fbaecced9feb326fe53bff43738fd439856`、tree `edb0729811c533b5a2539bbf39865097359dd789`；Git archive SHA-256 为 `87c3a36c66d3959842e818b04323ff0a4b938888d83e175d5572a4fd634b7bf7`。中文副本为 `/tmp/loopskill-v5-gj2.scOpQp/中文项目验证/nepha-content-os`，私有数据根为 `/tmp/loopskill-v5-gj2.scOpQp/private/nepha-data`。
+- PREPARE 真实证明默认时钟下用同一个 HTTP 幂等键重复导出会因 `exportedAt` 漂移产生 `idempotency_conflict`；固定时钟注入被明确排除，源码未改。隔离 scratch 随后通过合同路线：首次四包 HTTP 导出与磁盘 readback，停服确认无 listener，现有 `ReleaseRuntime` 用四个新调用 key 实际第二次导出并返回 exact existing，关闭 writer，再以新 HTTP 进程和新 Session 完整 readback。首个 scratch 的一次 inline JavaScript `ReferenceError` 在产品断言前停止并保留为准备失败；新 scratch PASS 后才展示修正版合同。
+- exact 12 项合同披露实际 Host 技术 sandbox 为 `danger-full-access`，同时把业务权能严格限制为 disposable archive、副本、owner-only data root、动态 loopback 与只读证据；更宽 Host 文件系统/网络能力不扩大业务授权。
+- 外层于 `2026-08-02T13:59:15.977776Z` 发起 exact resume 调用；child session 于 `14:00:24.311Z` 记录唯一独立用户消息 `START`，最终业务报告于 `14:13:39.139Z` 产生，task 于 `14:13:39.535Z` 完成。以 child 持久化 START 计时为 `795.224` 秒（`13 分 15.224 秒`）；Host 另报告本 turn `duration_ms=860897`。START 后 outer technical messages 为 `0`，没有继续、路径、端口、Store、内容、恢复提示、第二次 START、新 task、Goal、worker thread 或 heartbeat。
+
+### 业务结果、真实重放与重启
+
+固定输入以 exact SHA-256 `24590244fb4cbe71099e8d417751c0933ddcd1ed956bf4fa4ed2650675f33025` 持久化并 readback。真实 API 完成 intake/provenance、Evidence、Claim Ledger、topic selection、PerspectiveBrief fixture confirmation、MasterDraft、四个独立包、质量、exact-version fixture approval 与首次导出。项目 ID 为 `web-ca3324cc7c759fa9b0deb0cbe4274df8`；PerspectiveBrief v1 digest 为 `5d50ecb104dbff0f5c6d1f0e310707d83863b25e315622817a19270c751bb931`，MasterDraft v1 digest 为 `8885aa8a34e9ec36edb691d0386ad17ff9773d276049b94cd80afbf81d8d476a`。英文 v1 真实以 `bilingual_meaning_drift` 失败且无批准/导出；exact 英文 fixture 形成独立 v2，250 codepoints，文本 SHA-256 为 `3bb0ac8c9fa69afadfec91a0219b3889e229bc782b02d4c2e8f04dd00cd0fb9e`。
+
+| current 包 | version | package digest | exact Approval | exact ExportRecord / manifest SHA-256 |
+| --- | ---: | --- | --- | --- |
+| `x:zh-CN` | 1 | `0e4557613d798e9405b4c1b1f635d6b6ae94f8c7ba842c4a81a686ad8b2018c9` | `2567873d-e847-49b0-a03d-6f76d895d7c9` | `export:2c3a65be-2a4e-4bbd-a4ea-ec414b4b5b17:GJ2-DEVELOPMENT-scOpQp:http-export:x:zh-CN:v1` / `2e09a3f93dbe9ddcf34044c4937345aad5d20fab545555c5e9b1c9f9fd87aea1` |
+| `x:en` | 2 | `69c76c76bfc9a92b977ee7be1afd885a07821a98a11991c70370ebbd63320ce5` | `72a9a124-9a54-49bc-8ec5-4405786d87fc` | `export:5399a75b-c4f2-4eec-8eb5-e675fda70a69:GJ2-DEVELOPMENT-scOpQp:http-export:x:en:v2` / `9a95d85e34672f1be6244dabdb21df3fd406226cd8ad9241ad3b78bda72050ef` |
+| `xiaohongshu:zh-CN` | 1 | `a0d8a5ee9d883a019f3d2f5c364124796f5b14b09537b1c88b1a0ba15bc39909` | `9c5859ce-6292-4f58-a980-f09740a3cf50` | `export:8eb776a6-983d-4a52-9ae0-c5b00b440825:GJ2-DEVELOPMENT-scOpQp:http-export:xiaohongshu:zh-CN:v1` / `06c358d7cbca2b5b84ca72a5596d9d0dc5507bc2e4f646d31161471c0eb5456b` |
+| `wechat:zh-CN` | 1 | `bef0c723fe1c70590ae19aeda6aec098051a072a126c0f2e3146548cd4fa3b24` | `d13cb7f0-29ed-495f-9464-96b1a1f04d0b` | `export:af34542c-06a3-4cc9-9bdd-77da9e1a4752:GJ2-DEVELOPMENT-scOpQp:http-export:wechat:zh-CN:v1` / `bf36a82a46b296deefc628b0467dc780af3824c58433d3a834693ed8393e6225` |
+
+- 首个真实 HTTP writer 为 PID `44037`、`127.0.0.1:65364`。四个首次导出均逐包核对实际 content/manifest bytes、文件 ID、SHA 与 package digest；随后进程退出，端口无 listener 且连接拒绝。
+- 单一 `ReleaseRuntime` writer 为 PID `44066`。它对同一 data root 以四个不同于首次 HTTP 的新 key 实际调用 export；四次均返回上表原 `ExportRecord` ID、package digest、manifest file ID 与 manifest SHA。writer 关闭后 `ExportRecord=4`、内容寻址文件 `=8`、`JobRun=0`、`PublicationRecord=0`；排除 Store-open meta 字段后的逻辑状态 SHA-256 前后均为 `d80a973d625a5e2e033e83d32ac8eb7c2d8c41c8f5ba679b6a9c312da0958a50`。
+- 重启 HTTP writer 为新 PID `44067`、新端口 `65386`，签发不同的新 Session/Cookie/CSRF；完整 API 与磁盘 readback 后停止。最终三个 writer PID 均不存在，两个 GJ-2 端口均无 listener，data root 没有 open file。
+
+### 外层最终 readback 与严格判定
+
+- `database.json` owner/mode 为当前 uid/0600，SHA-256 为 `47838b5a75558539aee4e4fffb8d083fa6099b3f9567d8e3f6995de6f66822b8`；data root 与 `files/` 均为 0700。外层独立读取到 `ExportRecord=4`、`JobRun=0`、`PublicationRecord=0` 和恰好 8 个文件，8 个文件内容 SHA 均与其内容寻址文件名一致。
+- source 最终仍 clean exact commit；排除其既有 ignored `.nepha-data` 后，中文 archive 副本 44 文件与 source 逐字节无差异。既有 source listener `127.0.0.1:4317` 仍为 PID `62719`，未被复用或停止。没有源写入、v3/v4 数据访问、auth/config 改动、外部工作流或平台访问、secret、付费效果、commit、push、部署、publication 或删除。
+- 任务业务工具网络效果只有合同内动态 loopback。Codex Host 控制面/模型和其他系统流量可能存在，本身份不主张系统级 network 为零；`danger-full-access` 也不扩大业务权能。
+- 临时 v5 安装已从 `/Users/peachy/.codex/skills/loopskill5` 可恢复地移动到 `/Users/peachy/.Trash/loopskill5-development-install-scOpQp`；安装目标不存在，废纸篓中的两个文件 SHA 仍与 candidate 精确匹配。v4 安装树移动前后聚合 SHA-256 均为 `6cb22d41d9326b962ce45263b9803b1436eb7aaf7d3ea160d3da2307abb3243f`。
+- 最终业务状态是 `OWNER_GATE_REACHED`，推荐不公开；没有发布调用或虚假 `PublicationRecord`。准确分类为 **`OWNER_GATE_REACHED / GJ2_DEVELOPMENT_PASS`**。
+
+本身份闭合 Phase-0 GJ-2 基础 DEVELOPMENT 路径以及 A43hpY 漏掉的真实 repeated-export acceptance，但不是冻结 release candidate 上的连续第二次全新干净环境、故障注入 canary、48 小时/多日耐久或正式发布证据。IB-08 没有因本次无等待旅程而闭合；IB-11 仍缺运行中 Owner 跳过 Telegram/缩小范围、旧批准失效和最终主张降格的原始冲突复现。
