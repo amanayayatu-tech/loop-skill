@@ -1,6 +1,6 @@
 # Phase 3 事故行为缺口审计
 
-状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS / GJ2_A43_OWNER_GATE_REACHED_SPEC_INCOMPLETE / GJ2_SCOPQP_DEVELOPMENT_PASS`
+状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS / GJ2_A43_OWNER_GATE_REACHED_SPEC_INCOMPLETE / GJ2_SCOPQP_DEVELOPMENT_PASS / GJ3_SURFACE_DEVELOPMENT_PASS`
 
 证据日期：`2026-08-02`（Asia/Shanghai）
 
@@ -15,7 +15,7 @@
 | `IB-05` | `GJ1 已有直接证据` | Phase 3 以真实 socket 抢占 verifier 选定端口并观察 Node `EADDRINUSE`；系统只换临时端口重建 verifier 一次，真实 loopback 随后通过，Worker 仍为 `1`。listener 权限失败仍没有独立真实输入。 |
 | `IB-06` | `GJ1 已有直接证据` | exact Host spike 与 GJ-1 都证明相同 workspace-write 模式能真实写目标 workspace；不支持自动 wake 或更宽权限主张。 |
 | `IB-07` | `GJ1 已有直接证据` | 真实 GJ-1 注入 verifier exit `73`，只重建 verifier 一次且 Worker 调用仍为 `1`。 |
-| `IB-08` | `仍缺真实复现` | GJ-3 的单一等待事实、heartbeat readback 与最终报告保持一致，但 v5 当前没有 PAUSED/Active 用户投影，也没有原始冲突输入；不能把“不存在该表面”写成 PASS。 |
+| `IB-08` | `已有部分直接证据 / 原事故仍未完全闭合` | GJ-3 实际表面已有“单一 effect fact → 等待说明 → same-thread wake → 最终报告”同源的直接证据；但 v5 没有 PAUSED/Active 用户投影，权威 PAUSED、用户显示 Active 的原始冲突输入仍未复现，因此不得写成 IB-08 PASS。 |
 | `IB-09` | `GJ1 已有直接证据` | 真实运行前后 target status 只含两项允许修改与 Owner note，私有 handoff 位于 scratch 并在 START 后失效；其他 runtime 类型尚未验证。 |
 | `IB-10` | `GJ1 已有直接证据` | Phase 3 在同一 GJ-1 START 中依次注入 verifier exit 与真实端口竞态，保留同一 Worker 结果并最终真实验收通过；这只证明已知两类技术故障，不外推任意宽 Goal 的通用重规划。 |
 | `IB-11` | `仍缺真实复现` | A43hpY 已证明从一开始不含 Telegram 的固定四包合同可在原身份到达最终 Owner Gate；但没有复现运行中 Owner 跳过 Telegram/缩小范围、旧批准失效和最终主张降格，因此不改判。 |
@@ -212,3 +212,28 @@ run identity `pQPjua` 绑定 clean candidate `ae8284c2ffeec0d2a9e9e5f613b09976e8
 - 真正根因不是所有时限都应扩大。heartbeat prompt step 5 在 identity、目录、fact、heartbeat、Git 与 A 的重复 readback 之后，拿当时机器时间比较内部 `latest Host delivery` 预测，并把预测升级为新的硬停止。真实 delivery 已在预计窗内，`not_before` 已满足，B 的业务 deadline 尚未到；重复 verifier 又让 delivery 到 validation 耗时 `71.570s`。这是内部技术里程碑冒充业务 Gate 与 wake 热路径过度验证的组合失败，不需要 Controller、retry、状态机、schema、scheduler 或 wrapper。
 
 本身份永久分类为 **`DEVELOPMENT FAIL`**，已知效果固定为 **A=1/B=0**；不得补写 B、重试、改判、复活或把它写成 IB-08/GJ-3 PASS。后续语义只要求 turn 入口先捕获真实 `delivery_observed_at`，将 Host cadence/phase 估算保留为 START 前容量规划，并在运行期只执行已承诺的 `not_before`、真实业务 effect deadline 与 final completion deadline。
+
+## 实际 Skill 表面的 GJ-3 DEVELOPMENT 成功身份
+
+### 身份、唯一 START 与三项时间
+
+- business identity 为 `GJ3-DEVELOPMENT-SURFACE-Bd6HN0`，唯一 task/thread 为 `019fc1d7-b776-7583-a5c8-cdea92f7e458`；disposable workspace 为 `/tmp/loopskill-v5-gj3-surface.Bd6HN0/workspace`，private root 为同 identity 下的 `private`。唯一 START user event 为 `2026-08-02T15:48:54.450Z`。
+- A exact readback 后，唯一 owner-only effect fact 于 `15:50:11.331Z` 形成，`not_before=15:52:11.331Z`、B 业务效果截止 `15:55:41.331Z`、final completion deadline `15:58:11.331Z`。合同和事实没有 `latest Host delivery` 或其他内部阶段硬 Gate。
+- 唯一 heartbeat `loopskill-v5-gj3-surface-bd6hn0` 实际持久化为 ACTIVE，target 精确为上述同一 thread。START 后原 turn 结束；没有新 task、第二 heartbeat、Controller、daemon、queue、retry、状态机或 schema。
+
+### 同线程 reentry、业务效果与终局 readback
+
+- Host heartbeat user event 与入口即捕获的 `delivery_observed_at` 均为 `2026-08-02T15:52:22.611Z`，比 `not_before` 晚 `11.280s`。wake 热路径只 readback identity/thread、owner/mode/non-symlink、单一 fact、实际 heartbeat target/status、A exact、B 不存在及 Git commit/remote/status；没有复核固定 inode/dev、`.git/config` digest、candidate blob 或全量 automation。
+- artifact A 为 195 bytes（含末尾 LF），effect key `GJ3-DEVELOPMENT-SURFACE-Bd6HN0:artifact-A:v1`，SHA-256 为 `60087bbb84f3740167312e421a611eadf31c7e3e80cd89a9b8b2448f71010c35`。A 从等待前到最终 readback 始终为 effect count `1`，没有重写。
+- artifact B 于 `15:52:58.834Z` 写入一次，距 delivery `36.223s`，比 B 业务效果截止早 `162.497s`；`15:53:14Z` 完成真实 readback。B 为 304 bytes（含末尾 LF），effect key `GJ3-DEVELOPMENT-SURFACE-Bd6HN0:artifact-B:v1`，SHA-256 为 `8489b4c4d66b82c865c89efe64e2861095405a5eb43a7f74d24169dae96e4d7a`，并引用 A exact digest；effect count 为 `1`。
+- 唯一 heartbeat 于 `15:54:05Z` 由受支持 Desktop API 删除，supported view 与 exact local path 均确认不存在。最终 verifier readback 于 `15:54:35.775Z` 开始并在 final deadline 前通过；随后 final heartbeat message 完成并明确报告 DEVELOPMENT PASS。
+- final fact 仍为 uid 501 / mode 0600，SHA-256 为 `9e7a47ef2ec2ba776dc656270bab3b3b4aacc13b13510af55bc7ae6fc482f35b`；A/B effect count 各为 `1`。Git 仍为 unborn `main`、commit count `0`、remote 为空，status 仅 `?? artifact-A.txt` 与 `?? artifact-B.txt`。
+- 从唯一 START 到 final message，用户输入只有该 START 与 Host-native heartbeat user event，外层技术消息为 `0`。任务业务工具的 network、secrets、commit、push、PR、publication 与 deploy 效果均为 `0`；Codex Host 必需的模型/控制面流量不在该业务网络主张内，也不主张系统级 network 为零。
+
+### 因果边界与严格判定
+
+本次 PASS 的直接因果是：删去伪 `latest Host delivery` Gate，在 turn 入口、任何 verifier 前先捕获真实 delivery，并把 wake 热路径缩到安全续接所需的最少 readback；运行期只执行 `not_before`、B 业务效果截止和 final completion deadline。成功没有依赖 Controller、retry、状态机、schema、第二 task 或第二 heartbeat。
+
+因此 `GJ3-DEVELOPMENT-SURFACE-Bd6HN0` 准确分类为 **`GJ3 DEVELOPMENT PASS`**，闭合实际 `$loopskill5` 表面的 GJ-3 基础 DEVELOPMENT 路径。它不覆盖或改判 `GJ3-DEVELOPMENT-SURFACE-Y58h8e` 与 `GJ3-DEVELOPMENT-SURFACE-NKxcK6`：前两者继续永久保持各自 FAIL 与原始效果；本 PASS 也不证明 48 小时、多日、跨自然日、睡眠、OS 关机或任意 task crash recovery。
+
+IB-08 只获得“单一 effect fact 驱动等待说明、same-thread wake 和最终报告”的直接支持；v5 仍没有 PAUSED/Active 用户投影，也没有复现“权威执行已 PAUSED、用户状态仍显示 Active”的原始冲突输入，因此该事故仍未完全闭合，不得记为 IB-08 PASS。
