@@ -241,7 +241,7 @@ class WalkingSkeletonTests(unittest.TestCase):
         self.assertFalse(loopskill5._preparation_path(self.workspace).exists())
         self.assertEqual((self.workspace / loopskill5.OWNER_NOTE).read_bytes(), loopskill5.OWNER_NOTE_BYTES)
 
-    def test_gj1_rebuilds_verifier_once_after_a_real_port_collision(self):
+    def test_gj1_recovers_verifier_crash_and_real_port_collision_without_rerunning_worker(self):
         loopskill5.prepare(str(self.workspace), loopskill5.REQUEST)
         worker_calls = 0
         verifier_calls = 0
@@ -256,8 +256,10 @@ class WalkingSkeletonTests(unittest.TestCase):
         def verifier(workspace, tools, *, injected_exit):
             nonlocal verifier_calls
             verifier_calls += 1
-            self.assertFalse(injected_exit)
-            if verifier_calls > 1:
+            if injected_exit:
+                self.assertEqual(verifier_calls, 1)
+                return 73, None
+            if verifier_calls > 2:
                 return loopskill5._launch_verifier(workspace, tools, injected_exit=False)
 
             blocker = None
@@ -279,10 +281,11 @@ class WalkingSkeletonTests(unittest.TestCase):
                     blocker.close()
             self.fail("the real port collision did not fail the first verifier")
 
-        report = loopskill5.start(str(self.workspace), worker=worker, verifier=verifier)
+        with mock.patch.dict(os.environ, {loopskill5.INJECT_VERIFIER_EXIT: "1"}):
+            report = loopskill5.start(str(self.workspace), worker=worker, verifier=verifier)
         self.assertEqual(worker_calls, 1)
-        self.assertEqual(verifier_calls, 2)
-        self.assertIn("verifier 端口竞态后换临时端口重建 1 次", report)
+        self.assertEqual(verifier_calls, 3)
+        self.assertIn("首次 crash 后重建 1 次；随后端口竞态换临时端口再重建 1 次", report)
 
 
 def json_copy(value):
