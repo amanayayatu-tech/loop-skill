@@ -1,6 +1,6 @@
 # Phase 3 事故行为缺口审计
 
-状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS`
+状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS / GJ2_OWNER_GATE_REACHED_WITH_GAPS`
 
 证据日期：`2026-08-02`（Asia/Shanghai）
 
@@ -18,7 +18,7 @@
 | `IB-08` | `仍缺真实复现` | GJ-3 的单一等待事实、heartbeat readback 与最终报告保持一致，但 v5 当前没有 PAUSED/Active 用户投影，也没有原始冲突输入；不能把“不存在该表面”写成 PASS。 |
 | `IB-09` | `GJ1 已有直接证据` | 真实运行前后 target status 只含两项允许修改与 Owner note，私有 handoff 位于 scratch 并在 START 后失效；其他 runtime 类型尚未验证。 |
 | `IB-10` | `GJ1 已有直接证据` | Phase 3 在同一 GJ-1 START 中依次注入 verifier exit 与真实端口竞态，保留同一 Worker 结果并最终真实验收通过；这只证明已知两类技术故障，不外推任意宽 Goal 的通用重规划。 |
-| `IB-11` | `仍缺真实复现` | 尚未执行 GJ-2 的 Owner 跳过 Telegram/缩小范围路径，不能证明原身份继续、旧批准失效和最终主张降格。 |
+| `IB-11` | `仍缺真实复现` | A43hpY 已证明从一开始不含 Telegram 的固定四包合同可在原身份到达最终 Owner Gate；但没有复现运行中 Owner 跳过 Telegram/缩小范围、旧批准失效和最终主张降格，因此不改判。 |
 | `IB-12` | `GJ1 已有直接证据` | Phase 1 在测试全绿时真实复现 501；GJ-1 再以真实 POST 201、安全拒绝和无回显闭合固定业务路径。 |
 | `IB-13` | `GJ3 才能证明` | >300 秒 DEVELOPMENT regression 已证明等待不依赖一个已定向 TERM 的 disposable child，且 same-thread wake 后 A 不重复；该 child 不是 task 进程，因此原始 task-process 终止、跨自然日和 48 小时耐久仍未证明。 |
 | `IB-14` | `仍缺真实复现` | 尚未从公开 v3/v4 tag 与真实安装器字节验证原样并存，以及 v5 安装/卸载不触碰旧身份；该发布矩阵仍待后续阶段。 |
@@ -99,3 +99,41 @@ run identity `pQPjua` 绑定 clean candidate `ae8284c2ffeec0d2a9e9e5f613b09976e8
 最终 readback：source repository 前后均为 clean `74051fbaecced9feb326fe53bff43738fd439856`；target HEAD 未变、remote/staged diff 为空，status 恰为两项允许修改与 Owner note；Owner note SHA-256 仍为 `0e2ec45eb2cbf607487b376c57f11c48fea06443c4748f312bb3fdb23f11aa5d`。最终 diff SHA-256 为 `e64cd3a25656a0174a87846734983ecc6e6563ce55468260facfaf2988f3f7f4`，私有 handoff 与运行进程均已不存在。
 
 本真实运行没有注入端口竞态；IB-05 的 `EADDRINUSE` 恢复证据仍来自 exact implementation 上的确定性真实 socket/Node 回归。`uFBj6h` 是 DEVELOPMENT 证据，不是 formal canary、48 小时耐久或 release candidate 证明。
+
+## 实际 Skill 表面的 GJ-2 DEVELOPMENT 旅程
+
+### 身份、准入与一次 START
+
+- business identity：`GJ2-DEVELOPMENT-A43hpY`；唯一 Codex task/thread：`019fc262-8025-7001-923c-0957b69b8fdd`。
+- v5 Skill candidate：`7fdacb45781751cc2a33968ebcbed8057ede7f70`。实际开发态安装只有 `SKILL.md` 与 `agents/openai.yaml`，blob 分别为 `48cb0688ec39386bca1fceda7a3579b767d59034`、`6295d897c694e67785f25c04987ce2a5b1914d86`，均与该 commit 匹配。显式 `$loopskill5` 加载已有直接证据；全局 description budget 下的隐式自然语言发现仍为未知。
+- source 为只读仓库 `/Users/peachy/Documents/自媒体之路/nepha-content-os` 的 exact commit `74051fbaecced9feb326fe53bff43738fd439856`；Git archive SHA-256 为 `87c3a36c66d3959842e818b04323ff0a4b938888d83e175d5572a4fd634b7bf7`。中文副本位于 `/tmp/loopskill-v5-gj2.A43hpY/中文项目验证/nepha-content-os`，初始 44 文件 manifest 为 `be8d843eab097f7396ba74ce311fcc9cafc264699dfb652994a71d8499a520f6`。
+- 同一 PREPARE 先诚实保留 read-only Host 阻断；`workspace-write` 下 owner-only sentinel create/read/remove 通过，但 `listen(127.0.0.1:0)` 精确失败为 `EPERM`。切换到 Owner 已授权的 `danger-full-access` 技术 profile 后，只做同一短命 loopback 探针并通过：端口 `50905`，62-byte request SHA-256 `6338db8c97c2606e49844a09cbd3d4aeac0d623aa2260e4d2caecb7d09c43357`，63-byte response SHA-256 `03b92981c0cfb1d8ef4de0efa9152b5dd6a2f0e6d8e0eb69f180eedf5eabff5c`，关闭后无 listener。
+- Skill 随后在同一 task、同一 identity 重展示 exact 12 项 READY Launch Contract；`2026-08-02T12:49:51.164Z` 收到唯一一条独立 `START`。直到最终 Gate，外层没有发送继续、路径、端口、Store、CSRF、内容或恢复答案；没有第二次 START、新 task、Goal、worker thread 或 heartbeat。
+
+### 业务结果与内部恢复
+
+真实产品入口为副本中的 `src/server.js`，数据根为 `/tmp/loopskill-v5-gj2.A43hpY/private/nepha-data`，业务端口为动态 loopback `52447`。固定输入保留末尾 LF，257 UTF-8 bytes，SHA-256 为 `24590244fb4cbe71099e8d417751c0933ddcd1ed956bf4fa4ed2650675f33025`。
+
+第一次客户端脚本在 HTTP 前因 CommonJS 与 top-level await 的解析冲突退出；数据库 readback 为零业务效果后，Skill 自行改用 ESM。第二次在英文 v2 已创建后因 verifier 错把历史英文 v1 断言为 `invalidated` 而停止；Skill 先 readback 出产品真实语义为 v1 `current=false`、旧质量结果失效，再从 v2 之后继续，没有重放创建、主题、Brief、四包生成或 revision。两次均未请求技术救援，也没有不明效果或盲重发。
+
+| current 包 | version | package digest | exact Approval | ExportRecord / manifest SHA-256 |
+| --- | ---: | --- | --- | --- |
+| `x:zh-CN` | 1 | `05bb0dcd787116a0341e3ac2bf76fb9f3ea8688b50c375d5dc7b2860f412030d` | `a8dae1c8-36c7-4229-8eee-e083fee5efdf` | `export:9d3987b8-3b07-4578-bef5-b087f4263bc0:GJ2-DEVELOPMENT-A43hpY:export:x:zh-CN:v1` / `f72bd3b9a7164332a8a6d2192ce4f568d5edfb0be2e4f2ac777e5610a481f3d0` |
+| `x:en` | 2 | `f5da725a463074f9d8584ce4d5d0c1c04ae3658741250b3ce718219249ffda2a` | `b3bc6d76-5354-4fd6-b01f-75ce7bbf877b` | `export:a361308d-98a4-415b-9937-97cfa77d68f9:GJ2-DEVELOPMENT-A43hpY:export:x:en:v2` / `cdc18c8701bb3d3f388dbbfc4888d785501fe61aa789052ecff8e5312fbd490e` |
+| `xiaohongshu:zh-CN` | 1 | `da61b8b2fd051f6ace6cbeefe2e22ce793db9cfd4cf31a87222b7bd0928c3d41` | `a75db2ab-a8ff-4e16-92ea-7ecd31ae5dcc` | `export:ccfc8687-32eb-4e17-b67e-9780759ca93a:GJ2-DEVELOPMENT-A43hpY:export:xiaohongshu:zh-CN:v1` / `75d83508ab7abc3a3d460882c63680467b21fefa55de19cfcf6a651ed8ab5472` |
+| `wechat:zh-CN` | 1 | `e13be2a86b5f811321f89192f78288873786a9d54e90f64a3781058a8e09d336` | `4ad613a9-fcd0-4758-a380-1c5e55971117` | `export:df8d0f62-d34a-420b-a559-6271301c856c:GJ2-DEVELOPMENT-A43hpY:export:wechat:zh-CN:v1` / `014ea2c189e9bad3ed916f150403016612346b3a005880fdd7051b7db7cdb2f6` |
+
+英文 v1 `7fe1c03f-8d54-4261-ad03-c21ad55639e0` 的 deterministic 检查通过、semantic fixture 因 `bilingual_meaning_drift` 拒绝；它没有 Approval 或 ExportRecord。英文 v2 随后独立通过两个质量类、批准与导出。四个 current 包合计 8 个 active PASS QualityResult、4 个 exact package Approval、4 个 ExportRecord 和 8 个内容寻址文件。
+
+服务计划停止后以同一数据根重启并取得新 Session；API、数据库、依赖链、四个内容文件和四个 manifest 均精确 readback。restart-open 数据库为 schema v1、revision `61`、36 条记录、SHA-256 `a5fc39a65c67a455b7f65f249bf0825687fbe710aeb0bb8594797c89f47f2d28`。最终再次停止服务，`52447` 无 listener；`publications=[]` 且 `PublicationRecord=0`。最终报告首先指出到达 Owner 发布判断，推荐不公开并明确测试型 fixture 不等于编辑背书。
+
+### 外部效果 readback 与严格判定
+
+- source 最终仍为 clean exact commit；中文副本仍恰好 44 文件且 manifest 未变，代码修改、commit、push、remote、PR、部署和平台发布均为 0。既有源仓库 listener `127.0.0.1:4317` 仍为 PID `62719`，未被本任务停止或复用。
+- v4 安装树仍为 67 文件、manifest `e2bbbf514e7d2821e732506320fa013d858f2030a16ce72c139653e1bb3a89ce`；未读取或迁移 v3/v4 业务数据。Codex `config.toml` 与 `auth.json` 最终 SHA-256 分别仍为 `e6939d175d6ccdc1db5512d519948658ed4e74ed972652b5947e2c018c804505`、`01679363d8ddb1357677ecafedbf59757368ad40a2a6f39a4191adf80b53f6fd`。
+- owner-only 数据根保留供审阅：10 个 0700 目录、9 个 0600 文件、symlink 为 0。临时 v5 安装最终从 `/Users/peachy/.codex/skills/loopskill5` 可恢复地移动到 `/Users/peachy/.Trash/loopskill5-development-install-A43hpY`；安装目标已不存在，备份仍是上述两个 exact blob，v4 未动。
+- 业务执行没有调用外部工作流、平台或网络工具；但 Codex Host 本身存在模型控制面流量，并观察到一次失败的插件目录预热，因此不主张系统级网络为 0。
+- 从唯一 START 到最终消息 `2026-08-02T13:10:49.573Z` 实际约 `20 分 58.4 秒`，超过合同“保守约 15 分钟”的无人值守预期。无人值守仍成立，但合同的时长预测不准确。
+- 本身份只对四个 exact version 各执行一次导出。最终只有 4 个 ExportRecord 和 8 个内容文件，证明没有重复效果；但没有真实发起第二次同版本导出，因此 GJ-2 规格中的“重复导出返回相同逻辑结果和 manifest identity”仍缺直接证据，不能从幂等键设计或最终计数推定为已通过。
+
+因此本身份的准确结论是 **`OWNER_GATE_REACHED / DEVELOPMENT BUSINESS PATH PASS / GJ2 SPEC GAPS REMAIN`**，不计为完整 GJ-2 黄金旅程 PASS。它也不是连续第二次干净运行、全新正式安装、故障注入 canary 或 release candidate 证据。IB-08 仍缺等待/报告同源 effect fact 的真实用户表面回归；IB-11 仍缺运行中缩小范围与旧批准失效的原始冲突复现。
