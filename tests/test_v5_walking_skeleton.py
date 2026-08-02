@@ -175,6 +175,7 @@ class WalkingSkeletonTests(unittest.TestCase):
         contract = loopskill5.prepare(str(self.workspace), loopskill5.REQUEST)
         self.assertTrue(contract.startswith("# LoopSkill 5.0 Launch Contract"))
         self.assertIn("合法 POST 非 501", contract)
+        self.assertIn("端口竞态时换临时端口重建一次", contract)
         contract_path = loopskill5._preparation_path(self.workspace)
         self.assertEqual(contract_path.stat().st_mode & 0o777, 0o600)
         self.assertIn(loopskill5.FACTS_MARKER.strip(), contract_path.read_text(encoding="utf-8"))

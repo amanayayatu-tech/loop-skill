@@ -221,7 +221,7 @@ def _contract_body(workspace: Path, tools: dict[str, Any]) -> str:
             "关键验收：合法 POST 非 501；缺 Origin、Session 或 CSRF 均拒绝；私密原文不回显。",
             f"写范围：仅 {workspace}/src/server.js 与 {workspace}/test/server.test.js；Owner note 保持 exact bytes。",
             "已验证：exact HEAD、workspace 写权限、0700 scratch、loopback、Codex/Node/Git exact executable。",
-            "自动处理：测试注入的首次 verifier exit 73 后只重建 verifier 一次；Worker 绝不重跑。",
+            "自动处理：测试注入的首次 verifier exit 73 后只重建 verifier 一次；真实 verifier 遇一次端口竞态时换临时端口重建一次；Worker 绝不重跑。",
             "业务 Gate：无。START 后不请求技术性人工介入。",
             "停止边界：指纹漂移、越界 diff、Owner note 变化、外部效果不确定或真实 HTTP 失败。",
             "外部效果：Codex 使用 workspace-write sandbox；明确禁止项目外部网络、commit、push、发布和仓库外写入。",
