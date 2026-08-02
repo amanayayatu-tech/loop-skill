@@ -116,10 +116,15 @@ wait, and read back the actually persisted heartbeat target and status before
 committing to the wait; requested parameters are not evidence. Do not create a
 new task or a second worker thread to simulate continuation.
 
-For a natural wait, reserve an explicit contract window between `not_before`
+For a natural wait, capture `delivery_observed_at` immediately on turn entry,
+before any verifier. Reserve an explicit contract window between `not_before`
 and the final completion deadline for Host scheduling/delivery plus wake-time
 verifier and business execution, sized from real probes; a wake beginning
 before the deadline does not prove the business effect completed on time.
+Treat Host cadence and internal phase estimates as capacity-planning inputs,
+not additional hard Gates, unless the user's business requirement explicitly
+makes them Gates. Enforce only the promised `not_before`, business-effect
+deadline, and final-completion deadline.
 
 For a natural wait, keep at most one owner-only, human-readable effect fact
 containing the business identity, `not_before`, known effect key and digest,

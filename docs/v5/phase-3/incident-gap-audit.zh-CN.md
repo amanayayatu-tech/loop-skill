@@ -195,3 +195,20 @@ run identity `pQPjua` 绑定 clean candidate `ae8284c2ffeec0d2a9e9e5f613b09976e8
 本身份永久分类为 **`DEVELOPMENT FAIL / LATE_EFFECT_AFTER_ACCEPTANCE_WINDOW`**。B 的 bytes 与 digest 正确不能覆盖时长 Gate；不得重试、删除 B、改判、复活或把该身份写成 IB-08/GJ-3 PASS。它也不证明 48 小时、多日、OS 关机恢复或任意 task crash recovery，IB-08 仍保持未闭合。
 
 最窄根因是 Launch Contract 容量预算不足：300 秒总完成窗把前 180 秒全部分配给 `not_before`，首次早醒又占用一次 Host cadence；合格 delivery 到来时只剩 `35.667s`，而同源 fact/A readback 与 B 业务写入实际约需 `55.953s`。因此“唤醒在截止前开始”不等于“业务效果在截止前完成”。修正应在 START 前用真实探测为 Host 调度/投递和醒后 verifier/业务执行预留明确预算，不需要 Controller、retry、状态机、schema 或新恢复层。
+
+## 实际 Skill 表面的第二个 GJ-3 DEVELOPMENT 失败身份
+
+### 不可变身份、时间与效果 readback
+
+- business identity 永久固定为 `GJ3-DEVELOPMENT-SURFACE-NKxcK6`，task/thread 仍为 `019fc1d7-b776-7583-a5c8-cdea92f7e458`。唯一 owner-only fact 形成于 `2026-08-02T15:25:02.321Z`，`not_before=15:27:02.321Z`；内部容量预测另写为 `latest Host delivery=15:29:02.321Z`，真正业务 effect deadline 为 `15:30:32.321Z`，final completion deadline 为 `15:33:02.321Z`。
+- Host 在 `15:28:22.477Z` 实际原生投递同一 thread，早于内部预测的 latest delivery `39.844s`。wake 热路径的 pre-effect validation 到 `15:29:34.047Z` 才完成；此时 B 仍不存在，但距真正业务 effect deadline 仍有 `58.274s`。
+- artifact A 保持 195 bytes（含末尾 LF）、effect key `GJ3-DEVELOPMENT-SURFACE-NKxcK6:artifact-A:v1`、effect count `1`，SHA-256 精确为 `62abab106dbc2446dbd62d151d1a25f204e3ee668ef37fdfed61c59917f7a89c`；artifact B 从未创建，effect count 为 `0`。workspace 仍为 unborn `main`、commit count `0`、remote 为空、Git status 仅 `?? artifact-A.txt`。
+- 唯一 0600 fact 追加失败终态后 SHA-256 为 `df01a4f04069489430e6ed1dadd8db42bab2f231540262073858264938738ebb`。唯一 heartbeat `loopskill-v5-gj3-surface-nkxck6` 已由受支持 API 删除；automation 目录与 identity 搜索均回读为不存在，不会再次投递。
+- START 后外层技术消息为 `0`。任务业务工具的 network、commit、push、publication 与 deploy 效果均为 `0`；这不包含 Codex Host 必需的模型/控制面流量，也不主张系统级 network 为零。
+
+### 同一 START 内部自恢复与最窄根因
+
+- START 准入第一次通过自由 PATH 调用 `find`、`sort`、`tr` 与 `ps` 时得到 `command not found`；在任何业务写入和 heartbeat 创建前，系统改用 `/usr/bin/find`、`/usr/bin/sort`、`/usr/bin/tr` 与 `/bin/ps` 完成同一只读复核。heartbeat 第一次 create 又因 API 不接受显式 `id` 参数而零持久化效果拒绝；系统移除该不支持参数后创建并实际 readback 同一约定 identity。两项技术故障都在同一 START 内自主闭合，没有外层提示、第二次 START、第二 heartbeat 或新 task。
+- 真正根因不是所有时限都应扩大。heartbeat prompt step 5 在 identity、目录、fact、heartbeat、Git 与 A 的重复 readback 之后，拿当时机器时间比较内部 `latest Host delivery` 预测，并把预测升级为新的硬停止。真实 delivery 已在预计窗内，`not_before` 已满足，B 的业务 deadline 尚未到；重复 verifier 又让 delivery 到 validation 耗时 `71.570s`。这是内部技术里程碑冒充业务 Gate 与 wake 热路径过度验证的组合失败，不需要 Controller、retry、状态机、schema、scheduler 或 wrapper。
+
+本身份永久分类为 **`DEVELOPMENT FAIL`**，已知效果固定为 **A=1/B=0**；不得补写 B、重试、改判、复活或把它写成 IB-08/GJ-3 PASS。后续语义只要求 turn 入口先捕获真实 `delivery_observed_at`，将 Host cadence/phase 估算保留为 START 前容量规划，并在运行期只执行已承诺的 `not_before`、真实业务 effect deadline 与 final completion deadline。
