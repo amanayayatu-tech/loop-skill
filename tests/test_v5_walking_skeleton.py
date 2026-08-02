@@ -237,6 +237,7 @@ class WalkingSkeletonTests(unittest.TestCase):
         self.assertIn("真实 loopback POST 返回 HTTP 201", report)
         self.assertIn("/today、/inbox、/content、/settings 真实 loopback GET 均为 200", report)
         self.assertIn("verifier 首次 crash 后重建 1 次", report)
+        self.assertIn("只证明固定 DEVELOPMENT GJ-1", report)
         self.assertFalse(loopskill5._preparation_path(self.workspace).exists())
         self.assertEqual((self.workspace / loopskill5.OWNER_NOTE).read_bytes(), loopskill5.OWNER_NOTE_BYTES)
 

@@ -587,7 +587,7 @@ def start(
             f"恢复：Worker 1 次；verifier {verifier_summary}；Worker 未重跑。",
             "Diff：仅 src/server.js 与 test/server.test.js；Owner note exact digest 未变；HEAD 未变。",
             "外部效果边界：workspace-write sandbox 与明确 prompt 禁止项目外部网络；commit 0；push 0；发布 0。",
-            "限制：本结果只证明 Phase 2 DEVELOPMENT GJ-1，不证明通用任务、自动 wake 或 48 小时耐久。",
+            "限制：本结果只证明固定 DEVELOPMENT GJ-1，不证明通用任务、自动 wake 或 48 小时耐久。",
         )
     )
 
