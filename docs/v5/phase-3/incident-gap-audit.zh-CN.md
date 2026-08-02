@@ -1,6 +1,6 @@
 # Phase 3 事故行为缺口审计
 
-状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS`
+状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS`
 
 证据日期：`2026-08-02`（Asia/Shanghai）
 
@@ -20,7 +20,7 @@
 | `IB-10` | `GJ1 已有直接证据` | Phase 3 在同一 GJ-1 START 中依次注入 verifier exit 与真实端口竞态，保留同一 Worker 结果并最终真实验收通过；这只证明已知两类技术故障，不外推任意宽 Goal 的通用重规划。 |
 | `IB-11` | `仍缺真实复现` | 尚未执行 GJ-2 的 Owner 跳过 Telegram/缩小范围路径，不能证明原身份继续、旧批准失效和最终主张降格。 |
 | `IB-12` | `GJ1 已有直接证据` | Phase 1 在测试全绿时真实复现 501；GJ-1 再以真实 POST 201、安全拒绝和无回显闭合固定业务路径。 |
-| `IB-13` | `GJ3 才能证明` | 2–5 分钟 DEVELOPMENT spike 已证明一次退出占用后的 same-thread Host wake 与 A 效果不重复；300 秒观察窗口的独立终止语义、跨自然日和 48 小时耐久仍未证明。 |
+| `IB-13` | `GJ3 才能证明` | >300 秒 DEVELOPMENT regression 已证明等待不依赖一个已定向 TERM 的 disposable child，且 same-thread wake 后 A 不重复；该 child 不是 task 进程，因此原始 task-process 终止、跨自然日和 48 小时耐久仍未证明。 |
 | `IB-14` | `仍缺真实复现` | 尚未从公开 v3/v4 tag 与真实安装器字节验证原样并存，以及 v5 安装/卸载不触碰旧身份；该发布矩阵仍待后续阶段。 |
 
 ## GJ-3 DEVELOPMENT 原生 same-thread wake spike
@@ -50,6 +50,21 @@ Desktop 创建唯一临时 heartbeat `loopskill-v5-gj3-development-wake-ksgzsl`�
 允许主张：当前 Codex Desktop Host 能在约两分钟的 DEVELOPMENT 等待中，退出原 turn 后以同一 thread 重新进入，readback 既有效果且不重复 A，再完成 B；技术性人工介入为 `0`。
 
 不允许主张：这不是 48 小时运行，没有跨两个自然日，也没有证明操作系统睡眠/关机恢复、长期调度可靠性、300 秒历史终止事故的完整复现或多日级发布耐久。系统级网络活动没有被监控，因此外部网络边界只限于本 spike 没有发起项目外网络工具调用。
+
+## GJ-3 >300 秒 child-termination DEVELOPMENT regression
+
+business identity 为 `GJ3-DEVELOPMENT-OVER300-MzUovw`，架构门 candidate 为 `2549964d8a4e1dffd2db56c378df476cca5b6fc7`。disposable workspace HEAD 为 `f5f95b980e061e5bf8b1fee21ddab2c773579911`，remote 为空；0700 private root 中唯一 0600 事实文件 SHA-256 为 `7cc50d0d834a065c3e931451cdbe834862232e31019597ad21704dcf23b8cee9`。
+
+- artifact A effect key 为 `GJ3-DEVELOPMENT-OVER300-MzUovw:artifact-A:v1`，SHA-256 为 `df96c1a1725de952b675bd701aea5daada9b434d5c50503d60278d7846b3863a`，等待前写入次数为 `1`。
+- 唯一 disposable child PID `70186` 于 `2026-08-02T11:32:18Z` 启动，argv 绑定本 identity；确认 A/effect 后只对该 PID 发送 TERM。它于 `11:32:43Z` 以 `143` 退出，后续 `ps` readback 始终为不存在。
+- 唯一 native heartbeat `loopskill-v5-gj3-over-300s-development-wake-mzuovw` 创建于 `2026-08-02T11:34:46.877Z`，target thread 精确为 `019fc1d7-b776-7583-a5c8-cdea92f7e458`。`11:41:19.451Z` 的首次同线程触发早于 `not_before=11:41:30Z`，因此零写入结束并保留同一 heartbeat。
+- `2026-08-02T11:48:47.629Z`，同一 heartbeat 再次原生进入当前 thread；从创建到本次 wake 实际为 `840.752` 秒。事实、HEAD、empty remote、唯一 A status、A digest、B 不存在和 child PID 不存在全部匹配后，artifact B 写入一次。
+- artifact B effect key 为 `GJ3-DEVELOPMENT-OVER300-MzUovw:artifact-B:v1`，SHA-256 为 `2aeefb192c62a84397fff582f4b73b412b1b4c9fcf70ab6f92b1b175cac6724b`，并引用 A exact digest。最终 A/B effect count 各为 `1`，A digest 未变，Git status 仅为两个 untracked artifact，HEAD 未变、remote 为空；没有 commit、项目外网络工具调用或 publication。
+- heartbeat 删除成功；截至 `2026-08-02T11:50:30Z`，automation 文件与 identity 搜索均 readback 为不存在。
+
+允许主张：当前 Host 能在同一 thread 以超过 300 秒的自然等待重新进入；等待不依赖该 disposable child 的存活，且已知 A 在 child 终止后没有被重写。技术性人工介入为 `0`。
+
+不允许主张：该 child 不是 Codex Desktop、Host task 或当前 task 进程，因此本回归不证明任意 task crash recovery；也不证明 48 小时、多日、跨自然日、OS 睡眠或关机恢复。第一次过早触发的零写入只证明当前 `not_before` Gate，不扩大调度耐久主张。
 
 ## IB-02 / IB-05 确定性回归
 
