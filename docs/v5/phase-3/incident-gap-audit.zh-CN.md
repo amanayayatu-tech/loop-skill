@@ -15,7 +15,7 @@
 | `IB-05` | `GJ1 已有直接证据` | Phase 3 以真实 socket 抢占 verifier 选定端口并观察 Node `EADDRINUSE`；系统只换临时端口重建 verifier 一次，真实 loopback 随后通过，Worker 仍为 `1`。listener 权限失败仍没有独立真实输入。 |
 | `IB-06` | `GJ1 已有直接证据` | exact Host spike 与 GJ-1 都证明相同 workspace-write 模式能真实写目标 workspace；不支持自动 wake 或更宽权限主张。 |
 | `IB-07` | `GJ1 已有直接证据` | 真实 GJ-1 注入 verifier exit `73`，只重建 verifier 一次且 Worker 调用仍为 `1`。 |
-| `IB-08` | `仍缺真实复现` | v5 当前没有 PAUSED/Active 用户投影；尚无可执行冲突输入，不能把“不存在该表面”写成 PASS。 |
+| `IB-08` | `仍缺真实复现` | GJ-3 的单一等待事实、heartbeat readback 与最终报告保持一致，但 v5 当前没有 PAUSED/Active 用户投影，也没有原始冲突输入；不能把“不存在该表面”写成 PASS。 |
 | `IB-09` | `GJ1 已有直接证据` | 真实运行前后 target status 只含两项允许修改与 Owner note，私有 handoff 位于 scratch 并在 START 后失效；其他 runtime 类型尚未验证。 |
 | `IB-10` | `GJ1 已有直接证据` | Phase 3 在同一 GJ-1 START 中依次注入 verifier exit 与真实端口竞态，保留同一 Worker 结果并最终真实验收通过；这只证明已知两类技术故障，不外推任意宽 Goal 的通用重规划。 |
 | `IB-11` | `仍缺真实复现` | 尚未执行 GJ-2 的 Owner 跳过 Telegram/缩小范围路径，不能证明原身份继续、旧批准失效和最终主张降格。 |
