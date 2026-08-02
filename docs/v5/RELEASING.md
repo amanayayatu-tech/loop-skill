@@ -18,7 +18,7 @@ The branch, DEVELOPMENT journeys, a local install, PR, merge, or tag alone is no
 Start from a clean branch based on current `origin/main`. Confirm:
 
 1. the Skill inventory is exactly two regular files and zero symlinks;
-2. the root v4 `VERSION`, installer/runtime, tests, old tags, and release notes are unchanged except additive multi-product documentation;
+2. the root v4 `VERSION`, installer/runtime, workflow, old tags, and v4 release notes are unchanged; existing v4 checks remain in force, and any shared-validator adjustment only admits the authorized v5 docs/workflow without weakening a v4 assertion;
 3. no DEVELOPMENT harness or Phase 2–4 raw run evidence entered the branch;
 4. tracked files contain no local home path, LoopSkill scratch path, Codex task/thread/session identity, real credential, private transcript, or private evidence;
 5. README, quickstarts, CHANGELOG, SECURITY, this runbook, release notes, and CI describe one consistent two-file identity.
