@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [5.0.0] - Unreleased
+
+### Added
+
+- Added the independent two-file `loopskill5` Codex Skill product for proactive
+  preparation, a human-readable 12-item Launch Contract, one START, Host-native
+  continuation, true business Gates, and business-first reporting.
+- Added public v5 quickstarts, release notes, direct surface/distribution/privacy
+  checks, and a v5-only CI workflow while retaining the existing v4 CI.
+
+### Distribution boundary
+
+- v5 installs through the system Codex Skill Installer from the exact
+  `loopskill5` path at an annotated release tag. It has no bundled runtime,
+  installer wrapper, Controller, database, daemon, queue, migration, or v4
+  compatibility layer.
+- The root `VERSION=4.2.0` and `scripts/install.sh` remain the independent v4
+  runtime identity and behavior. v5 installation and recoverable uninstallation
+  must leave v3/v4 installations and data byte-for-byte unchanged.
+
+### Validation boundary
+
+- DEVELOPMENT golden journeys are supporting product evidence, not formal
+  canary or release evidence. Publication still requires an exact clean
+  candidate, formal authorized journeys including the 48-hour GJ-3, real old-tag
+  coexistence, privacy/secret review, independent review, PR/main/tag CI, and
+  public tag/Release readback.
+
 ## [4.2.0] - 2026-08-02
 
 ### Added
