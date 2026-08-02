@@ -71,6 +71,7 @@ class LoopSkill5SurfaceTest(unittest.TestCase):
             "Stop only at a true business Gate",
             "contract-authorized local permission repair",
             "New permissions, external authorization, or any expansion of authority",
+            "distinguish Codex Host-required control-plane/model traffic from task business-tool network effects",
             "Use emergency stop as the safety brake",
             "Report the business result first",
             "loopskill5-private",

@@ -89,6 +89,7 @@ confirmation:
 
 Keep internal control details out of the contract. START is a delivery
 commitment, not permission to discover whether the task can run.
+In the contract and final report, distinguish Codex Host-required control-plane/model traffic from task business-tool network effects; never expand zero task network effects into a claim of zero system-level network traffic.
 
 ## Confirm once
 

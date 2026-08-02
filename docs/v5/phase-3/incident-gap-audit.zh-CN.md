@@ -1,6 +1,6 @@
 # Phase 3 事故行为缺口审计
 
-状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS / GJ2_OWNER_GATE_REACHED_WITH_GAPS`
+状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS / GJ2_OWNER_GATE_REACHED_SPEC_INCOMPLETE`
 
 证据日期：`2026-08-02`（Asia/Shanghai）
 
@@ -134,6 +134,6 @@ run identity `pQPjua` 绑定 clean candidate `ae8284c2ffeec0d2a9e9e5f613b09976e8
 - owner-only 数据根保留供审阅：10 个 0700 目录、9 个 0600 文件、symlink 为 0。临时 v5 安装最终从 `/Users/peachy/.codex/skills/loopskill5` 可恢复地移动到 `/Users/peachy/.Trash/loopskill5-development-install-A43hpY`；安装目标已不存在，备份仍是上述两个 exact blob，v4 未动。
 - 业务执行没有调用外部工作流、平台或网络工具；但 Codex Host 本身存在模型控制面流量，并观察到一次失败的插件目录预热，因此不主张系统级网络为 0。
 - 从唯一 START 到最终消息 `2026-08-02T13:10:49.573Z` 实际约 `20 分 58.4 秒`，超过合同“保守约 15 分钟”的无人值守预期。无人值守仍成立，但合同的时长预测不准确。
-- 本身份只对四个 exact version 各执行一次导出。最终只有 4 个 ExportRecord 和 8 个内容文件，证明没有重复效果；但没有真实发起第二次同版本导出，因此 GJ-2 规格中的“重复导出返回相同逻辑结果和 manifest identity”仍缺直接证据，不能从幂等键设计或最终计数推定为已通过。
+- 本身份只对四个 exact version 各执行一次导出。Phase 0 GJ-2 规格中的“重复导出返回相同逻辑结果和 manifest identity”没有逐项映射进本次 Launch Contract，START 因而没有真实发起第二次同版本导出。最终只有 4 个 ExportRecord 和 8 个内容文件，证明没有重复效果，但不能从幂等键设计或最终计数推定该漏项已通过。
 
-因此本身份的准确结论是 **`OWNER_GATE_REACHED / DEVELOPMENT BUSINESS PATH PASS / GJ2 SPEC GAPS REMAIN`**，不计为完整 GJ-2 黄金旅程 PASS。它也不是连续第二次干净运行、全新正式安装、故障注入 canary 或 release candidate 证据。IB-08 仍缺等待/报告同源 effect fact 的真实用户表面回归；IB-11 仍缺运行中缩小范围与旧批准失效的原始冲突复现。
+因此本身份的准确结论是 **`OWNER_GATE_REACHED / GJ2_SPEC_INCOMPLETE`**，不得记为 GJ-2 PASS。它也不是连续第二次干净运行、全新正式安装、故障注入 canary 或 release candidate 证据。IB-08 仍缺等待/报告同源 effect fact 的真实用户表面回归；IB-11 仍缺运行中缩小范围与旧批准失效的原始冲突复现。
