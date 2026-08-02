@@ -1,6 +1,6 @@
 # Phase 3 事故行为缺口审计
 
-状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / IB02_IB05_REGRESSION_PASS`
+状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / IB02_IB05_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS`
 
 证据日期：`2026-08-02`（Asia/Shanghai）
 
@@ -59,4 +59,25 @@ IB-05 修复前，直接用例真实占用 verifier 刚选择的 loopback port�
 
 修复后同一个 port-collision 用例通过：Worker 调用 `1`，verifier 调用 `2`，第二次真实四页面与 intake loopback 验收通过。空可选环境用例也以准备好的 safe PATH 运行 exact Node 成功。最终 `tests/test_v5_walking_skeleton.py` 共 `5` 项直接回归全部 PASS，且 Python 语法与 `git diff --check` 通过。
 
-本提交后的 GJ-1 真实 Codex DEVELOPMENT 旅程尚未重新执行；因此这里是确定性事故回归，不改写 `c4608d041e4eb256bd12ec02f8087418c5debaac` 上既有真实运行身份，也不把新 commit 自动当成黄金旅程或发布证据。
+该回归提交形成时，GJ-1 真实 Codex DEVELOPMENT 旅程尚未重新执行；因此这一小节只记确定性事故回归，不改写 `c4608d041e4eb256bd12ec02f8087418c5debaac` 上既有真实运行身份。后续新 candidate 的真实运行另记于下一节。
+
+## Phase 3 candidate 上的真实 GJ-1
+
+### 保留的报告失败身份
+
+run identity `pQPjua` 绑定 clean candidate `ae8284c2ffeec0d2a9e9e5f613b09976e8bd48c2` 与入口 SHA-256 `fa7d5327f4048a6ec3179b7d9f9306a9df7e7ecad6984110e2e95c5f8cfecc21`。一次真实 START 的 intake、四页面、安全拒绝、无回显、直接测试、verifier crash 恢复和 Git readback 全部通过，但最终限制行仍错误声称“只证明 Phase 2 DEVELOPMENT GJ-1”。因此该身份永久保持 `BUSINESS_PASS / REPORTING_FAIL`，不计为 Phase 3 黄金旅程 PASS，也不在修复后复活或改判。
+
+报告修复只移除开发阶段编号，使稳定限制成为“只证明固定 DEVELOPMENT GJ-1”；5 项直接回归通过后形成新 clean candidate。
+
+### 新 candidate 成功身份
+
+- run identity：`uFBj6h`。
+- clean candidate：`b1e1a03b472a3cf7611e581c79e594ab4805ff2e`。
+- v5 入口 SHA-256：`905cdeb76e9007ecc5d81f585ba9e76fa4a7a37d5e8a97bcf63a54459c788721`。
+- target source：commit `a3b57ecea7e7e2f6e000820b06e7c895efd4a84b`；START 前只有 exact Owner note，remote 为空。
+
+一次 START 后，真实 Codex Worker 调用 `1`；注入的首次 verifier exit 后只重建 verifier `1` 次，Worker 未重跑。真实 loopback POST 返回 `201`，四页面分别为 `200 + exact data-view`，缺 Origin/Session/CSRF 分别为 `403`，私密 marker 未进入响应或 server logs，最终报告阶段边界准确。
+
+最终 readback：source repository 前后均为 clean `74051fbaecced9feb326fe53bff43738fd439856`；target HEAD 未变、remote/staged diff 为空，status 恰为两项允许修改与 Owner note；Owner note SHA-256 仍为 `0e2ec45eb2cbf607487b376c57f11c48fea06443c4748f312bb3fdb23f11aa5d`。最终 diff SHA-256 为 `e64cd3a25656a0174a87846734983ecc6e6563ce55468260facfaf2988f3f7f4`，私有 handoff 与运行进程均已不存在。
+
+本真实运行没有注入端口竞态；IB-05 的 `EADDRINUSE` 恢复证据仍来自 exact implementation 上的确定性真实 socket/Node 回归。`uFBj6h` 是 DEVELOPMENT 证据，不是 formal canary、48 小时耐久或 release candidate 证明。
