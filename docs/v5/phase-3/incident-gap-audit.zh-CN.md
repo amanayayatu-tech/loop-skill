@@ -1,8 +1,8 @@
 # Phase 3 事故行为缺口审计
 
-状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS / GJ2_A43_OWNER_GATE_REACHED_SPEC_INCOMPLETE / GJ2_SCOPQP_DEVELOPMENT_PASS / GJ3_SURFACE_DEVELOPMENT_PASS`
+状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / OVER300_CHILD_TERM_WAKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS / GJ2_A43_OWNER_GATE_REACHED_SPEC_INCOMPLETE / GJ2_SCOPQP_DEVELOPMENT_PASS / GJ3_SURFACE_DEVELOPMENT_PASS / IB11_DEVELOPMENT_PASS`
 
-证据日期：`2026-08-02`（Asia/Shanghai）
+证据日期：`2026-08-03`（Asia/Shanghai）
 
 审计基线为 [事故行为语料](../phase-0/incident-behavior-corpus.zh-CN.md)、[GJ-1 DEVELOPMENT 真实运行](../phase-2/gj1-development-run.zh-CN.md)、[Host capability spike](../phase-2/host-capability-spike.zh-CN.md) 和 [GJ-3 规格](../phase-0/golden-journey-gj3-durable-wait.zh-CN.md)。本审计不新增代码、状态、命令、schema、Store 或恢复机制；GJ-1 成功只支持其已观察固定路径，不自动闭合其他事故。
 
@@ -18,7 +18,7 @@
 | `IB-08` | `已有部分直接证据 / 原事故仍未完全闭合` | GJ-3 实际表面已有“单一 effect fact → 等待说明 → same-thread wake → 最终报告”同源的直接证据；但 v5 没有 PAUSED/Active 用户投影，权威 PAUSED、用户显示 Active 的原始冲突输入仍未复现，因此不得写成 IB-08 PASS。 |
 | `IB-09` | `GJ1 已有直接证据` | 真实运行前后 target status 只含两项允许修改与 Owner note，私有 handoff 位于 scratch 并在 START 后失效；其他 runtime 类型尚未验证。 |
 | `IB-10` | `GJ1 已有直接证据` | Phase 3 在同一 GJ-1 START 中依次注入 verifier exit 与真实端口竞态，保留同一 Worker 结果并最终真实验收通过；这只证明已知两类技术故障，不外推任意宽 Goal 的通用重规划。 |
-| `IB-11` | `仍缺真实复现` | A43hpY 已证明从一开始不含 Telegram 的固定四包合同可在原身份到达最终 Owner Gate；但没有复现运行中 Owner 跳过 Telegram/缩小范围、旧批准失效和最终主张降格，因此不改判。 |
+| `IB-11` | `DEVELOPMENT PASS` | QpLVbW 在同一 task、同一 business identity、一次 START 内先完成四包 exact-version 测试批准，再于导出前接收一次 Owner 业务范围决定；原 OutputSelection 追加版本并保留四包→三包历史，旧完整范围包、质量与批准上下文失效，只重建和导出保留三包，最终主张准确降格。该证据不等于完整四包 GJ-2、release candidate 或正式发布 PASS。 |
 | `IB-12` | `GJ1 已有直接证据` | Phase 1 在测试全绿时真实复现 501；GJ-1 再以真实 POST 201、安全拒绝和无回显闭合固定业务路径。 |
 | `IB-13` | `GJ3 才能证明` | >300 秒 DEVELOPMENT regression 已证明等待不依赖一个已定向 TERM 的 disposable child，且 same-thread wake 后 A 不重复；该 child 不是 task 进程，因此原始 task-process 终止、跨自然日和 48 小时耐久仍未证明。 |
 | `IB-14` | `仍缺真实复现` | 尚未从公开 v3/v4 tag 与真实安装器字节验证原样并存，以及 v5 安装/卸载不触碰旧身份；该发布矩阵仍待后续阶段。 |
@@ -173,6 +173,41 @@ run identity `pQPjua` 绑定 clean candidate `ae8284c2ffeec0d2a9e9e5f613b09976e8
 - 最终业务状态是 `OWNER_GATE_REACHED`，推荐不公开；没有发布调用或虚假 `PublicationRecord`。准确分类为 **`OWNER_GATE_REACHED / GJ2_DEVELOPMENT_PASS`**。
 
 本身份闭合 Phase-0 GJ-2 基础 DEVELOPMENT 路径以及 A43hpY 漏掉的真实 repeated-export acceptance，但不是冻结 release candidate 上的连续第二次全新干净环境、故障注入 canary、48 小时/多日耐久或正式发布证据。IB-08 没有因本次无等待旅程而闭合；IB-11 仍缺运行中 Owner 跳过 Telegram/缩小范围、旧批准失效和最终主张降格的原始冲突复现。
+
+## 实际 Skill 表面的 IB-11 DEVELOPMENT 成功身份
+
+### 身份、PREPARE 与唯一业务 Gate
+
+- business identity：`IB11-DEVELOPMENT-QpLVbW`；唯一 Codex task/thread：`019fc1d7-b776-7583-a5c8-cdea92f7e458`；运行绑定 clean v5 candidate `85b1a4189163e058d1371407d44f01c7d822614f`。实际安装仍只有 `SKILL.md` 与 `agents/openai.yaml`，blob 分别为 `e2f358d85a1eebfae9bb4933671db3aa0ce7f7a2`、`6295d897c694e67785f25c04987ce2a5b1914d86`，均与 candidate 匹配；显式 `$loopskill5` 在当前任务真实加载。
+- source 为只读 exact commit `74051fbaecced9feb326fe53bff43738fd439856`、tree `edb0729811c533b5a2539bbf39865097359dd789`；Git archive SHA-256 `87c3a36c66d3959842e818b04323ff0a4b938888d83e175d5572a4fd634b7bf7`。中文副本为 `/tmp/loopskill-v5-ib11.QpLVbW/中文项目验证/nepha-content-os`，44 文件、0 symlink，relative-path manifest `a1b8d461f4541cc384e2874c74935904dbd40c2760c598a476adbffa06f96169`；私有数据根为 `/tmp/loopskill-v5-ib11.QpLVbW/private/nepha-data`。
+- PREPARE 根、中文目录、副本、private 与 data root 均由 uid `501` 所有、mode `0700`、非 symlink。副本与 data root 的 owner-only `0600` sentinel 均真实 create/readback/delete；动态 loopback `127.0.0.1:52840` 完整交换并关闭。START 前 data root 为 0 文件，业务记录和 listener 均为 0。
+- 固定输入为 257 UTF-8 bytes、末尾一个 LF，SHA-256 `24590244fb4cbe71099e8d417751c0933ddcd1ed956bf4fa4ed2650675f33025`。唯一 START 的机器观察时间为 `2026-08-02T16:23:01.795Z`；从 START 到 Owner Gate 没有用户输入、第二 task、第二 START、Goal、heartbeat 或技术救援。
+- 首个真实 HTTP writer 为 PID `12656`、动态 `127.0.0.1:54578`。真实 API 完成 intake/provenance、Evidence、Claim Ledger、topic selection、PerspectiveBrief fixture confirmation、MasterDraft、四个 current 包、质量与 exact-version 测试型批准；英文 v1 真实以 `bilingual_meaning_drift` 拒绝，Approval/ExportRecord 均为 0，exact 英文 fixture 形成 v2。
+- `2026-08-02T16:25:58.760Z` 到达合同内唯一 Owner 业务 Gate并先停服。Gate readback 为 current 四包 `x:zh-CN v1`、`x:en v2`、`xiaohongshu:zh-CN v1`、`wechat:zh-CN v1`，8 个 active PASS QualityResult、4 个 exact package Approval、`ExportRecord=0`、内容寻址文件 `=0`、`PublicationRecord=0`。START 后唯一另一条人类输入是 Owner 于 `16:27:37.695Z` 作出的业务决定：“跳过小红书，保留 X 中文、X 英文、微信公众号中文”；技术性人工介入为 `0`。
+
+### 同身份缩围、旧上下文失效与自主恢复
+
+- OutputSelection 保持同一记录 `web-3174aa0e4e81ba76c255d12fb17709d3-outputs`。authority v1 于 `16:24:42.413Z` 记录四包；v2 于 `16:27:55.235Z` 追加三包 `x:zh-CN`、`x:en`、`wechat:zh-CN`。两个版本均保留在 `authorityHistory`，没有覆盖、删除、successor 或新 business identity。
+- v2 生效后，绑定旧完整范围的 5 个 PlatformPackage 记录、10 个 QualityResult 与 4 个 package Approval 在 `16:27:55.236Z` 递归失效；IntakeItem、Evidence、Claim、TopicCandidate、PerspectiveBrief 与 MasterDraft 各自的原记录保持有效。旧小红书 v1 与 Approval `b1038be5-f13a-4d65-b551-dd48a1225134` 保留历史且失效，没有替代版本。
+- Gate 前业务段结束后，inline verifier 只因把英文 v2 修订后 API 数组顺序误作固定业务顺序而退出。此时四包批准已完成且导出为 0；Skill 只用 GET 与磁盘 readback确认集合、版本和效果，没有重放 intake、主题、Brief、Draft、包生成、质量或批准。该合同内自主恢复没有用户技术输入、未知效果或盲重发，也没有新增 retry、Controller、状态或 wrapper。
+- 第二 HTTP writer 为 PID `13396`、新动态端口 `55546` 与新 Session。它只从同一 MasterDraft 生成保留范围，形成 current `x:zh-CN v2`、`x:en v4`、`wechat:zh-CN v2`；中间英文 v3 未批准、未导出。三包各有 2 个 active PASS QualityResult、1 个 exact-version fixture Approval，并各通过真实 HTTP 导出恰好一次；本身份按合同不重复导出。
+
+| 最终 current 包 | version | package digest | exact Approval | exact ExportRecord / manifest SHA-256 | content SHA-256 / bytes |
+| --- | ---: | --- | --- | --- | --- |
+| `x:zh-CN` | 2 | `e3986960357a224f20dd34425a59cd1f64a1a6f0283ca01eaea7dad85ebe3f02` | `38ffc5c1-b9f1-470d-9ff1-f6bb78765938` | `export:3211d8cf-bbdb-41f5-9571-6794b8a0f9ad:IB11-DEVELOPMENT-QpLVbW:http-export:x:zh-CN:v2` / `cf1068221762a5fd77f4e4ae3b1e43e1b412e41b4b3db6b06b8e6d67695b1ae8` | `8b07403aef90f084c6a2f3482b0a49bf40287bb9c5e029a44bd3b5dfd2a8ed37` / `466` |
+| `x:en` | 4 | `afc9cf995a792e5de47753e08d27d9fefd9e1c09c8d1065c86e418a329dab93a` | `7935f32d-9255-4c70-8f87-c2176055f312` | `export:85014b5f-3b3c-4027-8b8d-b70b4fd77582:IB11-DEVELOPMENT-QpLVbW:http-export:x:en:v4` / `73a4493b61f7e799ff0606c29a5b8fc52c06b5648b996e3438ec65db6ce2b7a5` | `3bb0ac8c9fa69afadfec91a0219b3889e229bc782b02d4c2e8f04dd00cd0fb9e` / `252` |
+| `wechat:zh-CN` | 2 | `3d7f66694f1041c2108df8d7fcd5098a9b954fea4c09b81aec3ca5a22c6629bc` | `374a3d09-7924-40fc-b6f6-f6dd5aaeb8b2` | `export:bf45897a-9e4a-4158-9ee6-64ceb8576027:IB11-DEVELOPMENT-QpLVbW:http-export:wechat:zh-CN:v2` / `f7de2d115188e4fc40e1d48eb3a13ec94c87a52dc67da7a3ab1224975de162e4` | `66f474d72ac18bb2e20a43cf0ea8637972f6c409b2074a27eaa70ac73c36a1a3` / `482` |
+
+### 重启 readback、外部效果与严格判定
+
+- 导出完成时间为 `16:29:06.075Z`；第二 writer 随后退出。第三 HTTP writer 为新 PID `13669`、新端口 `55869` 与新 Session，只做 GET/API readback；`16:30:01.394Z` 读到 OutputSelection v2、三个 current exact version、6 个 active PASS QualityResult、3 个 active package Approval、3 个 ExportRecord 与 `PublicationRecord=0`，随后最终停服。
+- 纯磁盘 verifier 于 `16:31:06.623Z` 逐项核对 package digest、Approval binding、ExportRecord、manifest bytes、content bytes、内容寻址文件名与 SHA。最终 `database.json` 为 88,215 bytes、mode `0600`、SHA-256 `fe7b998f1e676cb6d673bd30a0d04d7bf0a63f5ab75eb04aceba5adfffba6cd5`；data root 和 `files/` 为 `0700`，最终 `ExportRecord=3`、文件 `=6`、`JobRun=0`、`PublicationRecord=0`，所有私有文件为 `0600`、symlink 为 0。
+- 小红书最终 active package、active Approval、ExportRecord、manifest、内容文件和 PublicationRecord 均为 `0`。其旧包与旧批准只作为失效历史保留；最终报告没有把测试型批准写成公开背书，也没有把三包结果写成完整四包 GJ-2。
+- `16:31:36.800Z` 最终 readback 时，PID `12656`、`13396`、`13669` 均不存在，端口 `54578`、`55546`、`55869` 均无 listener，私有根无 open file。source 仍 clean exact `74051fbaecced9feb326fe53bff43738fd439856`；既有 source listener PID `62719` / `127.0.0.1:4317` 未复用或停止；archive manifest 与 candidate `85b1a4189163e058d1371407d44f01c7d822614f` 均未变。
+- v4 安装树仍为 67 文件：relative-path 聚合 SHA-256 `7eda1d15f1f33e282a7785b718db4997274a60cd2c8bcd64f5a25eeac0876e17`，absolute-path 聚合 SHA-256 `6cb22d41d9326b962ce45263b9803b1436eb7aaf7d3ea160d3da2307abb3243f`；二者是不同路径口径，不是漂移。没有读取或迁移 v3/v4 业务数据。
+- 没有外部工作流、平台访问、secret、commit、push、PR、publication 或 deployment。任务业务工具网络只有合同内动态 loopback；Codex Host 模型/控制面流量可能存在，因此不主张系统级 network 为 0。总墙钟约 `8 分 35 秒`，包含 Owner Gate 等待。
+
+因此本身份准确分类为 **`IB11_DEVELOPMENT_PASS / GJ2_FULL_FOUR_NOT_PASSED`**。它闭合 IB-11 的“原身份绑定合法范围决定、失效旧批准上下文、继续未变范围、历史保留、最终主张降格”DEVELOPMENT 旅程；不覆盖完整四包 GJ-2、连续第二次干净运行、release candidate、正式 canary、公开发布、48 小时/多日、睡眠或 OS 关机恢复。
 
 ## 实际 Skill 表面的 GJ-3 DEVELOPMENT 失败身份
 
