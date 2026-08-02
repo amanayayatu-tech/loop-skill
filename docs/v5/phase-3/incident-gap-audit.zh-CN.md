@@ -58,6 +58,7 @@ business identity 为 `GJ3-DEVELOPMENT-OVER300-MzUovw`，架构门 candidate 为
 - artifact A effect key 为 `GJ3-DEVELOPMENT-OVER300-MzUovw:artifact-A:v1`，SHA-256 为 `df96c1a1725de952b675bd701aea5daada9b434d5c50503d60278d7846b3863a`，等待前写入次数为 `1`。
 - 唯一 disposable child PID `70186` 于 `2026-08-02T11:32:18Z` 启动，argv 绑定本 identity；确认 A/effect 后只对该 PID 发送 TERM。它于 `11:32:43Z` 以 `143` 退出，后续 `ps` readback 始终为不存在。
 - 唯一 native heartbeat `loopskill-v5-gj3-over-300s-development-wake-mzuovw` 创建于 `2026-08-02T11:34:46.877Z`，target thread 精确为 `019fc1d7-b776-7583-a5c8-cdea92f7e458`。`11:41:19.451Z` 的首次同线程触发早于 `not_before=11:41:30Z`，因此零写入结束并保留同一 heartbeat。
+- 首次零写入 turn 完成 epoch 为 `1785670890`，第二次 turn 启动 epoch 为 `1785671327`；两次 turn 之间真实 Host idle 间隔为 `437` 秒。这一机器时间独立于 heartbeat 创建到 wake 的累计计时。
 - `2026-08-02T11:48:47.629Z`，同一 heartbeat 再次原生进入当前 thread；从创建到本次 wake 实际为 `840.752` 秒。事实、HEAD、empty remote、唯一 A status、A digest、B 不存在和 child PID 不存在全部匹配后，artifact B 写入一次。
 - artifact B effect key 为 `GJ3-DEVELOPMENT-OVER300-MzUovw:artifact-B:v1`，SHA-256 为 `2aeefb192c62a84397fff582f4b73b412b1b4c9fcf70ab6f92b1b175cac6724b`，并引用 A exact digest。最终 A/B effect count 各为 `1`，A digest 未变，Git status 仅为两个 untracked artifact，HEAD 未变、remote 为空；没有 commit、项目外网络工具调用或 publication。
 - heartbeat 删除成功；截至 `2026-08-02T11:50:30Z`，automation 文件与 identity 搜索均 readback 为不存在。
