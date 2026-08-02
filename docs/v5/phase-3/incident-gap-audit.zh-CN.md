@@ -1,6 +1,6 @@
 # Phase 3 事故行为缺口审计
 
-状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / IB02_IB05_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS`
+状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / IB02_IB05_IB10_REGRESSION_PASS / PHASE3_GJ1_CANDIDATE_PASS`
 
 证据日期：`2026-08-02`（Asia/Shanghai）
 
@@ -17,7 +17,7 @@
 | `IB-07` | `GJ1 已有直接证据` | 真实 GJ-1 注入 verifier exit `73`，只重建 verifier 一次且 Worker 调用仍为 `1`。 |
 | `IB-08` | `仍缺真实复现` | v5 当前没有 PAUSED/Active 用户投影；尚无可执行冲突输入，不能把“不存在该表面”写成 PASS。 |
 | `IB-09` | `GJ1 已有直接证据` | 真实运行前后 target status 只含两项允许修改与 Owner note，私有 handoff 位于 scratch 并在 START 后失效；其他 runtime 类型尚未验证。 |
-| `IB-10` | `仍缺真实复现` | GJ-1 只有一个固定 Worker 与一个 verifier 故障，没有“一个最终意图内多个独立故障”的真实输入和同身份重规划证据。 |
+| `IB-10` | `GJ1 已有直接证据` | Phase 3 在同一 GJ-1 START 中依次注入 verifier exit 与真实端口竞态，保留同一 Worker 结果并最终真实验收通过；这只证明已知两类技术故障，不外推任意宽 Goal 的通用重规划。 |
 | `IB-11` | `仍缺真实复现` | 尚未执行 GJ-2 的 Owner 跳过 Telegram/缩小范围路径，不能证明原身份继续、旧批准失效和最终主张降格。 |
 | `IB-12` | `GJ1 已有直接证据` | Phase 1 在测试全绿时真实复现 501；GJ-1 再以真实 POST 201、安全拒绝和无回显闭合固定业务路径。 |
 | `IB-13` | `GJ3 才能证明` | 2–5 分钟 DEVELOPMENT spike 已证明一次退出占用后的 same-thread Host wake 与 A 效果不重复；300 秒观察窗口的独立终止语义、跨自然日和 48 小时耐久仍未证明。 |
@@ -58,6 +58,8 @@ exact implementation commit：`b6fa01acdb4271a4aa653993c92762ab1c44df30`；v5 �
 IB-05 修复前，直接用例真实占用 verifier 刚选择的 loopback port；Node 因 `EADDRINUSE` 退出，现有入口错误停止为 `real verifier failed: loopback server did not become ready`。修复只把该 exact stderr 分类为 port collision，并在保留 Worker diff 后重建 verifier 一次；没有 retry loop、attempt budget、公开恢复状态或新模块。
 
 修复后同一个 port-collision 用例通过：Worker 调用 `1`，verifier 调用 `2`，第二次真实四页面与 intake loopback 验收通过。空可选环境用例也以准备好的 safe PATH 运行 exact Node 成功。最终 `tests/test_v5_walking_skeleton.py` 共 `5` 项直接回归全部 PASS，且 Python 语法与 `git diff --check` 通过。
+
+随后 test-only commit `346b859b62f36423df6a08f685d3437ab2afa432` 将同一用例升级为一次 START 内连续两种独立故障：verifier 依次为注入 exit、真实 `EADDRINUSE`、真实 PASS，共调用 `3` 次；Worker 仍为 `1`，最终报告准确列出两次内部恢复。没有新增 runtime 分支或用户 Gate。
 
 该回归提交形成时，GJ-1 真实 Codex DEVELOPMENT 旅程尚未重新执行；因此这一小节只记确定性事故回归，不改写 `c4608d041e4eb256bd12ec02f8087418c5debaac` 上既有真实运行身份。后续新 candidate 的真实运行另记于下一节。
 
