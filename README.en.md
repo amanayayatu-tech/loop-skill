@@ -13,7 +13,7 @@ LoopSkill 5 investigates the real environment before one START, recommends how t
 
 The public v5.0.0 identity exists only when GitHub Releases contains the annotated `v5.0.0` tag, the two exact Skill blobs at that tag, and the matching GitHub Release. Only after [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) lists it, use the system `$skill-installer` with `https://github.com/amanayayatu-tech/loop-skill/tree/v5.0.0/loopskill5`; the installer refuses to overwrite an existing destination. Uninstallation only moves the exact `loopskill5` directory recoverably out of `skills`; it does not run the v4 installer or read or migrate v3/v4 data. Complete steps are in the 5.0 Chinese and English quickstarts linked above.
 
-LoopSkill 5 has no LoopSkill-owned Controller, state machine, database, daemon, queue, general retry system, or compatibility layer. If `codex-loop-prompt-architect/scripts/loopskill5` appears in development history, it is only a DEVELOPMENT harness, never the public entry, and it is absent from the v5 release branch.
+LoopSkill 5 has no LoopSkill-owned Controller, state machine, database, daemon, queue, general retry system, or compatibility layer.
 
 LoopSkill 4 users should continue with the [v4 Chinese quickstart](docs/v4/quickstart.zh-CN.md) or [v4 English quickstart](docs/v4/quickstart.en.md). Installing, using, or uninstalling v5 must not overwrite `loopskill4` or legacy data.
 

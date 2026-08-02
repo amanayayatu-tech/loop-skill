@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "loopskill5"
 EXPECTED_BLOBS = {
-    "SKILL.md": "e2f358d85a1eebfae9bb4933671db3aa0ce7f7a2",
+    "SKILL.md": "4e2cdf0a9dff398314fbe99f0ea82bb2ea978cf9",
     "agents/openai.yaml": "6295d897c694e67785f25c04987ce2a5b1914d86",
 }
 PRESERVED_V4_BLOBS = {
@@ -101,10 +101,19 @@ class LoopSkill5DistributionTest(unittest.TestCase):
             "tests.test_v5_privacy",
             "tests.test_v5_distribution",
             "permissions:\n  contents: read",
+            "fetch-depth: 0",
             "persist-credentials: false",
             "tags: [v5.0.0]",
         ):
             self.assertIn(literal, workflow)
+        tag_gate = """      - name: Require an annotated v5 release tag
+        if: github.ref == 'refs/tags/v5.0.0'
+        run: |
+          test "$(git cat-file -t refs/tags/v5.0.0)" = tag
+          test "$(git rev-parse 'refs/tags/v5.0.0^{commit}')" = "$TESTED_SHA"
+          test "$(git rev-parse 'refs/remotes/origin/main^{commit}')" = "$TESTED_SHA"
+"""
+        self.assertIn(tag_gate, workflow)
         self.assertNotIn("contents: write", workflow)
         self.assertNotIn("git push", workflow)
         self.assertNotIn("gh release", workflow)

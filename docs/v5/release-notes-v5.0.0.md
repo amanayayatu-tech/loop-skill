@@ -23,7 +23,7 @@ The root `VERSION=4.2.0`, `scripts/install.sh`, `loopskill4`, old tags/Releases,
 
 ## Deliberate non-features
 
-v5.0.0 does not add a LoopSkill-owned Controller, state machine, schema, database, daemon, queue, router, general Host adapter, general retry system, compatibility layer, or migration path. The fixed GJ-1 DEVELOPMENT harness is not a public entry or release artifact.
+v5.0.0 does not add a LoopSkill-owned Controller, state machine, schema, database, daemon, queue, router, general Host adapter, general retry system, compatibility layer, or migration path. Development-only test harnesses are not release artifacts.
 
 ## Claim limits
 

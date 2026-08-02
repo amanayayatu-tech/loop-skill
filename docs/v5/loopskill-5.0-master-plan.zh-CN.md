@@ -5,7 +5,7 @@
 - 产品版本：`LoopSkill 5.0`
 - 日期：`2026-08-02`
 - 产品负责人：Owner
-- 当前授权：允许在独立 worktree 中按本计划实施、测试、branch、commit、push、PR、CI、merge、tag 和 GitHub Release；正式 canary 与发布仅在对应 Gate 全部满足后执行；不授权 force-push、改写历史、绕过平台保护、删除旧证据或泄露/迁移秘密
+- 授权边界：正式 canary、平台写入和发布必须由 Owner 针对 exact candidate 在对应 Gate 单独授权；本文件本身不授予任何执行权限
 - 单一事实来源：本文件是 5.0 当前唯一产品总计划；后续技术设计必须引用本文件，不得另起一套产品定义
 
 > 本文中的阶段、职责和结果名称首先描述产品行为，不自动要求新增同名模块、命令、schema、状态或服务。

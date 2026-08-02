@@ -88,7 +88,7 @@ class LoopSkill5SurfaceTest(unittest.TestCase):
             "Report the business result first",
             "loopskill5-private",
             "never replace or modify the `loopskill4` Skill",
-            "never invoke, copy, or wrap the fixed GJ-1 DEVELOPMENT harness",
+            "never substitute a development-only test harness for the user's actual task",
             "Do not add or depend on a LoopSkill-owned Controller",
         )
         normalized_surface = " ".join(skill.split())

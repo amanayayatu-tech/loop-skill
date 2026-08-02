@@ -41,7 +41,10 @@ jobs:
           tests.test_v5_privacy
       - name: Require an annotated v5 release tag
         if: github.ref == 'refs/tags/v5.0.0'
-        run: test "$(git cat-file -t refs/tags/v5.0.0)" = tag
+        run: |
+          test "$(git cat-file -t refs/tags/v5.0.0)" = tag
+          test "$(git rev-parse 'refs/tags/v5.0.0^{commit}')" = "$TESTED_SHA"
+          test "$(git rev-parse 'refs/remotes/origin/main^{commit}')" = "$TESTED_SHA"
 
   distribution-ubuntu:
     name: v5 distribution (ubuntu)

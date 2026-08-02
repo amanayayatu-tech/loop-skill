@@ -13,7 +13,7 @@ LoopSkill 5 帮你在一次 START 前主动调查真实环境、给出能延长�
 
 v5.0.0 的公开身份只由 GitHub Releases 中的 annotated `v5.0.0` tag、该 tag 下的两个 exact Skill blobs 与 GitHub Release 共同建立。只有 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 已列出该版本时，才使用系统 `$skill-installer` 从 `https://github.com/amanayayatu-tech/loop-skill/tree/v5.0.0/loopskill5` 安装；目标已存在时 installer 会拒绝覆盖。卸载只把 exact `loopskill5` 目录可恢复地移出 `skills`，不运行 v4 installer，也不读取或迁移 v3/v4 数据。完整步骤见上方 5.0 中英文快速开始。
 
-LoopSkill 5 不包含自有 Controller、状态机、数据库、daemon、queue、通用 retry 或兼容层。`codex-loop-prompt-architect/scripts/loopskill5` 若出现在开发历史中也只是 DEVELOPMENT harness，不是公开入口，且不包含在 v5 发布分支中。
+LoopSkill 5 不包含自有 Controller、状态机、数据库、daemon、queue、通用 retry 或兼容层。
 
 保留的 LoopSkill 4 用户请继续使用 [v4 中文快速开始](docs/v4/quickstart.zh-CN.md) 或 [v4 English quickstart](docs/v4/quickstart.en.md)；v5 安装、使用和卸载均不得覆盖 `loopskill4` 或旧数据。
 

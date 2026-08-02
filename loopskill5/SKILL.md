@@ -22,8 +22,7 @@ Keep the identities independent:
   `loopskill5-private` identity;
 - never discover, read, migrate, rewrite, revive, or dual-write v3/v4 data;
 - never replace or modify the `loopskill4` Skill or its installation;
-- never invoke, copy, or wrap the fixed GJ-1 DEVELOPMENT harness at
-  `codex-loop-prompt-architect/scripts/loopskill5` as the user entry.
+- never substitute a development-only test harness for the user's actual task.
 
 ## Prepare before START
 
