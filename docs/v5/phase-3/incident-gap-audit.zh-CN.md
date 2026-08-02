@@ -1,6 +1,6 @@
 # Phase 3 事故行为缺口审计
 
-状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS`
+状态：`DEVELOPMENT / GAP_AUDIT_COMPLETE / SAME_THREAD_WAKE_SPIKE_PASS / IB02_IB05_REGRESSION_PASS`
 
 证据日期：`2026-08-02`（Asia/Shanghai）
 
@@ -9,10 +9,10 @@
 | ID | 当前分类 | 尚未闭合的最窄缺口 |
 | --- | --- | --- |
 | `IB-01` | `GJ1 已有直接证据` | 已证明固定 private prepare root 为 0700、handoff 为 0600 且不污染 workspace；尚未由此建设或主张通用 Store。 |
-| `IB-02` | `仍缺真实复现` | Phase 1 证明了错误 PATH 顺序会选错 Codex，GJ-1 证明 exact PATH 可运行；尚未以“自定义 env 为空”作为真实触发并断言 Worker 调用为 0。 |
+| `IB-02` | `GJ1 已有直接证据` | Phase 1 证明错误 PATH 顺序会选错 Codex；Phase 3 直接回归在清空可选 ambient env 后仍使用 prepare 绑定的安全 PATH，并以 exact Node 真实运行 `--version`。当前固定入口不接受用户自填 env，也没有为此新增 env schema。 |
 | `IB-03` | `GJ1 已有直接证据` | prepare 绑定 Codex/Node/Git，现有直接回归证明 START 前 executable 指纹漂移以 Worker 0、workspace 0 effect 拒绝；没有通用 executable registry 主张。 |
 | `IB-04` | `GJ1 已有直接证据` | 固定 Owner note 被明确记录为 START 前既有事实，最终 diff 只认两项 transition 修改；其他 artifact 的“既有事实/本次变化”语义尚未验证。 |
-| `IB-05` | `仍缺真实复现` | GJ-1 证明 verifier exit 后不重跑 Worker，但没有真实制造端口占用、listener 权限失败或 bind 竞态。 |
+| `IB-05` | `GJ1 已有直接证据` | Phase 3 以真实 socket 抢占 verifier 选定端口并观察 Node `EADDRINUSE`；系统只换临时端口重建 verifier 一次，真实 loopback 随后通过，Worker 仍为 `1`。listener 权限失败仍没有独立真实输入。 |
 | `IB-06` | `GJ1 已有直接证据` | exact Host spike 与 GJ-1 都证明相同 workspace-write 模式能真实写目标 workspace；不支持自动 wake 或更宽权限主张。 |
 | `IB-07` | `GJ1 已有直接证据` | 真实 GJ-1 注入 verifier exit `73`，只重建 verifier 一次且 Worker 调用仍为 `1`。 |
 | `IB-08` | `仍缺真实复现` | v5 当前没有 PAUSED/Active 用户投影；尚无可执行冲突输入，不能把“不存在该表面”写成 PASS。 |
@@ -50,3 +50,13 @@ Desktop 创建唯一临时 heartbeat `loopskill-v5-gj3-development-wake-ksgzsl`�
 允许主张：当前 Codex Desktop Host 能在约两分钟的 DEVELOPMENT 等待中，退出原 turn 后以同一 thread 重新进入，readback 既有效果且不重复 A，再完成 B；技术性人工介入为 `0`。
 
 不允许主张：这不是 48 小时运行，没有跨两个自然日，也没有证明操作系统睡眠/关机恢复、长期调度可靠性、300 秒历史终止事故的完整复现或多日级发布耐久。系统级网络活动没有被监控，因此外部网络边界只限于本 spike 没有发起项目外网络工具调用。
+
+## IB-02 / IB-05 确定性回归
+
+exact implementation commit：`b6fa01acdb4271a4aa653993c92762ab1c44df30`；v5 入口 SHA-256：`cba47c1b1638494eec4b13d40b651111a91eaa61258f52a8ab88201f0b9a1530`。
+
+IB-05 修复前，直接用例真实占用 verifier 刚选择的 loopback port；Node 因 `EADDRINUSE` 退出，现有入口错误停止为 `real verifier failed: loopback server did not become ready`。修复只把该 exact stderr 分类为 port collision，并在保留 Worker diff 后重建 verifier 一次；没有 retry loop、attempt budget、公开恢复状态或新模块。
+
+修复后同一个 port-collision 用例通过：Worker 调用 `1`，verifier 调用 `2`，第二次真实四页面与 intake loopback 验收通过。空可选环境用例也以准备好的 safe PATH 运行 exact Node 成功。最终 `tests/test_v5_walking_skeleton.py` 共 `5` 项直接回归全部 PASS，且 Python 语法与 `git diff --check` 通过。
+
+本提交后的 GJ-1 真实 Codex DEVELOPMENT 旅程尚未重新执行；因此这里是确定性事故回归，不改写 `c4608d041e4eb256bd12ec02f8087418c5debaac` 上既有真实运行身份，也不把新 commit 自动当成黄金旅程或发布证据。
