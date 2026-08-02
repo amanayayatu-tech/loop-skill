@@ -1,0 +1,80 @@
+name: LoopSkill 5 Release CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: [v5.0.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v5-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  TESTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  surface-privacy:
+    name: v5 surface and privacy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ env.TESTED_SHA }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+      - name: Bind checkout to the tested SHA
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+      - name: Run the v5 public surface and privacy gates
+        run: >-
+          python -B -W error -m unittest -v
+          tests.test_v5_skill_surface
+          tests.test_v5_privacy
+      - name: Require an annotated v5 release tag
+        if: github.ref == 'refs/tags/v5.0.0'
+        run: test "$(git cat-file -t refs/tags/v5.0.0)" = tag
+
+  distribution-ubuntu:
+    name: v5 distribution (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ env.TESTED_SHA }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+      - name: Bind checkout to the tested SHA
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+      - name: Run the v5 distribution contract
+        run: python -B -W error -m unittest -v tests.test_v5_distribution
+
+  distribution-macos:
+    name: v5 distribution (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ env.TESTED_SHA }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+      - name: Bind checkout to the tested SHA
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+      - name: Run the v5 distribution contract
+        run: python -B -W error -m unittest -v tests.test_v5_distribution
