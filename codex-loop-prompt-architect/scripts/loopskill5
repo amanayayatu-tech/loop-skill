@@ -83,8 +83,10 @@ def _command(
     return result
 
 
-def _git(workspace: Path, *argv: str, check: bool = True) -> str:
-    return _command(("git", "-C", str(workspace), *argv), check=check).stdout.strip()
+def _git(workspace: Path, tools: dict[str, Any], *argv: str, check: bool = True) -> str:
+    return _command(
+        (tools["git"]["path"], "-C", str(workspace), *argv), check=check
+    ).stdout.strip()
 
 
 def _regular_owner_file(path: Path, *, private: bool = False) -> None:
@@ -110,27 +112,32 @@ def _resolved_tool(name: str) -> dict[str, str]:
 def _tools() -> dict[str, Any]:
     codex = _resolved_tool("codex")
     node = _resolved_tool("node")
-    path_parts = [str(Path(codex["path"]).parent), str(Path(node["path"]).parent)]
+    git = _resolved_tool("git")
+    path_parts = [
+        str(Path(codex["path"]).parent),
+        str(Path(node["path"]).parent),
+        str(Path(git["path"]).parent),
+    ]
     for part in os.environ.get("PATH", "").split(os.pathsep):
         if part and part not in path_parts:
             path_parts.append(part)
     safe_path = os.pathsep.join(path_parts)
-    for name, expected in (("codex", codex), ("node", node)):
+    for name, expected in (("codex", codex), ("node", node), ("git", git)):
         selected = shutil.which(name, path=safe_path)
         if not selected or Path(selected).resolve(strict=True) != Path(expected["path"]):
             raise LaunchError(f"{name} identity changed in the final PATH")
-    return {"codex": codex, "node": node, "path": safe_path}
+    return {"codex": codex, "node": node, "git": git, "path": safe_path}
 
 
-def _workspace(workspace_arg: str) -> Path:
+def _workspace(workspace_arg: str, tools: dict[str, Any]) -> Path:
     workspace = Path(workspace_arg).resolve(strict=True)
     if not workspace.is_dir() or workspace.stat().st_uid != os.getuid():
         raise LaunchError("workspace is not an owner-controlled directory")
-    if _git(workspace, "rev-parse", "--show-toplevel") != str(workspace):
+    if _git(workspace, tools, "rev-parse", "--show-toplevel") != str(workspace):
         raise LaunchError("workspace must be the Git root")
-    if _git(workspace, "rev-parse", "HEAD") != EXPECTED_HEAD:
+    if _git(workspace, tools, "rev-parse", "HEAD") != EXPECTED_HEAD:
         raise LaunchError("workspace is not the exact GJ-1 source commit")
-    if _git(workspace, "remote"):
+    if _git(workspace, tools, "remote"):
         raise LaunchError("the disposable GJ-1 workspace must not have a Git remote")
     _regular_owner_file(workspace / OWNER_NOTE)
     if (workspace / OWNER_NOTE).read_bytes() != OWNER_NOTE_BYTES:
@@ -140,9 +147,16 @@ def _workspace(workspace_arg: str) -> Path:
     return workspace
 
 
-def _status(workspace: Path) -> set[str]:
+def _status(workspace: Path, tools: dict[str, Any]) -> set[str]:
     output = _command(
-        ("git", "-C", str(workspace), "status", "--porcelain=v1", "--untracked-files=all")
+        (
+            tools["git"]["path"],
+            "-C",
+            str(workspace),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        )
     ).stdout.rstrip("\n")
     return set(filter(None, output.splitlines()))
 
@@ -150,13 +164,14 @@ def _status(workspace: Path) -> set[str]:
 def _facts(workspace: Path, tools: dict[str, Any], contract_body: str) -> dict[str, Any]:
     return {
         "workspace": str(workspace),
-        "head": _git(workspace, "rev-parse", "HEAD"),
+        "head": _git(workspace, tools, "rev-parse", "HEAD"),
         "owner_note_sha256": _sha256_file(workspace / OWNER_NOTE),
         "allowed_file_baseline": {
             relative: _sha256_file(workspace / relative) for relative in ALLOWED_FILES
         },
         "codex": tools["codex"],
         "node": tools["node"],
+        "git": tools["git"],
         "contract_sha256": _sha256_bytes(contract_body.encode()),
     }
 
@@ -205,13 +220,13 @@ def _contract_body(workspace: Path, tools: dict[str, Any]) -> str:
             "本次承诺：一次 START 内完成最窄修复、直接测试、真实 loopback HTTP smoke、一次 verifier crash 恢复和业务优先报告。",
             "关键验收：合法 POST 非 501；缺 Origin、Session 或 CSRF 均拒绝；私密原文不回显。",
             f"写范围：仅 {workspace}/src/server.js 与 {workspace}/test/server.test.js；Owner note 保持 exact bytes。",
-            "已验证：exact HEAD、workspace 写权限、0700 scratch、loopback、Codex/Node exact executable。",
+            "已验证：exact HEAD、workspace 写权限、0700 scratch、loopback、Codex/Node/Git exact executable。",
             "自动处理：测试注入的首次 verifier exit 73 后只重建 verifier 一次；Worker 绝不重跑。",
             "业务 Gate：无。START 后不请求技术性人工介入。",
             "停止边界：指纹漂移、越界 diff、Owner note 变化、外部效果不确定或真实 HTTP 失败。",
             "外部效果：Codex 使用 workspace-write sandbox；明确禁止项目外部网络、commit、push、发布和仓库外写入。",
             "时长边界：本 DEVELOPMENT 纵切目标 30 分钟内；不证明自动 wake 或 48 小时耐久。",
-            f"Executable：Codex {tools['codex']['version']}；Node {tools['node']['version']}。",
+            f"Executable：Codex {tools['codex']['version']}；Node {tools['node']['version']}；Git {tools['git']['version']}。",
         )
     )
 
@@ -219,12 +234,12 @@ def _contract_body(workspace: Path, tools: dict[str, Any]) -> str:
 def prepare(workspace_arg: str, request: str) -> str:
     if request.strip() != REQUEST:
         raise LaunchError("this walking skeleton accepts only the fixed GJ-1 natural-language request")
-    workspace = _workspace(workspace_arg)
-    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
-        raise LaunchError("workspace contains changes outside the fixed Owner note")
     tools = _tools()
+    workspace = _workspace(workspace_arg, tools)
+    if _status(workspace, tools) != {f"?? {OWNER_NOTE}"}:
+        raise LaunchError("workspace contains changes outside the fixed Owner note")
     _probe_prepare_conditions(workspace)
-    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+    if _status(workspace, tools) != {f"?? {OWNER_NOTE}"}:
         raise LaunchError("prepare probes changed the workspace")
     contract = _contract_body(workspace, tools)
     facts = _facts(workspace, tools, contract)
@@ -237,7 +252,7 @@ def prepare(workspace_arg: str, request: str) -> str:
     )
     contract_path.chmod(0o600)
     _regular_owner_file(contract_path, private=True)
-    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+    if _status(workspace, tools) != {f"?? {OWNER_NOTE}"}:
         raise LaunchError("prepare contract escaped the private scratch")
     return contract
 
@@ -309,20 +324,23 @@ def _run_worker(workspace: Path, tools: dict[str, Any]) -> None:
         raise LaunchError("Codex Worker did not complete its Host event stream")
 
 
-def _assert_worker_result(workspace: Path) -> None:
-    if _git(workspace, "rev-parse", "HEAD") != EXPECTED_HEAD:
+def _assert_worker_result(workspace: Path, tools: dict[str, Any]) -> None:
+    if _git(workspace, tools, "rev-parse", "HEAD") != EXPECTED_HEAD:
         raise LaunchError("HEAD changed after START")
     if _sha256_file(workspace / OWNER_NOTE) != OWNER_NOTE_SHA256:
         raise LaunchError("Owner note changed after START")
-    if _command(("git", "-C", str(workspace), "diff", "--cached", "--quiet"), check=False).returncode:
+    if _command(
+        (tools["git"]["path"], "-C", str(workspace), "diff", "--cached", "--quiet"),
+        check=False,
+    ).returncode:
         raise LaunchError("Worker staged changes")
-    changed = set(filter(None, _git(workspace, "diff", "--name-only").splitlines()))
+    changed = set(filter(None, _git(workspace, tools, "diff", "--name-only").splitlines()))
     if changed != set(ALLOWED_FILES):
         raise LaunchError(f"Worker changed files outside the contract: {sorted(changed)}")
     expected_status = {f" M {relative}" for relative in ALLOWED_FILES} | {f"?? {OWNER_NOTE}"}
-    if _status(workspace) != expected_status:
-        raise LaunchError(f"unexpected workspace status: {sorted(_status(workspace))}")
-    _command(("git", "-C", str(workspace), "diff", "--check"))
+    if _status(workspace, tools) != expected_status:
+        raise LaunchError(f"unexpected workspace status: {sorted(_status(workspace, tools))}")
+    _command((tools["git"]["path"], "-C", str(workspace), "diff", "--check"))
 
 
 def _request(
@@ -378,6 +396,14 @@ def _verify_gj1(workspace: Path, tools: dict[str, Any]) -> dict[str, Any]:
                 time.sleep(0.05)
         if page is None:
             raise LaunchError("loopback server did not become ready")
+
+        pages = {"today": page}
+        for view in ("inbox", "content", "settings"):
+            pages[view] = _request(port, "GET", f"/{view}")
+        for view, response in pages.items():
+            marker = f'data-view="{view}"'.encode()
+            if response[0] != 200 or marker not in response[2]:
+                raise LaunchError(f"/{view} loopback page verification failed")
 
         headers = {name.lower(): value for name, value in page[1]}
         cookie = headers.get("set-cookie", "").split(";", 1)[0]
@@ -442,6 +468,7 @@ def _verify_gj1(workspace: Path, tools: dict[str, Any]) -> dict[str, Any]:
     if private_bytes in stdout or private_bytes in stderr:
         raise LaunchError("private intake text appeared in server logs")
     return {
+        "pages": 4,
         "legal": legal_status,
         "origin": origin_status,
         "session": session_status,
@@ -500,25 +527,25 @@ def start(
     worker: Worker | None = None,
     verifier: Verifier | None = None,
 ) -> str:
-    workspace = _workspace(workspace_arg)
-    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+    tools = _tools()
+    workspace = _workspace(workspace_arg, tools)
+    if _status(workspace, tools) != {f"?? {OWNER_NOTE}"}:
         raise LaunchError("workspace drifted after prepare")
     contract_path = _preparation_path(workspace)
     contract, prepared_facts = _read_prepared_contract(contract_path)
-    tools = _tools()
     current_contract = _contract_body(workspace, tools)
     current_facts = _facts(workspace, tools, current_contract)
     if contract != current_contract or prepared_facts != current_facts:
         raise LaunchError("Launch Contract, workspace, or executable drifted before START")
     _probe_prepare_conditions(workspace)
-    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+    if _status(workspace, tools) != {f"?? {OWNER_NOTE}"}:
         raise LaunchError("START probes changed the workspace")
     contract_path.unlink()
-    if _status(workspace) != {f"?? {OWNER_NOTE}"}:
+    if _status(workspace, tools) != {f"?? {OWNER_NOTE}"}:
         raise LaunchError("START preflight changed the workspace")
 
     (worker or _run_worker)(workspace, tools)
-    _assert_worker_result(workspace)
+    _assert_worker_result(workspace, tools)
 
     launch_verifier = verifier or _launch_verifier
     verifier_rebuilt = os.environ.get(INJECT_VERIFIER_EXIT) == "1"
@@ -526,16 +553,17 @@ def start(
         exit_code, payload = launch_verifier(workspace, tools, injected_exit=True)
         if exit_code != 73 or payload is not None:
             raise LaunchError("the injected verifier did not exit with the fixed zero-effect failure")
-        _assert_worker_result(workspace)
+        _assert_worker_result(workspace, tools)
     exit_code, payload = launch_verifier(workspace, tools, injected_exit=False)
     if exit_code != 0 or not payload or not payload.get("ok"):
         detail = payload.get("error") if payload else "no verifier result"
         raise LaunchError(f"real verifier failed: {detail}")
-    _assert_worker_result(workspace)
+    _assert_worker_result(workspace, tools)
     result = payload["result"]
     return "\n".join(
         (
             f"业务结果：PASS — /api/intake 真实 loopback POST 返回 HTTP {result['legal']}，原 501 已消失。",
+            "业务页面：/today、/inbox、/content、/settings 真实 loopback GET 均为 200 且 data-view 正确。",
             "安全边界：缺 Origin / Session / CSRF 均为 403；私密原文未出现在响应或 server logs。",
             "直接测试：PASS。",
             f"恢复：Worker 1 次；verifier {'首次 crash 后重建 1 次' if verifier_rebuilt else '1 次'}；Worker 未重跑。",

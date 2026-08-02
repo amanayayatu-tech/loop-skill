@@ -130,6 +130,7 @@ class WalkingSkeletonTests(unittest.TestCase):
         self.head = run_git(self.workspace, "rev-parse", "HEAD")
         (self.workspace / loopskill5.OWNER_NOTE).write_bytes(loopskill5.OWNER_NOTE_BYTES)
         node = Path(shutil.which("node")).resolve()
+        git = Path(shutil.which("git")).resolve()
         self.tools = {
             "codex": {"path": "/not-used/codex", "sha256": "c" * 64, "version": "codex-test"},
             "node": {
@@ -137,7 +138,12 @@ class WalkingSkeletonTests(unittest.TestCase):
                 "sha256": hashlib.sha256(node.read_bytes()).hexdigest(),
                 "version": subprocess.run((str(node), "--version"), check=True, capture_output=True, text=True).stdout.strip(),
             },
-            "path": os.pathsep.join((str(node.parent), os.environ.get("PATH", ""))),
+            "git": {
+                "path": str(git),
+                "sha256": hashlib.sha256(git.read_bytes()).hexdigest(),
+                "version": subprocess.run((str(git), "--version"), check=True, capture_output=True, text=True).stdout.strip(),
+            },
+            "path": os.pathsep.join((str(node.parent), str(git.parent), os.environ.get("PATH", ""))),
         }
         self.patches = (
             mock.patch.object(loopskill5, "EXPECTED_HEAD", self.head),
@@ -211,6 +217,7 @@ class WalkingSkeletonTests(unittest.TestCase):
             report = loopskill5.start(str(self.workspace), worker=worker)
         self.assertEqual(worker_calls, 1)
         self.assertIn("真实 loopback POST 返回 HTTP 201", report)
+        self.assertIn("/today、/inbox、/content、/settings 真实 loopback GET 均为 200", report)
         self.assertIn("verifier 首次 crash 后重建 1 次", report)
         self.assertFalse(loopskill5._preparation_path(self.workspace).exists())
         self.assertEqual((self.workspace / loopskill5.OWNER_NOTE).read_bytes(), loopskill5.OWNER_NOTE_BYTES)
