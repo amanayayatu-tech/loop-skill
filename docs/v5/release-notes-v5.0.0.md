@@ -28,7 +28,8 @@ v5.0.0 does not add a LoopSkill-owned Controller, state machine, schema, databas
 ## Claim limits
 
 - Local, single-user Codex Host is the first-release surface.
-- Public multiday-wait wording requires the formal 48-hour, cross-natural-day release journey; short DEVELOPMENT waits do not establish it.
+- The verified release claim is limited to a scheduled exit in the same Codex task, at least two Host-native same-thread reentries, and safe continuation in each formal pre-merge and merged-main journey of at least 60 minutes.
+- Multiday endurance remains post-release validation and is not claimed by v5.0.0.
 - Sleep and operating-system shutdown recovery are not promised.
 - Fixture approvals do not represent Owner endorsement of public content.
 - No cross-system exactly-once, multi-host, arbitrary task-crash recovery, provider-wide publication, or automatic secret/permission expansion is claimed.

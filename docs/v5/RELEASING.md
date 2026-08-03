@@ -45,9 +45,9 @@ Formal journeys require separate authorization bound to the exact clean candidat
 
 - GJ-1: natural-language repository delivery, one START, zero technical intervention, real business smoke, and one recoverable verifier/process fault.
 - GJ-2: the complete four-package Nepha journey through exact-version fixture approvals, first real HTTP exports, repeated-export identity, restart/new Session readback, final Owner publication Gate, and zero PublicationRecord unless explicitly approved.
-- GJ-3: at least 48 continuous hours across two natural days and at least two Host-native same-thread reentries; A is written once, B cites A's exact digest, and no resident Worker/Controller/daemon waits.
+- GJ-3: on both the exact pre-merge candidate and the merged-main candidate, run for at least 60 minutes with a scheduled task-turn exit, at least two Host-native same-thread reentries, and safe continuation; A is written once, B cites A's exact digest, and no resident Worker/Controller/daemon waits.
 
-IB-08 remains an explicit review item because v5 has no PAUSED/Active user projection; absence of that surface must not be mislabeled as reproduction PASS. IB-13 closes only with the formal 48-hour journey and its exact machine-time evidence.
+IB-08 remains an explicit review item because v5 has no PAUSED/Active user projection; absence of that surface must not be mislabeled as reproduction PASS. IB-13 closes only when both formal GJ-3 journeys prove with exact machine times that a short observation or supervision timeout has no task termination authority. Multiday endurance remains post-release validation, not a v5.0.0 release Gate.
 
 ## Gate 3: privacy, secrets, and independent review
 

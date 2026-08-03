@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "loopskill5"
 EXPECTED_BLOBS = {
-    "SKILL.md": "4e2cdf0a9dff398314fbe99f0ea82bb2ea978cf9",
+    "SKILL.md": "cc8fe9230f489992dd962a0eb958815bf899a8d3",
     "agents/openai.yaml": "6295d897c694e67785f25c04987ce2a5b1914d86",
 }
 PRESERVED_V4_BLOBS = {
@@ -72,6 +72,9 @@ class LoopSkill5DistributionTest(unittest.TestCase):
         self.assertIn("目标已存在时，系统 installer 会拒绝覆盖", quickstart_zh)
         self.assertIn("installer refuses to overwrite an existing destination", quickstart_en)
         self.assertIn("annotated `v5.0.0`", releasing)
+        self.assertIn("run for at least 60 minutes", releasing)
+        self.assertIn("at least two Host-native same-thread reentries", releasing)
+        self.assertIn("Multiday endurance remains post-release validation", releasing)
         self.assertIn("root `VERSION=4.2.0`", release_notes)
         self.assertNotIn("rm -rf", quickstart_zh)
         self.assertNotIn("rm -rf", quickstart_en)

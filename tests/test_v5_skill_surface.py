@@ -74,6 +74,8 @@ class LoopSkill5SurfaceTest(unittest.TestCase):
             "Use the current Codex task/thread as the business execution identity",
             "Host-native heartbeat scheduling and same-thread turn reentry",
             "actually persisted heartbeat target and status before committing to the wait; requested parameters are not evidence",
+            "limit the verified wait claim to a scheduled task-turn exit, at least two Host-native same-thread reentries, and safe continuation",
+            "Treat multiday endurance as post-release validation, not as a launch claim",
             "capture `delivery_observed_at` immediately on turn entry, before any verifier",
             "a wake beginning before the deadline does not prove the business effect completed on time",
             "Treat Host cadence and internal phase estimates as capacity-planning inputs, not additional hard Gates",

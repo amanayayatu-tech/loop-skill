@@ -27,9 +27,11 @@ All notable changes to this project are documented here. The project follows
 
 - DEVELOPMENT golden journeys are supporting product evidence, not formal
   canary or release evidence. Publication still requires an exact clean
-  candidate, formal authorized journeys including the 48-hour GJ-3, real old-tag
-  coexistence, privacy/secret review, independent review, PR/main/tag CI, and
-  public tag/Release readback.
+  candidate, formal authorized journeys including pre-merge and merged-main
+  GJ-3 runs of at least 60 minutes with at least two Host-native same-thread
+  reentries and safe continuation, real old-tag coexistence, privacy/secret
+  review, independent review, PR/main/tag CI, and public tag/Release readback.
+- Multiday endurance remains post-release validation and is not a v5.0.0 claim.
 
 ## [4.2.0] - 2026-08-02
 

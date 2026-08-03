@@ -76,4 +76,4 @@ printf 'LoopSkill 5 moved recoverably to %s\n' "$loopskill5_backup"
 - 新权限、秘密、付费、公开发布、部署、删除或其他扩大授权仍是真实业务 Gate。
 - Codex Host 必需的模型/控制面流量与任务业务工具网络效果分别报告。
 - v5 不读取、迁移、复活或双写 v3/v4 数据。
-- 操作系统睡眠或关机恢复不是 v5.0.0 的硬承诺；多日级主张只以正式 48 小时旅程证据为准。
+- v5.0.0 已验证的等待主张只包括同一 Codex task 的定时退出、至少两次 Host-native same-thread reentry 与安全续接；多日耐久、睡眠或操作系统关机恢复留待发布后验证，不作首发承诺。

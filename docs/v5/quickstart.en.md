@@ -76,4 +76,4 @@ If the directory has extra files, a symlink, uncertain identity, or another writ
 - New authority, secrets, cost, public publication, deployment, deletion, or other authority expansion remains a true business Gate.
 - Codex Host-required model/control-plane traffic is reported separately from task business-tool network effects.
 - v5 never reads, migrates, revives, or dual-writes v3/v4 data.
-- Sleep or operating-system shutdown recovery is not a v5.0.0 hard promise; a multiday claim depends on the formal 48-hour journey evidence.
+- The v5.0.0 verified wait claim is limited to a scheduled exit in the same Codex task, at least two Host-native same-thread reentries, and safe continuation; multiday endurance, sleep, and operating-system shutdown recovery remain post-release validation rather than first-release promises.

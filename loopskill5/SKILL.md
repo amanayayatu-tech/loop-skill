@@ -115,6 +115,11 @@ wait, and read back the actually persisted heartbeat target and status before
 committing to the wait; requested parameters are not evidence. Do not create a
 new task or a second worker thread to simulate continuation.
 
+For v5.0.0, limit the verified wait claim to a scheduled task-turn exit, at
+least two Host-native same-thread reentries, and safe continuation within the
+exact tested window. Treat multiday endurance as post-release validation, not
+as a launch claim.
+
 For a natural wait, capture `delivery_observed_at` immediately on turn entry,
 before any verifier. Reserve an explicit contract window between `not_before`
 and the final completion deadline for Host scheduling/delivery plus wake-time
