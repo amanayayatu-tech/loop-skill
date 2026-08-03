@@ -115,6 +115,13 @@ wait, and read back the actually persisted heartbeat target and status before
 committing to the wait; requested parameters are not evidence. Do not create a
 new task or a second worker thread to simulate continuation.
 
+Keep Host automation control calls serialized. On reentry, narrowly read the
+already-persisted identity instead of rendering another control card merely to
+repeat PREPARE evidence. Never terminate an unresolved `view`, `update`, or
+`delete` call and issue another control call. At terminal cleanup, finish the
+business and file readbacks first, then make one `delete` the only outstanding
+control call; do not overlap it with another control call or blindly retry it.
+
 For v5.0.0, limit the verified wait claim to a scheduled task-turn exit, at
 least two Host-native same-thread reentries, and safe continuation within the
 exact tested window. Treat multiday endurance as post-release validation, not
