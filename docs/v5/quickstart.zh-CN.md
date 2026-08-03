@@ -77,3 +77,4 @@ printf 'LoopSkill 5 moved recoverably to %s\n' "$loopskill5_backup"
 - Codex Host 必需的模型/控制面流量与任务业务工具网络效果分别报告。
 - v5 不读取、迁移、复活或双写 v3/v4 数据。
 - v5.0.0 已验证的等待主张只包括同一 Codex task 的定时退出、至少两次 Host-native same-thread reentry 与安全续接；多日耐久、睡眠或操作系统关机恢复留待发布后验证，不作首发承诺。
+- 自然等待必须在 START 前回读 Host-native 有界或自动到期 heartbeat；终局以业务事实准确、效果不重复、`next_run_at=NULL` 且越过到期边界无后续投递为准。物理删除残留 identity 只是 best-effort housekeeping，不影响业务完成主张。

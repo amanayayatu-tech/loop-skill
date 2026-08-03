@@ -111,16 +111,22 @@ is unknown.
 
 Use the current Codex task/thread as the business execution identity. Use only
 Host-native heartbeat scheduling and same-thread turn reentry for a natural
-wait, and read back the actually persisted heartbeat target and status before
-committing to the wait; requested parameters are not evidence. Do not create a
-new task or a second worker thread to simulate continuation.
+wait. Before START and before committing to the wait, require a Host-native
+bounded or automatically expiring heartbeat and read back its actually
+persisted target, status, and finite recurrence; requested parameters are not
+evidence. Size the recurrence to cover at least two eligible same-thread
+reentries, final business readback, and scheduling jitter supported by real
+probes. Never shorten a business Gate to fit the recurrence. Do not create a new
+task or a second worker thread to simulate continuation.
 
 Keep Host automation control calls serialized. On reentry, narrowly read the
 already-persisted identity instead of rendering another control card merely to
 repeat PREPARE evidence. Never terminate an unresolved `view`, `update`, or
-`delete` call and issue another control call. At terminal cleanup, finish the
-business and file readbacks first, then make one `delete` the only outstanding
-control call; do not overlap it with another control call or blindly retry it.
+`delete` call and issue another control call; do not overlap unresolved calls or
+blindly retry them. Treat terminal scheduling safety as accurate business facts,
+no repeated effect, persisted `next_run_at=NULL`, and observation past the
+expiry boundary with no future delivery. Physical identity deletion is
+best-effort housekeeping and cannot upgrade or downgrade business completion.
 
 For v5.0.0, limit the verified wait claim to a scheduled task-turn exit, at
 least two Host-native same-thread reentries, and safe continuation within the

@@ -77,3 +77,4 @@ If the directory has extra files, a symlink, uncertain identity, or another writ
 - Codex Host-required model/control-plane traffic is reported separately from task business-tool network effects.
 - v5 never reads, migrates, revives, or dual-writes v3/v4 data.
 - The v5.0.0 verified wait claim is limited to a scheduled exit in the same Codex task, at least two Host-native same-thread reentries, and safe continuation; multiday endurance, sleep, and operating-system shutdown recovery remain post-release validation rather than first-release promises.
+- Before START, a natural wait requires readback of a Host-native bounded or automatically expiring heartbeat. Terminal acceptance requires accurate business facts, no repeated effect, `next_run_at=NULL`, and no delivery past the expiry boundary. Physical deletion of a residual identity is best-effort housekeeping and does not affect the business-completion claim.

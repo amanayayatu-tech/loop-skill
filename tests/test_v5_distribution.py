@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "loopskill5"
 EXPECTED_BLOBS = {
-    "SKILL.md": "3f513b316d141cad0f0ceac0e63d17f594b760a6",
+    "SKILL.md": "fe098768f85e2023a551aa700d1b4e5f4daa17f5",
     "agents/openai.yaml": "6295d897c694e67785f25c04987ce2a5b1914d86",
 }
 PRESERVED_V4_BLOBS = {
@@ -74,8 +74,11 @@ class LoopSkill5DistributionTest(unittest.TestCase):
         self.assertIn("annotated `v5.0.0`", releasing)
         self.assertIn("run for at least 60 minutes", releasing)
         self.assertIn("at least two Host-native same-thread reentries", releasing)
-        self.assertIn("Host control calls are serialized", releasing)
-        self.assertIn("terminal delete is the sole outstanding control call", releasing)
+        self.assertIn("Host-native bounded or automatically expiring heartbeat", releasing)
+        self.assertIn("covers the second eligible reentry, final business readback, and measured scheduling jitter", releasing)
+        self.assertIn("persisted `next_run_at=NULL`", releasing)
+        self.assertIn("Physical identity deletion is best-effort housekeeping", releasing)
+        self.assertIn("Keep Host control calls serialized", releasing)
         self.assertIn("Multiday endurance remains post-release validation", releasing)
         self.assertIn("root `VERSION=4.2.0`", release_notes)
         self.assertNotIn("rm -rf", quickstart_zh)

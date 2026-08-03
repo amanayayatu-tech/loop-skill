@@ -11,6 +11,8 @@
 
 LoopSkill 5 帮你在一次 START 前主动调查真实环境、给出能延长无人值守跨度的建议，并展示 12 项人类可读 Launch Contract。START 后，它依赖当前 Codex task/thread 与 Host 原生续接能力，自主推进到真实业务结果或预先披露的业务 Gate；不会要求用户填写 JSON、ID、digest 或恢复命令。
 
+自然等待只在 START 前已回读 Host-native 有界 heartbeat 时准入；终局以真实业务事实、无重复效果、持久化调度已耗尽及越过到期边界无后续投递为准。残留 identity 的物理删除只是 best-effort housekeeping，不决定业务是否完成。
+
 v5.0.0 的公开身份只由 GitHub Releases 中的 annotated `v5.0.0` tag、该 tag 下的两个 exact Skill blobs 与 GitHub Release 共同建立。只有 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 已列出该版本时，才使用系统 `$skill-installer` 从 `https://github.com/amanayayatu-tech/loop-skill/tree/v5.0.0/loopskill5` 安装；目标已存在时 installer 会拒绝覆盖。卸载只把 exact `loopskill5` 目录可恢复地移出 `skills`，不运行 v4 installer，也不读取或迁移 v3/v4 数据。完整步骤见上方 5.0 中英文快速开始。
 
 LoopSkill 5 不包含自有 Controller、状态机、数据库、daemon、queue、通用 retry 或兼容层。

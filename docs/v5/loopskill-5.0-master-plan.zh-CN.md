@@ -340,6 +340,8 @@ LoopSkill 可以把长任务拆成多个内部里程碑、Worker 工作段或验
 - 用户离开对话后，系统应按 Launch Contract 继续；界面是否持续展示不是完成证据。
 - 普通上下文切换、内部工作段结束或可恢复进程退出，不应终止 Loop。
 - 跨等待窗口任务应采用 Host-native 定时退出、同一 Codex task 重新进入和安全续接，而不是让一个进程永久占用。
+- 自然等待必须在 START 前把一个 Host-native 有界或自动到期 heartbeat 作为准入事实，并回读其实际持久化 target、status 与有限 recurrence；该 recurrence 必须覆盖至少两次合格重入、最终业务 readback 和基于实测的调度抖动余量，不得靠缩短业务 Gate 制造成功。
+- 终局调度安全以业务事实准确、效果不重复、持久化 `next_run_at=NULL` 且越过到期边界无 future delivery 为准。物理删除残留 identity 只是 best-effort housekeeping，不影响业务 PASS；任何 Host 控制调用仍不得重叠、遗留 pending 后盲重试。
 - 如果当前 Host 无法保证声明时长或续接能力，必须在 START 前降低承诺或拒绝启动。
 
 5.0 首次公开版本的等待主张只覆盖同一 Codex task 的定时退出、至少两次 Host-native same-thread reentry 和安全续接。多日耐久移到发布后验证；操作系统睡眠或关机恢复不作为首发承诺。
@@ -589,13 +591,13 @@ LoopSkill 可以把长任务拆成多个内部里程碑、Worker 工作段或验
 
 任务包含主动执行、按合同定时退出、至少两次 Host-native same-thread reentry 和安全续接，最终到达业务结果或审批 Gate。
 
-通过条件：等待不是终止；无需用户重发任务；每次重入都从同一最小效果事实安全续接且不重复外部效果；最终状态与业务完成度一致。
+通过条件：等待不是终止；无需用户重发任务；每次重入都从同一最小效果事实安全续接且不重复外部效果；有限 recurrence 覆盖合同所需重入与最终 readback，终局可读证明 `next_run_at=NULL` 且越过到期边界无 future delivery；最终状态与业务完成度一致。同步 self-delete 回执或本地 identity 物理消失不是业务 PASS Gate。
 
 ### 15.3 发布重复要求
 
 - 每条黄金旅程在干净环境中连续通过两次。
 - 至少一次从全新安装开始，至少一次包含可恢复故障注入。
-- GJ-3 在 pre-merge exact candidate 与 merged-main 新候选上各正式运行一次；每次至少 60 分钟、至少两次真实 Host-native same-thread reentry，并证明定时退出与安全续接。多日耐久是发布后验证，不是 v5.0.0 发布 Gate。
+- GJ-3 在 pre-merge exact candidate 与 merged-main 新候选上各正式运行一次；每次至少 60 分钟、至少两次真实 Host-native same-thread reentry，并证明定时退出与安全续接。START 前预配并回读的有限 recurrence 必须覆盖第二次合格重入、最终 readback 和合理调度抖动；完成时以 `next_run_at=NULL` 及越过到期边界无 future delivery 证明不再投递。多日耐久是发布后验证，不是 v5.0.0 发布 Gate。
 - 所有运行绑定 exact candidate，失败证据不改写。
 - DEVELOPMENT 重跑可以在修复根因后使用新运行身份；不得把旧失败改判为 PASS。
 - 正式发布证据必须在用户另行授权后执行。
@@ -669,7 +671,7 @@ LoopSkill 可以把长任务拆成多个内部里程碑、Worker 工作段或验
 - START 后技术性人工介入目标为零。
 - 承诺结果必须是最终结果或最远安全业务 Gate。
 - 首发从本地、单用户、Codex Host 场景开始。
-- 首发等待主张为同一 Codex task 的定时退出、至少两次 Host-native same-thread reentry 和安全续接；多日耐久移到发布后验证，操作系统睡眠或关机恢复不作首发承诺。
+- 首发等待主张为同一 Codex task 的定时退出、START 前回读的 Host-native 有界 recurrence、至少两次 same-thread reentry 和安全续接；终局以准确业务事实、无重复效果、`next_run_at=NULL` 与越过到期边界无 future delivery 为证据，物理删除只作 best-effort housekeeping。多日耐久移到发布后验证，操作系统睡眠或关机恢复不作首发承诺。
 - v3/v4 数据在首发中保持原样并存，不建设迁移或复活路径。
 - 先跑通真实纵切，再决定架构。
 
