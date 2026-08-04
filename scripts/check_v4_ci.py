@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static fail-closed contract for the sole v4 GitHub Actions workflow."""
+"""Static fail-closed contract for the preserved v4 GitHub Actions workflow."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ REQUIRED_JOBS = (
     "distribution",
     "release-hygiene",
 )
+ALLOWED_WORKFLOWS = {"v4-release.yml", "v5-release.yml"}
 REQUIRED_COMMANDS = (
     "scripts/generate_v4_protocol.py --check",
     "scripts/validate_v4_preservation.py --root . --json",
@@ -76,7 +77,7 @@ def validate(root: Path) -> dict[str, object]:
     root = root.resolve()
     workflow_root = root / ".github/workflows"
     workflows = sorted(path.name for path in workflow_root.glob("*.y*ml"))
-    if workflows != ["v4-release.yml"]:
+    if "v4-release.yml" not in workflows or not set(workflows) <= ALLOWED_WORKFLOWS:
         raise CiError(f"CI_WORKFLOW_SET_INVALID:{','.join(workflows)}")
     legacy_ci = root / ".github/ci"
     if legacy_ci.exists() and any(path.is_file() for path in legacy_ci.rglob("*")):

@@ -1,5 +1,18 @@
 # Security policy
 
+## Multi-product boundary
+
+This repository carries the independent `loopskill5` Skill product and the
+preserved LoopSkill 4.2 runtime. The root `VERSION=4.2.0`, `scripts/install.sh`,
+`loopskill4`, and v4 data remain v4-only. The v5 public identity is only the
+annotated `v5.0.0` tag, the exact `loopskill5/SKILL.md` and
+`loopskill5/agents/openai.yaml` blobs at that tag, and the matching GitHub
+Release. Source on a branch or an unpeeled tag is not a supported release.
+
+LoopSkill 5 must not overwrite or discover v3/v4 installations or data, edit
+Codex config, register MCP, create a daemon, or expand task authority. Its
+recoverable uninstall boundary is the exact `loopskill5` directory only.
+
 ## Supported versions
 
 Security support follows the versions listed on GitHub Releases.

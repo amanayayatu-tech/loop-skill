@@ -38,7 +38,7 @@ class V4CiTests(unittest.TestCase):
             config["tool"]["coverage"]["run"]["omit"],
         )
 
-    def test_v4_release_workflow_is_the_only_ci_and_passes_contract(self) -> None:
+    def test_v4_release_workflow_remains_exact_with_v5_ci_present(self) -> None:
         result = ci.validate(ROOT)
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["job_count"], 5)

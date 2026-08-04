@@ -1,5 +1,11 @@
 # Releasing LoopSkill 4
 
+This root runbook remains the v4.2 runtime release procedure because the root
+`VERSION=4.2.0` and `scripts/install.sh` are intentionally v4-only. LoopSkill 5
+is an independent two-file Skill product; its release identity and gates are in
+[`docs/v5/RELEASING.md`](v5/RELEASING.md). A v5 release must not alter this v4
+installer/runtime behavior or reuse v4 receipts as v5 evidence.
+
 This is the v4-only release runbook. It cannot rewrite or delete any v3 tag,
 GitHub Release, or Git history; it cannot migrate real v3 data or overwrite a
 user installation. A release operator must stop on secret/private-evidence

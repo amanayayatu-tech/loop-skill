@@ -1,13 +1,26 @@
-# LoopSkill 4.2
+# LoopSkill 5 Skill / LoopSkill 4.2 runtime
 
 [![v4 Release CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml)
+[![v5 Release CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v5-release.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v5-release.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[English](README.en.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
+[English](README.en.md) · [5.0 中文快速开始](docs/v5/quickstart.zh-CN.md) · [5.0 English quickstart](docs/v5/quickstart.en.md) · [5.0 release notes](docs/v5/release-notes-v5.0.0.md)
+
+本仓库承载两个独立产品身份：当前的 LoopSkill 5 是 Codex 中的自然语言 Skill，安装内容严格只有 `loopskill5/SKILL.md` 与 `loopskill5/agents/openai.yaml`；保留的 LoopSkill 4.2 是独立 Python runtime。根 `VERSION=4.2.0` 与 `scripts/install.sh` 只属于 v4，不是 v5 的版本或安装入口。
+
+LoopSkill 5 帮你在一次 START 前主动调查真实环境、给出能延长无人值守跨度的建议，并展示 12 项人类可读 Launch Contract。START 后，它依赖当前 Codex task/thread 与 Host 原生续接能力，自主推进到真实业务结果或预先披露的业务 Gate；不会要求用户填写 JSON、ID、digest 或恢复命令。
+
+自然等待只在 START 前已回读 Host-native 有界 heartbeat 时准入；终局以真实业务事实、无重复效果、持久化调度已耗尽及越过到期边界无后续投递为准。残留 identity 的物理删除只是 best-effort housekeeping，不决定业务是否完成。
+
+v5.0.0 的公开身份只由 GitHub Releases 中的 annotated `v5.0.0` tag、该 tag 下的两个 exact Skill blobs 与 GitHub Release 共同建立。只有 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 已列出该版本时，才使用系统 `$skill-installer` 从 `https://github.com/amanayayatu-tech/loop-skill/tree/v5.0.0/loopskill5` 安装；目标已存在时 installer 会拒绝覆盖。卸载只把 exact `loopskill5` 目录可恢复地移出 `skills`，不运行 v4 installer，也不读取或迁移 v3/v4 数据。完整步骤见上方 5.0 中英文快速开始。
+
+LoopSkill 5 不包含自有 Controller、状态机、数据库、daemon、queue、通用 retry 或兼容层。
+
+保留的 LoopSkill 4 用户请继续使用 [v4 中文快速开始](docs/v4/quickstart.zh-CN.md) 或 [v4 English quickstart](docs/v4/quickstart.en.md)；v5 安装、使用和卸载均不得覆盖 `loopskill4` 或旧数据。
 
 <!-- parity: identity -->
-> 本文档对应 LoopSkill 4.2.0；当前可用的公开版本以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
+> 以下保留段落对应 LoopSkill 4.2 runtime。本文档对应 LoopSkill 4.2.0；当前可用的公开版本以 [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) 页面为准。
 
 **一句话说明要做什么，LoopSkill 帮你先锁定边界，确认后只启动一次，并用机器证据告诉你做成了什么、哪里还不确定。**
 

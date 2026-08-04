@@ -1,13 +1,26 @@
-# LoopSkill 4.2
+# LoopSkill 5 Skill / LoopSkill 4.2 runtime
 
 [![v4 Release CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v4-release.yml)
+[![v5 Release CI](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v5-release.yml/badge.svg)](https://github.com/amanayayatu-tech/loop-skill/actions/workflows/v5-release.yml)
 [![Release](https://img.shields.io/github/v/release/amanayayatu-tech/loop-skill?display_name=tag)](https://github.com/amanayayatu-tech/loop-skill/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[中文](README.md) · [中文快速开始](docs/v4/quickstart.zh-CN.md) · [English quickstart](docs/v4/quickstart.en.md)
+[中文](README.md) · [5.0 中文快速开始](docs/v5/quickstart.zh-CN.md) · [5.0 English quickstart](docs/v5/quickstart.en.md) · [5.0 release notes](docs/v5/release-notes-v5.0.0.md)
+
+This repository carries two independent product identities. The current LoopSkill 5 product is a natural-language Codex Skill whose install contains exactly `loopskill5/SKILL.md` and `loopskill5/agents/openai.yaml`. The preserved LoopSkill 4.2 product is an independent Python runtime. The root `VERSION=4.2.0` and `scripts/install.sh` belong only to v4; neither is the v5 version nor its installer.
+
+LoopSkill 5 investigates the real environment before one START, recommends how to extend the unattended span, and presents a 12-item human-readable Launch Contract. After START it relies on the current Codex task/thread and Host-native continuation to reach a real business result or a disclosed business Gate without asking the user for JSON, IDs, digests, or recovery commands.
+
+A natural wait is admitted only after a Host-native bounded heartbeat is persisted and read back before START. Terminal acceptance requires accurate business facts, no repeated effect, an exhausted persisted schedule, and no delivery past its expiry boundary. Physical deletion of a residual identity is best-effort housekeeping and does not determine business completion.
+
+The public v5.0.0 identity exists only when GitHub Releases contains the annotated `v5.0.0` tag, the two exact Skill blobs at that tag, and the matching GitHub Release. Only after [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) lists it, use the system `$skill-installer` with `https://github.com/amanayayatu-tech/loop-skill/tree/v5.0.0/loopskill5`; the installer refuses to overwrite an existing destination. Uninstallation only moves the exact `loopskill5` directory recoverably out of `skills`; it does not run the v4 installer or read or migrate v3/v4 data. Complete steps are in the 5.0 Chinese and English quickstarts linked above.
+
+LoopSkill 5 has no LoopSkill-owned Controller, state machine, database, daemon, queue, general retry system, or compatibility layer.
+
+LoopSkill 4 users should continue with the [v4 Chinese quickstart](docs/v4/quickstart.zh-CN.md) or [v4 English quickstart](docs/v4/quickstart.en.md). Installing, using, or uninstalling v5 must not overwrite `loopskill4` or legacy data.
 
 <!-- parity: identity -->
-> This document describes LoopSkill 4.2.0. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
+> The retained sections below describe the LoopSkill 4.2 runtime. This document describes LoopSkill 4.2.0. See [Releases](https://github.com/amanayayatu-tech/loop-skill/releases) for the public versions currently available.
 
 **Describe the job in one sentence. LoopSkill fixes the boundary first, starts once after confirmation, and uses machine evidence to show what worked and what remains uncertain.**
 

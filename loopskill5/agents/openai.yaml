@@ -1,0 +1,4 @@
+interface:
+  display_name: "LoopSkill 5"
+  short_description: "主动调查并准备长程任务，一次确认后自主推进到真实结果"
+  default_prompt: "Use $loopskill5：先主动调查并给出最远安全 Launch Contract，只集中询问真正阻断项，等待我一次确认 START 后再自主执行。"
