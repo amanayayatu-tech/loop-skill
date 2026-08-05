@@ -45,14 +45,15 @@ def tree_digest(root: Path) -> str:
 
 
 class LoopSkill5DistributionTest(unittest.TestCase):
-    def test_public_payload_and_multi_product_docs_are_exact(self) -> None:
+    def test_public_payload_and_v5_docs_are_exact(self) -> None:
         self.assertEqual((ROOT / "VERSION").read_text(encoding="utf-8"), "4.2.0\n")
         for relative, expected in PRESERVED_V4_BLOBS.items():
             self.assertEqual(blob_id((ROOT / relative).read_bytes()), expected)
         self.assertFalse(any(path.is_symlink() for path in SKILL_ROOT.rglob("*")))
         self.assertEqual(inventory(SKILL_ROOT), EXPECTED_BLOBS)
 
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme_zh = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme_en = (ROOT / "README.en.md").read_text(encoding="utf-8")
         quickstart_zh = (ROOT / "docs/v5/quickstart.zh-CN.md").read_text(
             encoding="utf-8"
         )
@@ -67,8 +68,68 @@ class LoopSkill5DistributionTest(unittest.TestCase):
             "https://github.com/amanayayatu-tech/loop-skill/"
             "tree/v5.0.0/loopskill5"
         )
-        for text in (readme, quickstart_zh, quickstart_en):
+        for text in (readme_zh, readme_en, quickstart_zh, quickstart_en):
             self.assertIn(installer_url, text)
+        for text in (readme_zh, readme_en):
+            self.assertEqual(text.splitlines()[0], "# LoopSkill 5")
+            for literal in (
+                "$skill-installer",
+                "$loopskill5",
+                "Launch Contract",
+                "START",
+                "scripts/install.sh",
+                "agents/openai.yaml",
+            ):
+                self.assertIn(literal, text)
+            for target in (
+                "docs/v5/quickstart.zh-CN.md",
+                "docs/v5/quickstart.en.md",
+                "docs/v5/release-notes-v5.0.0.md",
+                "loopskill5/SKILL.md",
+                "SECURITY.md",
+                "LICENSE",
+            ):
+                self.assertIn(f"]({target})", text)
+            for stale in (
+                "<!-- parity:",
+                "$LOOPSKILL4",
+                "v4 Release CI",
+                "LoopSkill 4",
+                "docs/v4/",
+                "v3.3.8",
+                "git clone --branch v4.2.0",
+                "EAGER_V4_0",
+                "CONTENT_ADDRESSED_V1",
+                "USER_UNSUPPORTED_LEGACY_VERSION",
+                "scripts/generate_v4_protocol.py --check",
+                "docs/readme-assets/",
+                "bash scripts/install.sh",
+            ):
+                self.assertNotIn(stale, text)
+        self.assertIn(
+            "不要运行仓库根目录的 `scripts/install.sh`；它不是 LoopSkill 5 安装器。",
+            readme_zh,
+        )
+        self.assertIn(
+            "只有新的价值判断或授权扩张",
+            readme_zh,
+        )
+        self.assertIn(
+            "才会再次向你询问决策",
+            readme_zh,
+        )
+        self.assertIn(
+            "Do not run the repository-root `scripts/install.sh`; "
+            "it is not the LoopSkill 5 installer.",
+            readme_en,
+        )
+        self.assertIn(
+            "It asks you for a decision only when a new value judgment "
+            "or authority expansion is required",
+            readme_en,
+        )
+        self.assertIn("](README.en.md)", readme_zh)
+        self.assertIn("](README.md)", readme_en)
         self.assertIn("目标已存在时，系统 installer 会拒绝覆盖", quickstart_zh)
         self.assertIn("installer refuses to overwrite an existing destination", quickstart_en)
         self.assertIn("annotated `v5.0.0`", releasing)
@@ -81,8 +142,8 @@ class LoopSkill5DistributionTest(unittest.TestCase):
         self.assertIn("Keep Host control calls serialized", releasing)
         self.assertIn("Multiday endurance remains post-release validation", releasing)
         self.assertIn("root `VERSION=4.2.0`", release_notes)
-        self.assertNotIn("rm -rf", quickstart_zh)
-        self.assertNotIn("rm -rf", quickstart_en)
+        for text in (readme_zh, readme_en, quickstart_zh, quickstart_en):
+            self.assertNotIn("rm -rf", text)
         zh_bash = re.findall(r"```bash\n(.*?)\n```", quickstart_zh, re.DOTALL)
         en_bash = re.findall(r"```bash\n(.*?)\n```", quickstart_en, re.DOTALL)
         self.assertEqual(zh_bash, en_bash)
