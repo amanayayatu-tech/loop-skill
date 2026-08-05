@@ -350,8 +350,6 @@ class V4RcAcceptanceTests(unittest.TestCase):
         self.assertIn("automatically migrate v3", release_notes)
         self.assertIn("patch-success superiority", limitations)
         self.assertIn("release notes for LoopSkill 4.0.0", release_notes)
-        self.assertIn("docs/v4/quickstart.zh-CN.md", (ROOT / "README.md").read_text(encoding="utf-8"))
-        self.assertIn("docs/v4/quickstart.en.md", (ROOT / "README.en.md").read_text(encoding="utf-8"))
         self.assertEqual(
             len(list((ROOT / "examples").glob("v4-*-input.json"))), 2
         )

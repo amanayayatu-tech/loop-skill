@@ -20,13 +20,13 @@ class V4DocsTests(unittest.TestCase):
     def test_public_docs_pass_parity_commands_links_and_claims(self) -> None:
         result = docs.validate(ROOT)
         self.assertEqual(result["status"], "PASS")
-        self.assertEqual(result["section_count"], 16)
-        self.assertGreaterEqual(result["bash_command_blocks"], 6)
-        self.assertEqual(result["readme_asset_count"], 2)
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertGreaterEqual(result["quickstart_bash_command_blocks"], 5)
+        quickstart_zh = (ROOT / "docs/v4/quickstart.zh-CN.md").read_text(
+            encoding="utf-8"
+        )
         active_mode = (
             "candidate"
-            if docs.README_CANDIDATE_STATUS_ZH in readme
+            if docs.QUICKSTART_CANDIDATE_STATUS_ZH in quickstart_zh
             else "release"
         )
         inactive_mode = "release" if active_mode == "candidate" else "candidate"
@@ -44,21 +44,16 @@ class V4DocsTests(unittest.TestCase):
         self.assertIn("v4.2.0 has no canary exception", releasing)
         self.assertIn("three ordered layers", releasing)
         self.assertIn("one recorded `codex exec resume`", release_notes)
-        quickstart_zh = (ROOT / "docs/v4/quickstart.zh-CN.md").read_text(
-            encoding="utf-8"
-        )
         quickstart_en = (ROOT / "docs/v4/quickstart.en.md").read_text(
             encoding="utf-8"
         )
         self.assertIn(docs.QUICKSTART_CANARY_STATUS_ZH, quickstart_zh)
         self.assertIn(docs.QUICKSTART_CANARY_STATUS_EN, quickstart_en)
 
-    def test_section_command_link_and_stale_wording_drift_fail_closed(self) -> None:
+    def test_quickstart_link_and_stale_wording_drift_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for relative in (
-                "README.md",
-                "README.en.md",
                 "CHANGELOG.md",
                 "VERSION",
                 "LICENSE",
@@ -75,16 +70,12 @@ class V4DocsTests(unittest.TestCase):
                 "docs/v4/architecture-map.md",
                 "docs/v4/release-notes.md",
                 "docs/v4/release-notes-v4.2.md",
-                "docs/readme-assets/durable-handoff.png",
-                "docs/readme-assets/evidence-before-closure.png",
                 "docs/RELEASING.md",
+                "docs/architecture/loopskill-v4-single-entry-ux.md",
                 "docs/adr/0011-loopskill-4-compatible-kernel-refactor.md",
                 "docs/adr/0013-content-addressed-plan-capacity.md",
                 "docs/v4/compatibility-matrix-v4.1.md",
                 "docs/v4/compatibility-matrix-v4.2.md",
-                "docs/v5/quickstart.zh-CN.md",
-                "docs/v5/quickstart.en.md",
-                "docs/v5/release-notes-v5.0.0.md",
                 "protocol/v4/README.md",
                 "examples/v4-standard-input.json",
                 "codex-loop-prompt-architect/scripts/loop_architect/v4_entry/canary.py",
@@ -94,12 +85,33 @@ class V4DocsTests(unittest.TestCase):
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(source.read_bytes())
-            readme = root / "README.md"
-            readme.write_text(
-                readme.read_text(encoding="utf-8") + "\nUse $codex-loop-prompt-architect\n",
+            quickstart = root / "docs/v4/quickstart.zh-CN.md"
+            quickstart_text = quickstart.read_text(encoding="utf-8")
+            quickstart.write_text(
+                quickstart_text + "\nUse $codex-loop-prompt-architect\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(docs.DocsError, "DOC_STALE_V3_CURRENT_PRODUCT"):
+                docs.validate(root)
+            quickstart.write_text(quickstart_text, encoding="utf-8")
+
+            quickstart_en = root / "docs/v4/quickstart.en.md"
+            quickstart_en_text = quickstart_en.read_text(encoding="utf-8")
+            quickstart_en.write_text(
+                quickstart_en_text.replace(
+                    "does not modify it, register MCP",
+                    "does modify it and register MCP",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(docs.DocsError, "DOC_MCP_CLAIM_DRIFT"):
+                docs.validate(root)
+            quickstart_en.write_text(quickstart_en_text, encoding="utf-8")
+
+            readme_link = "\n[Repository README](README.md)\n"
+            quickstart.write_text(quickstart_text + readme_link, encoding="utf-8")
+            quickstart_en.write_text(quickstart_en_text + readme_link, encoding="utf-8")
+            with self.assertRaisesRegex(docs.DocsError, "DOC_LINK_MISSING"):
                 docs.validate(root)
 
     def test_release_mode_uses_durable_status_without_premature_claim(self) -> None:
@@ -114,8 +126,6 @@ class V4DocsTests(unittest.TestCase):
             candidate_replacements = (
                 (docs.QUICKSTART_RELEASE_STATUS_ZH, docs.QUICKSTART_CANDIDATE_STATUS_ZH),
                 (docs.QUICKSTART_RELEASE_STATUS_EN, docs.QUICKSTART_CANDIDATE_STATUS_EN),
-                (docs.README_RELEASE_STATUS_ZH, docs.README_CANDIDATE_STATUS_ZH),
-                (docs.README_RELEASE_STATUS_EN, docs.README_CANDIDATE_STATUS_EN),
                 (docs.SECURITY_RELEASE_STATUS, docs.SECURITY_CANDIDATE_STATUS),
                 (
                     docs.RELEASE_NOTES_RELEASE_STATUS,
@@ -123,8 +133,6 @@ class V4DocsTests(unittest.TestCase):
                 ),
             )
             for relative in (
-                "README.md",
-                "README.en.md",
                 "docs/v4/quickstart.zh-CN.md",
                 "docs/v4/quickstart.en.md",
                 "SECURITY.md",
@@ -150,8 +158,6 @@ class V4DocsTests(unittest.TestCase):
             ):
                 docs.validate(root, mode="release")
             replacements = {
-                docs.README_CANDIDATE_STATUS_ZH: docs.README_RELEASE_STATUS_ZH,
-                docs.README_CANDIDATE_STATUS_EN: docs.README_RELEASE_STATUS_EN,
                 docs.QUICKSTART_CANDIDATE_STATUS_ZH: docs.QUICKSTART_RELEASE_STATUS_ZH,
                 docs.QUICKSTART_CANDIDATE_STATUS_EN: docs.QUICKSTART_RELEASE_STATUS_EN,
                 docs.SECURITY_CANDIDATE_STATUS: docs.SECURITY_RELEASE_STATUS,
@@ -159,8 +165,6 @@ class V4DocsTests(unittest.TestCase):
                 "## [4.2.0] - Unreleased": "## [4.2.0] - 2026-08-02",
             }
             for relative in (
-                "README.md",
-                "README.en.md",
                 "docs/v4/quickstart.zh-CN.md",
                 "docs/v4/quickstart.en.md",
                 "SECURITY.md",
@@ -201,7 +205,7 @@ class V4DocsTests(unittest.TestCase):
             ):
                 docs.validate(root, mode="release")
             quickstart_en.write_text(quickstart_en_text, encoding="utf-8")
-            stale_zh = root / "README.md"
+            stale_zh = root / "docs/v4/quickstart.zh-CN.md"
             stale_zh.write_text(
                 stale_zh.read_text(encoding="utf-8") + "\n此源码树是稳定发行\n",
                 encoding="utf-8",
