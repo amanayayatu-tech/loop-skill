@@ -10,7 +10,7 @@ LoopSkill 5 是本仓库中独立的两文件 Codex Skill 产品。根 `VERSION=
 Use $skill-installer to install https://github.com/amanayayatu-tech/loop-skill/tree/v5.0.0/loopskill5
 ```
 
-安装目标是 `${CODEX_HOME:-$HOME/.codex}/skills/loopskill5`，内容必须只有：
+正常默认配置的安装目标是 `${CODEX_HOME:-$HOME/.codex}/skills/loopskill5`；自定义 `--dest` 会改变目标，实际路径以 installer 输出为准。内容必须只有：
 
 - `SKILL.md`
 - `agents/openai.yaml`
@@ -27,13 +27,20 @@ Use $loopskill5。请先主动调查这个长程任务，给出最远安全的 1
 
 ## 可恢复卸载
 
+让 Codex 从 installer 的实际输出或现有安装核对中设置 `LOOPSKILL5_INSTALL_DIR`，不要根据默认目录猜测自定义安装的位置。将 `LOOPSKILL5_BACKUP_ROOT` 设置为 Skill 搜索根之外的备份目录，其父目录须已存在且归当前用户所有。两个变量都必须是已核对的绝对路径；脚本会在任何移动前拒绝安装父目录内的备份。
+
 以下命令不删除文件，只把 exact v5 Skill 目录移到 `skills` 之外的 owner-only 备份。它不会触碰 `loopskill4`、根 `VERSION`、v4 receipts 或任何 v3/v4 数据。
 
 ```bash
 set -eu
-loopskill5_home="${CODEX_HOME:-$HOME/.codex}"
-loopskill5_dir="$loopskill5_home/skills/loopskill5"
-loopskill5_backup_root="$loopskill5_home/uninstalled-skills"
+: "${LOOPSKILL5_INSTALL_DIR:?Set the verified absolute LoopSkill 5 install directory}"
+: "${LOOPSKILL5_BACKUP_ROOT:?Set an owner-only backup root outside the installation skills root}"
+loopskill5_dir="$LOOPSKILL5_INSTALL_DIR"
+loopskill5_backup_root="$LOOPSKILL5_BACKUP_ROOT"
+case "$loopskill5_dir" in /*) ;; *) printf 'Install path must be absolute\n' >&2; exit 1 ;; esac
+case "$loopskill5_backup_root" in /*) ;; *) printf 'Backup path must be absolute\n' >&2; exit 1 ;; esac
+test "${loopskill5_dir##*/}" = loopskill5
+case "${loopskill5_backup_root##*/}" in ''|.|..) printf 'Invalid backup root\n' >&2; exit 1 ;; esac
 
 test -d "$loopskill5_dir"
 test ! -L "$loopskill5_dir"
@@ -49,7 +56,15 @@ test ! -L "$loopskill5_dir/agents/openai.yaml"
 test -O "$loopskill5_dir/agents/openai.yaml"
 test "$(find "$loopskill5_dir" -type f | wc -l | tr -d ' ')" = 2
 test "$(find "$loopskill5_dir" -type d | wc -l | tr -d ' ')" = 2
-test -z "$(find "$loopskill5_dir" -type l -print)"
+test -z "$(find "$loopskill5_dir" ! -type f ! -type d -print)"
+
+loopskill5_dir="$(cd "$loopskill5_dir" && pwd -P)"
+loopskill5_skills_root="$(dirname "$loopskill5_dir")"
+loopskill5_backup_parent="$(cd "$(dirname "$loopskill5_backup_root")" && pwd -P)"
+test -O "$loopskill5_backup_parent"
+loopskill5_backup_root="$loopskill5_backup_parent/${loopskill5_backup_root##*/}"
+case "$loopskill5_backup_root/" in "$loopskill5_skills_root/"*) printf 'Backup must be outside the installation skills root\n' >&2; exit 1 ;; esac
+test ! -L "$loopskill5_backup_root"
 
 umask 077
 mkdir -p "$loopskill5_backup_root"
@@ -59,6 +74,7 @@ test -O "$loopskill5_backup_root"
 chmod 700 "$loopskill5_backup_root"
 loopskill5_backup="$loopskill5_backup_root/loopskill5-$(date -u +%Y%m%dT%H%M%SZ)"
 test ! -e "$loopskill5_backup"
+test ! -L "$loopskill5_backup"
 mv "$loopskill5_dir" "$loopskill5_backup"
 
 test ! -e "$loopskill5_dir"

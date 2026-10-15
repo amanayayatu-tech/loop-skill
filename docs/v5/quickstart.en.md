@@ -10,7 +10,7 @@ First confirm that GitHub Releases contains a public, non-prerelease `v5.0.0` Re
 Use $skill-installer to install https://github.com/amanayayatu-tech/loop-skill/tree/v5.0.0/loopskill5
 ```
 
-The destination is `${CODEX_HOME:-$HOME/.codex}/skills/loopskill5` and must contain only:
+With normal default configuration the destination is `${CODEX_HOME:-$HOME/.codex}/skills/loopskill5`; a custom `--dest` changes it, so use the installer's output as the actual path. It must contain only:
 
 - `SKILL.md`
 - `agents/openai.yaml`
@@ -27,13 +27,20 @@ Review the final intent, committed result, authority, real acceptance, recovery 
 
 ## Recoverable uninstall
 
+Have Codex set `LOOPSKILL5_INSTALL_DIR` from the installer's actual output or a verified existing installation, without inferring a custom destination from the default directory. Set `LOOPSKILL5_BACKUP_ROOT` to a backup directory outside Skill discovery roots, beneath an existing parent owned by the current user. Both variables must contain verified absolute paths; the script rejects backups under the installation parent before moving anything.
+
 The commands below delete nothing. They move only the exact v5 Skill directory to an owner-only backup outside `skills`. They do not touch `loopskill4`, the root `VERSION`, v4 receipts, or any v3/v4 data.
 
 ```bash
 set -eu
-loopskill5_home="${CODEX_HOME:-$HOME/.codex}"
-loopskill5_dir="$loopskill5_home/skills/loopskill5"
-loopskill5_backup_root="$loopskill5_home/uninstalled-skills"
+: "${LOOPSKILL5_INSTALL_DIR:?Set the verified absolute LoopSkill 5 install directory}"
+: "${LOOPSKILL5_BACKUP_ROOT:?Set an owner-only backup root outside the installation skills root}"
+loopskill5_dir="$LOOPSKILL5_INSTALL_DIR"
+loopskill5_backup_root="$LOOPSKILL5_BACKUP_ROOT"
+case "$loopskill5_dir" in /*) ;; *) printf 'Install path must be absolute\n' >&2; exit 1 ;; esac
+case "$loopskill5_backup_root" in /*) ;; *) printf 'Backup path must be absolute\n' >&2; exit 1 ;; esac
+test "${loopskill5_dir##*/}" = loopskill5
+case "${loopskill5_backup_root##*/}" in ''|.|..) printf 'Invalid backup root\n' >&2; exit 1 ;; esac
 
 test -d "$loopskill5_dir"
 test ! -L "$loopskill5_dir"
@@ -49,7 +56,15 @@ test ! -L "$loopskill5_dir/agents/openai.yaml"
 test -O "$loopskill5_dir/agents/openai.yaml"
 test "$(find "$loopskill5_dir" -type f | wc -l | tr -d ' ')" = 2
 test "$(find "$loopskill5_dir" -type d | wc -l | tr -d ' ')" = 2
-test -z "$(find "$loopskill5_dir" -type l -print)"
+test -z "$(find "$loopskill5_dir" ! -type f ! -type d -print)"
+
+loopskill5_dir="$(cd "$loopskill5_dir" && pwd -P)"
+loopskill5_skills_root="$(dirname "$loopskill5_dir")"
+loopskill5_backup_parent="$(cd "$(dirname "$loopskill5_backup_root")" && pwd -P)"
+test -O "$loopskill5_backup_parent"
+loopskill5_backup_root="$loopskill5_backup_parent/${loopskill5_backup_root##*/}"
+case "$loopskill5_backup_root/" in "$loopskill5_skills_root/"*) printf 'Backup must be outside the installation skills root\n' >&2; exit 1 ;; esac
+test ! -L "$loopskill5_backup_root"
 
 umask 077
 mkdir -p "$loopskill5_backup_root"
@@ -59,6 +74,7 @@ test -O "$loopskill5_backup_root"
 chmod 700 "$loopskill5_backup_root"
 loopskill5_backup="$loopskill5_backup_root/loopskill5-$(date -u +%Y%m%dT%H%M%SZ)"
 test ! -e "$loopskill5_backup"
+test ! -L "$loopskill5_backup"
 mv "$loopskill5_dir" "$loopskill5_backup"
 
 test ! -e "$loopskill5_dir"
