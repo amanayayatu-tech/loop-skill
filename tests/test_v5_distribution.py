@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "loopskill5"
+QUICKSTARTS = ("docs/v5/quickstart.zh-CN.md", "docs/v5/quickstart.en.md")
 EXPECTED_BLOBS = {
     "SKILL.md": "fe098768f85e2023a551aa700d1b4e5f4daa17f5",
     "agents/openai.yaml": "6295d897c694e67785f25c04987ce2a5b1914d86",
@@ -39,12 +42,138 @@ def tree_digest(root: Path) -> str:
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix().encode("utf-8")
         digest.update(relative + b"\0")
-        if path.is_file():
+        mode = path.lstat().st_mode
+        digest.update(str(mode).encode("ascii") + b"\0")
+        if stat.S_ISREG(mode):
             digest.update(path.read_bytes())
+        elif stat.S_ISLNK(mode):
+            digest.update(os.readlink(path).encode("utf-8"))
     return digest.hexdigest()
 
 
+def run_documented_uninstall(
+    doc: str, fixture_home: Path, source: Path | str | None, backups: Path | str | None
+) -> subprocess.CompletedProcess[str]:
+    blocks = re.findall(r"```bash\n(.*?)\n```", (ROOT / doc).read_text(), re.DOTALL)
+    if len(blocks) != 1:
+        raise AssertionError("Expected one documented uninstall Bash block")
+    # Bind the historical command to the fixture without changing HOME or CODEX_HOME.
+    script = blocks[0].replace(
+        'loopskill5_home="${CODEX_HOME:-$HOME/.codex}"', 'loopskill5_home="$1"'
+    )
+    if "$HOME" in script or "$CODEX_HOME" in script:
+        raise AssertionError("Uninstall fixture must not access the real Codex home")
+    environment = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+    if source is not None:
+        environment["LOOPSKILL5_INSTALL_DIR"] = str(source)
+    if backups is not None:
+        environment["LOOPSKILL5_BACKUP_ROOT"] = str(backups)
+    return subprocess.run(
+        ["/bin/bash", "-c", script, "loopskill5-uninstall-fixture", str(fixture_home)],
+        cwd=fixture_home,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
 class LoopSkill5DistributionTest(unittest.TestCase):
+    def test_isolated_install_refuses_overwrite_and_uninstalls_recoverably(self) -> None:
+        for doc in QUICKSTARTS:
+            for installation in ("default", "custom"):
+                with self.subTest(doc=doc, installation=installation), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    home = root / "global"
+                    default = home / "skills/loopskill5"
+                    shutil.copytree(SKILL_ROOT, default)
+                    source = default
+                    if installation == "custom":
+                        source = root / "custom/skills/loopskill5"
+                        shutil.copytree(SKILL_ROOT, source)
+                    control = home / "skills/loopskill4"
+                    control.mkdir()
+                    (control / "PRESERVE.txt").write_text("leave this installation alone\n")
+                    control_before = tree_digest(control)
+                    default_before = tree_digest(default)
+                    expected = tree_digest(source)
+                    self.assertEqual(inventory(source), EXPECTED_BLOBS)
+                    with self.assertRaises(FileExistsError):
+                        shutil.copytree(SKILL_ROOT, source)
+                    self.assertEqual(tree_digest(source), expected)
+                    backups = home / "uninstalled-skills"
+
+                    result = run_documented_uninstall(doc, home, source, backups)
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(source.exists())
+                    moved = list(backups.iterdir())
+                    self.assertEqual(len(moved), 1)
+                    self.assertEqual(tree_digest(moved[0]), expected)
+                    self.assertEqual(stat.S_IMODE(backups.stat().st_mode), 0o700)
+                    self.assertEqual(tree_digest(control), control_before)
+                    if installation == "custom":
+                        self.assertEqual(tree_digest(default), default_before)
+
+    def test_documented_uninstall_rejects_extra_entries_without_changes(self) -> None:
+        for doc in QUICKSTARTS:
+            for entry in ("fifo", "file", "symlink"):
+                with self.subTest(doc=doc, entry=entry), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    home = root / "home"
+                    source = home / "skills/loopskill5"
+                    shutil.copytree(SKILL_ROOT, source)
+                    extra = source / "extra"
+                    if entry == "fifo":
+                        os.mkfifo(extra)
+                    elif entry == "file":
+                        extra.write_text("preserve unexpected material\n")
+                    else:
+                        extra.symlink_to("SKILL.md")
+                    before = tree_digest(root)
+
+                    result = run_documented_uninstall(doc, home, source, root / "backups")
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(tree_digest(root), before)
+
+    def test_documented_uninstall_rejects_invalid_paths_without_changes(self) -> None:
+        cases = (
+            "missing-install", "missing-backup", "relative-install", "relative-backup",
+            "backup-in-skill", "backup-in-skills", "backup-in-skills-via-alias",
+        )
+        for doc in QUICKSTARTS:
+            for case in cases:
+                with self.subTest(doc=doc, case=case), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    home = root / "home"
+                    source = home / "skills/loopskill5"
+                    shutil.copytree(SKILL_ROOT, source)
+                    selected_source: Path | str | None = source
+                    backups: Path | str | None = home / "uninstalled-skills"
+                    if case == "missing-install":
+                        selected_source = None
+                    elif case == "missing-backup":
+                        backups = None
+                    elif case == "relative-install":
+                        selected_source = "skills/loopskill5"
+                    elif case == "relative-backup":
+                        backups = "uninstalled-skills"
+                    elif case == "backup-in-skill":
+                        backups = source / "backups"
+                    elif case == "backup-in-skills":
+                        backups = source.parent / "backups"
+                    else:
+                        alias = root / "skills-alias"
+                        alias.symlink_to(source.parent, target_is_directory=True)
+                        backups = alias / "backups"
+                    before = tree_digest(root)
+
+                    result = run_documented_uninstall(doc, home, selected_source, backups)
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(tree_digest(root), before)
+
     def test_public_payload_and_v5_docs_are_exact(self) -> None:
         self.assertEqual((ROOT / "VERSION").read_text(encoding="utf-8"), "4.2.0\n")
         for relative, expected in PRESERVED_V4_BLOBS.items():
@@ -186,34 +315,6 @@ class LoopSkill5DistributionTest(unittest.TestCase):
         self.assertNotIn("contents: write", workflow)
         self.assertNotIn("git push", workflow)
         self.assertNotIn("gh release", workflow)
-
-    def test_isolated_install_refuses_overwrite_and_uninstalls_recoverably(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            private_root = Path(directory)
-            skills = private_root / "skills"
-            backups = private_root / "uninstalled-skills"
-            v4 = skills / "loopskill4"
-            v4.mkdir(parents=True)
-            (v4 / "PRESERVE.txt").write_text("v4 remains independent\n", encoding="utf-8")
-            v4_before = tree_digest(v4)
-
-            destination = skills / "loopskill5"
-            shutil.copytree(SKILL_ROOT, destination)
-            self.assertEqual(inventory(destination), EXPECTED_BLOBS)
-
-            before_refusal = tree_digest(destination)
-            with self.assertRaises(FileExistsError):
-                shutil.copytree(SKILL_ROOT, destination)
-            self.assertEqual(tree_digest(destination), before_refusal)
-            self.assertEqual(tree_digest(v4), v4_before)
-
-            backups.mkdir(mode=0o700)
-            backup = backups / "loopskill5-test-backup"
-            destination.replace(backup)
-            self.assertFalse(destination.exists())
-            self.assertEqual(inventory(backup), EXPECTED_BLOBS)
-            self.assertEqual(tree_digest(v4), v4_before)
-
 
 if __name__ == "__main__":
     unittest.main()
