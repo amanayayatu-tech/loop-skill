@@ -52,7 +52,8 @@ def tree_digest(root: Path) -> str:
 
 
 def run_documented_uninstall(
-    doc: str, fixture_home: Path, source: Path | str | None, backups: Path | str | None
+    doc: str, fixture_home: Path, source: Path | str | None, backups: Path | str | None,
+    *, command_path: str = "/usr/bin:/bin:/usr/sbin:/sbin",
 ) -> subprocess.CompletedProcess[str]:
     blocks = re.findall(r"```bash\n(.*?)\n```", (ROOT / doc).read_text(), re.DOTALL)
     if len(blocks) != 1:
@@ -63,7 +64,7 @@ def run_documented_uninstall(
     )
     if "$HOME" in script or "$CODEX_HOME" in script:
         raise AssertionError("Uninstall fixture must not access the real Codex home")
-    environment = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+    environment = {"PATH": command_path}
     if source is not None:
         environment["LOOPSKILL5_INSTALL_DIR"] = str(source)
     if backups is not None:
@@ -79,6 +80,80 @@ def run_documented_uninstall(
 
 
 class LoopSkill5DistributionTest(unittest.TestCase):
+    def test_documented_uninstall_rejects_root_installation_parent(self) -> None:
+        for doc in QUICKSTARTS:
+            with self.subTest(doc=doc), tempfile.TemporaryDirectory() as directory:
+                script = re.findall(
+                    r"```bash\n(.*?)\n```", (ROOT / doc).read_text(), re.DOTALL
+                )[0]
+                gate = next(line for line in script.splitlines() if line.startswith(
+                    'case "$loopskill5_backup_root/" in '
+                ))
+                result = subprocess.run(
+                    ["/bin/bash", "-c", gate],
+                    env={"loopskill5_skills_root": "/", "loopskill5_backup_root": directory},
+                    capture_output=True, text=True, timeout=10,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_documented_uninstall_rejects_each_find_failure_without_changes(self) -> None:
+        for doc in QUICKSTARTS:
+            for failed_arguments in ("-type:f", "-type:d", "!:-type"):
+                with self.subTest(doc=doc, failed_arguments=failed_arguments), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    home = root / "home"
+                    source = home / "skills/loopskill5"
+                    shutil.copytree(SKILL_ROOT, source)
+                    commands = root / "bin"
+                    commands.mkdir()
+                    fake_find = commands / "find"
+                    fake_find.write_text(
+                        '#!/bin/sh\n/usr/bin/find "$@" || exit "$?"\n'
+                        f'case "$2:$3" in "{failed_arguments}") exit 1 ;; esac\n'
+                    )
+                    fake_find.chmod(0o700)
+                    before = tree_digest(root)
+
+                    result = run_documented_uninstall(
+                        doc, home, source, root / "backups",
+                        command_path=f"{commands}:/usr/bin:/bin:/usr/sbin:/sbin",
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(tree_digest(root), before)
+
+    def test_documented_uninstall_preserves_newline_paths(self) -> None:
+        for doc in QUICKSTARTS:
+            for case in ("install-parent", "backup-parent", "backup-parent-alias"):
+                with self.subTest(doc=doc, case=case), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    home = root / "home"
+                    source = home / ("skills\n/loopskill5" if case == "install-parent" else "skills/loopskill5")
+                    shutil.copytree(SKILL_ROOT, source)
+                    expected = tree_digest(source)
+                    backup_parent = root / "backup-parent\n"
+                    backup_parent.mkdir()
+                    wrong_parent = root / "backup-parent"
+                    wrong_parent.mkdir()
+                    (wrong_parent / "PRESERVE.txt").write_text("leave this sibling alone\n")
+                    control_before = tree_digest(wrong_parent)
+                    backups = backup_parent / "saved"
+                    if case == "backup-parent-alias":
+                        alias = root / "backup-alias"
+                        alias.symlink_to(backup_parent, target_is_directory=True)
+                        backups = alias / "saved"
+
+                    result = run_documented_uninstall(doc, home, source, backups)
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(source.exists())
+                    self.assertTrue((backup_parent / "saved").is_dir())
+                    moved = list((backup_parent / "saved").iterdir())
+                    self.assertEqual(len(moved), 1)
+                    self.assertEqual(tree_digest(moved[0]), expected)
+                    self.assertEqual(tree_digest(wrong_parent), control_before)
+
     def test_isolated_install_refuses_overwrite_and_uninstalls_recoverably(self) -> None:
         for doc in QUICKSTARTS:
             for installation in ("default", "custom"):
@@ -141,6 +216,7 @@ class LoopSkill5DistributionTest(unittest.TestCase):
         cases = (
             "missing-install", "missing-backup", "relative-install", "relative-backup",
             "backup-in-skill", "backup-in-skills", "backup-in-skills-via-alias",
+            "backup-in-newline-skills-via-alias",
         )
         for doc in QUICKSTARTS:
             for case in cases:
@@ -163,10 +239,21 @@ class LoopSkill5DistributionTest(unittest.TestCase):
                         backups = source / "backups"
                     elif case == "backup-in-skills":
                         backups = source.parent / "backups"
-                    else:
+                    elif case == "backup-in-skills-via-alias":
                         alias = root / "skills-alias"
                         alias.symlink_to(source.parent, target_is_directory=True)
                         backups = alias / "backups"
+                    else:
+                        source.rename(home / "loopskill5")
+                        source = home / "skills\n/loopskill5"
+                        source.parent.mkdir()
+                        (home / "loopskill5").rename(source)
+                        alias = root / "skills-alias"
+                        alias.symlink_to(source.parent, target_is_directory=True)
+                        selected_source = alias / "loopskill5"
+                        staging = source.parent / "staging"
+                        staging.mkdir()
+                        backups = staging / "backups"
                     before = tree_digest(root)
 
                     result = run_documented_uninstall(doc, home, selected_source, backups)

@@ -54,16 +54,22 @@ test -O "$loopskill5_dir/agents"
 test -f "$loopskill5_dir/agents/openai.yaml"
 test ! -L "$loopskill5_dir/agents/openai.yaml"
 test -O "$loopskill5_dir/agents/openai.yaml"
-test "$(find "$loopskill5_dir" -type f | wc -l | tr -d ' ')" = 2
-test "$(find "$loopskill5_dir" -type d | wc -l | tr -d ' ')" = 2
-test -z "$(find "$loopskill5_dir" ! -type f ! -type d -print)"
+loopskill5_files="$(find "$loopskill5_dir" -type f -exec printf . \;)"
+test "${#loopskill5_files}" = 2
+loopskill5_directories="$(find "$loopskill5_dir" -type d -exec printf . \;)"
+test "${#loopskill5_directories}" = 2
+loopskill5_other_entries="$(find "$loopskill5_dir" ! -type f ! -type d -print)"
+test -z "$loopskill5_other_entries"
 
-loopskill5_dir="$(cd "$loopskill5_dir" && pwd -P)"
-loopskill5_skills_root="$(dirname "$loopskill5_dir")"
-loopskill5_backup_parent="$(cd "$(dirname "$loopskill5_backup_root")" && pwd -P)"
+loopskill5_dir="$(cd -P "$loopskill5_dir" && printf '%s.' "$PWD")"
+loopskill5_dir="${loopskill5_dir%.}"
+loopskill5_skills_root="${loopskill5_dir%/*}"
+loopskill5_backup_parent="${loopskill5_backup_root%/*}"
+loopskill5_backup_parent="$(cd -P "${loopskill5_backup_parent:-/}" && printf '%s.' "$PWD")"
+loopskill5_backup_parent="${loopskill5_backup_parent%.}"
 test -O "$loopskill5_backup_parent"
 loopskill5_backup_root="$loopskill5_backup_parent/${loopskill5_backup_root##*/}"
-case "$loopskill5_backup_root/" in "$loopskill5_skills_root/"*) printf 'Backup must be outside the installation skills root\n' >&2; exit 1 ;; esac
+case "$loopskill5_backup_root/" in "${loopskill5_skills_root%/}/"*) printf 'Backup must be outside the installation skills root\n' >&2; exit 1 ;; esac
 test ! -L "$loopskill5_backup_root"
 
 umask 077
