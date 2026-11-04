@@ -107,6 +107,24 @@ failures, and continue without asking the user to restart a milestone,
 Verifier, Worker, or task. Do not repeat an irreversible effect when its result
 is unknown.
 
+### Keep fixes covered by existing project checks
+
+For real, reproducible problems in this task that you decide to fix, follow
+the user's current frequency/severity (F/S) triage and minimum-sufficient
+validation. Reuse existing tests first; add a minimal direct regression check
+only when key coverage is missing. Verify that the check exposes the original
+problem and passes after the fix, using a feasible, authorized reproduction
+for the actual project. If existing coverage is sufficient, run it and retain
+the evidence; do not require a new test for every fix.
+
+Choose checks to fit the failure; do not turn every bug into a new lint rule.
+Ensure applicable checks run through the project's existing test/check commands
+or CI entry points so later changes keep running them. Retain commands, results,
+and any reproduction limits as acceptance evidence. If no suitable mechanism
+exists, report the gap; do not add a test framework, CI system, Controller,
+daemon, or other runtime mechanism for it. Do not broaden the work to
+hypothetical future risks.
+
 ### Leave identity and wake-up to Host
 
 Use the current Codex task/thread as the business execution identity. Use only
