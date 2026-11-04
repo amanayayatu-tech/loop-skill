@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "loopskill5"
 QUICKSTARTS = ("docs/v5/quickstart.zh-CN.md", "docs/v5/quickstart.en.md")
 EXPECTED_BLOBS = {
-    "SKILL.md": "fe098768f85e2023a551aa700d1b4e5f4daa17f5",
+    "SKILL.md": "7f4cb02c24303651f40c5f198cebfd84bf9805c6",
     "agents/openai.yaml": "6295d897c694e67785f25c04987ce2a5b1914d86",
 }
 PRESERVED_V4_BLOBS = {
