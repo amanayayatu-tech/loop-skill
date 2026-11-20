@@ -32,7 +32,8 @@ LoopSkill 5 remains the same two files. Do not add an installer or a second copy
 After verifying the Codex install directory, link that one directory into Cindy's shared root:
 
 ```bash
-ln -s "${CODEX_HOME:-$HOME/.codex}/skills/loopskill5" "$HOME/.agents/skills/loopskill5"
+: "${LOOPSKILL5_INSTALL_DIR:?Set the verified absolute LoopSkill 5 install directory}"
+ln -s "$LOOPSKILL5_INSTALL_DIR" "$HOME/.agents/skills/loopskill5"
 ```
 
 Open a new Cindy session. A session that is already open does not refresh its skill list. Choose `loopskill5` from the `/` menu, or send:

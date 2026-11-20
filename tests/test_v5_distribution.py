@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "loopskill5"
 QUICKSTARTS = ("docs/v5/quickstart.zh-CN.md", "docs/v5/quickstart.en.md")
 EXPECTED_BLOBS = {
-    "SKILL.md": "7f4cb02c24303651f40c5f198cebfd84bf9805c6",
+    "SKILL.md": "59cbed7d34f0c9f5336ffab7dd17ae962075ff69",
     "agents/openai.yaml": "6295d897c694e67785f25c04987ce2a5b1914d86",
 }
 PRESERVED_V4_BLOBS = {
@@ -51,15 +51,26 @@ def tree_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
+def documented_bash_blocks(doc: str) -> list[str]:
+    return re.findall(r"```bash\n(.*?)\n```", (ROOT / doc).read_text(), re.DOTALL)
+
+
+def documented_uninstall_script(doc: str) -> str:
+    blocks = [
+        block for block in documented_bash_blocks(doc)
+        if "LOOPSKILL5_BACKUP_ROOT" in block
+    ]
+    if len(blocks) != 1:
+        raise AssertionError("Expected one documented uninstall Bash block")
+    return blocks[0]
+
+
 def run_documented_uninstall(
     doc: str, fixture_home: Path, source: Path | str | None, backups: Path | str | None,
     *, command_path: str = "/usr/bin:/bin:/usr/sbin:/sbin",
 ) -> subprocess.CompletedProcess[str]:
-    blocks = re.findall(r"```bash\n(.*?)\n```", (ROOT / doc).read_text(), re.DOTALL)
-    if len(blocks) != 1:
-        raise AssertionError("Expected one documented uninstall Bash block")
     # Bind the historical command to the fixture without changing HOME or CODEX_HOME.
-    script = blocks[0].replace(
+    script = documented_uninstall_script(doc).replace(
         'loopskill5_home="${CODEX_HOME:-$HOME/.codex}"', 'loopskill5_home="$1"'
     )
     if "$HOME" in script or "$CODEX_HOME" in script:
@@ -83,9 +94,7 @@ class LoopSkill5DistributionTest(unittest.TestCase):
     def test_documented_uninstall_rejects_root_installation_parent(self) -> None:
         for doc in QUICKSTARTS:
             with self.subTest(doc=doc), tempfile.TemporaryDirectory() as directory:
-                script = re.findall(
-                    r"```bash\n(.*?)\n```", (ROOT / doc).read_text(), re.DOTALL
-                )[0]
+                script = documented_uninstall_script(doc)
                 gate = next(line for line in script.splitlines() if line.startswith(
                     'case "$loopskill5_backup_root/" in '
                 ))
@@ -360,13 +369,18 @@ class LoopSkill5DistributionTest(unittest.TestCase):
         self.assertIn("root `VERSION=4.2.0`", release_notes)
         for text in (readme_zh, readme_en, quickstart_zh, quickstart_en):
             self.assertNotIn("rm -rf", text)
-        zh_bash = re.findall(r"```bash\n(.*?)\n```", quickstart_zh, re.DOTALL)
-        en_bash = re.findall(r"```bash\n(.*?)\n```", quickstart_en, re.DOTALL)
+        zh_bash = documented_bash_blocks("docs/v5/quickstart.zh-CN.md")
+        en_bash = documented_bash_blocks("docs/v5/quickstart.en.md")
         self.assertEqual(zh_bash, en_bash)
-        self.assertEqual(len(zh_bash), 1)
+        uninstall = [block for block in zh_bash if "LOOPSKILL5_BACKUP_ROOT" in block]
+        cindy_link = [block for block in zh_bash if "agents/skills/loopskill5" in block]
+        self.assertEqual(len(uninstall), 1)
+        self.assertEqual(len(cindy_link), 1)
+        self.assertIn("LOOPSKILL5_INSTALL_DIR", cindy_link[0])
+        self.assertNotIn("CODEX_HOME", cindy_link[0])
         syntax = subprocess.run(
             ["bash", "-n"],
-            input=zh_bash[0],
+            input=uninstall[0],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

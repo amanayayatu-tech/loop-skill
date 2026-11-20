@@ -32,7 +32,8 @@ LoopSkill 5 仍是上面那两个文件，不另做安装器，也不复制第�
 核对 Codex 安装目录后，用一条符号链接接到 Cindy 的共享根，不要再导入一份：
 
 ```bash
-ln -s "${CODEX_HOME:-$HOME/.codex}/skills/loopskill5" "$HOME/.agents/skills/loopskill5"
+: "${LOOPSKILL5_INSTALL_DIR:?Set the verified absolute LoopSkill 5 install directory}"
+ln -s "$LOOPSKILL5_INSTALL_DIR" "$HOME/.agents/skills/loopskill5"
 ```
 
 然后新开一个 Cindy 会话。已经开着的会话不会刷新技能列表。在 `/` 菜单选择 `loopskill5`，或发送：
