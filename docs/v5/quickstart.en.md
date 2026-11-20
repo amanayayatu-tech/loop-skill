@@ -25,6 +25,24 @@ Use $loopskill5. Investigate this long task proactively and show the farthest-sa
 
 Review the final intent, committed result, authority, real acceptance, recovery limits, business Gates, emergency stops, and unattended window. Only then send one separate `START` for that exact contract.
 
+## Use in Cindy
+
+LoopSkill 5 remains the same two files. Do not add an installer or a second copy. Cindy's Codex and Pi engines discover skills from `~/.agents/skills`. An install that exists only under `~/.codex/skills` stays invisible in Cindy while cross-agent sync is off.
+
+After verifying the Codex install directory, link that one directory into Cindy's shared root:
+
+```bash
+ln -s "${CODEX_HOME:-$HOME/.codex}/skills/loopskill5" "$HOME/.agents/skills/loopskill5"
+```
+
+Open a new Cindy session. A session that is already open does not refresh its skill list. Choose `loopskill5` from the `/` menu, or send:
+
+```text
+Use $loopskill5. Investigate this long task proactively and show the farthest-safe 12-item Launch Contract; do not START yet.
+```
+
+Run the unattended wait only in a Cindy task whose engine is Codex. That is the verified same-thread heartbeat and reentry path. A Pi or Claude Code task may prepare the Launch Contract, but it must stop before START and say the confirmation belongs in a Codex-engine task. Do not imitate continuation with a Cindy schedule, a plugin, or a second task. If the Codex heartbeat tool is absent, stop before START and report that the wait cannot be verified.
+
 ## Recoverable uninstall
 
 Have Codex set `LOOPSKILL5_INSTALL_DIR` from the installer's actual output or a verified existing installation, without inferring a custom destination from the default directory. Set `LOOPSKILL5_BACKUP_ROOT` to a backup directory outside Skill discovery roots, beneath an existing parent owned by the current user. Both variables must contain verified absolute paths; the script rejects backups under the installation parent before moving anything.

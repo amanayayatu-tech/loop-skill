@@ -42,7 +42,7 @@ Use $skill-installer to install https://github.com/amanayayatu-tech/loop-skill/t
 
 ### 2. 先准备，不要启动
 
-安装后，在新的 Codex turn 中显式调用：
+安装后，在新的 Codex turn 中显式调用。Cindy 不会自动看到只装在 `~/.codex/skills` 的技能；用法见[快速开始](docs/v5/quickstart.zh-CN.md#在-cindy-中使用)。
 
 ```text
 Use $loopskill5。请主动调查这个长程任务，给出最远安全的 12 项 Launch Contract；现在不要 START。

@@ -1,6 +1,6 @@
 ---
 name: loopskill5
-description: Prepare and run long local single-user Codex tasks from natural language or a PRD. Use when a multi-step outcome needs read-only investigation, concrete advice, one human Launch Contract and START confirmation, unattended execution across internal work segments or native waits, true business gates, and evidence-backed business reporting. Use a direct Codex task instead when the request is a short one-off action.
+description: Prepare and run long local single-user Codex tasks from natural language or a PRD, including a Cindy task whose engine is Codex. Use when a multi-step outcome needs read-only investigation, concrete advice, one human Launch Contract and START confirmation, unattended execution across internal work segments or native waits, true business gates, and evidence-backed business reporting. Use a direct task instead when the request is a short one-off action.
 ---
 
 # LoopSkill 5
@@ -11,9 +11,24 @@ Accept a sentence, PRD, repository, attachment, or existing conversation as the
 user's final intent. Never require the user to write JSON, IDs, digests,
 receipts, Host arguments, or an internal plan.
 
-Use this Skill for local, single-user work on Codex Host. Recommend direct
-execution when the request is short enough to finish safely in the current
-task without a long commitment.
+Use this Skill for local, single-user work on Codex Host, including a Cindy
+task whose engine is Codex. Recommend direct execution when the request is
+short enough to finish safely in the current task without a long commitment.
+
+### Cindy
+
+Cindy's Codex and Pi engines discover skills from `~/.agents/skills`. A Codex
+installer that only writes `~/.codex/skills/loopskill5` does not make this Skill
+visible in Cindy while cross-agent sync is off. One symlink into
+`~/.agents/skills/loopskill5` is enough; do not install a second copy.
+
+Run the unattended wait only when the current Cindy task engine is Codex. That
+is the verified host for same-thread heartbeat and reentry. If the task is Pi
+or Claude Code, prepare the Launch Contract, then stop before START and say
+the confirmation must happen in a Codex-engine task. Do not create a Cindy
+schedule, plugin, or second task to imitate that heartbeat. If the Codex
+heartbeat tool is absent, block before START and report that the wait cannot
+be verified.
 
 Keep the identities independent:
 

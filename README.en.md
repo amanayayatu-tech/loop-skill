@@ -42,7 +42,7 @@ The system installer does not overwrite an existing destination. See the [quicks
 
 ### 2. Prepare without starting
 
-After installation, invoke the Skill explicitly in a new Codex turn:
+After installation, invoke the Skill explicitly in a new Codex turn. Cindy does not see a skill that exists only under `~/.codex/skills`; see the [quickstart](docs/v5/quickstart.en.md#use-in-cindy).
 
 ```text
 Use $loopskill5. Investigate this long task proactively and show the farthest-safe 12-item Launch Contract; do not START yet.
