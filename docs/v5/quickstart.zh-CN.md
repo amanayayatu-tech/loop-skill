@@ -25,6 +25,25 @@ Use $loopskill5。请先主动调查这个长程任务，给出最远安全的 1
 
 检查合同中的最终意图、承诺结果、授权范围、真实验收、恢复上限、业务 Gate、紧急停止和无人值守预期。只有接受该 exact 合同后，再发送一条独立的 `START`。
 
+## 在 Cindy 中使用
+
+LoopSkill 5 仍是上面那两个文件，不另做安装器，也不复制第二份。Cindy 的 Codex 和 Pi 从 `~/.agents/skills` 发现技能；只装进 `~/.codex/skills` 时，跨引擎同步默认关闭，Cindy 看不到它。
+
+核对 Codex 安装目录后，用一条符号链接接到 Cindy 的共享根，不要再导入一份：
+
+```bash
+: "${LOOPSKILL5_INSTALL_DIR:?Set the verified absolute LoopSkill 5 install directory}"
+ln -s "$LOOPSKILL5_INSTALL_DIR" "$HOME/.agents/skills/loopskill5"
+```
+
+然后新开一个 Cindy 会话。已经开着的会话不会刷新技能列表。在 `/` 菜单选择 `loopskill5`，或发送：
+
+```text
+Use $loopskill5。请先主动调查这个长程任务，给出最远安全的 12 项 Launch Contract；现在不要 START。
+```
+
+无人值守只在引擎为 Codex 的 Cindy 任务里跑。这是已验证的同线程 heartbeat 和再次进入路径。Pi 或 Claude Code 任务可以准备 Launch Contract，但必须在 START 前停下，并说明要换到 Codex 任务里确认。不要用 Cindy 定时任务、插件或第二个任务假装续跑。看不到 Codex heartbeat 工具时，同样停在 START 前，并写明等待无法验证。
+
 ## 可恢复卸载
 
 让 Codex 从 installer 的实际输出或现有安装核对中设置 `LOOPSKILL5_INSTALL_DIR`，不要根据默认目录猜测自定义安装的位置。将 `LOOPSKILL5_BACKUP_ROOT` 设置为 Skill 搜索根之外的备份目录，其父目录须已存在且归当前用户所有。两个变量都必须是已核对的绝对路径；脚本会在任何移动前拒绝安装父目录内的备份。
